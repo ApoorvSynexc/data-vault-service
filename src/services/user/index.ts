@@ -1,6 +1,6 @@
 import { USER } from '../../models';
 
-const addUser = (data: object) => USER.create(data);
+const createUser = (data: object) => USER.create(data);
 
 const updateUser = (search = {}, payload = {}, options = {}) =>
   USER.findOneAndUpdate(search, payload, options);
@@ -50,4 +50,4 @@ const getUsersWithPagination = async (
   ]).then((result) => result[0] || null);
 };
 
-export { addUser, getUser, updateUser, getUsers, getUsersWithPagination };
+export { createUser, getUser, updateUser, getUsers, getUsersWithPagination };

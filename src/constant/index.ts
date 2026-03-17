@@ -30,6 +30,14 @@ const GENDER = {
   female: 'FEMALE',
   other: 'OTHER',
 };
+const OTP_TYPE = {
+  email: 'EMAIL',
+  mobile: 'MOBILE',
+};
+const OTP_STATUS = {
+  pending: 'PEDING',
+  verified: 'VERIFIED',
+};
 
 export {
   HOST,
@@ -42,8 +50,11 @@ export {
   MONGO_PASSWORD,
   MONGO_PORT,
   MONGO_USER,
+
   STATUS,
   AUTH_PROVIDER,
   LANGUAGE,
   GENDER,
+  OTP_TYPE,
+  OTP_STATUS
 };
