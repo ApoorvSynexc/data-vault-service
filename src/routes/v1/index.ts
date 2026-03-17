@@ -1,11 +1,8 @@
 import { Router } from 'express';
-import { clientRouter } from './client';
+import { authRouter } from './auth.routes';
 
 const router = Router();
 
-// Public Route
-
-// Private Route
-router.use('/', clientRouter);
+router.use('/auth', authRouter);
 
 export const v1Routers = router;
