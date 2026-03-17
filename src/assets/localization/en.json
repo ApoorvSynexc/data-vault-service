@@ -6,6 +6,7 @@
   "otp_sent": "OTP has been Successfully sent",
   "otp_verify": "Otp has been Successfully verified",
   "otp_incorrect": "Your OTP is incorrect or has been expired",
+  "otp_expired": "Your OTP has expired. Please request a new one",
   "password_not_match": "The current password you entered doesn't match our records. Please check and try again",
   "old_and_new_password_same": "Old and new password can't be same",
   "confirm_password_not_match": "Password and confirm password does not match",
