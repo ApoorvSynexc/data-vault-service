@@ -35,4 +35,9 @@ const asyncHandler = (fn: IHandler): IHandler =>
     }
   };
 
-export { randomNumber, generateTokens, asyncHandler };
+const wrapController = <T extends Record<string, IHandler>>(controller: T): T =>
+  Object.fromEntries(
+    Object.entries(controller).map(([key, fn]) => [key, asyncHandler(fn)])
+  ) as T;
+
+export { randomNumber, generateTokens, wrapController };

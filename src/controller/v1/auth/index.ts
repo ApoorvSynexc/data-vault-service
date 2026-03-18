@@ -4,11 +4,11 @@ import jwt from 'jsonwebtoken';
 import { JWT_REFRESH_SECRET, OTP_CHANNEL, OTP_STATUS, OTP_TYPE, STATUS } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { getOtp, getUser, updateOtp } from '../../../services';
-import { asyncHandler, generateTokens } from '../../../utils/helper';
+import { generateTokens, wrapController } from '../../../utils/helper';
 
 const OTP_EXPIRY_MINUTES = 10;
 
-const sendOtpHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
+const sendOtpHandler = async (req: IRequest, res: IResponse) => {
   const { contact, channel } = req.body as {
     contact: string | object;
     channel: string;
@@ -36,9 +36,9 @@ const sendOtpHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
   // TODO: send OTP via email/SMS based on channel === OTP_CHANNEL.email / OTP_CHANNEL.mobile
 
   makeResponse(req, res, 200, true, 'otp_sent');
-});
+};
 
-const verifyOtpHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
+const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
   const { contact, channel, otpType, otp } = req.body as {
     contact: string | object;
     channel: string;
@@ -69,9 +69,9 @@ const verifyOtpHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
   await updateOtp({ _id: record._id }, { $set: { status: OTP_STATUS.verified } });
 
   makeResponse(req, res, 200, true, 'otp_verify');
-});
+};
 
-const loginHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
+const loginHandler = async (req: IRequest, res: IResponse) => {
   const { email, mobile, password } = req.body;
 
   const search = email
@@ -91,9 +91,9 @@ const loginHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
 
   const tokens = generateTokens(user.userId);
   makeResponse(req, res, 200, true, 'login', tokens);
-});
+};
 
-const refreshTokenHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
+const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
   const { refreshToken } = req.body;
 
   const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
@@ -107,11 +107,11 @@ const refreshTokenHandler = asyncHandler(async (req: IRequest, res: IResponse) =
 
   const tokens = generateTokens(user.userId);
   makeResponse(req, res, 200, true, 'fetch', tokens);
-});
+};
 
-export const authController = {
+export const authController = wrapController({
   sendOtpHandler,
   verifyOtpHandler,
   loginHandler,
   refreshTokenHandler,
-};
+});

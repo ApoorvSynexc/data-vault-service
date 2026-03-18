@@ -3,11 +3,11 @@ import dayjs from 'dayjs';
 import { OTP_STATUS, OTP_TYPE } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { createUser, getOtp, getUser } from '../../../services';
-import { asyncHandler } from '../../../utils/helper';
+import { wrapController } from '../../../utils/helper';
 
 const SALT_ROUNDS = 10;
 
-const signupHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
+const signupHandler = async (req: IRequest, res: IResponse) => {
   const body = req.body;
 
   const isEmailSignup = !!body.contact?.email;
@@ -43,8 +43,8 @@ const signupHandler = asyncHandler(async (req: IRequest, res: IResponse) => {
 
   await createUser(body);
   makeResponse(req, res, 201, true, 'create');
-});
-
-export const userController = {
-  signupHandler,
 };
+
+export const userController = wrapController({
+  signupHandler,
+});
