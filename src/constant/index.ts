@@ -31,13 +31,22 @@ const GENDER = {
   other: 'OTHER',
 };
 const OTP_TYPE = {
-  email: 'EMAIL',
-  mobile: 'MOBILE',
+  forgotPassword: 'FORGOT-PASSWORD',
+  signup: 'SIGNUP',
+  updateContact: 'UPDATE-CONTACT',
 };
 const OTP_STATUS = {
-  pending: 'PEDING',
-  verified: 'VERIFIED',
-};
+  pending: 'PENDING',
+  verified: 'VERIFIED'
+}
+const OTP_FOR = {
+  user: 'USER',
+  admin: 'ADMIN'
+}
+const OTP_CHANNEL = {
+  email: 'EMAIL',
+  mobile: 'MOBILE',
+}
 
 export {
   HOST,
@@ -56,5 +65,7 @@ export {
   LANGUAGE,
   GENDER,
   OTP_TYPE,
-  OTP_STATUS
+  OTP_STATUS,
+  OTP_FOR,
+  OTP_CHANNEL,
 };

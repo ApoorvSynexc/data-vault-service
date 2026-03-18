@@ -1,23 +1,22 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
-import { OTP_TYPE } from '../../../constant';
+import { OTP_CHANNEL, OTP_TYPE } from '../../../constant';
 import { makeResponse } from '../../../lib';
+import { phoneJoiSchema } from '../shared';
 
 export const sendOtpValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    contact: Joi.string()
-      .trim()
-      .when('type', {
-        is: OTP_TYPE.email,
-        then: Joi.string().email({ tlds: { allow: false } }).required(),
-        otherwise: Joi.string()
-          .pattern(/^\+?[1-9]\d{6,14}$/)
-          .required(),
-      })
-      .required(),
-    type: Joi.string()
+     otpType: Joi.string()
       .valid(...Object.values(OTP_TYPE))
       .required(),
+    channel: Joi.string()
+      .valid(...Object.values(OTP_CHANNEL))
+      .required(),
+    contact: Joi.when('channel', {
+      is: OTP_CHANNEL.email,
+      then: Joi.string().trim().email({ tlds: { allow: false } }).required(),
+      otherwise: phoneJoiSchema.required(),
+    }),
   });
 
   const { error } = schema.validate(req.body);
@@ -30,8 +29,15 @@ export const sendOtpValidation = (req: Request, res: Response, next: NextFunctio
 
 export const verifyOtpValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    contact: Joi.string().trim().required(),
-    type: Joi.string()
+    channel: Joi.string()
+      .valid(...Object.values(OTP_CHANNEL))
+      .required(),
+    contact: Joi.when('channel', {
+      is: OTP_CHANNEL.email,
+      then: Joi.string().trim().email({ tlds: { allow: false } }).required(),
+      otherwise: phoneJoiSchema.required(),
+    }),
+    otpType: Joi.string()
       .valid(...Object.values(OTP_TYPE))
       .required(),
     otp: Joi.string().length(6).pattern(/^\d+$/).required(),

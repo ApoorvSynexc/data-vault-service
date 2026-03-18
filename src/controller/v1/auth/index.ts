@@ -1,38 +1,51 @@
 import dayjs from 'dayjs';
-import { OTP_STATUS } from '../../../constant';
+import { OTP_CHANNEL, OTP_STATUS, OTP_TYPE } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { getOtp, updateOtp } from '../../../services';
 
 const OTP_EXPIRY_MINUTES = 10;
-const sendOtpHandler = async (req: IRequest, res: IResponse) => {
-  const body = req.body as { contact: string; type: string };
 
-  const otpNumber = '123456';
+const sendOtpHandler = async (req: IRequest, res: IResponse) => {
+  const { contact, channel } = req.body as { contact: string | object; channel: string };
+
+  const otpNumber = 123456;
   const expiresAt = dayjs().add(OTP_EXPIRY_MINUTES, 'minute').toDate();
 
+  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
+
   await updateOtp(
-    body,
+    { [contactField]: contact, channel, otpType: OTP_TYPE.signup },
     {
-      ...body,
+      [contactField]: contact,
+      channel,
       otp: otpNumber,
       expiresAt,
-      status: OTP_STATUS.pending
+      otpType: OTP_TYPE.signup,
+      status: OTP_STATUS.pending,
     },
-    {upsert: true}
+    { upsert: true }
   );
 
-  // TODO: send OTP via email/SMS based on type === OTP_TYPE.email / OTP_TYPE.mobile
+  // TODO: send OTP via email/SMS based on channel === OTP_CHANNEL.email / OTP_CHANNEL.mobile
 
   makeResponse(req, res, 200, true, 'otp_sent');
 };
 
 const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
-  const { contact, type, otp } = req.body as { contact: string; type: string; otp: string };
+  const { contact, channel, otpType, otp } = req.body as {
+    contact: string | object;
+    channel: string;
+    otpType: string;
+    otp: string;
+  };
+
+  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
 
   const record = await getOtp({
-    contact,
-    type,
-    otp,
+    [contactField]: contact,
+    channel,
+    otpType,
+    otp: Number(otp),
     status: OTP_STATUS.pending,
   });
 

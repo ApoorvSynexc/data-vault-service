@@ -1,36 +1,44 @@
-import mongoose from 'mongoose';
-import { OTP_TYPE, OTP_STATUS } from '../../constant';
+import { model, Schema } from "mongoose";
+import { OTP_CHANNEL, OTP_FOR, OTP_STATUS, OTP_TYPE } from "../../constant";
+import { phoneSchema } from "../shared";
 
-const schema = new mongoose.Schema(
-  {
+const schema = new Schema({
     contact: {
-      type: String,
-      trim: true,
-      lowercase: true,
-    },
-    type: {
-      type: String,
-      enum: Object.values(OTP_TYPE),
+        email: {
+            type: String,
+            lowercase: true,
+            trim: true,
+        },
+        mobile: phoneSchema,
     },
     otp: {
-      type: String,
+        type: Number,
     },
     expiresAt: {
-      type: Date,
+        type: Date,
+    },
+    otpType: {
+        type: String,
+        enum: Object.values(OTP_TYPE),
+        default: OTP_TYPE.signup,
+    },
+    channel: {
+        type: String,
+        enum: Object.values(OTP_CHANNEL),
     },
     status: {
-      type: String,
-      enum: Object.values(OTP_STATUS),
-      default: OTP_STATUS.pending
-    }
-  },
-  {
+        type: String,
+        enum: Object.values(OTP_STATUS),
+        default: OTP_STATUS.pending,
+    },
+    otpFor: {
+        type: String,
+        enum: Object.values(OTP_FOR),
+        default: OTP_FOR.user,
+    },
+}, {
     timestamps: true,
-  }
-);
+});
 
-type IOTP = mongoose.InferSchemaType<typeof schema>;
 
-const OTP = mongoose.model('otp', schema);
-
-export { IOTP, OTP };
+export const OTP = model("otp", schema);
