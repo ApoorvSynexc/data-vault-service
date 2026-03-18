@@ -5,11 +5,13 @@ import {
   logoutValidation,
   refreshTokenValidation,
   sendOtpValidation,
+  signupValidation,
   verifyOtpValidation,
 } from '../../middlewares';
 
 const router = Router();
 
+router.post('/signup', signupValidation, authController.signupHandler);
 router.post('/send-otp', sendOtpValidation, authController.sendOtpHandler);
 router.post('/verify-otp', verifyOtpValidation, authController.verifyOtpHandler);
 router.post('/login', loginValidation, authController.loginHandler);
