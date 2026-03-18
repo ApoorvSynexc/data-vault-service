@@ -46,6 +46,12 @@ const OTP_CHANNEL = {
   mobile: 'MOBILE',
 };
 
+// JWT Config
+const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
+const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
+const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
+const JWT_REFRESH_EXPIRY = String(process.env.JWT_REFRESH_EXPIRY || '7d');
+
 export {
   HOST,
   PORT,
@@ -55,6 +61,12 @@ export {
   DYNAMODB_ENDPOINT,
   USER_TABLE,
   OTP_TABLE,
+
+  // JWT Config
+  JWT_ACCESS_SECRET,
+  JWT_REFRESH_SECRET,
+  JWT_ACCESS_EXPIRY,
+  JWT_REFRESH_EXPIRY,
 
   STATUS,
   AUTH_PROVIDER,
