@@ -37,16 +37,16 @@ const OTP_TYPE = {
 };
 const OTP_STATUS = {
   pending: 'PENDING',
-  verified: 'VERIFIED'
-}
+  verified: 'VERIFIED',
+};
 const OTP_FOR = {
   user: 'USER',
-  admin: 'ADMIN'
-}
+  admin: 'ADMIN',
+};
 const OTP_CHANNEL = {
   email: 'EMAIL',
   mobile: 'MOBILE',
-}
+};
 
 export {
   HOST,
@@ -59,7 +59,6 @@ export {
   MONGO_PASSWORD,
   MONGO_PORT,
   MONGO_USER,
-
   STATUS,
   AUTH_PROVIDER,
   LANGUAGE,

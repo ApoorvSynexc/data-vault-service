@@ -6,12 +6,17 @@ import { getOtp, updateOtp } from '../../../services';
 const OTP_EXPIRY_MINUTES = 10;
 
 const sendOtpHandler = async (req: IRequest, res: IResponse) => {
-  const { contact, channel } = req.body as { contact: string | object; channel: string };
+  const { contact, channel } = req.body as {
+    contact: string | object;
+    channel: string;
+  };
 
   const otpNumber = 123456;
-  const expiresAt = dayjs().add(OTP_EXPIRY_MINUTES, 'minute').toDate();
+  const expiresAt = dayjs().add(OTP_EXPIRY_MINUTES, 'minute')
+.toDate();
 
-  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
+  const contactField =
+    channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
 
   await updateOtp(
     { [contactField]: contact, channel, otpType: OTP_TYPE.signup },
@@ -39,7 +44,8 @@ const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
     otp: string;
   };
 
-  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
+  const contactField =
+    channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
 
   const record = await getOtp({
     [contactField]: contact,
@@ -49,14 +55,22 @@ const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
     status: OTP_STATUS.pending,
   });
 
-  if (!record) return makeResponse(req, res, 400, false, 'otp_incorrect');
+  if (!record) {
+    return makeResponse(req, res, 400, false, 'otp_incorrect');
+  }
 
   if (dayjs().isAfter(dayjs(record.expiresAt))) {
-    await updateOtp({ _id: record._id }, { $set: { status: OTP_STATUS.verified } });
+    await updateOtp(
+      { _id: record._id },
+      { $set: { status: OTP_STATUS.verified } }
+    );
     return makeResponse(req, res, 400, false, 'otp_expired');
   }
 
-  await updateOtp({ _id: record._id }, { $set: { status: OTP_STATUS.verified } });
+  await updateOtp(
+    { _id: record._id },
+    { $set: { status: OTP_STATUS.verified } }
+  );
 
   makeResponse(req, res, 200, true, 'otp_verify');
 };

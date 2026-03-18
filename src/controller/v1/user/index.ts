@@ -23,11 +23,18 @@ const signupHandler = async (req: IRequest, res: IResponse) => {
   if (isEmailSignup) {
     body.contact.isEmailVerified = true;
     const existing = await getUser({ 'contact.email': body.contact.email });
-    if (existing) return makeResponse(req, res, 400, false, 'email_exit');
+    if (existing) {
+      return makeResponse(req, res, 400, false, 'email_exit');
+    }
   } else {
     body.contact.isMobileVerified = true;
-    const existing = await getUser({ 'contact.mobile.number': body.contact.mobile.number, 'contact.mobile.dialCode': body.contact.mobile.dialCode });
-    if (existing) return makeResponse(req, res, 400, false, 'mobile_exit');
+    const existing = await getUser({
+      'contact.mobile.number': body.contact.mobile.number,
+      'contact.mobile.dialCode': body.contact.mobile.dialCode,
+    });
+    if (existing) {
+      return makeResponse(req, res, 400, false, 'mobile_exit');
+    }
   }
 
   await createUser(body);

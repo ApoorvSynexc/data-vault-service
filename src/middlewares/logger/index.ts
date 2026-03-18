@@ -4,7 +4,8 @@ import path from 'path';
 import morgan from 'morgan';
 
 function getLogFolder() {
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date().toISOString()
+.split('T')[0];
   const dir = path.join(__dirname, '../../assets/logs', today);
 
   if (!fs.existsSync(dir)) {
@@ -42,6 +43,8 @@ const stream = {
   write: (message: string) => logger.info(message.trim()),
 };
 
-const morganMiddleware = morgan(':method :url :status :response-time ms', { stream });
+const morganMiddleware = morgan(':method :url :status :response-time ms', {
+  stream,
+});
 
 export { morganMiddleware, logger };
