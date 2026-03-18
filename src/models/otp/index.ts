@@ -1,46 +1,26 @@
-import { model, Schema } from 'mongoose';
-import { OTP_CHANNEL, OTP_FOR, OTP_STATUS, OTP_TYPE } from '../../constant';
-import { phoneSchema } from '../shared';
+import { IPhone } from '../shared';
 
-const schema = new Schema(
-  {
-    contact: {
-      email: {
-        type: String,
-        lowercase: true,
-        trim: true,
-      },
-      mobile: phoneSchema,
-    },
-    otp: {
-      type: Number,
-    },
-    expiresAt: {
-      type: Date,
-    },
-    otpType: {
-      type: String,
-      enum: Object.values(OTP_TYPE),
-      default: OTP_TYPE.signup,
-    },
-    channel: {
-      type: String,
-      enum: Object.values(OTP_CHANNEL),
-    },
-    status: {
-      type: String,
-      enum: Object.values(OTP_STATUS),
-      default: OTP_STATUS.pending,
-    },
-    otpFor: {
-      type: String,
-      enum: Object.values(OTP_FOR),
-      default: OTP_FOR.user,
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
+export interface IOtpId {
+  otpId: string;     // DynamoDB PK
+  createdAt: string; // DynamoDB SK
+}
 
-export const OTP = model('otp', schema);
+export interface IOtp {
+  otpId: string;
+  createdAt: string;
+  // Composite GSI key: "email#user@example.com#SIGNUP" | "mobile#+91...#SIGNUP"
+  contactOtpKey: string;
+  contact?: {
+    email?: string;
+    mobile?: IPhone;
+  };
+  otp?: number;
+  expiresAt?: string;
+  otpType?: string;
+  channel?: string;
+  status?: string;
+  otpFor?: string;
+  updatedAt?: string;
+  // Virtual field returned by getOtp so updateOtp can target the exact item
+  _id?: IOtpId;
+}

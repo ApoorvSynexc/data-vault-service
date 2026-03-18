@@ -1,13 +1,11 @@
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
-// Mongo Config
-const MONGO_CONNECTION_TYPE = String(process.env.MONGO_CONNECTION_TYPE);
-const MONGO_HOST = String(process.env.MONGO_HOST);
-const MONGO_PORT = String(process.env.MONGO_PORT);
-const MONGO_DATABASE = String(process.env.MONGO_DATABASE);
-const MONGO_USER = String(process.env.MONGO_USER);
-const MONGO_PASSWORD = String(process.env.MONGO_PASSWORD);
+// AWS / DynamoDB Config
+const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
+const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT; // optional: for DynamoDB Local
+const USER_TABLE = String(process.env.USER_TABLE || 'data-vault-users');
+const OTP_TABLE = String(process.env.OTP_TABLE || 'data-vault-otps');
 
 const STATUS = {
   active: 'ACTIVE',
@@ -52,13 +50,12 @@ export {
   HOST,
   PORT,
 
-  // Mongo Config
-  MONGO_CONNECTION_TYPE,
-  MONGO_DATABASE,
-  MONGO_HOST,
-  MONGO_PASSWORD,
-  MONGO_PORT,
-  MONGO_USER,
+  // AWS / DynamoDB Config
+  AWS_REGION,
+  DYNAMODB_ENDPOINT,
+  USER_TABLE,
+  OTP_TABLE,
+
   STATUS,
   AUTH_PROVIDER,
   LANGUAGE,
