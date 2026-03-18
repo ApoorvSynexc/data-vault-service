@@ -53,3 +53,16 @@ export const refreshTokenValidation = (req: Request, res: Response, next: NextFu
   }
   next();
 };
+
+export const logoutValidation = (req: Request, res: Response, next: NextFunction) => {
+  const schema = Joi.object({
+    refreshToken: Joi.string().required(),
+  });
+
+  const { error } = schema.validate(req.body);
+  if (error) {
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    return;
+  }
+  next();
+};

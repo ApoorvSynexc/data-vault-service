@@ -6,6 +6,7 @@ const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT; // optional: for DynamoDB Local
 const USER_TABLE = String(process.env.USER_TABLE || 'data-vault-users');
 const OTP_TABLE = String(process.env.OTP_TABLE || 'data-vault-otps');
+const SESSION_TABLE = String(process.env.SESSION_TABLE || 'data-vault-sessions');
 
 const STATUS = {
   active: 'ACTIVE',
@@ -45,6 +46,10 @@ const OTP_CHANNEL = {
   email: 'EMAIL',
   mobile: 'MOBILE',
 };
+const SESSION_STATUS = {
+  active: 'ACTIVE',
+  revoked: 'REVOKED',
+};
 
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
@@ -61,6 +66,7 @@ export {
   DYNAMODB_ENDPOINT,
   USER_TABLE,
   OTP_TABLE,
+  SESSION_TABLE,
 
   // JWT Config
   JWT_ACCESS_SECRET,
@@ -76,4 +82,5 @@ export {
   OTP_STATUS,
   OTP_FOR,
   OTP_CHANNEL,
+  SESSION_STATUS,
 };

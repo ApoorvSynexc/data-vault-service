@@ -1,10 +1,18 @@
 import bcrypt from 'bcrypt';
 import dayjs from 'dayjs';
 import jwt from 'jsonwebtoken';
-import { JWT_REFRESH_SECRET, OTP_CHANNEL, OTP_STATUS, OTP_TYPE, STATUS } from '../../../constant';
+import {
+  JWT_REFRESH_EXPIRY,
+  JWT_REFRESH_SECRET,
+  OTP_CHANNEL,
+  OTP_STATUS,
+  OTP_TYPE,
+  SESSION_STATUS,
+  STATUS,
+} from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getOtp, getUser, updateOtp } from '../../../services';
-import { generateTokens, wrapController } from '../../../utils/helper';
+import { createSession, getOtp, getSession, getUser, updateOtp, updateSession } from '../../../services';
+import { generateTokens, parseExpiryToSeconds, wrapController } from '../../../utils/helper';
 
 const OTP_EXPIRY_MINUTES = 10;
 
@@ -89,8 +97,16 @@ const loginHandler = async (req: IRequest, res: IResponse) => {
   const isPasswordValid = await bcrypt.compare(password, user.password ?? '');
   if (!isPasswordValid) return makeResponse(req, res, 401, false, 'unauthorized');
 
-  const tokens = generateTokens(user.userId);
-  makeResponse(req, res, 200, true, 'login', tokens);
+  const deviceInfo = {
+    userAgent: req.headers['user-agent'],
+    ipAddress: (req.headers['x-forwarded-for'] as string) ?? req.socket.remoteAddress,
+  };
+
+  const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
+  const session = await createSession(user.userId, ttlSeconds, deviceInfo);
+
+  const tokens = generateTokens(user.userId, session.sessionId);
+  makeResponse(req, res, 200, true, 'login', { ...tokens });
 };
 
 const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
@@ -105,8 +121,30 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
     return makeResponse(req, res, 403, false, 'blocked_or_removed');
   }
 
-  const tokens = generateTokens(user.userId);
+  const session = await getSession(payload.sessionId);
+  if (!session || session.status !== SESSION_STATUS.active) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
+
+  await updateSession(session.sessionId, { lastAccessedAt: new Date().toISOString() });
+
+  const tokens = generateTokens(user.userId, session.sessionId);
   makeResponse(req, res, 200, true, 'fetch', tokens);
+};
+
+const logoutHandler = async (req: IRequest, res: IResponse) => {
+  const { refreshToken } = req.body;
+
+  const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
+
+  const session = await getSession(payload.sessionId);
+  if (!session || session.status !== SESSION_STATUS.active) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
+
+  await updateSession(session.sessionId, { status: SESSION_STATUS.revoked });
+
+  makeResponse(req, res, 200, true, 'logout');
 };
 
 export const authController = wrapController({
@@ -114,4 +152,5 @@ export const authController = wrapController({
   verifyOtpHandler,
   loginHandler,
   refreshTokenHandler,
+  logoutHandler,
 });

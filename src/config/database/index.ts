@@ -2,10 +2,11 @@ import {
   CreateTableCommand,
   DescribeTableCommand,
   DynamoDBClient,
+  UpdateTimeToLiveCommand,
   waitUntilTableExists,
 } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { AWS_REGION, DYNAMODB_ENDPOINT, OTP_TABLE, USER_TABLE } from '../../constant';
+import { AWS_REGION, DYNAMODB_ENDPOINT, OTP_TABLE, SESSION_TABLE, USER_TABLE } from '../../constant';
 
 const client = new DynamoDBClient({
   region: AWS_REGION,
@@ -17,6 +18,11 @@ export const docClient = DynamoDBDocumentClient.from(client);
 // ---------------------------------------------------------------------------
 // Table definitions
 // ---------------------------------------------------------------------------
+
+// Tables that need DynamoDB TTL enabled (attribute name per table)
+const TTL_CONFIG: Record<string, string> = {
+  [SESSION_TABLE]: 'ttl',
+};
 
 const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
   {
@@ -38,6 +44,24 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
           { AttributeName: 'contactOtpKey', KeyType: 'HASH'  },
           { AttributeName: 'createdAt',     KeyType: 'RANGE' },
         ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  {
+    TableName: SESSION_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'sessionId', AttributeType: 'S' },
+      { AttributeName: 'userId',    AttributeType: 'S' },
+    ],
+    KeySchema: [
+      { AttributeName: 'sessionId', KeyType: 'HASH' },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'user-sessions-index',
+        KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],
@@ -86,6 +110,22 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
       { TableName: def.TableName }
     );
     console.log(`Table ready: ${def.TableName}`);
+  }
+
+  const ttlAttr = TTL_CONFIG[def.TableName!];
+  if (ttlAttr) {
+    try {
+      await client.send(
+        new UpdateTimeToLiveCommand({
+          TableName: def.TableName,
+          TimeToLiveSpecification: { AttributeName: ttlAttr, Enabled: true },
+        })
+      );
+      console.log(`TTL enabled on ${def.TableName} (attr: ${ttlAttr})`);
+    } catch (err: any) {
+      if (err.name !== 'ValidationException') throw err;
+      // TTL already enabled — nothing to do
+    }
   }
 };
 

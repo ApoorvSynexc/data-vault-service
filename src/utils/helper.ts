@@ -15,14 +15,23 @@ const randomNumber = (digits: number = 6): string => {
   return String(Math.floor(min + Math.random() * (max - min + 1)));
 };
 
-const generateTokens = (userId: string) => {
-  const accessToken = jwt.sign({ userId }, JWT_ACCESS_SECRET, {
+const generateTokens = (userId: string, sessionId: string) => {
+  const payload = { userId, sessionId };
+  const accessToken = jwt.sign(payload, JWT_ACCESS_SECRET, {
     expiresIn: JWT_ACCESS_EXPIRY as jwt.SignOptions['expiresIn'],
   });
-  const refreshToken = jwt.sign({ userId }, JWT_REFRESH_SECRET, {
+  const refreshToken = jwt.sign(payload, JWT_REFRESH_SECRET, {
     expiresIn: JWT_REFRESH_EXPIRY as jwt.SignOptions['expiresIn'],
   });
   return { accessToken, refreshToken };
+};
+
+// Parse a JWT expiry string like "7d", "15m", "3600s" into seconds
+const parseExpiryToSeconds = (expiry: string): number => {
+  const unit = expiry.slice(-1);
+  const value = parseInt(expiry.slice(0, -1), 10);
+  const map: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+  return value * (map[unit] ?? 1);
 };
 
 const asyncHandler = (fn: IHandler): IHandler =>
@@ -40,4 +49,4 @@ const wrapController = <T extends Record<string, IHandler>>(controller: T): T =>
     Object.entries(controller).map(([key, fn]) => [key, asyncHandler(fn)])
   ) as T;
 
-export { randomNumber, generateTokens, wrapController };
+export { randomNumber, generateTokens, parseExpiryToSeconds, wrapController };
