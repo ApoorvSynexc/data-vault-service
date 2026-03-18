@@ -171,26 +171,10 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'fetch', tokens);
 };
 
-const logoutHandler = async (req: IRequest, res: IResponse) => {
-  const { refreshToken } = req.body;
-
-  const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
-
-  const session = await getSession(payload.sessionId);
-  if (!session || session.status !== SESSION_STATUS.active) {
-    return makeResponse(req, res, 401, false, 'unauthorized');
-  }
-
-  await updateSession(session.sessionId, { status: SESSION_STATUS.revoked });
-
-  makeResponse(req, res, 200, true, 'logout');
-};
-
 export const authController = wrapController({
   signupHandler,
   sendOtpHandler,
   verifyOtpHandler,
   loginHandler,
   refreshTokenHandler,
-  logoutHandler,
 });

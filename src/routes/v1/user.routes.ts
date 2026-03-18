@@ -6,5 +6,6 @@ const router = Router();
 
 router.use(authenticate);
 router.get('/my-profile', userController.myProfileHandler);
+router.get('/logout', userController.logoutHandler);
 
 export const userRouter = router;

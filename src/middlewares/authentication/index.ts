@@ -34,6 +34,7 @@ const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): 
     }
 
     req.user = user;
+    req.sessionId = payload.sessionId;
     next();
   } catch {
     await makeResponse(req, res, 401, false, 'unauthorized');
