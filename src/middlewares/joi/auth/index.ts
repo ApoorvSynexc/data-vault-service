@@ -78,3 +78,37 @@ export const verifyOtpValidation = (
   }
   next();
 };
+
+export const resetPasswordValidation = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const schema = Joi.object({
+    channel: Joi.string()
+      .valid(...Object.values(OTP_CHANNEL))
+      .required(),
+    contact: Joi.when('channel', {
+      is: OTP_CHANNEL.email,
+      then: Joi.string()
+        .trim()
+        .email({ tlds: { allow: false } })
+        .required(),
+      otherwise: phoneJoiSchema.required(),
+    }),
+    newPassword: Joi.string().min(8).required(),
+  });
+
+  const { error } = schema.validate(req.body);
+  if (error) {
+    makeResponse(
+      req,
+      res,
+      400,
+      false,
+      error.details.map((d) => d.message).join(', ') as any
+    );
+    return;
+  }
+  next();
+};

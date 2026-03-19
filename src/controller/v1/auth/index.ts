@@ -11,7 +11,7 @@ import {
   STATUS,
 } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { createSession, createUser, getOtp, getSession, getUser, updateOtp, updateSession } from '../../../services';
+import { createSession, createUser, getOtp, getSession, getUser, updateOtp, updateSession, updateUser } from '../../../services';
 import { generateTokens, parseExpiryToSeconds, wrapController } from '../../../utils/helper';
 
 const OTP_EXPIRY_MINUTES = 10;
@@ -56,9 +56,10 @@ const signupHandler = async (req: IRequest, res: IResponse) => {
 };
 
 const sendOtpHandler = async (req: IRequest, res: IResponse) => {
-  const { contact, channel } = req.body as {
+  const { contact, channel, otpType } = req.body as {
     contact: string | object;
     channel: string;
+    otpType: string;
   };
 
   const otpNumber = 123456;
@@ -68,13 +69,13 @@ const sendOtpHandler = async (req: IRequest, res: IResponse) => {
     channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
 
   await updateOtp(
-    { [contactField]: contact, channel, otpType: OTP_TYPE.signup },
+    { [contactField]: contact, channel, otpType: otpType },
     {
       [contactField]: contact,
       channel,
       otp: otpNumber,
       expiresAt,
-      otpType: OTP_TYPE.signup,
+      otpType: otpType,
       status: OTP_STATUS.pending,
     },
     { upsert: true }
@@ -171,10 +172,40 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'fetch', tokens);
 };
 
+const resetPasswordHandler = async (req: IRequest, res: IResponse) => {
+  const { contact, channel, newPassword } = req.body;
+
+  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
+
+  const record = await getOtp({
+    [contactField]: contact,
+    channel,
+    otpType: OTP_TYPE.forgotPassword,
+    status: OTP_STATUS.verified,
+  });
+
+  if (!record || dayjs().isAfter(dayjs(record.expiresAt))) {
+    return makeResponse(req, res, 400, false, 'otp_expired');
+  }
+
+  const userSearch = channel === OTP_CHANNEL.email
+    ? { 'contact.email': contact }
+    : { 'contact.mobile.number': contact.number, 'contact.mobile.dialCode': contact.dialCode };
+
+  const user = await getUser(userSearch);
+  if (!user) return makeResponse(req, res, 404, false, 'not_exit');
+
+  const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  await updateUser({ userId: user.userId }, { password: hashed });
+
+  makeResponse(req, res, 200, true, 'update');
+};
+
 export const authController = wrapController({
   signupHandler,
   sendOtpHandler,
   verifyOtpHandler,
   loginHandler,
   refreshTokenHandler,
+  resetPasswordHandler,
 });
