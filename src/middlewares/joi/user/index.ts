@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
-import { GENDER } from '../../../constant';
+import { AUTH_PROVIDER, GENDER } from '../../../constant';
 import { makeResponse } from '../../../lib';
 import { phoneJoiSchema } from '../shared';
 
@@ -32,6 +32,7 @@ export const signupValidation = (req: Request, res: Response, next: NextFunction
       .or('email', 'mobile')
       .required(),
     password: Joi.string().min(8).required(),
+    authProvider: Joi.string().valid(...Object.values(AUTH_PROVIDER)).required(),
     gender: Joi.string()
       .valid(...Object.values(GENDER))
       .optional(),

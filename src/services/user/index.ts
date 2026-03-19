@@ -26,7 +26,7 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
   const now = new Date().toISOString();
   const item: Record<string, any> = {
     ...data,
-    userId: uuidv4(),
+    userId: data.userId ?? uuidv4(),
     contactEmail: data.contact?.email ?? undefined,
     contactMobileKey: data.contact?.mobile ? buildMobileKey(data.contact.mobile) : undefined,
     status: data.status ?? STATUS.active,

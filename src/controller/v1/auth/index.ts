@@ -22,6 +22,7 @@ import {
   updateUser,
 } from '../../../services';
 import { generateTokens, parseExpiryToSeconds, wrapController } from '../../../utils/helper';
+import { defaultRoles } from '../../../assets';
 
 const OTP_EXPIRY_MINUTES = 10;
 const SALT_ROUNDS = 10;
@@ -63,6 +64,9 @@ const signupHandler = async (req: IRequest, res: IResponse) => {
   if (body.password) {
     body.password = await bcrypt.hash(body.password, SALT_ROUNDS);
   }
+
+  const userRole = defaultRoles.find((r) => r.name === 'user')!;
+  body.role = { name: userRole.name, roleId: userRole.roleId };
 
   await createUser(body);
   makeResponse(req, res, 201, true, 'create');
