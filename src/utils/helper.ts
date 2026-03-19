@@ -34,19 +34,24 @@ const parseExpiryToSeconds = (expiry: string): number => {
   return value * (map[unit] ?? 1);
 };
 
-const asyncHandler = (fn: IHandler): IHandler =>
+const asyncHandler =
+  (fn: IHandler): IHandler =>
   async (req: IRequest, res: IResponse): Promise<void> => {
     try {
       await fn(req, res);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'unknown_error';
-      makeResponse(req, res, 400, false, (message || 'unknown_error') as Parameters<typeof makeResponse>[4]);
+      makeResponse(
+        req,
+        res,
+        400,
+        false,
+        (message || 'unknown_error') as Parameters<typeof makeResponse>[4]
+      );
     }
   };
 
 const wrapController = <T extends Record<string, IHandler>>(controller: T): T =>
-  Object.fromEntries(
-    Object.entries(controller).map(([key, fn]) => [key, asyncHandler(fn)])
-  ) as T;
+  Object.fromEntries(Object.entries(controller).map(([key, fn]) => [key, asyncHandler(fn)])) as T;
 
 export { randomNumber, generateTokens, parseExpiryToSeconds, wrapController };

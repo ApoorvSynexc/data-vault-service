@@ -12,7 +12,7 @@ export interface IUser {
     mobile?: IPhone;
   };
   // Denormalized top-level attributes used as DynamoDB GSI keys
-  contactEmail?: string;     // GSI: email-index  PK
+  contactEmail?: string; // GSI: email-index  PK
   contactMobileKey?: string; // GSI: mobile-index PK  e.g. "+919876543210"
   settings?: {
     notifications?: boolean;

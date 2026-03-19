@@ -7,6 +7,7 @@ const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT; // optional: for Dynamo
 const USER_TABLE = String(process.env.USER_TABLE || 'data-vault-users');
 const OTP_TABLE = String(process.env.OTP_TABLE || 'data-vault-otps');
 const SESSION_TABLE = String(process.env.SESSION_TABLE || 'data-vault-sessions');
+const ROLE_TABLE = String(process.env.ROLE_TABLE || 'data-vault-roles');
 
 const STATUS = {
   active: 'ACTIVE',
@@ -67,13 +68,13 @@ export {
   USER_TABLE,
   OTP_TABLE,
   SESSION_TABLE,
+  ROLE_TABLE,
 
   // JWT Config
   JWT_ACCESS_SECRET,
   JWT_REFRESH_SECRET,
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
-
   STATUS,
   AUTH_PROVIDER,
   LANGUAGE,

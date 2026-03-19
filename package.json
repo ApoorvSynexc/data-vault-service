@@ -9,6 +9,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "npm run format && npm run lint && tsc",
     "start": "node dist/index.js",
+    "migrate": "node dist/migration/index.js",
+    "migrate:create-role": "node dist/migration/index.js CREATE_ROLE",
     "lint": "eslint --fix",
     "format": "prettier --write ."
   },

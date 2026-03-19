@@ -6,7 +6,7 @@ import {
   waitUntilTableExists,
 } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { AWS_REGION, DYNAMODB_ENDPOINT, OTP_TABLE, SESSION_TABLE, USER_TABLE } from '../../constant';
+import { AWS_REGION, OTP_TABLE, ROLE_TABLE, SESSION_TABLE, USER_TABLE } from '../../constant';
 
 const client = new DynamoDBClient({
   region: AWS_REGION,
@@ -29,20 +29,20 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     TableName: OTP_TABLE,
     BillingMode: 'PAY_PER_REQUEST',
     AttributeDefinitions: [
-      { AttributeName: 'otpId',         AttributeType: 'S' },
-      { AttributeName: 'createdAt',     AttributeType: 'S' },
+      { AttributeName: 'otpId', AttributeType: 'S' },
+      { AttributeName: 'createdAt', AttributeType: 'S' },
       { AttributeName: 'contactOtpKey', AttributeType: 'S' },
     ],
     KeySchema: [
-      { AttributeName: 'otpId',     KeyType: 'HASH'  },
+      { AttributeName: 'otpId', KeyType: 'HASH' },
       { AttributeName: 'createdAt', KeyType: 'RANGE' },
     ],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'contact-otptype-index',
         KeySchema: [
-          { AttributeName: 'contactOtpKey', KeyType: 'HASH'  },
-          { AttributeName: 'createdAt',     KeyType: 'RANGE' },
+          { AttributeName: 'contactOtpKey', KeyType: 'HASH' },
+          { AttributeName: 'createdAt', KeyType: 'RANGE' },
         ],
         Projection: { ProjectionType: 'ALL' },
       },
@@ -53,11 +53,9 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     BillingMode: 'PAY_PER_REQUEST',
     AttributeDefinitions: [
       { AttributeName: 'sessionId', AttributeType: 'S' },
-      { AttributeName: 'userId',    AttributeType: 'S' },
+      { AttributeName: 'userId', AttributeType: 'S' },
     ],
-    KeySchema: [
-      { AttributeName: 'sessionId', KeyType: 'HASH' },
-    ],
+    KeySchema: [{ AttributeName: 'sessionId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'user-sessions-index',
@@ -67,16 +65,30 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     ],
   },
   {
+    TableName: ROLE_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'roleId', AttributeType: 'S' },
+      { AttributeName: 'name', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'roleId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'name-index',
+        KeySchema: [{ AttributeName: 'name', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  {
     TableName: USER_TABLE,
     BillingMode: 'PAY_PER_REQUEST',
     AttributeDefinitions: [
-      { AttributeName: 'userId',           AttributeType: 'S' },
-      { AttributeName: 'contactEmail',     AttributeType: 'S' },
+      { AttributeName: 'userId', AttributeType: 'S' },
+      { AttributeName: 'contactEmail', AttributeType: 'S' },
       { AttributeName: 'contactMobileKey', AttributeType: 'S' },
     ],
-    KeySchema: [
-      { AttributeName: 'userId', KeyType: 'HASH' },
-    ],
+    KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'email-index',
@@ -101,14 +113,13 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
     await client.send(new DescribeTableCommand({ TableName: def.TableName }));
     console.log(`Table exists: ${def.TableName}`);
   } catch (err: any) {
-    if (err.name !== 'ResourceNotFoundException') throw err;
+    if (err.name !== 'ResourceNotFoundException') {
+      throw err;
+    }
 
     console.log(`Creating table: ${def.TableName}`);
     await client.send(new CreateTableCommand(def));
-    await waitUntilTableExists(
-      { client, maxWaitTime: 60 },
-      { TableName: def.TableName }
-    );
+    await waitUntilTableExists({ client, maxWaitTime: 60 }, { TableName: def.TableName });
     console.log(`Table ready: ${def.TableName}`);
   }
 
@@ -123,7 +134,9 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
       );
       console.log(`TTL enabled on ${def.TableName} (attr: ${ttlAttr})`);
     } catch (err: any) {
-      if (err.name !== 'ValidationException') throw err;
+      if (err.name !== 'ValidationException') {
+        throw err;
+      }
       // TTL already enabled — nothing to do
     }
   }

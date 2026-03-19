@@ -1,7 +1,7 @@
 import { IPhone } from '../shared';
 
 export interface IOtpId {
-  otpId: string;     // DynamoDB PK
+  otpId: string; // DynamoDB PK
   createdAt: string; // DynamoDB SK
 }
 

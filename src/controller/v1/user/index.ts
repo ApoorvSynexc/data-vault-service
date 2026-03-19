@@ -26,7 +26,9 @@ const changePasswordHandler = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
 
   const isMatch = await bcrypt.compare(oldPassword, user.password ?? '');
-  if (!isMatch) return makeResponse(req, res, 401, false, 'unauthorized');
+  if (!isMatch) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
 
   const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
   await updateUser({ userId: user.userId }, { password: hashed });

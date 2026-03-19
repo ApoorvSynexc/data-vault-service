@@ -1,9 +1,8 @@
 import { PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
-import { docClient } from '../../config/database';
+import { docClient } from '../../config';
 import { OTP_TABLE } from '../../constant';
-import { IOtp, IOtpId } from '../../models/otp';
-import { IPhone } from '../../models/shared';
+import { IOtp, IOtpId, IPhone } from '../../models';
 
 // ---------------------------------------------------------------------------
 // DynamoDB table layout
@@ -22,7 +21,9 @@ import { IPhone } from '../../models/shared';
 // ---------------------------------------------------------------------------
 
 const buildContactKey = (search: Record<string, any>): string => {
-  if (search['contact.email']) return `email#${search['contact.email']}`;
+  if (search['contact.email']) {
+    return `email#${search['contact.email']}`;
+  }
   if (search['contact.mobile']) {
     const m = search['contact.mobile'] as IPhone;
     return `mobile#${m.dialCode}${m.number}`;
@@ -42,8 +43,12 @@ const buildContactObject = (
 ): IOtp['contact'] | undefined => {
   const emailVal = payload['contact.email'] ?? search['contact.email'];
   const mobileVal = payload['contact.mobile'] ?? search['contact.mobile'];
-  if (emailVal) return { email: emailVal };
-  if (mobileVal) return { mobile: mobileVal as IPhone };
+  if (emailVal) {
+    return { email: emailVal };
+  }
+  if (mobileVal) {
+    return { mobile: mobileVal as IPhone };
+  }
   return undefined;
 };
 
@@ -70,7 +75,9 @@ const createOtp = async (data: Record<string, any>): Promise<void> => {
 
 const getOtp = async (search: Record<string, any>): Promise<IOtp | null> => {
   const contactOtpKey = buildContactOtpKey(search);
-  if (!contactOtpKey.includes('#')) return null;
+  if (!contactOtpKey.includes('#')) {
+    return null;
+  }
 
   // Query GSI — sorted by createdAt DESC, take first result
   const result = await docClient.send(
@@ -80,7 +87,7 @@ const getOtp = async (search: Record<string, any>): Promise<IOtp | null> => {
       KeyConditionExpression: 'contactOtpKey = :key',
       ExpressionAttributeValues: { ':key': contactOtpKey },
       ScanIndexForward: false, // descending createdAt → latest first
-      Limit: 10,               // small window; filtered below
+      Limit: 10, // small window; filtered below
     })
   );
 
@@ -88,20 +95,27 @@ const getOtp = async (search: Record<string, any>): Promise<IOtp | null> => {
 
   // In-memory filters (mirrors MongoDB $match on remaining fields)
   const match = items.find((item) => {
-    if (search.otp !== undefined && item.otp !== search.otp) return false;
-    if (search.status !== undefined && item.status !== search.status) return false;
-    if (search.channel !== undefined && item.channel !== search.channel) return false;
+    if (search.otp !== undefined && item.otp !== search.otp) {
+      return false;
+    }
+    if (search.status !== undefined && item.status !== search.status) {
+      return false;
+    }
+    if (search.channel !== undefined && item.channel !== search.channel) {
+      return false;
+    }
     return true;
   });
 
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   return { ...match, _id: { otpId: match.otpId, createdAt: match.createdAt } };
 };
 
 const updateOtp = async (
   search: Record<string, any>,
-  payload: Record<string, any>,
-  _options: Record<string, any> = {}
+  payload: Record<string, any>
 ): Promise<void> => {
   const now = new Date().toISOString();
 
@@ -134,7 +148,9 @@ const updateOtp = async (
 
   // ── Case 2: upsert — update existing record or insert if none exists ────────
   const contactKey = buildContactKey(search);
-  if (!contactKey) return;
+  if (!contactKey) {
+    return;
+  }
 
   const otpType = (payload as any).otpType ?? search.otpType;
   const contactOtpKey = `${contactKey}#${otpType}`;

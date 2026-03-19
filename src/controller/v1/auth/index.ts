@@ -11,7 +11,16 @@ import {
   STATUS,
 } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { createSession, createUser, getOtp, getSession, getUser, updateOtp, updateSession, updateUser } from '../../../services';
+import {
+  createSession,
+  createUser,
+  getOtp,
+  getSession,
+  getUser,
+  updateOtp,
+  updateSession,
+  updateUser,
+} from '../../../services';
 import { generateTokens, parseExpiryToSeconds, wrapController } from '../../../utils/helper';
 
 const OTP_EXPIRY_MINUTES = 10;
@@ -37,14 +46,18 @@ const signupHandler = async (req: IRequest, res: IResponse) => {
   if (isEmailSignup) {
     body.contact.isEmailVerified = true;
     const existing = await getUser({ 'contact.email': body.contact.email });
-    if (existing) return makeResponse(req, res, 400, false, 'email_exit');
+    if (existing) {
+      return makeResponse(req, res, 400, false, 'email_exit');
+    }
   } else {
     body.contact.isMobileVerified = true;
     const existing = await getUser({
       'contact.mobile.number': body.contact.mobile.number,
       'contact.mobile.dialCode': body.contact.mobile.dialCode,
     });
-    if (existing) return makeResponse(req, res, 400, false, 'mobile_exit');
+    if (existing) {
+      return makeResponse(req, res, 400, false, 'mobile_exit');
+    }
   }
 
   if (body.password) {
@@ -65,8 +78,7 @@ const sendOtpHandler = async (req: IRequest, res: IResponse) => {
   const otpNumber = 123456;
   const expiresAt = dayjs().add(OTP_EXPIRY_MINUTES, 'minute').toDate();
 
-  const contactField =
-    channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
+  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
 
   await updateOtp(
     { [contactField]: contact, channel, otpType: otpType },
@@ -77,8 +89,7 @@ const sendOtpHandler = async (req: IRequest, res: IResponse) => {
       expiresAt,
       otpType: otpType,
       status: OTP_STATUS.pending,
-    },
-    { upsert: true }
+    }
   );
 
   // TODO: send OTP via email/SMS based on channel === OTP_CHANNEL.email / OTP_CHANNEL.mobile
@@ -94,8 +105,7 @@ const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
     otp: string;
   };
 
-  const contactField =
-    channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
+  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
 
   const record = await getOtp({
     [contactField]: contact,
@@ -128,14 +138,18 @@ const loginHandler = async (req: IRequest, res: IResponse) => {
 
   const user = await getUser(search);
 
-  if (!user) return makeResponse(req, res, 401, false, 'unauthorized');
+  if (!user) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
 
   if (user.status === STATUS.inactive) {
     return makeResponse(req, res, 403, false, 'blocked_or_removed');
   }
 
   const isPasswordValid = await bcrypt.compare(password, user.password ?? '');
-  if (!isPasswordValid) return makeResponse(req, res, 401, false, 'unauthorized');
+  if (!isPasswordValid) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
 
   const deviceInfo = {
     userAgent: req.headers['user-agent'],
@@ -155,7 +169,9 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
   const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
 
   const user = await getUser({ userId: payload.userId });
-  if (!user) return makeResponse(req, res, 401, false, 'unauthorized');
+  if (!user) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
 
   if (user.status === STATUS.inactive) {
     return makeResponse(req, res, 403, false, 'blocked_or_removed');
@@ -188,12 +204,15 @@ const resetPasswordHandler = async (req: IRequest, res: IResponse) => {
     return makeResponse(req, res, 400, false, 'otp_expired');
   }
 
-  const userSearch = channel === OTP_CHANNEL.email
-    ? { 'contact.email': contact }
-    : { 'contact.mobile.number': contact.number, 'contact.mobile.dialCode': contact.dialCode };
+  const userSearch =
+    channel === OTP_CHANNEL.email
+      ? { 'contact.email': contact }
+      : { 'contact.mobile.number': contact.number, 'contact.mobile.dialCode': contact.dialCode };
 
   const user = await getUser(userSearch);
-  if (!user) return makeResponse(req, res, 404, false, 'not_exit');
+  if (!user) {
+    return makeResponse(req, res, 404, false, 'not_exit');
+  }
 
   const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
   await updateUser({ userId: user.userId }, { password: hashed });

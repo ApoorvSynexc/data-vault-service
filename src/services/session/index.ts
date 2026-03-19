@@ -1,8 +1,8 @@
 import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
-import { docClient } from '../../config/database';
+import { docClient } from '../../config';
 import { SESSION_STATUS, SESSION_TABLE } from '../../constant';
-import { ISession, ISessionDeviceInfo } from '../../models/session';
+import { ISession, ISessionDeviceInfo } from '../../models';
 
 // ---------------------------------------------------------------------------
 // DynamoDB table layout
@@ -39,10 +39,7 @@ const getSession = async (sessionId: string): Promise<ISession | null> => {
   return (result.Item as ISession) ?? null;
 };
 
-const updateSession = async (
-  sessionId: string,
-  payload: Partial<ISession>
-): Promise<void> => {
+const updateSession = async (sessionId: string, payload: Partial<ISession>): Promise<void> => {
   const now = new Date().toISOString();
   const $set = { ...payload, updatedAt: now };
 
@@ -51,13 +48,17 @@ const updateSession = async (
   const parts: string[] = [];
 
   Object.entries($set).forEach(([key, val], i) => {
-    if (key === 'sessionId') return;
+    if (key === 'sessionId') {
+      return;
+    }
     names[`#f${i}`] = key;
     values[`:v${i}`] = val;
     parts.push(`#f${i} = :v${i}`);
   });
 
-  if (!parts.length) return;
+  if (!parts.length) {
+    return;
+  }
 
   await docClient.send(
     new UpdateCommand({

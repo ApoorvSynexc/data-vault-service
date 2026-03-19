@@ -23,13 +23,18 @@ export const signupValidation = (req: Request, res: Response, next: NextFunction
     firstName: Joi.string().trim().required(),
     lastName: Joi.string().trim().optional(),
     contact: Joi.object({
-      email: Joi.string().trim().email({ tlds: { allow: false } }).optional(),
+      email: Joi.string()
+        .trim()
+        .email({ tlds: { allow: false } })
+        .optional(),
       mobile: phoneJoiSchema.optional(),
     })
       .or('email', 'mobile')
       .required(),
     password: Joi.string().min(8).required(),
-    gender: Joi.string().valid(...Object.values(GENDER)).optional(),
+    gender: Joi.string()
+      .valid(...Object.values(GENDER))
+      .optional(),
   });
 
   const { error } = schema.validate(req.body);
@@ -42,7 +47,10 @@ export const signupValidation = (req: Request, res: Response, next: NextFunction
 
 export const loginValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    email: Joi.string().trim().email({ tlds: { allow: false } }).optional(),
+    email: Joi.string()
+      .trim()
+      .email({ tlds: { allow: false } })
+      .optional(),
     mobile: phoneJoiSchema.optional(),
     password: Joi.string().required(),
   }).or('email', 'mobile');
@@ -67,4 +75,3 @@ export const refreshTokenValidation = (req: Request, res: Response, next: NextFu
   }
   next();
 };
-

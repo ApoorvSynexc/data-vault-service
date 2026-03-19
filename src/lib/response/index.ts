@@ -17,9 +17,7 @@ const makeResponse = async (
     const acceptLanguage = req.headers['accept-language'] as ILanguage;
     const allowedLanguages = Object.values(LANGUAGE) as Array<ILanguage>;
     const language =
-      acceptLanguage && allowedLanguages.includes(acceptLanguage)
-        ? acceptLanguage
-        : 'en';
+      acceptLanguage && allowedLanguages.includes(acceptLanguage) ? acceptLanguage : 'en';
     const localizationMessage = LOCALIZATION[language]?.[message] ?? message;
 
     res.status(statusCode).send({

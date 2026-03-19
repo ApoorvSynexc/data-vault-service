@@ -6,9 +6,9 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
-import { docClient } from '../../config/database';
+import { docClient } from '../../config';
 import { STATUS, USER_TABLE } from '../../constant';
-import { IUser } from '../../models/user';
+import { IUser } from '../../models';
 
 // ---------------------------------------------------------------------------
 // DynamoDB table layout
@@ -76,9 +76,7 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
   // ── By userId (primary key) ───────────────────────────────────────────────
   const userId = search.userId ?? search._id;
   if (userId) {
-    const result = await docClient.send(
-      new GetCommand({ TableName: USER_TABLE, Key: { userId } })
-    );
+    const result = await docClient.send(new GetCommand({ TableName: USER_TABLE, Key: { userId } }));
     return (result.Item as IUser) ?? null;
   }
 
@@ -87,11 +85,12 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
 
 const updateUser = async (
   search: Record<string, any>,
-  payload: Record<string, any>,
-  _options: Record<string, any> = {}
+  payload: Record<string, any>
 ): Promise<void> => {
   const userId = search.userId ?? search._id;
-  if (!userId) return;
+  if (!userId) {
+    return;
+  }
 
   const $set: Record<string, any> = (payload as any).$set ?? payload;
   const now = new Date().toISOString();
@@ -101,7 +100,9 @@ const updateUser = async (
   const parts: string[] = ['#updatedAt = :updatedAt'];
 
   Object.entries($set).forEach(([key, val], i) => {
-    if (key === 'userId') return; // never overwrite the PK
+    if (key === 'userId') {
+      return;
+    } // never overwrite the PK
     names[`#f${i}`] = key;
     values[`:v${i}`] = val;
     parts.push(`#f${i} = :v${i}`);
@@ -118,20 +119,170 @@ const updateUser = async (
   );
 };
 
-const getUsers = async (_search: Record<string, any> = {}): Promise<IUser[]> => {
-  const result = await docClient.send(new ScanCommand({ TableName: USER_TABLE }));
+// ---------------------------------------------------------------------------
+// Builds FilterExpression parts for gender (and any future scalar fields).
+// Returns null when no filter fields are present.
+// ---------------------------------------------------------------------------
+const buildFilterExpression = (search: Record<string, any>) => {
+  const names: Record<string, string> = {};
+  const values: Record<string, any> = {};
+  const parts: string[] = [];
+
+  if (search.gender) {
+    names['#gender'] = 'gender';
+    values[':gender'] = search.gender;
+    parts.push('#gender = :gender');
+  }
+
+  if (!parts.length) {
+    return null;
+  }
+  return {
+    FilterExpression: parts.join(' AND '),
+    ExpressionAttributeNames: names,
+    ExpressionAttributeValues: values,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Queries by email or mobile GSI and applies an optional FilterExpression
+// for remaining fields (e.g. gender).
+// ---------------------------------------------------------------------------
+const queryByContact = async (
+  search: Record<string, any>,
+  extraParams: Record<string, any> = {}
+): Promise<IUser[]> => {
+  const filter = buildFilterExpression(search);
+
+  if (search['contact.email']) {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: USER_TABLE,
+        IndexName: 'email-index',
+        KeyConditionExpression: 'contactEmail = :email',
+        ExpressionAttributeValues: {
+          ':email': search['contact.email'],
+          ...filter?.ExpressionAttributeValues,
+        },
+        ...(filter && {
+          FilterExpression: filter.FilterExpression,
+          ExpressionAttributeNames: filter.ExpressionAttributeNames,
+        }),
+        ...extraParams,
+      })
+    );
+    return (result.Items ?? []) as IUser[];
+  }
+
+  if (search['contact.mobile.number'] && search['contact.mobile.dialCode']) {
+    const mobileKey = buildMobileKey({
+      dialCode: search['contact.mobile.dialCode'],
+      number: search['contact.mobile.number'],
+    });
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: USER_TABLE,
+        IndexName: 'mobile-index',
+        KeyConditionExpression: 'contactMobileKey = :mobileKey',
+        ExpressionAttributeValues: {
+          ':mobileKey': mobileKey,
+          ...filter?.ExpressionAttributeValues,
+        },
+        ...(filter && {
+          FilterExpression: filter.FilterExpression,
+          ExpressionAttributeNames: filter.ExpressionAttributeNames,
+        }),
+        ...extraParams,
+      })
+    );
+    return (result.Items ?? []) as IUser[];
+  }
+
+  return [];
+};
+
+const getUsers = async (search: Record<string, any> = {}): Promise<IUser[]> => {
+  const hasContact =
+    search['contact.email'] ||
+    (search['contact.mobile.number'] && search['contact.mobile.dialCode']);
+
+  if (hasContact) {
+    return queryByContact(search);
+  }
+
+  const filter = buildFilterExpression(search);
+  const result = await docClient.send(
+    new ScanCommand({
+      TableName: USER_TABLE,
+      ...(filter && {
+        FilterExpression: filter.FilterExpression,
+        ExpressionAttributeNames: filter.ExpressionAttributeNames,
+        ExpressionAttributeValues: filter.ExpressionAttributeValues,
+      }),
+    })
+  );
   return (result.Items ?? []) as IUser[];
 };
 
+// ---------------------------------------------------------------------------
+// Converts a MongoDB-style projection { firstName: 1, email: 1 } into
+// DynamoDB ProjectionExpression params.  Returns null when projection is empty.
+// ---------------------------------------------------------------------------
+const buildProjectionExpression = (projection: Record<string, any>) => {
+  const fields = Object.keys(projection).filter((k) => projection[k]);
+  if (!fields.length) {return null;}
+
+  const names: Record<string, string> = {};
+  const parts = fields.map((field, i) => {
+    const alias = `#p${i}`;
+    names[alias] = field;
+    return alias;
+  });
+
+  return {
+    ProjectionExpression: parts.join(', '),
+    ExpressionAttributeNames: names,
+  };
+};
+
 const getUsersWithPagination = async (
-  _search: Record<string, any> = {},
-  _projection: object = {},
+  search: Record<string, any> = {},
+  projection: Record<string, any> = {},
   optional: { skip: number; limit: number }
 ) => {
-  // DynamoDB does not support offset-based pagination.
-  // Use cursor-based pagination (LastEvaluatedKey) in production.
+  const hasContact =
+    search['contact.email'] ||
+    (search['contact.mobile.number'] && search['contact.mobile.dialCode']);
+
+  const proj = buildProjectionExpression(projection);
+
+  if (hasContact) {
+    const documents = await queryByContact(search, {
+      Limit: optional.limit,
+      ...(proj && {
+        ProjectionExpression: proj.ProjectionExpression,
+        ExpressionAttributeNames: proj.ExpressionAttributeNames,
+      }),
+    });
+    return { documents, total: { count: documents.length } };
+  }
+
+  const filter = buildFilterExpression(search);
+
+  // Merge ExpressionAttributeNames from filter and projection (both may define them)
+  const mergedNames = { ...filter?.ExpressionAttributeNames, ...proj?.ExpressionAttributeNames };
+
   const result = await docClient.send(
-    new ScanCommand({ TableName: USER_TABLE, Limit: optional.limit })
+    new ScanCommand({
+      TableName: USER_TABLE,
+      Limit: optional.limit,
+      ...(filter && {
+        FilterExpression: filter.FilterExpression,
+        ExpressionAttributeValues: filter.ExpressionAttributeValues,
+      }),
+      ...(proj && { ProjectionExpression: proj.ProjectionExpression }),
+      ...(Object.keys(mergedNames).length && { ExpressionAttributeNames: mergedNames }),
+    })
   );
   const documents = (result.Items ?? []) as IUser[];
   return { documents, total: { count: result.Count ?? 0 } };

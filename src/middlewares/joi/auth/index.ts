@@ -4,11 +4,7 @@ import { OTP_CHANNEL, OTP_TYPE } from '../../../constant';
 import { makeResponse } from '../../../lib';
 import { phoneJoiSchema } from '../shared';
 
-export const sendOtpValidation = (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+export const sendOtpValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     otpType: Joi.string()
       .valid(...Object.values(OTP_TYPE))
@@ -28,23 +24,13 @@ export const sendOtpValidation = (
 
   const { error } = schema.validate(req.body);
   if (error) {
-    makeResponse(
-      req,
-      res,
-      400,
-      false,
-      error.details.map((d) => d.message).join(', ') as any
-    );
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }
   next();
 };
 
-export const verifyOtpValidation = (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+export const verifyOtpValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     channel: Joi.string()
       .valid(...Object.values(OTP_CHANNEL))
@@ -60,30 +46,18 @@ export const verifyOtpValidation = (
     otpType: Joi.string()
       .valid(...Object.values(OTP_TYPE))
       .required(),
-    otp: Joi.string().length(6)
-.pattern(/^\d+$/)
-.required(),
+    otp: Joi.string().length(6).pattern(/^\d+$/).required(),
   });
 
   const { error } = schema.validate(req.body);
   if (error) {
-    makeResponse(
-      req,
-      res,
-      400,
-      false,
-      error.details.map((d) => d.message).join(', ') as any
-    );
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }
   next();
 };
 
-export const resetPasswordValidation = (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+export const resetPasswordValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     channel: Joi.string()
       .valid(...Object.values(OTP_CHANNEL))
@@ -101,13 +75,7 @@ export const resetPasswordValidation = (
 
   const { error } = schema.validate(req.body);
   if (error) {
-    makeResponse(
-      req,
-      res,
-      400,
-      false,
-      error.details.map((d) => d.message).join(', ') as any
-    );
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }
   next();
