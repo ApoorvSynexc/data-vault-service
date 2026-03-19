@@ -32,7 +32,9 @@ export const signupValidation = (req: Request, res: Response, next: NextFunction
       .or('email', 'mobile')
       .required(),
     password: Joi.string().min(8).required(),
-    authProvider: Joi.string().valid(...Object.values(AUTH_PROVIDER)).required(),
+    authProvider: Joi.string()
+      .valid(...Object.values(AUTH_PROVIDER))
+      .required(),
     gender: Joi.string()
       .valid(...Object.values(GENDER))
       .optional(),
