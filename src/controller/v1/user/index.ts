@@ -53,11 +53,11 @@ const usersHandler = async (req: IRequest, res: IResponse) => {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
     const { cursor } = req.query as Record<string, string>;
 
-    const { documents, nextCursor } = await getUsersWithPagination(
-      searchFilter,
-      {},
-      { limit: limitNum, cursor }
-    );
+    const [{ documents, nextCursor }, counter] = await Promise.all([
+      getUsersWithPagination(searchFilter, {}, { limit: limitNum, cursor }),
+      getTableCounter(USER_TABLE, 'GLOBAL'),
+    ]);
+
     return makeResponse(
       req,
       res,
@@ -68,6 +68,8 @@ const usersHandler = async (req: IRequest, res: IResponse) => {
       {
         limit: limitNum,
         nextCursor,
+        totalRecords: counter?.count ?? 0,
+        totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
       }
     );
   }
@@ -83,15 +85,9 @@ const usersHandler = async (req: IRequest, res: IResponse) => {
   );
 };
 
-const userCountHandler = async (req: IRequest, res: IResponse) => {
-  const counter = await getTableCounter(USER_TABLE, 'GLOBAL');
-  makeResponse(req, res, 200, true, 'fetch', { totalRecords: counter?.count ?? 0 });
-};
-
 export const userController = wrapController({
   myProfileHandler,
   logoutHandler,
   changePasswordHandler,
   usersHandler,
-  userCountHandler,
 });
