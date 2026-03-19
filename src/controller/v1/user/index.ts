@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 import { SESSION_STATUS } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getSession, updateSession, updateUser } from '../../../services';
+import { getSession, getUsers, getUsersWithPagination, updateSession, updateUser } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 
 const SALT_ROUNDS = 10;
@@ -36,8 +36,32 @@ const changePasswordHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'update');
 };
 
+const usersHandler = async (req: IRequest, res: IResponse) => {
+  const { pagination, limit, search } = req.query as Record<string, string>;
+
+  const searchFilter: Record<string, any> = {};
+  if (search) searchFilter.search = search;
+
+  if (pagination === 'true') {
+    const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
+    const { cursor } = req.query as Record<string, string>;
+
+    const { documents, nextCursor } = await getUsersWithPagination(searchFilter, {}, { limit: limitNum, cursor });
+    return makeResponse(req, res, 200, true, 'fetch',
+      documents.map((u) => ({ ...u, password: undefined })),
+      {
+        limit: limitNum,
+        nextCursor,
+      });
+  }
+
+  const documents = await getUsers(searchFilter);
+  makeResponse(req, res, 200, true, 'fetch', documents.map((u) => ({ ...u, password: undefined })));
+};
+
 export const userController = wrapController({
   myProfileHandler,
   logoutHandler,
   changePasswordHandler,
+  usersHandler,
 });

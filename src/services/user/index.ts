@@ -3,6 +3,7 @@ import {
   PutCommand,
   QueryCommand,
   ScanCommand,
+  ScanCommandInput,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
@@ -134,6 +135,17 @@ const buildFilterExpression = (search: Record<string, any>) => {
     parts.push('#gender = :gender');
   }
 
+  if (search.search) {
+    values[':search'] = search.search;
+    names['#firstName'] = 'firstName';
+    names['#lastName'] = 'lastName';
+    names['#contactEmail'] = 'contactEmail';
+    names['#contactMobileKey'] = 'contactMobileKey';
+    parts.push(
+      '(contains(#firstName, :search) OR contains(#lastName, :search) OR contains(#contactEmail, :search) OR contains(#contactMobileKey, :search))'
+    );
+  }
+
   if (!parts.length) {
     return null;
   }
@@ -247,47 +259,91 @@ const buildProjectionExpression = (projection: Record<string, any>) => {
   };
 };
 
+const decodeCursor = (cursor?: string): Record<string, any> | undefined => {
+  if (!cursor) return undefined;
+  try {
+    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8'));
+  } catch {
+    return undefined;
+  }
+};
+
+const encodeCursor = (key: Record<string, any>): string =>
+  Buffer.from(JSON.stringify(key)).toString('base64url');
+
 const getUsersWithPagination = async (
   search: Record<string, any> = {},
   projection: Record<string, any> = {},
-  optional: { skip: number; limit: number }
+  optional: { limit: number; cursor?: string }
 ) => {
+  const proj = buildProjectionExpression(projection);
+  const filter = buildFilterExpression(search);
+  const exclusiveStartKey = decodeCursor(optional.cursor);
+  const mergedNames = { ...filter?.ExpressionAttributeNames, ...proj?.ExpressionAttributeNames };
+
   const hasContact =
     search['contact.email'] ||
     (search['contact.mobile.number'] && search['contact.mobile.dialCode']);
 
-  const proj = buildProjectionExpression(projection);
-
   if (hasContact) {
-    const documents = await queryByContact(search, {
+    const baseParams = {
       Limit: optional.limit,
-      ...(proj && {
-        ProjectionExpression: proj.ProjectionExpression,
-        ExpressionAttributeNames: proj.ExpressionAttributeNames,
-      }),
-    });
-    return { documents, total: { count: documents.length } };
-  }
-
-  const filter = buildFilterExpression(search);
-
-  // Merge ExpressionAttributeNames from filter and projection (both may define them)
-  const mergedNames = { ...filter?.ExpressionAttributeNames, ...proj?.ExpressionAttributeNames };
-
-  const result = await docClient.send(
-    new ScanCommand({
-      TableName: USER_TABLE,
-      Limit: optional.limit,
-      ...(filter && {
-        FilterExpression: filter.FilterExpression,
-        ExpressionAttributeValues: filter.ExpressionAttributeValues,
-      }),
+      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
+      ...(filter && { FilterExpression: filter.FilterExpression }),
       ...(proj && { ProjectionExpression: proj.ProjectionExpression }),
       ...(Object.keys(mergedNames).length && { ExpressionAttributeNames: mergedNames }),
-    })
-  );
-  const documents = (result.Items ?? []) as IUser[];
-  return { documents, total: { count: result.Count ?? 0 } };
+    };
+
+    let result;
+    if (search['contact.email']) {
+      result = await docClient.send(
+        new QueryCommand({
+          TableName: USER_TABLE,
+          IndexName: 'email-index',
+          KeyConditionExpression: 'contactEmail = :email',
+          ExpressionAttributeValues: { ':email': search['contact.email'], ...filter?.ExpressionAttributeValues },
+          ...baseParams,
+        })
+      );
+    } else {
+      const mobileKey = buildMobileKey({
+        dialCode: search['contact.mobile.dialCode'],
+        number: search['contact.mobile.number'],
+      });
+      result = await docClient.send(
+        new QueryCommand({
+          TableName: USER_TABLE,
+          IndexName: 'mobile-index',
+          KeyConditionExpression: 'contactMobileKey = :mobileKey',
+          ExpressionAttributeValues: { ':mobileKey': mobileKey, ...filter?.ExpressionAttributeValues },
+          ...baseParams,
+        })
+      );
+    }
+
+    return {
+      documents: (result.Items ?? []) as IUser[],
+      nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+    };
+  }
+
+  const scanParams: ScanCommandInput = {
+    TableName: USER_TABLE,
+    Limit: optional.limit,
+    ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
+    ...(filter && {
+      FilterExpression: filter.FilterExpression,
+      ExpressionAttributeValues: filter.ExpressionAttributeValues,
+    }),
+    ...(proj && { ProjectionExpression: proj.ProjectionExpression }),
+    ...(Object.keys(mergedNames).length && { ExpressionAttributeNames: mergedNames }),
+  };
+
+  const result = await docClient.send(new ScanCommand(scanParams));
+  return {
+    documents: (result.Items ?? []) as IUser[],
+    nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+  };
 };
 
 export { createUser, getUser, updateUser, getUsers, getUsersWithPagination };
