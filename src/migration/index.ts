@@ -10,7 +10,7 @@ const [, , command] = process.argv;
 const run = async (): Promise<void> => {
   if (!command) {
     console.error('Usage: node dist/migration/index.js <COMMAND>');
-    console.error('Available commands: CREATE_ROLE, CREATE_ADMIN');
+    console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, INIT_COUNTERS');
     process.exit(1);
   }
 
@@ -27,7 +27,7 @@ const run = async (): Promise<void> => {
     }
     default:
       console.error(`Unknown migration command: ${command}`);
-      console.error('Available commands: CREATE_ROLE, CREATE_ADMIN');
+      console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, INIT_COUNTERS');
       process.exit(1);
   }
 

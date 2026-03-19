@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { STATUS, USER_TABLE } from '../../constant';
 import { IUser } from '../../models';
+import { incrementTableCounter } from '../counter';
 
 // ---------------------------------------------------------------------------
 // DynamoDB table layout
@@ -38,7 +39,10 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
   // DynamoDB rejects undefined values
   Object.keys(item).forEach((k) => item[k] === undefined && delete item[k]);
 
-  await docClient.send(new PutCommand({ TableName: USER_TABLE, Item: item }));
+  await Promise.all([
+    docClient.send(new PutCommand({ TableName: USER_TABLE, Item: item })),
+    incrementTableCounter(USER_TABLE, 'GLOBAL'),
+  ]);
 };
 
 const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
@@ -260,7 +264,7 @@ const buildProjectionExpression = (projection: Record<string, any>) => {
 };
 
 const decodeCursor = (cursor?: string): Record<string, any> | undefined => {
-  if (!cursor) return undefined;
+  if (!cursor) {return undefined;}
   try {
     return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8'));
   } catch {
@@ -301,7 +305,10 @@ const getUsersWithPagination = async (
           TableName: USER_TABLE,
           IndexName: 'email-index',
           KeyConditionExpression: 'contactEmail = :email',
-          ExpressionAttributeValues: { ':email': search['contact.email'], ...filter?.ExpressionAttributeValues },
+          ExpressionAttributeValues: {
+            ':email': search['contact.email'],
+            ...filter?.ExpressionAttributeValues,
+          },
           ...baseParams,
         })
       );
@@ -315,7 +322,10 @@ const getUsersWithPagination = async (
           TableName: USER_TABLE,
           IndexName: 'mobile-index',
           KeyConditionExpression: 'contactMobileKey = :mobileKey',
-          ExpressionAttributeValues: { ':mobileKey': mobileKey, ...filter?.ExpressionAttributeValues },
+          ExpressionAttributeValues: {
+            ':mobileKey': mobileKey,
+            ...filter?.ExpressionAttributeValues,
+          },
           ...baseParams,
         })
       );

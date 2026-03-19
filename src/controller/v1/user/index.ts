@@ -1,7 +1,14 @@
 import bcrypt from 'bcrypt';
-import { SESSION_STATUS } from '../../../constant';
+import { SESSION_STATUS, USER_TABLE } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getSession, getUsers, getUsersWithPagination, updateSession, updateUser } from '../../../services';
+import {
+  getTableCounter,
+  getSession,
+  getUsers,
+  getUsersWithPagination,
+  updateSession,
+  updateUser,
+} from '../../../services';
 import { wrapController } from '../../../utils/helper';
 
 const SALT_ROUNDS = 10;
@@ -40,23 +47,45 @@ const usersHandler = async (req: IRequest, res: IResponse) => {
   const { pagination, limit, search } = req.query as Record<string, string>;
 
   const searchFilter: Record<string, any> = {};
-  if (search) searchFilter.search = search;
+  if (search) {searchFilter.search = search;}
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
     const { cursor } = req.query as Record<string, string>;
 
-    const { documents, nextCursor } = await getUsersWithPagination(searchFilter, {}, { limit: limitNum, cursor });
-    return makeResponse(req, res, 200, true, 'fetch',
+    const { documents, nextCursor } = await getUsersWithPagination(
+      searchFilter,
+      {},
+      { limit: limitNum, cursor }
+    );
+    return makeResponse(
+      req,
+      res,
+      200,
+      true,
+      'fetch',
       documents.map((u) => ({ ...u, password: undefined })),
       {
         limit: limitNum,
         nextCursor,
-      });
+      }
+    );
   }
 
   const documents = await getUsers(searchFilter);
-  makeResponse(req, res, 200, true, 'fetch', documents.map((u) => ({ ...u, password: undefined })));
+  makeResponse(
+    req,
+    res,
+    200,
+    true,
+    'fetch',
+    documents.map((u) => ({ ...u, password: undefined }))
+  );
+};
+
+const userCountHandler = async (req: IRequest, res: IResponse) => {
+  const counter = await getTableCounter(USER_TABLE, 'GLOBAL');
+  makeResponse(req, res, 200, true, 'fetch', { totalRecords: counter?.count ?? 0 });
 };
 
 export const userController = wrapController({
@@ -64,4 +93,5 @@ export const userController = wrapController({
   logoutHandler,
   changePasswordHandler,
   usersHandler,
+  userCountHandler,
 });

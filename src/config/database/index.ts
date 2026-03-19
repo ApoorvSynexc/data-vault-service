@@ -6,7 +6,14 @@ import {
   waitUntilTableExists,
 } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { AWS_REGION, OTP_TABLE, ROLE_TABLE, SESSION_TABLE, USER_TABLE } from '../../constant';
+import {
+  AWS_REGION,
+  TABLE_COUNTER_TABLE,
+  OTP_TABLE,
+  ROLE_TABLE,
+  SESSION_TABLE,
+  USER_TABLE,
+} from '../../constant';
 
 const client = new DynamoDBClient({
   region: AWS_REGION,
@@ -78,6 +85,18 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         KeySchema: [{ AttributeName: 'name', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
+    ],
+  },
+  {
+    TableName: TABLE_COUNTER_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'tableName', AttributeType: 'S' },
+      { AttributeName: 'entityId', AttributeType: 'S' },
+    ],
+    KeySchema: [
+      { AttributeName: 'tableName', KeyType: 'HASH' },
+      { AttributeName: 'entityId', KeyType: 'RANGE' },
     ],
   },
   {

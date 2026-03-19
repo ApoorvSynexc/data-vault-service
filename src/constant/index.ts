@@ -8,6 +8,7 @@ const USER_TABLE = String(process.env.USER_TABLE || 'data-vault-users');
 const OTP_TABLE = String(process.env.OTP_TABLE || 'data-vault-otps');
 const SESSION_TABLE = String(process.env.SESSION_TABLE || 'data-vault-sessions');
 const ROLE_TABLE = String(process.env.ROLE_TABLE || 'data-vault-roles');
+const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
 
 const STATUS = {
   active: 'ACTIVE',
@@ -69,6 +70,7 @@ export {
   OTP_TABLE,
   SESSION_TABLE,
   ROLE_TABLE,
+  TABLE_COUNTER_TABLE,
 
   // JWT Config
   JWT_ACCESS_SECRET,
