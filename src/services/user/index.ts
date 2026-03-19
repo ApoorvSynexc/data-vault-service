@@ -230,7 +230,9 @@ const getUsers = async (search: Record<string, any> = {}): Promise<IUser[]> => {
 // ---------------------------------------------------------------------------
 const buildProjectionExpression = (projection: Record<string, any>) => {
   const fields = Object.keys(projection).filter((k) => projection[k]);
-  if (!fields.length) {return null;}
+  if (!fields.length) {
+    return null;
+  }
 
   const names: Record<string, string> = {};
   const parts = fields.map((field, i) => {

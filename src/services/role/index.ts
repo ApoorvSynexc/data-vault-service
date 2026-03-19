@@ -14,7 +14,7 @@ const createRole = async (data: Partial<IRole>): Promise<void> => {
   const now = new Date().toISOString();
   const item: Record<string, any> = {
     ...data,
-    roleId: uuidv4(),
+    roleId: data.roleId ?? uuidv4(),
     status: data.status ?? STATUS.active,
     createdAt: now,
     updatedAt: now,
