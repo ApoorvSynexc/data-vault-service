@@ -13,14 +13,13 @@ const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vaul
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
-const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '7d');
-// const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
+const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
 const JWT_REFRESH_EXPIRY = String(process.env.JWT_REFRESH_EXPIRY || '7d');
 
 // Salesforce Config
-const SALESFORCE_CLIENT_ID = process.env.SALESFORCE_CLIENT_ID;
-const SALESFORCE_CLIENT_SECRET = process.env.SALESFORCE_CLIENT_SECRET;
-const SALESFORCE_REDIRECT_URI = process.env.SALESFORCE_REDIRECT_URI;
+const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
+const SALESFORCE_CLIENT_SECRET = String(process.env.SALESFORCE_CLIENT_SECRET);
+const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
 
 const STATUS = {
   active: 'ACTIVE',

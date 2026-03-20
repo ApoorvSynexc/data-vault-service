@@ -35,12 +35,14 @@ export async function httpRequest<TResponse = any, TBody = any>(
   };
 
   if (body && method !== 'GET') {
-    fetchOptions.body = JSON.stringify(body);
+    fetchOptions.body = body as any;
   }
 
   const response = await fetch(finalUrl, fetchOptions);
 
   if (!response.ok) {
+    console.log(response);
+    
     const errorText = await response.text();
     throw new Error(`HTTP Error ${response.status}: ${errorText}`);
   }

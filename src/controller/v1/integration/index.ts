@@ -21,12 +21,12 @@ const integrationLoginHanlder = async (req: IRequest, res: IResponse): Promise<v
 }
 
 const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmName, code } = req.body;
+    const { crmName, code, code_verifier } = req.query;
 
     let token;
     switch (crmName) {
         case 'salesforce':
-            token = await getSalesforceToken(code);
+            token = await getSalesforceToken(String(code), String(code_verifier));
             break;
     }
 
