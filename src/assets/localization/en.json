@@ -21,5 +21,6 @@
   "blocked_or_removed": "You have been removed or blocked by Admin",
   "route_not_found": "the resource you are looking for is not found",
   "mobile_exit": "Mobile number already exits",
-  "email_exit": "Email already exits"
+  "email_exit": "Email already exits",
+  "crm_name_required": "crmName is required"
 }

@@ -13,14 +13,14 @@ const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vaul
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
-const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
+const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '7d');
+// const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
 const JWT_REFRESH_EXPIRY = String(process.env.JWT_REFRESH_EXPIRY || '7d');
 
 // Salesforce Config
 const SALESFORCE_CLIENT_ID = process.env.SALESFORCE_CLIENT_ID;
 const SALESFORCE_CLIENT_SECRET = process.env.SALESFORCE_CLIENT_SECRET;
 const SALESFORCE_REDIRECT_URI = process.env.SALESFORCE_REDIRECT_URI;
-const SALESFORCE_REFRESH_TOKEN = process.env.SALESFORCE_REFRESH_TOKEN;
 
 const STATUS = {
   active: 'ACTIVE',
@@ -88,7 +88,6 @@ export {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
-  SALESFORCE_REFRESH_TOKEN,
 
   // Enums
   STATUS,
