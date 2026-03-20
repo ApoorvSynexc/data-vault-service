@@ -10,6 +10,12 @@ const SESSION_TABLE = String(process.env.SESSION_TABLE || 'data-vault-sessions')
 const ROLE_TABLE = String(process.env.ROLE_TABLE || 'data-vault-roles');
 const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
 
+// JWT Config
+const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
+const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
+const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
+const JWT_REFRESH_EXPIRY = String(process.env.JWT_REFRESH_EXPIRY || '7d');
+
 const STATUS = {
   active: 'ACTIVE',
   inactive: 'INACTIVE',
@@ -53,12 +59,6 @@ const SESSION_STATUS = {
   revoked: 'REVOKED',
 };
 
-// JWT Config
-const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
-const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
-const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
-const JWT_REFRESH_EXPIRY = String(process.env.JWT_REFRESH_EXPIRY || '7d');
-
 export {
   HOST,
   PORT,
@@ -77,6 +77,8 @@ export {
   JWT_REFRESH_SECRET,
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
+
+  // Enums
   STATUS,
   AUTH_PROVIDER,
   LANGUAGE,

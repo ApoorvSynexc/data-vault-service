@@ -13,11 +13,12 @@ import {
   ROLE_TABLE,
   SESSION_TABLE,
   USER_TABLE,
+  DYNAMODB_ENDPOINT,
 } from '../../constant';
 
 const client = new DynamoDBClient({
   region: AWS_REGION,
-  // ...(DYNAMODB_ENDPOINT ? { endpoint: DYNAMODB_ENDPOINT } : {}),
+  ...(DYNAMODB_ENDPOINT ? { endpoint: DYNAMODB_ENDPOINT } : {}),
 });
 
 export const docClient = DynamoDBDocumentClient.from(client);
