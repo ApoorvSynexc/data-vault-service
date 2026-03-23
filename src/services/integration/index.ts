@@ -24,8 +24,9 @@ const upsertIntegration = async (params: UpsertIntegrationParams): Promise<IInte
         await docClient.send(new UpdateCommand({
             TableName: INTEGRATION_TABLE,
             Key: { integrationId: existing.integrationId },
-            UpdateExpression: 'SET crmProfile = :crmProfile, encryptedCredentials = :encryptedCredentials, iv = :iv, authTag = :authTag, updatedAt = :now',
+            UpdateExpression: 'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :encryptedCredentials, iv = :iv, authTag = :authTag, updatedAt = :now',
             ExpressionAttributeValues: {
+                ':isConnected': true,
                 ':crmProfile': crmProfile,
                 ':encryptedCredentials': ciphertext,
                 ':iv': iv,
@@ -33,13 +34,14 @@ const upsertIntegration = async (params: UpsertIntegrationParams): Promise<IInte
                 ':now': now,
             },
         }));
-        return { ...existing, crmProfile, encryptedCredentials: ciphertext, iv, authTag, updatedAt: now };
+        return { ...existing, isConnected: true, crmProfile, encryptedCredentials: ciphertext, iv, authTag, updatedAt: now };
     }
 
     const integration: IIntegration = {
         integrationId: uuidv4(),
         userId,
         crmName,
+        isConnected: true,
         crmProfile,
         encryptedCredentials: ciphertext,
         iv,
@@ -64,10 +66,21 @@ const getIntegrationByUser = async (userId: string, crmName: string): Promise<II
     return (result.Items?.[0] as IIntegration) ?? null;
 };
 
+const getIntegrationsByUser = async (userId: string): Promise<IIntegration[]> => {
+    const result = await docClient.send(new QueryCommand({
+        TableName: INTEGRATION_TABLE,
+        IndexName: 'userId-crmName-index',
+        KeyConditionExpression: 'userId = :uid',
+        ExpressionAttributeValues: { ':uid': userId },
+    }));
+
+    return (result.Items as IIntegration[] | undefined) ?? [];
+};
+
 const getIntegrationTokens = (integration: IIntegration): Record<string, any> => JSON.parse(decrypt({
     ciphertext: integration.encryptedCredentials,
     iv: integration.iv,
     authTag: integration.authTag,
 }));
 
-export { upsertIntegration, getIntegrationByUser, getIntegrationTokens };
+export { upsertIntegration, getIntegrationByUser, getIntegrationsByUser, getIntegrationTokens };

@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { createOAuthState, getOAuthState, getSalesforceLoginUrl, getSalesforceToken, getSalesforceProfile, upsertIntegration } from "../../../services";
+import { createOAuthState, getIntegrationsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertIntegration } from "../../../services";
 import { wrapController } from "../../../utils/helper";
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
@@ -89,7 +89,20 @@ const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<vo
     makeResponse(req, res, 200, true, 'fetch');
 }
 
+const integrationListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    console.log({user: req.user});
+    const integrations = await getIntegrationsByUser(req.user!.userId);
+
+    makeResponse(req, res, 200, true, 'fetch', integrations.map((integration) => ({
+        ...integration,
+        encryptedCredentials: undefined,
+        iv: undefined,
+        authTag: undefined,
+    })));
+}
+
 export const integratioController = wrapController({
     integrationLoginHanlder,
-    integrationCodeHanlder
+    integrationCodeHanlder,
+    integrationListHandler
 });

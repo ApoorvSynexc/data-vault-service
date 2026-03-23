@@ -13,6 +13,7 @@ export interface IIntegration {
     integrationId: string;   // PK
     userId: string;          // GSI: userId-crmName-index
     crmName: string;         // GSI sort key
+    isConnected: boolean;
     crmProfile: IIntegrationProfile;
     encryptedCredentials: string;
     iv: string;
