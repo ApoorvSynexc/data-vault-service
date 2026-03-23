@@ -6,6 +6,10 @@ const AUTH_URL = 'https://login.salesforce.com/services/oauth2/authorize';
 const TOKEN_URL = 'https://login.salesforce.com/services/oauth2/token';
 const PROFILE_URL = 'https://login.salesforce.com/services/oauth2/userinfo';
 
+// ---------------------------------------------------------------------------
+// PKCE / state helpers
+// ---------------------------------------------------------------------------
+
 function generateCodeVerifier() {
     return crypto.randomBytes(32).toString('base64url');
 }
@@ -18,11 +22,81 @@ function generateState() {
     return crypto.randomBytes(16).toString('hex');
 }
 
+// ---------------------------------------------------------------------------
+// Typed error — thrown when both access token and refresh token are expired.
+// Controllers catch this to respond with 401 + reconnect prompt.
+// ---------------------------------------------------------------------------
+
+export class SalesforceAuthExpiredError extends Error {
+    constructor() {
+        super('Salesforce session expired. User must re-authenticate.');
+        this.name = 'SalesforceAuthExpiredError';
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Centralized Salesforce API request
+//   - Injects Authorization header automatically
+//   - On 401 (expired access token) → refreshes token and retries once
+//   - Returns { data, accessToken } so callers can persist the (possibly new) token
+// ---------------------------------------------------------------------------
+
+interface SalesforceRequestOptions {
+    url: string;
+    method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+    body?: any;
+    query?: Record<string, string | number | boolean>;
+}
+
+interface SalesforceTokens {
+    accessToken: string;
+    refreshToken: string;
+}
+
+interface SalesforceRequestResult<T> {
+    data: T;
+    accessToken: string;
+}
+
+const salesforceRequest = async <T = any>(
+    options: SalesforceRequestOptions,
+    tokens: SalesforceTokens
+): Promise<SalesforceRequestResult<T>> => {
+    const makeCall = (accessToken: string) =>
+        httpRequest<T>({
+            ...options,
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+
+    try {
+        const data = await makeCall(tokens.accessToken);
+        return { data, accessToken: tokens.accessToken };
+    } catch (error: any) {
+        if (!error?.message?.startsWith('HTTP Error 401')) throw error;
+
+        // Access token expired — refresh and retry once
+        let refreshed: any;
+        try {
+            refreshed = await refreashSalesforceToken(tokens.refreshToken);
+        } catch {
+            // Refresh token also expired — user must reconnect
+            throw new SalesforceAuthExpiredError();
+        }
+
+        const newAccessToken: string = refreshed.access_token;
+        const data = await makeCall(newAccessToken);
+        return { data, accessToken: newAccessToken };
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
 const getSalesforceLoginUrl = () => {
     const state = generateState();
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = generateCodeChallenge(codeVerifier);
-    console.log({ state, codeVerifier, codeChallenge });
 
     const params = new URLSearchParams({
         response_type: 'code',
@@ -33,74 +107,53 @@ const getSalesforceLoginUrl = () => {
         code_challenge_method: 'S256',
     });
 
-    return `${AUTH_URL}?${params}`;
+    return { url: `${AUTH_URL}?${params}`, codeVerifier, state };
 };
 
 const getSalesforceToken = async (code: string, code_verifier: string) => {
-    try {
-        const body = new URLSearchParams({
-            'grant_type': 'authorization_code',
-            code,
-            'client_id': String(SALESFORCE_CLIENT_ID),
-            'client_secret': String(SALESFORCE_CLIENT_SECRET),
-            'redirect_uri': String(SALESFORCE_REDIRECT_URI),
-            code_verifier,
-        }).toString();
+    const body = new URLSearchParams({
+        'grant_type': 'authorization_code',
+        code,
+        'client_id': String(SALESFORCE_CLIENT_ID),
+        'client_secret': String(SALESFORCE_CLIENT_SECRET),
+        'redirect_uri': String(SALESFORCE_REDIRECT_URI),
+        code_verifier,
+    }).toString();
 
-        const token = await httpRequest({
-            url: TOKEN_URL,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body
-        });
-
-        return token;
-    } catch (error) {
-        console.log(error);
-        throw error;
-    }
-}
-
-const getSalesforceProfile = async (token: string) => {
-    try {
-        const res = await httpRequest({
-            url: PROFILE_URL,
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`
-            },
-        });
-        return res;
-    } catch (error) {
-        throw error
-    }
-}
+    return httpRequest({
+        url: TOKEN_URL,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+    });
+};
 
 const refreashSalesforceToken = async (refreshToken: string) => {
-    try {
-        const token = await httpRequest({
-            url: TOKEN_URL,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: {
-                'grant_type': 'refresh_token',
-                'client_id': SALESFORCE_CLIENT_ID,
-                'client_secret': SALESFORCE_CLIENT_SECRET,
-                'refresh_token': refreshToken
-            }
-        });
-    } catch (error) {
-        throw error;
-    }
-}
+    return httpRequest({
+        url: TOKEN_URL,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+            'grant_type': 'refresh_token',
+            'client_id': SALESFORCE_CLIENT_ID,
+            'client_secret': SALESFORCE_CLIENT_SECRET,
+            'refresh_token': refreshToken,
+        }).toString(),
+    });
+};
+
+// ---------------------------------------------------------------------------
+// API methods — all go through salesforceRequest
+// ---------------------------------------------------------------------------
+
+const getSalesforceProfile = async (tokens: SalesforceTokens) => {
+    return salesforceRequest({ url: PROFILE_URL, method: 'GET' }, tokens);
+};
 
 export {
     getSalesforceLoginUrl,
     getSalesforceToken,
     getSalesforceProfile,
-    refreashSalesforceToken
-}
+    refreashSalesforceToken,
+};
+export type { SalesforceTokens, SalesforceRequestResult };

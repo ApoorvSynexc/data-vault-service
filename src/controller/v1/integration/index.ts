@@ -1,36 +1,67 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { getSalesforceLoginUrl, getSalesforceToken } from "../../../services";
+import { createOAuthState, getOAuthState, getSalesforceLoginUrl, getSalesforceToken } from "../../../services";
 import { wrapController } from "../../../utils/helper";
+
+// Extracts the Salesforce `error` code from httpRequest thrown messages.
+// e.g. "HTTP Error 400: {"error":"invalid_grant",...}" → "invalid_grant"
+const parseSalesforceError = (error: any): string | null => {
+    try {
+        const json = error?.message?.replace(/^HTTP Error \d+:\s*/, '');
+        return JSON.parse(json)?.error ?? null;
+    } catch {
+        return null;
+    }
+};
 
 const integrationLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const { crmName } = req.query;
     if (!crmName) {
         makeResponse(req, res, 400, false, 'crm_name_required');
+        return;
     }
 
+    const userId = req.user!.userId;
     let redirectUrl = '';
+
     switch (crmName) {
         case 'salesforce':
-            redirectUrl = getSalesforceLoginUrl()
+        default: {
+            const { url, codeVerifier, state } = getSalesforceLoginUrl();
+            await createOAuthState(state, codeVerifier, userId, String(crmName));
+            redirectUrl = url;
             break;
-        default:
-            redirectUrl = getSalesforceLoginUrl()
+        }
     }
 
     makeResponse(req, res, 200, true, 'fetch', { redirectUrl });
 }
 
 const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmName, code, code_verifier } = req.query;
+    const { crmName, code, state } = req.query;
 
-    let token;
-    switch (crmName) {
-        case 'salesforce':
-            token = await getSalesforceToken(String(code), String(code_verifier));
-            break;
+    const oauthState = await getOAuthState(String(state));
+    if (!oauthState) {
+        makeResponse(req, res, 400, false, 'invalid_or_expired_state');
+        return;
     }
 
-    console.log({token});
+    let token;
+    try {
+        switch (crmName) {
+            case 'salesforce':
+            default:
+                token = await getSalesforceToken(String(code), oauthState.codeVerifier);
+                break;
+        }
+    } catch (error: any) {
+        const sfError = parseSalesforceError(error);
+        if (sfError === 'invalid_grant') {
+            makeResponse(req, res, 400, false, 'salesforce_code_expired');
+            return;
+        }
+        throw error;
+    }
+
     makeResponse(req, res, 200, true, 'fetch');
 }
 

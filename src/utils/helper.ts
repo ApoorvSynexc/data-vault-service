@@ -6,6 +6,7 @@ import {
   JWT_REFRESH_SECRET,
 } from '../constant';
 import { IRequest, IResponse, makeResponse } from '../lib';
+import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -40,6 +41,10 @@ const asyncHandler =
     try {
       await fn(req, res);
     } catch (error: unknown) {
+      if (error instanceof SalesforceAuthExpiredError) {
+        makeResponse(req, res, 401, false, 'salesforce_reauth_required');
+        return;
+      }
       const message = error instanceof Error ? error.message : 'unknown_error';
       makeResponse(
         req,

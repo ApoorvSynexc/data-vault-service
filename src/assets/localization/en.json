@@ -22,5 +22,8 @@
   "route_not_found": "the resource you are looking for is not found",
   "mobile_exit": "Mobile number already exits",
   "email_exit": "Email already exits",
-  "crm_name_required": "crmName is required"
+  "crm_name_required": "crmName is required",
+  "invalid_or_expired_state": "OAuth state is invalid or has expired",
+  "salesforce_reauth_required": "Your Salesforce session has expired. Please reconnect your account",
+  "salesforce_code_expired": "The authorization code has expired or is invalid. Please try connecting again"
 }

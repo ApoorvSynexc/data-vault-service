@@ -10,6 +10,7 @@ import {
   AWS_REGION,
   TABLE_COUNTER_TABLE,
   OTP_TABLE,
+  OAUTH_STATE_TABLE,
   ROLE_TABLE,
   SESSION_TABLE,
   USER_TABLE,
@@ -30,9 +31,18 @@ export const docClient = DynamoDBDocumentClient.from(client);
 // Tables that need DynamoDB TTL enabled (attribute name per table)
 const TTL_CONFIG: Record<string, string> = {
   [SESSION_TABLE]: 'ttl',
+  [OAUTH_STATE_TABLE]: 'ttl',
 };
 
 const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
+  {
+    TableName: OAUTH_STATE_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'state', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'state', KeyType: 'HASH' }],
+  },
   {
     TableName: OTP_TABLE,
     BillingMode: 'PAY_PER_REQUEST',
