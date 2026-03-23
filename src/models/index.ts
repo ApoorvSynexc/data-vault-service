@@ -1,4 +1,4 @@
-export * from './integration';
+export * from './crm';
 export * from './oauth-state';
 export * from './table-counter';
 export * from './otp';

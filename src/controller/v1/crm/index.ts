@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { createOAuthState, disconnectIntegration, getIntegrationsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertIntegration } from "../../../services";
+import { createOAuthState, disconnectCrm, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertCrm } from "../../../services";
 import { wrapController } from "../../../utils/helper";
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
@@ -13,7 +13,7 @@ const parseSalesforceError = (error: any): string | null => {
     }
 };
 
-const integrationLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const { crmName } = req.query;
     if (!crmName) {
         makeResponse(req, res, 400, false, 'crm_name_required');
@@ -36,7 +36,7 @@ const integrationLoginHanlder = async (req: IRequest, res: IResponse): Promise<v
     makeResponse(req, res, 200, true, 'fetch', { redirectUrl });
 }
 
-const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const { crmName, code, state } = req.query;
 
     const oauthState = await getOAuthState(String(state));
@@ -67,8 +67,8 @@ const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<vo
         refreshToken: token.refresh_token,
     });
 
-    const existingIntegrations = await getIntegrationsByUser(oauthState.userId);
-    const duplicate = existingIntegrations.find(
+    const existingCrms = await getCrmsByUser(oauthState.userId);
+    const duplicate = existingCrms.find(
         (i) => i.crmProfile?.organizationId === sfProfile.organization_id && i.crmProfile?.userId === sfProfile.user_id
     );
     if (duplicate) {
@@ -76,7 +76,7 @@ const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<vo
         return;
     }
 
-    await upsertIntegration({
+    await upsertCrm({
         userId: oauthState.userId,
         crmName: String(crmName),
         crmProfile: {
@@ -98,43 +98,43 @@ const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<vo
     makeResponse(req, res, 200, true, 'fetch');
 }
 
-const integrationListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const integrations = await getIntegrationsByUser(req.user!.userId);
+const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const crms = await getCrmsByUser(req.user!.userId);
 
-    makeResponse(req, res, 200, true, 'fetch', integrations.map((integration) => ({
-        ...integration,
+    makeResponse(req, res, 200, true, 'fetch', crms.map((crm) => ({
+        ...crm,
         encryptedCredentials: undefined,
         iv: undefined,
         authTag: undefined,
     })));
 }
 
-const integrationDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { integrationId } = req.query;
+const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const { crmId } = req.query;
 
-    if (!integrationId) {
-        makeResponse(req, res, 400, false, 'integration_id_required');
+    if (!crmId) {
+        makeResponse(req, res, 400, false, 'crm_id_required');
         return;
     }
 
-    const integration = await disconnectIntegration(String(integrationId));
+    const crm = await disconnectCrm(String(crmId));
 
-    if (!integration) {
+    if (!crm) {
         makeResponse(req, res, 404, false, 'fetch');
         return;
     }
 
     makeResponse(req, res, 200, true, 'update', {
-        ...integration,
+        ...crm,
         encryptedCredentials: undefined,
         iv: undefined,
         authTag: undefined,
     });
 }
 
-export const integratioController = wrapController({
-    integrationLoginHanlder,
-    integrationCodeHanlder,
-    integrationListHandler,
-    integrationDisconnectHandler
+export const crmController = wrapController({
+    crmLoginHanlder,
+    crmCodeHanlder,
+    crmListHandler,
+    crmDisconnectHandler
 });

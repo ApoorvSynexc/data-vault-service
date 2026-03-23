@@ -1,4 +1,4 @@
-export interface IIntegrationProfile {
+export interface ICrmProfile {
     zoneinfo: string;
     instanceUrl: string;
     organizationId: string;
@@ -9,12 +9,12 @@ export interface IIntegrationProfile {
     photoUrl?: string;
 }
 
-export interface IIntegration {
-    integrationId: string;   // PK
+export interface ICrm {
+    crmId: string;   // PK
     userId: string;          // GSI: userId-crmName-index
     crmName: string;         // GSI sort key
     isConnected: boolean;
-    crmProfile?: IIntegrationProfile;
+    crmProfile?: ICrmProfile;
     encryptedCredentials?: string;
     iv?: string;
     authTag?: string;

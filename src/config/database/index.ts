@@ -11,7 +11,7 @@ import {
   TABLE_COUNTER_TABLE,
   OTP_TABLE,
   OAUTH_STATE_TABLE,
-  INTEGRATION_TABLE,
+  CRM_TABLE,
   ROLE_TABLE,
   SESSION_TABLE,
   USER_TABLE,
@@ -37,14 +37,14 @@ const TTL_CONFIG: Record<string, string> = {
 
 const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
   {
-    TableName: INTEGRATION_TABLE,
+    TableName: CRM_TABLE,
     BillingMode: 'PAY_PER_REQUEST',
     AttributeDefinitions: [
-      { AttributeName: 'integrationId', AttributeType: 'S' },
+      { AttributeName: 'crmId', AttributeType: 'S' },
       { AttributeName: 'userId', AttributeType: 'S' },
       { AttributeName: 'crmName', AttributeType: 'S' },
     ],
-    KeySchema: [{ AttributeName: 'integrationId', KeyType: 'HASH' }],
+    KeySchema: [{ AttributeName: 'crmId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'userId-crmName-index',
