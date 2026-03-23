@@ -77,10 +77,51 @@ const getIntegrationsByUser = async (userId: string): Promise<IIntegration[]> =>
     return (result.Items as IIntegration[] | undefined) ?? [];
 };
 
-const getIntegrationTokens = (integration: IIntegration): Record<string, any> => JSON.parse(decrypt({
-    ciphertext: integration.encryptedCredentials,
-    iv: integration.iv,
-    authTag: integration.authTag,
-}));
+const disconnectIntegration = async (userId: string, crmName: string): Promise<IIntegration | null> => {
+    const existing = await getIntegrationByUser(userId, crmName);
 
-export { upsertIntegration, getIntegrationByUser, getIntegrationsByUser, getIntegrationTokens };
+    if (!existing) {
+        return null;
+    }
+
+    const updatedAt = new Date().toISOString();
+
+    await docClient.send(new UpdateCommand({
+        TableName: INTEGRATION_TABLE,
+        Key: { integrationId: existing.integrationId },
+        UpdateExpression: 'SET isConnected = :isConnected, #status = :status, updatedAt = :updatedAt REMOVE crmProfile, encryptedCredentials, iv, authTag',
+        ExpressionAttributeNames: {
+            '#status': 'status',
+        },
+        ExpressionAttributeValues: {
+            ':isConnected': false,
+            ':status': STATUS.inactive,
+            ':updatedAt': updatedAt,
+        },
+    }));
+
+    return {
+        ...existing,
+        isConnected: false,
+        crmProfile: undefined,
+        encryptedCredentials: undefined,
+        iv: undefined,
+        authTag: undefined,
+        status: STATUS.inactive,
+        updatedAt,
+    };
+};
+
+const getIntegrationTokens = (integration: IIntegration): Record<string, any> => {
+    if (!integration.encryptedCredentials || !integration.iv || !integration.authTag) {
+        return {};
+    }
+
+    return JSON.parse(decrypt({
+        ciphertext: integration.encryptedCredentials,
+        iv: integration.iv,
+        authTag: integration.authTag,
+    }));
+};
+
+export { upsertIntegration, getIntegrationByUser, getIntegrationsByUser, disconnectIntegration, getIntegrationTokens };

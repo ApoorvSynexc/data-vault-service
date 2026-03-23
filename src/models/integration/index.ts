@@ -14,10 +14,10 @@ export interface IIntegration {
     userId: string;          // GSI: userId-crmName-index
     crmName: string;         // GSI sort key
     isConnected: boolean;
-    crmProfile: IIntegrationProfile;
-    encryptedCredentials: string;
-    iv: string;
-    authTag: string;
+    crmProfile?: IIntegrationProfile;
+    encryptedCredentials?: string;
+    iv?: string;
+    authTag?: string;
     status: string;
     createdAt: string;
     updatedAt: string;
