@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { createOAuthState, getOAuthState, getSalesforceLoginUrl, getSalesforceToken } from "../../../services";
+import { createOAuthState, getOAuthState, getSalesforceLoginUrl, getSalesforceToken, getSalesforceProfile, upsertIntegration } from "../../../services";
 import { wrapController } from "../../../utils/helper";
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
@@ -61,6 +61,30 @@ const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<vo
         }
         throw error;
     }
+
+    const { data: sfProfile } = await getSalesforceProfile({
+        accessToken: token.access_token,
+        refreshToken: token.refresh_token,
+    });
+
+    await upsertIntegration({
+        userId: oauthState.userId,
+        crmName: String(crmName),
+        crmProfile: {
+            zoneinfo:sfProfile.zoneinfo,
+            instanceUrl: token.instance_url,
+            organizationId: sfProfile.organization_id,
+            userId: sfProfile.user_id,
+            name: sfProfile.name,
+            email: sfProfile.email,
+            username: sfProfile.preferred_username,
+            photoUrl: sfProfile.photos?.thumbnail,
+        },
+        crmCredentials: {
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+        },
+    });
 
     makeResponse(req, res, 200, true, 'fetch');
 }

@@ -21,6 +21,10 @@ const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
 const SALESFORCE_CLIENT_SECRET = String(process.env.SALESFORCE_CLIENT_SECRET);
 const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
 const OAUTH_STATE_TABLE = String(process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states');
+const INTEGRATION_TABLE = String(process.env.INTEGRATION_TABLE || 'data-vault-integrations');
+
+// Encryption — must be a 64-char hex string (32 bytes for AES-256)
+const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
 const STATUS = {
   active: 'ACTIVE',
@@ -89,6 +93,8 @@ export {
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
   OAUTH_STATE_TABLE,
+  INTEGRATION_TABLE,
+  ENCRYPTION_KEY,
 
   // Enums
   STATUS,

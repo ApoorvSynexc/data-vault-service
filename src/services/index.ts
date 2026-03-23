@@ -1,4 +1,5 @@
 export * from './counter';
+export * from './integration';
 export * from './oauth-state';
 export * from './otp';
 export * from './role';

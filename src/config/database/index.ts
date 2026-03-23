@@ -11,6 +11,7 @@ import {
   TABLE_COUNTER_TABLE,
   OTP_TABLE,
   OAUTH_STATE_TABLE,
+  INTEGRATION_TABLE,
   ROLE_TABLE,
   SESSION_TABLE,
   USER_TABLE,
@@ -35,6 +36,26 @@ const TTL_CONFIG: Record<string, string> = {
 };
 
 const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
+  {
+    TableName: INTEGRATION_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'integrationId', AttributeType: 'S' },
+      { AttributeName: 'userId', AttributeType: 'S' },
+      { AttributeName: 'crmName', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'integrationId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'userId-crmName-index',
+        KeySchema: [
+          { AttributeName: 'userId', KeyType: 'HASH' },
+          { AttributeName: 'crmName', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
   {
     TableName: OAUTH_STATE_TABLE,
     BillingMode: 'PAY_PER_REQUEST',

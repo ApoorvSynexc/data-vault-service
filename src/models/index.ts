@@ -1,3 +1,4 @@
+export * from './integration';
 export * from './oauth-state';
 export * from './table-counter';
 export * from './otp';
