@@ -155,5 +155,6 @@ export {
     getSalesforceToken,
     getSalesforceProfile,
     refreashSalesforceToken,
+    salesforceRequest,
 };
 export type { SalesforceTokens, SalesforceRequestResult };
