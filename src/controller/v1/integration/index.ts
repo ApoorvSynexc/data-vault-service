@@ -67,6 +67,15 @@ const integrationCodeHanlder = async (req: IRequest, res: IResponse): Promise<vo
         refreshToken: token.refresh_token,
     });
 
+    const existingIntegrations = await getIntegrationsByUser(oauthState.userId);
+    const duplicate = existingIntegrations.find(
+        (i) => i.crmProfile?.organizationId === sfProfile.organization_id && i.crmProfile?.userId === sfProfile.user_id
+    );
+    if (duplicate) {
+        makeResponse(req, res, 409, false, 'exit');
+        return;
+    }
+
     await upsertIntegration({
         userId: oauthState.userId,
         crmName: String(crmName),
@@ -101,14 +110,14 @@ const integrationListHandler = async (req: IRequest, res: IResponse): Promise<vo
 }
 
 const integrationDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmName } = req.query;
+    const { integrationId } = req.query;
 
-    if (!crmName) {
-        makeResponse(req, res, 400, false, 'crm_name_required');
+    if (!integrationId) {
+        makeResponse(req, res, 400, false, 'integration_id_required');
         return;
     }
 
-    const integration = await disconnectIntegration(req.user!.userId, String(crmName));
+    const integration = await disconnectIntegration(String(integrationId));
 
     if (!integration) {
         makeResponse(req, res, 404, false, 'fetch');

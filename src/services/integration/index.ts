@@ -1,4 +1,4 @@
-import { PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { INTEGRATION_TABLE, STATUS } from '../../constant';
@@ -55,6 +55,14 @@ const upsertIntegration = async (params: UpsertIntegrationParams): Promise<IInte
     return integration;
 };
 
+const getIntegrationById = async (integrationId: string): Promise<IIntegration | null> => {
+    const result = await docClient.send(new GetCommand({
+        TableName: INTEGRATION_TABLE,
+        Key: { integrationId },
+    }));
+    return (result.Item as IIntegration) ?? null;
+};
+
 const getIntegrationByUser = async (userId: string, crmName: string): Promise<IIntegration | null> => {
     const result = await docClient.send(new QueryCommand({
         TableName: INTEGRATION_TABLE,
@@ -77,8 +85,8 @@ const getIntegrationsByUser = async (userId: string): Promise<IIntegration[]> =>
     return (result.Items as IIntegration[] | undefined) ?? [];
 };
 
-const disconnectIntegration = async (userId: string, crmName: string): Promise<IIntegration | null> => {
-    const existing = await getIntegrationByUser(userId, crmName);
+const disconnectIntegration = async (integrationId: string): Promise<IIntegration | null> => {
+    const existing = await getIntegrationById(integrationId);
 
     if (!existing) {
         return null;
@@ -88,7 +96,7 @@ const disconnectIntegration = async (userId: string, crmName: string): Promise<I
 
     await docClient.send(new UpdateCommand({
         TableName: INTEGRATION_TABLE,
-        Key: { integrationId: existing.integrationId },
+        Key: { integrationId },
         UpdateExpression: 'SET isConnected = :isConnected, #status = :status, updatedAt = :updatedAt REMOVE crmProfile, encryptedCredentials, iv, authTag',
         ExpressionAttributeNames: {
             '#status': 'status',
@@ -124,4 +132,4 @@ const getIntegrationTokens = (integration: IIntegration): Record<string, any> =>
     }));
 };
 
-export { upsertIntegration, getIntegrationByUser, getIntegrationsByUser, disconnectIntegration, getIntegrationTokens };
+export { upsertIntegration, getIntegrationById, getIntegrationByUser, getIntegrationsByUser, disconnectIntegration, getIntegrationTokens };
