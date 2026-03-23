@@ -17,26 +17,6 @@ const upsertIntegration = async (params: UpsertIntegrationParams): Promise<IInte
     const now = new Date().toISOString();
     const { ciphertext, iv, authTag } = encrypt(JSON.stringify(crmCredentials));
 
-    // Check if integration already exists for this user + crmName
-    const existing = await getIntegrationByUser(userId, crmName);
-
-    if (existing) {
-        await docClient.send(new UpdateCommand({
-            TableName: INTEGRATION_TABLE,
-            Key: { integrationId: existing.integrationId },
-            UpdateExpression: 'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :encryptedCredentials, iv = :iv, authTag = :authTag, updatedAt = :now',
-            ExpressionAttributeValues: {
-                ':isConnected': true,
-                ':crmProfile': crmProfile,
-                ':encryptedCredentials': ciphertext,
-                ':iv': iv,
-                ':authTag': authTag,
-                ':now': now,
-            },
-        }));
-        return { ...existing, isConnected: true, crmProfile, encryptedCredentials: ciphertext, iv, authTag, updatedAt: now };
-    }
-
     const integration: IIntegration = {
         integrationId: uuidv4(),
         userId,
