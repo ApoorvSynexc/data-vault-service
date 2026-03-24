@@ -8,6 +8,7 @@ import {
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import {
   AWS_REGION,
+  BACKUP_CONFIG_TABLE,
   TABLE_COUNTER_TABLE,
   OTP_TABLE,
   OAUTH_STATE_TABLE,
@@ -36,6 +37,22 @@ const TTL_CONFIG: Record<string, string> = {
 };
 
 const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
+  {
+    TableName: BACKUP_CONFIG_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'backupConfigId', AttributeType: 'S' },
+      { AttributeName: 'userId', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'backupConfigId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'userId-index',
+        KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
   {
     TableName: CRM_TABLE,
     BillingMode: 'PAY_PER_REQUEST',

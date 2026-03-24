@@ -1,3 +1,4 @@
+export * from './backup-config';
 export * from './counter';
 export * from './crm';
 export * from './oauth-state';

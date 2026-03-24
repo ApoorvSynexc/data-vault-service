@@ -1,5 +1,4 @@
 export interface ICrmProfile {
-    zoneinfo: string;
     instanceUrl: string;
     organizationId: string;
     userId: string;

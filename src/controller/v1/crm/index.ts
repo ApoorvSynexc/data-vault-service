@@ -80,19 +80,15 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
         userId: oauthState.userId,
         crmName: String(crmName),
         crmProfile: {
-            zoneinfo:sfProfile.zoneinfo,
             instanceUrl: token.instance_url,
             organizationId: sfProfile.organization_id,
-            userId: sfProfile.user_id,
+            userId: sfProfile.organization_id,
             name: sfProfile.name,
             email: sfProfile.email,
             username: sfProfile.preferred_username,
             photoUrl: sfProfile.photos?.thumbnail,
         },
-        crmCredentials: {
-            access_token: token.access_token,
-            refresh_token: token.refresh_token,
-        },
+        crmCredentials: token,
     });
 
     makeResponse(req, res, 200, true, 'fetch');

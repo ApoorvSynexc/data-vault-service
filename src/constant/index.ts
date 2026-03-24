@@ -22,9 +22,52 @@ const SALESFORCE_CLIENT_SECRET = String(process.env.SALESFORCE_CLIENT_SECRET);
 const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
 const OAUTH_STATE_TABLE = String(process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states');
 const CRM_TABLE = String(process.env.CRM_TABLE || 'data-vault-crms');
+const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
 
 // Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
+
+const SCHEDULE_MODE = {
+  realtime: 'REALTIME',
+  schedule: 'SCHEDULE',
+};
+
+const SCHEDULE_TYPE = {
+  oneTime: 'ONE_TIME',
+  incremental: 'INCREMENTAL',
+};
+
+const DURATION_TYPE = {
+  hour: 'HOUR',
+  days: 'DAYS',
+  week: 'WEEK',
+  month: 'MONTH',
+};
+
+const WEEK_DAY = {
+  mon: 'MON',
+  tue: 'TUE',
+  wed: 'WED',
+  thu: 'THU',
+  fri: 'FRI',
+  sat: 'SAT',
+  sun: 'SUN',
+};
+
+const DESTINATION_TYPE = {
+  s3: 'S3',
+};
+
+const FILTER_OPERATOR = {
+  gt: '>',
+  lt: '<',
+  gte: '>=',
+  lte: '<=',
+  eq: '=',
+  neq: '!=',
+  in: 'IN',
+  like: 'LIKE',
+};
 
 const STATUS = {
   active: 'ACTIVE',
@@ -94,6 +137,7 @@ export {
   SALESFORCE_REDIRECT_URI,
   OAUTH_STATE_TABLE,
   CRM_TABLE,
+  BACKUP_CONFIG_TABLE,
   ENCRYPTION_KEY,
 
   // Enums
@@ -106,5 +150,11 @@ export {
   OTP_FOR,
   OTP_CHANNEL,
   SESSION_STATUS,
+  SCHEDULE_MODE,
+  SCHEDULE_TYPE,
+  DURATION_TYPE,
+  WEEK_DAY,
+  DESTINATION_TYPE,
+  FILTER_OPERATOR,
 };
 
