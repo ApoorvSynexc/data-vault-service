@@ -8,8 +8,8 @@ router.get('/objects', backupConfigController.getObjectsHanlder);
 router.get('/fields', backupConfigController.getFieldsHanlder);
 
 router.post('/', createBackupConfigValidation, backupConfigController.createBackupConfigHandler);
-router.get('/', backupConfigController.listBackupConfigsHandler);
-router.get('/detail', backupConfigController.getBackupConfigHandler);
+router.get('/list', backupConfigController.listBackupConfigsHandler);
+router.get('/', backupConfigController.getBackupConfigHandler);
 router.put('/', updateBackupConfigValidation, backupConfigController.updateBackupConfigHandler);
 router.delete('/', backupConfigController.deleteBackupConfigHandler);
 

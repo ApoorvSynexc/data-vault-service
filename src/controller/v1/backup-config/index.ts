@@ -1,5 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, updateBackupConfig, deleteBackupConfig } from '../../../services';
+import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter } from '../../../services';
+import { BACKUP_CONFIG_TABLE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
 
@@ -29,7 +30,26 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 };
 
 const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const configs = await getBackupConfigsByUser(req.user!.userId);
+    const { pagination, limit, cursor } = req.query as Record<string, string>;
+    const userId = req.user!.userId;
+
+    if (pagination === 'true') {
+        const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
+
+        const [{ documents, nextCursor }, counter] = await Promise.all([
+            getBackupConfigsByUserWithPagination(userId, { limit: limitNum, cursor }),
+            getTableCounter(BACKUP_CONFIG_TABLE, userId),
+        ]);
+
+        return makeResponse(req, res, 200, true, 'fetch', documents.map(sanitize), {
+            limit: limitNum,
+            nextCursor,
+            totalRecords: counter?.count ?? 0,
+            totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
+        });
+    }
+
+    const configs = await getBackupConfigsByUser(userId);
     makeResponse(req, res, 200, true, 'fetch', configs.map(sanitize));
 };
 

@@ -4,6 +4,7 @@ import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, STATUS } from '../../constant';
 import { IBackupConfig, IObjectFilter, IScheduleConfig } from '../../models';
 import { decrypt, encrypt } from '../../utils/encryption';
+import { incrementTableCounter } from '../counter';
 
 interface CreateBackupConfigParams {
     userId: string;
@@ -42,7 +43,10 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
         updatedAt: now,
     };
 
-    await docClient.send(new PutCommand({ TableName: BACKUP_CONFIG_TABLE, Item: item }));
+    await Promise.all([
+        docClient.send(new PutCommand({ TableName: BACKUP_CONFIG_TABLE, Item: item })),
+        incrementTableCounter(BACKUP_CONFIG_TABLE, userId),
+    ]);
     return item;
 };
 
@@ -113,9 +117,39 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
     return true;
 };
 
+const decodeCursor = (cursor?: string): Record<string, any> | undefined => {
+    if (!cursor) return undefined;
+    try { return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8')); }
+    catch { return undefined; }
+};
+
+const encodeCursor = (key: Record<string, any>): string =>
+    Buffer.from(JSON.stringify(key)).toString('base64url');
+
+const getBackupConfigsByUserWithPagination = async (
+    userId: string,
+    optional: { limit: number; cursor?: string }
+): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
+    const exclusiveStartKey = decodeCursor(optional.cursor);
+
+    const result = await docClient.send(new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :uid',
+        ExpressionAttributeValues: { ':uid': userId },
+        Limit: optional.limit,
+        ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
+    }));
+
+    return {
+        documents: (result.Items as IBackupConfig[] | undefined) ?? [],
+        nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+    };
+};
+
 const getDestinationConfig = (config: IBackupConfig): Record<string, any> => {
     const { ciphertext, iv, authTag } = config.destination;
     return JSON.parse(decrypt({ ciphertext, iv, authTag }));
 };
 
-export { createBackupConfig, getBackupConfigById, getBackupConfigsByUser, updateBackupConfig, deleteBackupConfig, getDestinationConfig };
+export { createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getDestinationConfig };
