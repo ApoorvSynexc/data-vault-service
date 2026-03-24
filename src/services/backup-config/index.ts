@@ -110,10 +110,10 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
     const existing = await getBackupConfigById(backupConfigId);
     if (!existing) return false;
 
-    await docClient.send(new DeleteCommand({
-        TableName: BACKUP_CONFIG_TABLE,
-        Key: { backupConfigId },
-    }));
+    await Promise.all([
+        docClient.send(new DeleteCommand({ TableName: BACKUP_CONFIG_TABLE, Key: { backupConfigId } })),
+        incrementTableCounter(BACKUP_CONFIG_TABLE, existing.userId, -1),
+    ]);
     return true;
 };
 
