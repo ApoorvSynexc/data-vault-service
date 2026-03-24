@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { createOAuthState, disconnectCrm, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertCrm } from "../../../services";
+import { createOAuthState, deleteCrm, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertCrm } from "../../../services";
 import { wrapController } from "../../../utils/helper";
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
@@ -113,19 +113,14 @@ const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void
         return;
     }
 
-    const crm = await disconnectCrm(String(crmId));
+    const deleted = await deleteCrm(String(crmId));
 
-    if (!crm) {
+    if (!deleted) {
         makeResponse(req, res, 404, false, 'fetch');
         return;
     }
 
-    makeResponse(req, res, 200, true, 'update', {
-        ...crm,
-        encryptedCredentials: undefined,
-        iv: undefined,
-        authTag: undefined,
-    });
+    makeResponse(req, res, 200, true, 'delete');
 }
 
 export const crmController = wrapController({

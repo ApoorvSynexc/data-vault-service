@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { CRM_TABLE, STATUS } from '../../constant';
@@ -100,6 +100,18 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
     };
 };
 
+const deleteCrm = async (crmId: string): Promise<boolean> => {
+    const existing = await getCrmById(crmId);
+    if (!existing) return false;
+
+    await docClient.send(new DeleteCommand({
+        TableName: CRM_TABLE,
+        Key: { crmId },
+    }));
+
+    return true;
+};
+
 const updateCrmCredentials = async (crmId: string, credentials: Record<string, any>): Promise<void> => {
     const { ciphertext, iv, authTag } = encrypt(JSON.stringify(credentials));
     const updatedAt = new Date().toISOString();
@@ -129,4 +141,4 @@ const getCrmTokens = (crm: ICrm): Record<string, any> => {
     }));
 };
 
-export { upsertCrm, getCrmById, getCrmByUser, getCrmsByUser, disconnectCrm, getCrmTokens, updateCrmCredentials };
+export { upsertCrm, getCrmById, getCrmByUser, getCrmsByUser, disconnectCrm, deleteCrm, getCrmTokens, updateCrmCredentials };
