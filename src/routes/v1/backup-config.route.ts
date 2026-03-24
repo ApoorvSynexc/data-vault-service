@@ -12,5 +12,6 @@ router.get('/list', backupConfigController.listBackupConfigsHandler);
 router.get('/', backupConfigController.getBackupConfigHandler);
 router.put('/', updateBackupConfigValidation, backupConfigController.updateBackupConfigHandler);
 router.delete('/', backupConfigController.deleteBackupConfigHandler);
+router.post('/test', backupConfigController.testBackupHandler);
 
 export const backupRouter = router;

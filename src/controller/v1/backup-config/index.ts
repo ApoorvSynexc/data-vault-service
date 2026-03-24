@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter } from '../../../services';
+import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter, getCrmById, getCrmTokens } from '../../../services';
 import { BACKUP_CONFIG_TABLE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
@@ -93,6 +93,19 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     makeResponse(req, res, 200, true, 'delete');
 };
 
+const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const crm = await getCrmById(req.body.crmId);
+    if (!crm) {
+        makeResponse(req, res, 404, false, 'not_found');
+        return;
+    }
+    const credentials = await getCrmTokens(crm);
+    const source = { ...credentials, crmName: crm.crmName };
+    const destination = req.body.destination;
+    const payload = { source, destination };
+    makeResponse(req, res, 200, true, 'fetch', payload);
+}
+
 export const backupConfigController = wrapController({
     getObjectsHanlder,
     getFieldsHanlder,
@@ -101,4 +114,5 @@ export const backupConfigController = wrapController({
     getBackupConfigHandler,
     updateBackupConfigHandler,
     deleteBackupConfigHandler,
+    testBackupHandler
 });
