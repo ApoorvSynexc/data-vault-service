@@ -62,12 +62,12 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
         throw error;
     }
 
+    const existingCrms = await getCrmsByUser(oauthState.userId);
     const { data: sfProfile } = await getSalesforceProfile({
         accessToken: token.access_token,
         refreshToken: token.refresh_token,
     });
 
-    const existingCrms = await getCrmsByUser(oauthState.userId);
     const duplicate = existingCrms.find(
         (i) => i.crmProfile?.organizationId === sfProfile.organization_id && i.crmProfile?.userId === sfProfile.user_id
     );

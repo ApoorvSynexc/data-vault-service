@@ -10,10 +10,9 @@ const getApexObjects = async (crmId: string) => {
     if (!instanceUrl) throw new Error('Instance URL not found');
 
     const url = `${instanceUrl}/services/apexrest/v1/accessible-objects`;
-    console.log({ url });
     return salesforceRequest(
         { url, method: 'GET' },
-        { accessToken: access_token, refreshToken: refresh_token }
+        { accessToken: access_token, refreshToken: refresh_token, crmId }
     );
 };
 
@@ -26,10 +25,9 @@ const getApexFields = async (crmId: string, objectName: string) => {
     if (!instanceUrl) throw new Error('Instance URL not found');
 
     const url = `${instanceUrl}/services/apexrest/v1/object-fields-metadata?objectApiName=${objectName}`;
-    console.log({ url });
     return salesforceRequest(
         { url, method: 'GET' },
-        { accessToken: access_token, refreshToken: refresh_token }
+        { accessToken: access_token, refreshToken: refresh_token, crmId }
     );
 };
 

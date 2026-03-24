@@ -51,6 +51,7 @@ interface SalesforceRequestOptions {
 interface SalesforceTokens {
     accessToken: string;
     refreshToken: string;
+    crmId?: string;
 }
 
 interface SalesforceRequestResult<T> {
