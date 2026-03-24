@@ -100,6 +100,23 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
     };
 };
 
+const updateCrmCredentials = async (crmId: string, credentials: Record<string, any>): Promise<void> => {
+    const { ciphertext, iv, authTag } = encrypt(JSON.stringify(credentials));
+    const updatedAt = new Date().toISOString();
+
+    await docClient.send(new UpdateCommand({
+        TableName: CRM_TABLE,
+        Key: { crmId },
+        UpdateExpression: 'SET encryptedCredentials = :enc, iv = :iv, authTag = :authTag, updatedAt = :updatedAt',
+        ExpressionAttributeValues: {
+            ':enc': ciphertext,
+            ':iv': iv,
+            ':authTag': authTag,
+            ':updatedAt': updatedAt,
+        },
+    }));
+};
+
 const getCrmTokens = (crm: ICrm): Record<string, any> => {
     if (!crm.encryptedCredentials || !crm.iv || !crm.authTag) {
         return {};
@@ -112,4 +129,4 @@ const getCrmTokens = (crm: ICrm): Record<string, any> => {
     }));
 };
 
-export { upsertCrm, getCrmById, getCrmByUser, getCrmsByUser, disconnectCrm, getCrmTokens };
+export { upsertCrm, getCrmById, getCrmByUser, getCrmsByUser, disconnectCrm, getCrmTokens, updateCrmCredentials };

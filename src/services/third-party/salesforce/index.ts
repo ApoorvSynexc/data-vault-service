@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { updateCrmCredentials } from "../../crm";
 import { httpRequest } from "../../../utils/http-request";
 import { SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET, SALESFORCE_REDIRECT_URI } from "../../../constant";
 
@@ -85,6 +86,12 @@ const salesforceRequest = async <T = any>(
         }
 
         const newAccessToken: string = refreshed.access_token;
+        const newRefreshToken: string = refreshed.refresh_token ?? tokens.refreshToken;
+
+        if (tokens.crmId) {
+            await updateCrmCredentials(tokens.crmId, { access_token: newAccessToken, refresh_token: newRefreshToken });
+        }
+
         const data = await makeCall(newAccessToken);
         return { data, accessToken: newAccessToken };
     }
