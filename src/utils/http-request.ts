@@ -41,8 +41,6 @@ export async function httpRequest<TResponse = any, TBody = any>(
   const response = await fetch(finalUrl, fetchOptions);
 
   if (!response.ok) {
-    console.log(response);
-    
     const errorText = await response.text();
     throw new Error(`HTTP Error ${response.status}: ${errorText}`);
   }
