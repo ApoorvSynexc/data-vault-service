@@ -101,7 +101,7 @@ const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> =
         return;
     }
     const credentials = await getCrmTokens(crm);
-    const source = { ...credentials, crmName: crm.crmName };
+    const source = { ...credentials, objects:["Account"], crmId: crm.crmId, crmName: crm.crmName, instanceUrl: crm.crmProfile?.instanceUrl };
     const destination = req.body.destination;
     const payload = {
         userId: req.user!.userId,
@@ -109,8 +109,8 @@ const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> =
         source,
         destination
     };
-    await httpRequest({ url: `${BACKUP_SERVICE}/v1/backup-job`, method: 'POST', body: JSON.stringify(payload) });
-    makeResponse(req, res, 200, true, 'fetch', payload);
+    const result = await httpRequest({ url: `${BACKUP_SERVICE}/v1/backup-job`, method: 'POST', body: JSON.stringify(payload) });
+    makeResponse(req, res, 200, true, 'fetch', result);
 }
 
 export const backupConfigController = wrapController({
