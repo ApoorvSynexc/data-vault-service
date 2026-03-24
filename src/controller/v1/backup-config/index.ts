@@ -17,7 +17,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
     makeResponse(req, res, 200, true, 'fetch', test);
 }
 
-export const backupController = wrapController({
+export const backupConfigController = wrapController({
     getObjectsHanlder,
     getFieldsHanlder
 });
