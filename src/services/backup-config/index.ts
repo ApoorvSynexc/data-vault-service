@@ -1,7 +1,7 @@
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { BACKUP_CONFIG_TABLE, STATUS } from '../../constant';
+import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
 import { IBackupConfig, IObjectFilter, IScheduleConfig } from '../../models';
 import { decrypt, encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
@@ -9,6 +9,7 @@ import { incrementTableCounter } from '../counter';
 interface CreateBackupConfigParams {
     userId: string;
     crmId: string;
+    name?: string;
     objectNames: string[];
     schedule: string;
     scheduleConfig?: IScheduleConfig;
@@ -17,15 +18,17 @@ interface CreateBackupConfigParams {
 }
 
 interface UpdateBackupConfigParams {
+    name?: string;
     objectNames?: string[];
     schedule?: string;
     scheduleConfig?: IScheduleConfig;
     objectFilters?: IObjectFilter[];
     destination?: { type: string; config: Record<string, any> };
+    backupStatus?: string;
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
-    const { userId, crmId, objectNames, schedule, scheduleConfig, objectFilters, destination } = params;
+    const { userId, crmId, name, objectNames, schedule, scheduleConfig, objectFilters, destination } = params;
     const now = new Date().toISOString();
     const { ciphertext, iv, authTag } = encrypt(JSON.stringify(destination.config));
 
@@ -33,12 +36,14 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
         backupConfigId: uuidv4(),
         userId,
         crmId,
+        ...(name && { name }),
         objectNames,
         schedule,
         scheduleConfig,
         objectFilters,
         destination: { type: destination.type, ciphertext, iv, authTag },
         status: STATUS.active,
+        backupStatus: BACKUP_STATUS.pending,
         createdAt: now,
         updatedAt: now,
     };
@@ -76,8 +81,10 @@ const updateBackupConfig = async (backupConfigId: string, params: UpdateBackupCo
     const updates: Record<string, any> = { updatedAt: now };
     const names: Record<string, string> = {};
 
+    if (params.name !== undefined) updates.name = params.name;
     if (params.objectNames !== undefined) updates.objectNames = params.objectNames;
     if (params.schedule !== undefined) updates.schedule = params.schedule;
+    if (params.backupStatus !== undefined) updates.backupStatus = params.backupStatus;
     if (params.scheduleConfig !== undefined) updates.scheduleConfig = params.scheduleConfig;
     if (params.objectFilters !== undefined) updates.objectFilters = params.objectFilters;
     if (params.destination !== undefined) {

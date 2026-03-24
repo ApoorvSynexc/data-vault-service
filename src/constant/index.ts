@@ -74,6 +74,11 @@ const STATUS = {
   inactive: 'INACTIVE',
   deleted: 'DELETED',
 };
+const BACKUP_STATUS = {
+  pending: 'PENDING',
+  success: 'SUCCESS',
+  failed: 'FAILED',
+};
 const AUTH_PROVIDER = {
   email: 'EMAIL',
   google: 'GOOGLE',
@@ -156,5 +161,6 @@ export {
   WEEK_DAY,
   DESTINATION_TYPE,
   FILTER_OPERATOR,
+  BACKUP_STATUS,
 };
 

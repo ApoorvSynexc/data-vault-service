@@ -32,12 +32,14 @@ export interface IBackupConfig {
     backupConfigId: string; // PK
     userId: string;         // GSI: userId-index
     crmId: string;
+    name?: string;
     objectNames: string[];
     schedule: string;       // REALTIME | SCHEDULE
     scheduleConfig?: IScheduleConfig;
     objectFilters?: IObjectFilter[];
     destination: IBackupDestination;
     status: string;
+    backupStatus: string;   // PENDING | SUCCESS | FAILED
     createdAt: string;
     updatedAt: string;
 }

@@ -48,6 +48,7 @@ const destinationSchema = Joi.object({
 export const createBackupConfigValidation = (req: Request, res: Response, next: NextFunction) => {
     const schema = Joi.object({
         crmId: Joi.string().required(),
+        name: Joi.string().optional(),
         objectNames: Joi.array().items(Joi.string()).min(1).required(),
         schedule: Joi.string().valid(...Object.values(SCHEDULE_MODE)).required(),
         scheduleConfig: Joi.when('schedule', {
@@ -69,6 +70,7 @@ export const createBackupConfigValidation = (req: Request, res: Response, next: 
 
 export const updateBackupConfigValidation = (req: Request, res: Response, next: NextFunction) => {
     const schema = Joi.object({
+        name: Joi.string().optional(),
         objectNames: Joi.array().items(Joi.string()).min(1).optional(),
         schedule: Joi.string().valid(...Object.values(SCHEDULE_MODE)).optional(),
         scheduleConfig: scheduleConfigSchema.optional(),
