@@ -27,6 +27,9 @@ const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vaul
 // Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
+// Services 
+const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
+
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
   schedule: 'SCHEDULE',
@@ -144,6 +147,9 @@ export {
   CRM_TABLE,
   BACKUP_CONFIG_TABLE,
   ENCRYPTION_KEY,
+
+  // Services
+  BACKUP_SERVICE,
 
   // Enums
   STATUS,

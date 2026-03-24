@@ -1,8 +1,9 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter, getCrmById, getCrmTokens } from '../../../services';
-import { BACKUP_CONFIG_TABLE } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, BACKUP_SERVICE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
+import { httpRequest } from '../../../utils/http-request';
 
 const sanitize = ({ destination, ...rest }: IBackupConfig) => ({
     ...rest,
@@ -102,7 +103,13 @@ const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> =
     const credentials = await getCrmTokens(crm);
     const source = { ...credentials, crmName: crm.crmName };
     const destination = req.body.destination;
-    const payload = { source, destination };
+    const payload = {
+        userId: req.user!.userId,
+        backupConfigId: req.body.backupConfigId,
+        source,
+        destination
+    };
+    await httpRequest({ url: `${BACKUP_SERVICE}/v1/backup-job`, method: 'POST', body: JSON.stringify(payload) });
     makeResponse(req, res, 200, true, 'fetch', payload);
 }
 

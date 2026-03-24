@@ -1,5 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { createOAuthState, deleteCrm, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertCrm } from "../../../services";
+import { createOAuthState, deleteCrm, getCrmById, getCrmTokens, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertCrm, updateCrmCredentials } from "../../../services";
+import { refreashSalesforceToken, SalesforceAuthExpiredError } from "../../../services/third-party/salesforce";
 import { wrapController } from "../../../utils/helper";
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
@@ -123,9 +124,41 @@ const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void
     makeResponse(req, res, 200, true, 'delete');
 }
 
+const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const { crmId } = req.query;
+
+    if (!crmId) {
+        makeResponse(req, res, 400, false, 'crm_id_required');
+        return;
+    }
+
+    const crm = await getCrmById(String(crmId));
+    if (!crm) {
+        makeResponse(req, res, 404, false, 'not_found');
+        return;
+    }
+
+    const tokens = getCrmTokens(crm);
+
+    let refreshed: any;
+    try {
+        refreshed = await refreashSalesforceToken(tokens.refresh_token);
+    } catch {
+        throw new SalesforceAuthExpiredError();
+    }
+
+    const newAccessToken: string = refreshed.access_token;
+    const newRefreshToken: string = refreshed.refresh_token ?? tokens.refresh_token;
+
+    await updateCrmCredentials(String(crmId), { access_token: newAccessToken, refresh_token: newRefreshToken });
+
+    makeResponse(req, res, 200, true, 'update', refreshed);
+};
+
 export const crmController = wrapController({
     crmLoginHanlder,
     crmCodeHanlder,
     crmListHandler,
-    crmDisconnectHandler
+    crmDisconnectHandler,
+    crmRefreshTokenHandler,
 });
