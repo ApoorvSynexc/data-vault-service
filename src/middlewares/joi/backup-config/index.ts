@@ -3,15 +3,19 @@ import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 import { DESTINATION_TYPE, DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_MODE, SCHEDULE_TYPE, WEEK_DAY } from '../../../constant';
 
-const filterConditionSchema = Joi.object({
-    field: Joi.string().required(),
+const fieldFilterSchema = Joi.object({
     operator: Joi.string().valid(...Object.values(FILTER_OPERATOR)).required(),
     value: Joi.any().required(),
 });
 
-const objectFilterSchema = Joi.object({
-    objectName: Joi.string().required(),
-    filters: Joi.array().items(filterConditionSchema).min(1).required(),
+const objectFieldSchema = Joi.object({
+    name: Joi.string().required(),
+    filter: fieldFilterSchema.required(),
+});
+
+const objectSchema = Joi.object({
+    name: Joi.string().required(),
+    field: Joi.array().items(objectFieldSchema).min(1).required(),
 });
 
 const schedulingSchema = Joi.object({
@@ -56,7 +60,7 @@ export const createBackupConfigValidation = (req: Request, res: Response, next: 
             then: scheduleConfigSchema.required(),
             otherwise: Joi.forbidden(),
         }),
-        objectFilters: Joi.array().items(objectFilterSchema).optional(),
+        objects: Joi.array().items(objectSchema).optional(),
         destination: destinationSchema.required(),
     });
 
@@ -74,7 +78,7 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
         objectNames: Joi.array().items(Joi.string()).min(1).optional(),
         schedule: Joi.string().valid(...Object.values(SCHEDULE_MODE)).optional(),
         scheduleConfig: scheduleConfigSchema.optional(),
-        objectFilters: Joi.array().items(objectFilterSchema).optional(),
+        objects: Joi.array().items(objectSchema).optional(),
         destination: destinationSchema.optional(),
     }).min(1);
 

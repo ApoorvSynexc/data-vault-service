@@ -101,7 +101,22 @@ const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> =
         return;
     }
     const credentials = await getCrmTokens(crm);
-    const source = { ...credentials, objects:["Account"], crmId: crm.crmId, crmName: crm.crmName, instanceUrl: crm.crmProfile?.instanceUrl };
+    const source = { 
+        ...credentials, 
+        crmId: crm.crmId, 
+        crmName: crm.crmName, 
+        instanceUrl: crm.crmProfile?.instanceUrl,
+        objects:[
+            {
+                name: "Account",
+                fields: ["Name", "Type"]
+            },
+            {
+                name: "Contact",
+                fields: []
+            }
+        ]
+    };
     const destination = req.body.destination;
     const payload = {
         userId: req.user!.userId,

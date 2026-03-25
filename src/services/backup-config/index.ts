@@ -2,7 +2,7 @@ import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } fr
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
-import { IBackupConfig, IObjectFilter, IScheduleConfig } from '../../models';
+import { IBackupConfig, IObject, IScheduleConfig } from '../../models';
 import { decrypt, encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
 
@@ -13,7 +13,7 @@ interface CreateBackupConfigParams {
     objectNames: string[];
     schedule: string;
     scheduleConfig?: IScheduleConfig;
-    objectFilters?: IObjectFilter[];
+    objects?: IObject[];
     destination: { type: string; config: Record<string, any> };
 }
 
@@ -22,13 +22,13 @@ interface UpdateBackupConfigParams {
     objectNames?: string[];
     schedule?: string;
     scheduleConfig?: IScheduleConfig;
-    objectFilters?: IObjectFilter[];
+    objects?: IObject[];
     destination?: { type: string; config: Record<string, any> };
     backupStatus?: string;
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
-    const { userId, crmId, name, objectNames, schedule, scheduleConfig, objectFilters, destination } = params;
+    const { userId, crmId, name, objectNames, schedule, scheduleConfig, objects, destination } = params;
     const now = new Date().toISOString();
     const { ciphertext, iv, authTag } = encrypt(JSON.stringify(destination.config));
 
@@ -40,7 +40,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
         objectNames,
         schedule,
         scheduleConfig,
-        objectFilters,
+        objects,
         destination: { type: destination.type, ciphertext, iv, authTag },
         status: STATUS.active,
         backupStatus: BACKUP_STATUS.pending,
@@ -86,7 +86,7 @@ const updateBackupConfig = async (backupConfigId: string, params: UpdateBackupCo
     if (params.schedule !== undefined) updates.schedule = params.schedule;
     if (params.backupStatus !== undefined) updates.backupStatus = params.backupStatus;
     if (params.scheduleConfig !== undefined) updates.scheduleConfig = params.scheduleConfig;
-    if (params.objectFilters !== undefined) updates.objectFilters = params.objectFilters;
+    if (params.objects !== undefined) updates.objects = params.objects;
     if (params.destination !== undefined) {
         const { ciphertext, iv, authTag } = encrypt(JSON.stringify(params.destination.config));
         updates.destination = { type: params.destination.type, ciphertext, iv, authTag };

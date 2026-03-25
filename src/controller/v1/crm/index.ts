@@ -89,7 +89,10 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
             username: sfProfile.preferred_username,
             photoUrl: sfProfile.photos?.thumbnail,
         },
-        crmCredentials: token,
+        crmCredentials: {
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+        },
     });
 
     makeResponse(req, res, 200, true, 'fetch');

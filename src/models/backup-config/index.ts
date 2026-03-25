@@ -10,15 +10,19 @@ export interface IScheduling {
     monthDate?: number;
 }
 
-export interface IObjectFilter {
-    objectName: string;
-    filters: IFilterCondition[];
-}
-
-export interface IFilterCondition {
-    field: string;
+export interface IFieldFilter {
     operator: string;
     value: any;
+}
+
+export interface IObjectField {
+    name: string;
+    filter: IFieldFilter;
+}
+
+export interface IObject {
+    name: string;
+    field: IObjectField[];
 }
 
 export interface IBackupDestination {
@@ -36,7 +40,7 @@ export interface IBackupConfig {
     objectNames: string[];
     schedule: string;       // REALTIME | SCHEDULE
     scheduleConfig?: IScheduleConfig;
-    objectFilters?: IObjectFilter[];
+    objects?: IObject[];
     destination: IBackupDestination;
     status: string;
     backupStatus: string;   // PENDING | SUCCESS | FAILED
