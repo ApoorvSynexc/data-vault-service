@@ -79,8 +79,11 @@ const salesforceRequest = async <T = any>(
         // Access token expired — refresh and retry once
         let refreshed: any;
         try {
+            console.log("Refreshing Token");
             refreshed = await refreashSalesforceToken(tokens.refreshToken);
-        } catch {
+            console.log("Refreshing Token success");
+        } catch (e: any){
+            console.log("Refreshing Token failed", e?.message);
             // Refresh token also expired — user must reconnect
             throw new SalesforceAuthExpiredError();
         }

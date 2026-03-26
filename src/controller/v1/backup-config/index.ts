@@ -109,11 +109,11 @@ const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> =
         objects:[
             {
                 name: "Account",
-                fields: ["Name", "Type"]
+                field: []
             },
             {
                 name: "Contact",
-                fields: []
+                field: []
             }
         ]
     };

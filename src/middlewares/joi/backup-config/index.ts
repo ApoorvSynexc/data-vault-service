@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
-import { DESTINATION_TYPE, DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_MODE, SCHEDULE_TYPE, WEEK_DAY } from '../../../constant';
+import { CONDITION_TYPE, DESTINATION_TYPE, DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_MODE, SCHEDULE_TYPE, WEEK_DAY } from '../../../constant';
 
 const fieldFilterSchema = Joi.object({
     operator: Joi.string().valid(...Object.values(FILTER_OPERATOR)).required(),
@@ -13,8 +13,18 @@ const objectFieldSchema = Joi.object({
     filter: fieldFilterSchema.required(),
 });
 
+const conditionSchema = Joi.object({
+    type: Joi.string().valid(...Object.values(CONDITION_TYPE)).required(),
+    expression: Joi.when('type', {
+        is: CONDITION_TYPE.custom,
+        then: Joi.string().required(),
+        otherwise: Joi.forbidden(),
+    }),
+});
+
 const objectSchema = Joi.object({
     name: Joi.string().required(),
+    condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).min(1).required(),
 });
 

@@ -82,6 +82,11 @@ const BACKUP_STATUS = {
   success: 'SUCCESS',
   failed: 'FAILED',
 };
+const CONDITION_TYPE = {
+  and: 'AND',
+  or: 'OR',
+  custom: 'CUSTOM',
+};
 const AUTH_PROVIDER = {
   email: 'EMAIL',
   google: 'GOOGLE',
@@ -168,5 +173,6 @@ export {
   DESTINATION_TYPE,
   FILTER_OPERATOR,
   BACKUP_STATUS,
+  CONDITION_TYPE,
 };
 

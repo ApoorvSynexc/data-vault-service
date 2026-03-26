@@ -20,9 +20,15 @@ export interface IObjectField {
     filter: IFieldFilter;
 }
 
+export interface IObjectCondition {
+    type: string; // AND | OR | NOT | CUSTOM
+    expression?: string; // required when type === CUSTOM, e.g. "1 AND 2 OR 3"
+}
+
 export interface IObject {
     name: string;
     field: IObjectField[];
+    condition?: IObjectCondition;
 }
 
 export interface IBackupDestination {
