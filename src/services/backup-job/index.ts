@@ -43,11 +43,6 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
         ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     };
 
-    console.log({
-        payload
-    });
-    
-
     const result = await httpRequest({
         url: `${BACKUP_SERVICE}/v1/backup-job`,
         method: 'POST',
