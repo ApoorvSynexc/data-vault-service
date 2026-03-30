@@ -25,7 +25,7 @@ const conditionSchema = Joi.object({
 const objectSchema = Joi.object({
     name: Joi.string().required(),
     condition: conditionSchema.optional(),
-    field: Joi.array().items(objectFieldSchema).min(1).required(),
+    field: Joi.array().items(objectFieldSchema).required(),
 });
 
 const schedulingSchema = Joi.object({

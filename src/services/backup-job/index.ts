@@ -19,7 +19,7 @@ const getSourceObjects = (config: IBackupConfig) => {
     }));
 };
 
-const triggerBackupJob = async (config: IBackupConfig) => {
+const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) => {
     const crm = await getCrmById(config.crmId);
     if (!crm) {
         throw new Error(`crm_not_found:${config.crmId}`);
@@ -38,9 +38,9 @@ const triggerBackupJob = async (config: IBackupConfig) => {
         },
         destination: {
             type: config.destination.type,
-            config: getDestinationConfig(config)
+            config:getDestinationConfig(config)
         },
-        ...(config.lastBackupAt ? { lastUpdatedAt: config.lastBackupAt } : {}),
+        ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     };
 
     console.log({
