@@ -1,4 +1,4 @@
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
@@ -25,6 +25,7 @@ interface UpdateBackupConfigParams {
     objects?: IObject[];
     destination?: { type: string; config: Record<string, any> };
     backupStatus?: string;
+    lastBackupAt?: string;
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
@@ -73,6 +74,26 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
     return (result.Items as IBackupConfig[] | undefined) ?? [];
 };
 
+const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> => {
+    const result = await docClient.send(new ScanCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        FilterExpression: '#status = :active AND #schedule = :schedule AND #scheduleConfig.#type = :type',
+        ExpressionAttributeNames: {
+            '#status': 'status',
+            '#schedule': 'schedule',
+            '#scheduleConfig': 'scheduleConfig',
+            '#type': 'type',
+        },
+        ExpressionAttributeValues: {
+            ':active': STATUS.active,
+            ':schedule': 'SCHEDULE',
+            ':type': 'INCREMENTAL',
+        },
+    }));
+
+    return (result.Items as IBackupConfig[] | undefined) ?? [];
+};
+
 const updateBackupConfig = async (backupConfigId: string, params: UpdateBackupConfigParams): Promise<IBackupConfig | null> => {
     const existing = await getBackupConfigById(backupConfigId);
     if (!existing) return null;
@@ -85,6 +106,7 @@ const updateBackupConfig = async (backupConfigId: string, params: UpdateBackupCo
     if (params.objectNames !== undefined) updates.objectNames = params.objectNames;
     if (params.schedule !== undefined) updates.schedule = params.schedule;
     if (params.backupStatus !== undefined) updates.backupStatus = params.backupStatus;
+    if (params.lastBackupAt !== undefined) updates.lastBackupAt = params.lastBackupAt;
     if (params.scheduleConfig !== undefined) updates.scheduleConfig = params.scheduleConfig;
     if (params.objects !== undefined) updates.objects = params.objects;
     if (params.destination !== undefined) {
@@ -159,4 +181,4 @@ const getDestinationConfig = (config: IBackupConfig): Record<string, any> => {
     return JSON.parse(decrypt({ ciphertext, iv, authTag }));
 };
 
-export { createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getDestinationConfig };
+export { createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getScheduledIncrementalBackupConfigs, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getDestinationConfig };

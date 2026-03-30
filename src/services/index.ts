@@ -1,4 +1,5 @@
 export * from './backup-config';
+export * from './backup-job';
 export * from './counter';
 export * from './crm';
 export * from './oauth-state';

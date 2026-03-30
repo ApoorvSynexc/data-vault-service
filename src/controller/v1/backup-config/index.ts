@@ -1,9 +1,8 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter, getCrmById, getCrmTokens } from '../../../services';
-import { BACKUP_CONFIG_TABLE, BACKUP_SERVICE } from '../../../constant';
+import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter, triggerBackupJob } from '../../../services';
+import { BACKUP_CONFIG_TABLE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
-import { httpRequest } from '../../../utils/http-request';
 
 const sanitize = ({ destination, ...rest }: IBackupConfig) => ({
     ...rest,
@@ -95,38 +94,15 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 };
 
 const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const crm = await getCrmById(req.body.crmId);
-    if (!crm) {
+    const existing = await getBackupConfigById(String(req.body.backupConfigId));
+    if (!existing || existing.userId !== req.user!.userId) {
         makeResponse(req, res, 404, false, 'not_found');
         return;
     }
-    const credentials = await getCrmTokens(crm);
-    const source = { 
-        ...credentials, 
-        crmId: crm.crmId, 
-        crmName: crm.crmName, 
-        instanceUrl: crm.crmProfile?.instanceUrl,
-        objects:[
-            {
-                name: "Account",
-                field: []
-            },
-            {
-                name: "Contact",
-                field: []
-            }
-        ]
-    };
-    const destination = req.body.destination;
-    const payload = {
-        userId: req.user!.userId,
-        backupConfigId: req.body.backupConfigId,
-        source,
-        destination
-    };
-    const result = await httpRequest({ url: `${BACKUP_SERVICE}/v1/backup-job`, method: 'POST', body: JSON.stringify(payload) });
+
+    const result = await triggerBackupJob(existing);
     makeResponse(req, res, 200, true, 'fetch', result);
-}
+};
 
 export const backupConfigController = wrapController({
     getObjectsHanlder,

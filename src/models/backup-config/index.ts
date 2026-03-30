@@ -50,6 +50,7 @@ export interface IBackupConfig {
     destination: IBackupDestination;
     status: string;
     backupStatus: string;   // PENDING | SUCCESS | FAILED
+    lastBackupAt?: string;  // when the last backup job ran
     createdAt: string;
     updatedAt: string;
 }
