@@ -43,6 +43,8 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    console.log({body: req.body});
+    
      makeResponse(req, res, 200, true, 'update');
 };
 

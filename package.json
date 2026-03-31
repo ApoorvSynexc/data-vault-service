@@ -17,8 +17,10 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1011.0",
     "@aws-sdk/lib-dynamodb": "^3.1011.0",
+    "@types/cors": "^2.8.19",
     "axios": "^1.13.6",
     "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
     "crypto": "^1.0.1",
     "dayjs": "^1.11.20",
     "dotenv": "^17.3.1",
