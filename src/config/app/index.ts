@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { createServer, Server } from 'http';
 import { router } from '../../routes';
 import { morganMiddleware } from '../../middlewares';
@@ -8,9 +9,12 @@ import { startBackupConfigCron } from '../../jobs/backup-config-cron';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST: string = String(process.env.HOST || '0.0.0.0');
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
+app.use(cookieParser());
 app.use(express.json());
 app.use(morganMiddleware);
 

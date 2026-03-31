@@ -5,8 +5,7 @@ import { IRequest, IResponse, makeResponse } from '../../lib';
 import { getSession, getUser } from '../../services';
 
 const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): Promise<void> => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const token = req.cookies?.accessToken ?? null;
 
   if (!token) {
     await makeResponse(req, res, 401, false, 'unauthorized');

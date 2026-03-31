@@ -2,6 +2,7 @@ import bcrypt from 'bcrypt';
 import dayjs from 'dayjs';
 import jwt from 'jsonwebtoken';
 import {
+  JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
   JWT_REFRESH_SECRET,
   OTP_CHANNEL,
@@ -133,6 +134,14 @@ const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'otp_verify');
 };
 
+const isProduction = process.env.NODE_ENV === 'production';
+
+const baseCookieOptions = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: 'strict' as const,
+};
+
 const loginHandler = async (req: IRequest, res: IResponse) => {
   const { email, mobile, password } = req.body;
 
@@ -164,11 +173,25 @@ const loginHandler = async (req: IRequest, res: IResponse) => {
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
 
   const tokens = generateTokens(user.userId, session.sessionId);
-  makeResponse(req, res, 200, true, 'login', { ...tokens });
+
+  res.cookie('accessToken', tokens.accessToken, {
+    ...baseCookieOptions,
+    maxAge: parseExpiryToSeconds(JWT_ACCESS_EXPIRY) * 1000,
+  });
+  res.cookie('refreshToken', tokens.refreshToken, {
+    ...baseCookieOptions,
+    maxAge: parseExpiryToSeconds(JWT_REFRESH_EXPIRY) * 1000,
+  });
+
+  makeResponse(req, res, 200, true, 'login');
 };
 
 const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies?.refreshToken;
+
+  if (!refreshToken) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
 
   const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
 
@@ -189,7 +212,35 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
   await updateSession(session.sessionId, { lastAccessedAt: new Date().toISOString() });
 
   const tokens = generateTokens(user.userId, session.sessionId);
-  makeResponse(req, res, 200, true, 'fetch', tokens);
+
+  res.cookie('accessToken', tokens.accessToken, {
+    ...baseCookieOptions,
+    maxAge: parseExpiryToSeconds(JWT_ACCESS_EXPIRY) * 1000,
+  });
+  res.cookie('refreshToken', tokens.refreshToken, {
+    ...baseCookieOptions,
+    maxAge: parseExpiryToSeconds(JWT_REFRESH_EXPIRY) * 1000,
+  });
+
+  makeResponse(req, res, 200, true, 'fetch');
+};
+
+const logoutHandler = async (req: IRequest, res: IResponse) => {
+  const refreshToken = req.cookies?.refreshToken;
+
+  if (refreshToken) {
+    try {
+      const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
+      await updateSession(payload.sessionId, { status: SESSION_STATUS.revoked });
+    } catch {
+      // Token expired or invalid — still clear cookies
+    }
+  }
+
+  res.clearCookie('accessToken', baseCookieOptions);
+  res.clearCookie('refreshToken', baseCookieOptions);
+
+  makeResponse(req, res, 200, true, 'logout');
 };
 
 const resetPasswordHandler = async (req: IRequest, res: IResponse) => {
@@ -230,5 +281,6 @@ export const authController = wrapController({
   verifyOtpHandler,
   loginHandler,
   refreshTokenHandler,
+  logoutHandler,
   resetPasswordHandler,
 });
