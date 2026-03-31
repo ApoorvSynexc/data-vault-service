@@ -42,7 +42,9 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
     makeResponse(req, res, 200, true, 'update', refreshed);
 };
 
-const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {};
+const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+     makeResponse(req, res, 200, true, 'update');
+};
 
 export const internalController = wrapController({
     getFieldsHanlder,
