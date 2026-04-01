@@ -45,6 +45,7 @@ const schedulingSchema = Joi.object({
 
 const scheduleConfigSchema = Joi.object({
     type: Joi.string().valid(...Object.values(SCHEDULE_TYPE)).required(),
+    timeZone: Joi.string().required(),
     scheduling: schedulingSchema.optional(),
 });
 

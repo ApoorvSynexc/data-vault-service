@@ -1,5 +1,6 @@
 export interface IScheduleConfig {
     type: string; // ONE_TIME | INCREMENTAL
+    timeZone: string;
     scheduling?: IScheduling;
 }
 
