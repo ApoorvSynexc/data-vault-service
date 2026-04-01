@@ -77,13 +77,9 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
     await docClient.send(new UpdateCommand({
         TableName: CRM_TABLE,
         Key: { crmId },
-        UpdateExpression: 'SET isConnected = :isConnected, #status = :status, updatedAt = :updatedAt REMOVE crmProfile, encryptedCredentials, iv, authTag',
-        ExpressionAttributeNames: {
-            '#status': 'status',
-        },
+        UpdateExpression: 'SET isConnected = :isConnected, updatedAt = :updatedAt REMOVE encryptedCredentials, iv, authTag',
         ExpressionAttributeValues: {
             ':isConnected': false,
-            ':status': STATUS.inactive,
             ':updatedAt': updatedAt,
         },
     }));
@@ -91,11 +87,9 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
     return {
         ...existing,
         isConnected: false,
-        crmProfile: undefined,
         encryptedCredentials: undefined,
         iv: undefined,
         authTag: undefined,
-        status: STATUS.inactive,
         updatedAt,
     };
 };

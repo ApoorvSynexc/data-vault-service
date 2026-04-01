@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { createOAuthState, deleteCrm, getCrmById, getCrmTokens, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertCrm, updateCrmCredentials } from "../../../services";
+import { createOAuthState, disconnectCrm, getCrmById, getCrmTokens, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertCrm, updateCrmCredentials } from "../../../services";
 import { refreashSalesforceToken, SalesforceAuthExpiredError } from "../../../services/third-party/salesforce";
 import { wrapController } from "../../../utils/helper";
 
@@ -117,14 +117,14 @@ const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void
         return;
     }
 
-    const deleted = await deleteCrm(String(crmId));
+    const disconnected = await disconnectCrm(String(crmId));
 
-    if (!deleted) {
+    if (!disconnected) {
         makeResponse(req, res, 404, false, 'fetch');
         return;
     }
 
-    makeResponse(req, res, 200, true, 'delete');
+    makeResponse(req, res, 200, true, 'update');
 }
 
 const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
