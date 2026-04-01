@@ -83,7 +83,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
         crmProfile: {
             instanceUrl: token.instance_url,
             organizationId: sfProfile.organization_id,
-            userId: sfProfile.organization_id,
+            userId: sfProfile.user_id,
             name: sfProfile.name,
             email: sfProfile.email,
             username: sfProfile.preferred_username,
