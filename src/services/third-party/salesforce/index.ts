@@ -104,8 +104,8 @@ const salesforceRequest = async <T = any>(
 // Auth
 // ---------------------------------------------------------------------------
 
-const getSalesforceLoginUrl = () => {
-    const state = generateState();
+const getSalesforceLoginUrl = (stateOverride?: string) => {
+    const state = stateOverride ?? generateState();
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = generateCodeChallenge(codeVerifier);
 

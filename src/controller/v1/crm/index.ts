@@ -15,20 +15,35 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmName } = req.query;
-    if (!crmName) {
+    const { crmName, crmId } = req.query;
+
+    if (!crmName && !crmId) {
         makeResponse(req, res, 400, false, 'crm_name_required');
         return;
     }
 
     const userId = req.user!.userId;
+    let resolvedCrmName = String(crmName ?? '');
+    let oauthStateKey: string | undefined;
+
+    if (!resolvedCrmName && crmId) {
+        const crm = await getCrmById(String(crmId));
+        if (!crm || crm.userId !== userId) {
+            makeResponse(req, res, 404, false, 'not_found');
+            return;
+        }
+
+        resolvedCrmName = crm.crmName;
+        oauthStateKey = `crm-${crm.crmId}`;
+    }
+
     let redirectUrl = '';
 
-    switch (crmName) {
+    switch (resolvedCrmName) {
         case 'salesforce':
         default: {
-            const { url, codeVerifier, state } = getSalesforceLoginUrl();
-            await createOAuthState(state, codeVerifier, userId, String(crmName));
+            const { url, codeVerifier, state } = getSalesforceLoginUrl(oauthStateKey);
+            await createOAuthState(state, codeVerifier, userId, resolvedCrmName);
             redirectUrl = url;
             break;
         }
@@ -70,7 +85,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     });
 
     const duplicate = existingCrms.find(
-        (i) => i.crmProfile?.organizationId === sfProfile.organization_id && i.crmProfile?.userId === sfProfile.user_id
+        (i) => i.crmProfile?.organizationId === sfProfile.organization_id && i.crmProfile?.userId === sfProfile.user_id && i.isConnected === true
     );
     if (duplicate) {
         makeResponse(req, res, 409, false, 'exit');
