@@ -3,6 +3,7 @@ export interface IOAuthState {
   codeVerifier: string;
   userId: string;
   crmName: string;
+  crmId?: string;
   ttl: number;        // Unix epoch seconds — DynamoDB TTL attribute
   createdAt: string;
 }

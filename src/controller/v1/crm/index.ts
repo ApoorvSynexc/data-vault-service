@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { createOAuthState, disconnectCrm, getCrmById, getCrmTokens, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, upsertCrm, updateCrmCredentials } from "../../../services";
+import { createOAuthState, disconnectCrm, getCrmById, getCrmTokens, getCrmsByUser, getOAuthState, getSalesforceLoginUrl, getSalesforceProfile, getSalesforceToken, reconnectCrm, upsertCrm, updateCrmCredentials } from "../../../services";
 import { refreashSalesforceToken, SalesforceAuthExpiredError } from "../../../services/third-party/salesforce";
 import { wrapController } from "../../../utils/helper";
 
@@ -43,7 +43,7 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
         case 'salesforce':
         default: {
             const { url, codeVerifier, state } = getSalesforceLoginUrl(oauthStateKey);
-            await createOAuthState(state, codeVerifier, userId, resolvedCrmName);
+            await createOAuthState(state, codeVerifier, userId, resolvedCrmName, crmId ? String(crmId) : undefined);
             redirectUrl = url;
             break;
         }
@@ -85,30 +85,47 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     });
 
     const duplicate = existingCrms.find(
-        (i) => i.crmProfile?.organizationId === sfProfile.organization_id && i.crmProfile?.userId === sfProfile.user_id && i.isConnected === true
+        (i) => i.crmId !== oauthState.crmId && i.crmProfile?.organizationId === sfProfile.organization_id && i.crmProfile?.userId === sfProfile.user_id && i.isConnected === true
     );
     if (duplicate) {
         makeResponse(req, res, 409, false, 'exit');
         return;
     }
 
-    await upsertCrm({
-        userId: oauthState.userId,
-        crmName: String(crmName),
-        crmProfile: {
-            instanceUrl: token.instance_url,
-            organizationId: sfProfile.organization_id,
-            userId: sfProfile.user_id,
-            name: sfProfile.name,
-            email: sfProfile.email,
-            username: sfProfile.preferred_username,
-            photoUrl: sfProfile.photos?.thumbnail,
-        },
-        crmCredentials: {
-            access_token: token.access_token,
-            refresh_token: token.refresh_token,
-        },
-    });
+    const nextCrmProfile = {
+        instanceUrl: token.instance_url,
+        organizationId: sfProfile.organization_id,
+        userId: sfProfile.user_id,
+        name: sfProfile.name,
+        email: sfProfile.email,
+        username: sfProfile.preferred_username,
+        photoUrl: sfProfile.photos?.thumbnail,
+    };
+
+    const nextCrmCredentials = {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+    };
+
+    if (oauthState.crmId) {
+        const reconnected = await reconnectCrm({
+            crmId: oauthState.crmId,
+            crmProfile: nextCrmProfile,
+            crmCredentials: nextCrmCredentials,
+        });
+
+        if (!reconnected) {
+            makeResponse(req, res, 404, false, 'not_found');
+            return;
+        }
+    } else {
+        await upsertCrm({
+            userId: oauthState.userId,
+            crmName: oauthState.crmName,
+            crmProfile: nextCrmProfile,
+            crmCredentials: nextCrmCredentials,
+        });
+    }
 
     makeResponse(req, res, 200, true, 'fetch');
 }

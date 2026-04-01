@@ -12,6 +12,12 @@ interface UpsertCrmParams {
     crmCredentials: Record<string, any>;
 }
 
+interface ReconnectCrmParams {
+    crmId: string;
+    crmProfile: ICrmProfile;
+    crmCredentials: Record<string, any>;
+}
+
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     const { userId, crmName, crmProfile, crmCredentials } = params;
     const now = new Date().toISOString();
@@ -123,6 +129,47 @@ const updateCrmCredentials = async (crmId: string, credentials: Record<string, a
     }));
 };
 
+const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> => {
+    const { crmId, crmProfile, crmCredentials } = params;
+    const existing = await getCrmById(crmId);
+
+    if (!existing) {
+        return null;
+    }
+
+    const { ciphertext, iv, authTag } = encrypt(JSON.stringify(crmCredentials));
+    const updatedAt = new Date().toISOString();
+
+    await docClient.send(new UpdateCommand({
+        TableName: CRM_TABLE,
+        Key: { crmId },
+        UpdateExpression: 'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :enc, iv = :iv, authTag = :authTag, #status = :status, updatedAt = :updatedAt',
+        ExpressionAttributeNames: {
+            '#status': 'status',
+        },
+        ExpressionAttributeValues: {
+            ':isConnected': true,
+            ':crmProfile': crmProfile,
+            ':enc': ciphertext,
+            ':iv': iv,
+            ':authTag': authTag,
+            ':status': STATUS.active,
+            ':updatedAt': updatedAt,
+        },
+    }));
+
+    return {
+        ...existing,
+        isConnected: true,
+        crmProfile,
+        encryptedCredentials: ciphertext,
+        iv,
+        authTag,
+        status: STATUS.active,
+        updatedAt,
+    };
+};
+
 const getCrmTokens = (crm: ICrm): Record<string, any> => {
     if (!crm.encryptedCredentials || !crm.iv || !crm.authTag) {
         return {};
@@ -135,4 +182,4 @@ const getCrmTokens = (crm: ICrm): Record<string, any> => {
     }));
 };
 
-export { upsertCrm, getCrmById, getCrmByUser, getCrmsByUser, disconnectCrm, deleteCrm, getCrmTokens, updateCrmCredentials };
+export { upsertCrm, reconnectCrm, getCrmById, getCrmByUser, getCrmsByUser, disconnectCrm, deleteCrm, getCrmTokens, updateCrmCredentials };
