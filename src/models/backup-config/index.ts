@@ -5,7 +5,7 @@ export interface IScheduleConfig {
 }
 
 export interface IScheduling {
-    duration: string; // HOUR | DAYS | WEEK | MONTH
+    frequency: string; // HOUR | DAYS | WEEK | MONTH
     interval: number;
     weekDays?: string[];
     monthDate?: number;

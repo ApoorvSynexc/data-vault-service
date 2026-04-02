@@ -29,14 +29,14 @@ const objectSchema = Joi.object({
 });
 
 const schedulingSchema = Joi.object({
-    duration: Joi.string().valid(...Object.values(DURATION_TYPE)).required(),
+    frequency: Joi.string().valid(...Object.values(DURATION_TYPE)).required(),
     interval: Joi.number().integer().min(1).required(),
-    weekDays: Joi.when('duration', {
+    weekDays: Joi.when('frequency', {
         is: DURATION_TYPE.week,
         then: Joi.array().items(Joi.string().valid(...Object.values(WEEK_DAY))).min(1).required(),
         otherwise: Joi.forbidden(),
     }),
-    monthDate: Joi.when('duration', {
+    monthDate: Joi.when('frequency', {
         is: DURATION_TYPE.month,
         then: Joi.number().integer().min(1).max(31).required(),
         otherwise: Joi.forbidden(),
