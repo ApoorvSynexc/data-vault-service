@@ -82,6 +82,10 @@ const BACKUP_STATUS = {
   success: 'SUCCESS',
   failed: 'FAILED',
 };
+const ENVIRONMENT_TYPE = {
+  production: 'production',
+  sandbox: 'sandbox',
+};
 const CONDITION_TYPE = {
   and: 'AND',
   or: 'OR',
@@ -174,5 +178,6 @@ export {
   FILTER_OPERATOR,
   BACKUP_STATUS,
   CONDITION_TYPE,
+  ENVIRONMENT_TYPE,
 };
 

@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
-import { CONDITION_TYPE, DESTINATION_TYPE, DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_MODE, SCHEDULE_TYPE, WEEK_DAY } from '../../../constant';
+import { CONDITION_TYPE, DESTINATION_TYPE, DURATION_TYPE, ENVIRONMENT_TYPE, FILTER_OPERATOR, SCHEDULE_MODE, SCHEDULE_TYPE, WEEK_DAY } from '../../../constant';
 
 const fieldFilterSchema = Joi.object({
     operator: Joi.string().valid(...Object.values(FILTER_OPERATOR)).required(),
@@ -64,6 +64,8 @@ export const createBackupConfigValidation = (req: Request, res: Response, next: 
     const schema = Joi.object({
         crmId: Joi.string().required(),
         name: Joi.string().optional(),
+        description: Joi.string().optional(),
+        environment: Joi.string().valid(...Object.values(ENVIRONMENT_TYPE)).required(),
         objectNames: Joi.array().items(Joi.string()).min(1).required(),
         schedule: Joi.string().valid(...Object.values(SCHEDULE_MODE)).required(),
         scheduleConfig: Joi.when('schedule', {
@@ -86,6 +88,8 @@ export const createBackupConfigValidation = (req: Request, res: Response, next: 
 export const updateBackupConfigValidation = (req: Request, res: Response, next: NextFunction) => {
     const schema = Joi.object({
         name: Joi.string().optional(),
+        description: Joi.string().optional(),
+        environment: Joi.string().valid(...Object.values(ENVIRONMENT_TYPE)).optional(),
         objectNames: Joi.array().items(Joi.string()).min(1).optional(),
         schedule: Joi.string().valid(...Object.values(SCHEDULE_MODE)).optional(),
         scheduleConfig: scheduleConfigSchema.optional(),

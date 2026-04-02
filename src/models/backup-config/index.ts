@@ -43,6 +43,8 @@ export interface IBackupConfig {
     userId: string;         // GSI: userId-index
     crmId: string;
     name?: string;
+    description?: string;
+    environment: string;
     objectNames: string[];
     schedule: string;       // REALTIME | SCHEDULE
     scheduleConfig?: IScheduleConfig;

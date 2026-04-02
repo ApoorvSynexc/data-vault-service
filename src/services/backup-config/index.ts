@@ -10,6 +10,8 @@ interface CreateBackupConfigParams {
     userId: string;
     crmId: string;
     name?: string;
+    description?: string;
+    environment: string;
     objectNames: string[];
     schedule: string;
     scheduleConfig?: IScheduleConfig;
@@ -19,6 +21,8 @@ interface CreateBackupConfigParams {
 
 interface UpdateBackupConfigParams {
     name?: string;
+    description?: string;
+    environment?: string;
     objectNames?: string[];
     schedule?: string;
     scheduleConfig?: IScheduleConfig;
@@ -29,7 +33,7 @@ interface UpdateBackupConfigParams {
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
-    const { userId, crmId, name, objectNames, schedule, scheduleConfig, objects, destination } = params;
+    const { userId, crmId, name, description, environment, objectNames, schedule, scheduleConfig, objects, destination } = params;
     const now = new Date().toISOString();
     const { ciphertext, iv } = encrypt(JSON.stringify(destination.config));
 
@@ -38,6 +42,8 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
         userId,
         crmId,
         ...(name && { name }),
+        ...(description && { description }),
+        environment,
         objectNames,
         schedule,
         scheduleConfig,
@@ -103,6 +109,8 @@ const updateBackupConfig = async (backupConfigId: string, params: UpdateBackupCo
     const names: Record<string, string> = {};
 
     if (params.name !== undefined) updates.name = params.name;
+    if (params.description !== undefined) updates.description = params.description;
+    if (params.environment !== undefined) updates.environment = params.environment;
     if (params.objectNames !== undefined) updates.objectNames = params.objectNames;
     if (params.schedule !== undefined) updates.schedule = params.schedule;
     if (params.backupStatus !== undefined) updates.backupStatus = params.backupStatus;
