@@ -36,7 +36,6 @@ export interface IBackupDestination {
     type: string;
     ciphertext: string;
     iv: string;
-    authTag: string;
 }
 
 export interface IBackupConfig {

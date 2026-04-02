@@ -21,7 +21,7 @@ interface ReconnectCrmParams {
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     const { userId, crmName, crmProfile, crmCredentials } = params;
     const now = new Date().toISOString();
-    const { ciphertext, iv, authTag } = encrypt(JSON.stringify(crmCredentials));
+    const { ciphertext, iv } = encrypt(JSON.stringify(crmCredentials));
 
     const crm: ICrm = {
         crmId: uuidv4(),
@@ -31,7 +31,6 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
         crmProfile,
         encryptedCredentials: ciphertext,
         iv,
-        authTag,
         status: STATUS.active,
         createdAt: now,
         updatedAt: now,
@@ -83,7 +82,7 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
     await docClient.send(new UpdateCommand({
         TableName: CRM_TABLE,
         Key: { crmId },
-        UpdateExpression: 'SET isConnected = :isConnected, updatedAt = :updatedAt REMOVE encryptedCredentials, iv, authTag',
+        UpdateExpression: 'SET isConnected = :isConnected, updatedAt = :updatedAt REMOVE encryptedCredentials, iv',
         ExpressionAttributeValues: {
             ':isConnected': false,
             ':updatedAt': updatedAt,
@@ -95,7 +94,6 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
         isConnected: false,
         encryptedCredentials: undefined,
         iv: undefined,
-        authTag: undefined,
         updatedAt,
     };
 };
@@ -113,17 +111,16 @@ const deleteCrm = async (crmId: string): Promise<boolean> => {
 };
 
 const updateCrmCredentials = async (crmId: string, credentials: Record<string, any>): Promise<void> => {
-    const { ciphertext, iv, authTag } = encrypt(JSON.stringify(credentials));
+    const { ciphertext, iv } = encrypt(JSON.stringify(credentials));
     const updatedAt = new Date().toISOString();
 
     await docClient.send(new UpdateCommand({
         TableName: CRM_TABLE,
         Key: { crmId },
-        UpdateExpression: 'SET encryptedCredentials = :enc, iv = :iv, authTag = :authTag, updatedAt = :updatedAt',
+        UpdateExpression: 'SET encryptedCredentials = :enc, iv = :iv, updatedAt = :updatedAt',
         ExpressionAttributeValues: {
             ':enc': ciphertext,
             ':iv': iv,
-            ':authTag': authTag,
             ':updatedAt': updatedAt,
         },
     }));
@@ -137,13 +134,13 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
         return null;
     }
 
-    const { ciphertext, iv, authTag } = encrypt(JSON.stringify(crmCredentials));
+    const { ciphertext, iv } = encrypt(JSON.stringify(crmCredentials));
     const updatedAt = new Date().toISOString();
 
     await docClient.send(new UpdateCommand({
         TableName: CRM_TABLE,
         Key: { crmId },
-        UpdateExpression: 'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :enc, iv = :iv, authTag = :authTag, #status = :status, updatedAt = :updatedAt',
+        UpdateExpression: 'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :enc, iv = :iv, #status = :status, updatedAt = :updatedAt',
         ExpressionAttributeNames: {
             '#status': 'status',
         },
@@ -152,7 +149,6 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
             ':crmProfile': crmProfile,
             ':enc': ciphertext,
             ':iv': iv,
-            ':authTag': authTag,
             ':status': STATUS.active,
             ':updatedAt': updatedAt,
         },
@@ -164,21 +160,19 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
         crmProfile,
         encryptedCredentials: ciphertext,
         iv,
-        authTag,
         status: STATUS.active,
         updatedAt,
     };
 };
 
 const getCrmTokens = (crm: ICrm): Record<string, any> => {
-    if (!crm.encryptedCredentials || !crm.iv || !crm.authTag) {
+    if (!crm.encryptedCredentials || !crm.iv) {
         return {};
     }
 
     return JSON.parse(decrypt({
         ciphertext: crm.encryptedCredentials,
         iv: crm.iv,
-        authTag: crm.authTag,
     }));
 };
 

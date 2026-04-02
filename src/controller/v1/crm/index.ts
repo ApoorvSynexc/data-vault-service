@@ -137,7 +137,6 @@ const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
         ...crm,
         encryptedCredentials: undefined,
         iv: undefined,
-        authTag: undefined,
     })));
 }
 

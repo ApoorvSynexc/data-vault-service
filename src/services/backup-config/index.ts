@@ -31,7 +31,7 @@ interface UpdateBackupConfigParams {
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
     const { userId, crmId, name, objectNames, schedule, scheduleConfig, objects, destination } = params;
     const now = new Date().toISOString();
-    const { ciphertext, iv, authTag } = encrypt(JSON.stringify(destination.config));
+    const { ciphertext, iv } = encrypt(JSON.stringify(destination.config));
 
     const item: IBackupConfig = {
         backupConfigId: uuidv4(),
@@ -42,7 +42,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
         schedule,
         scheduleConfig,
         objects,
-        destination: { type: destination.type, ciphertext, iv, authTag },
+        destination: { type: destination.type, ciphertext, iv },
         status: STATUS.active,
         backupStatus: BACKUP_STATUS.pending,
         createdAt: now,
@@ -110,8 +110,8 @@ const updateBackupConfig = async (backupConfigId: string, params: UpdateBackupCo
     if (params.scheduleConfig !== undefined) updates.scheduleConfig = params.scheduleConfig;
     if (params.objects !== undefined) updates.objects = params.objects;
     if (params.destination !== undefined) {
-        const { ciphertext, iv, authTag } = encrypt(JSON.stringify(params.destination.config));
-        updates.destination = { type: params.destination.type, ciphertext, iv, authTag };
+        const { ciphertext, iv } = encrypt(JSON.stringify(params.destination.config));
+        updates.destination = { type: params.destination.type, ciphertext, iv };
     }
 
     const setExpr = Object.keys(updates)
@@ -177,8 +177,8 @@ const getBackupConfigsByUserWithPagination = async (
 };
 
 const getDestinationConfig = (config: IBackupConfig): Record<string, any> => {
-    const { ciphertext, iv, authTag } = config.destination;
-    return JSON.parse(decrypt({ ciphertext, iv, authTag }));
+    const { ciphertext, iv } = config.destination;
+    return JSON.parse(decrypt({ ciphertext, iv }));
 };
 
 export { createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getScheduledIncrementalBackupConfigs, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getDestinationConfig };

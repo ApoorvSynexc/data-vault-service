@@ -16,7 +16,6 @@ export interface ICrm {
     crmProfile?: ICrmProfile;
     encryptedCredentials?: string;
     iv?: string;
-    authTag?: string;
     status: string;
     createdAt: string;
     updatedAt: string;
