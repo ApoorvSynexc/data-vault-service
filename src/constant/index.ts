@@ -83,8 +83,8 @@ const BACKUP_STATUS = {
   failed: 'FAILED',
 };
 const ENVIRONMENT_TYPE = {
-  production: 'production',
-  sandbox: 'sandbox',
+  production: 'PRODUCTION',
+  sandbox: 'SANDBOX',
 };
 const CONDITION_TYPE = {
   and: 'AND',
