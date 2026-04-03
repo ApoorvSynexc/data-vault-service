@@ -64,7 +64,7 @@ export const createBackupConfigValidation = (req: Request, res: Response, next: 
     const schema = Joi.object({
         crmId: Joi.string().required(),
         name: Joi.string().optional(),
-        description: Joi.string().optional(),
+        description: Joi.string().optional().allow(''),
         environment: Joi.string().valid(...Object.values(ENVIRONMENT_TYPE)).required(),
         objectNames: Joi.array().items(Joi.string()).min(1).required(),
         schedule: Joi.string().valid(...Object.values(SCHEDULE_MODE)).required(),

@@ -42,7 +42,7 @@ const SCHEDULE_TYPE = {
 
 const DURATION_TYPE = {
   hour: 'HOUR',
-  days: 'DAYS',
+  days: 'DAY',
   week: 'WEEK',
   month: 'MONTH',
 };
