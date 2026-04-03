@@ -54,6 +54,9 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
                 lastBackupAt: new Date().toISOString(),
             });
             break;
+        case "backup.size.updated":
+            await updateBackupConfig(backupJobId, { sizeInBytes: req.body.sizeInBytes });
+            break;
         case "schema.updated":
             await updateBackupConfig(backupJobId, { schemaChange: true });
             break;

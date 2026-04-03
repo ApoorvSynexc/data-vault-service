@@ -31,6 +31,7 @@ interface UpdateBackupConfigParams {
     backupStatus?: string;
     lastBackupAt?: string;
     schemaChange?: boolean;
+    sizeInBytes?: number;
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
@@ -129,6 +130,7 @@ const updateBackupConfig = async (backupConfigId: string, params: UpdateBackupCo
     if (params.backupStatus !== undefined) updates.backupStatus = params.backupStatus;
     if (params.lastBackupAt !== undefined) updates.lastBackupAt = params.lastBackupAt;
     if (params.schemaChange !== undefined) updates.schemaChange = params.schemaChange;
+    if (params.sizeInBytes !== undefined) updates.sizeInBytes = params.sizeInBytes;
     if (params.scheduleConfig !== undefined) updates.scheduleConfig = params.scheduleConfig;
     if (params.objects !== undefined) updates.objects = params.objects;
     if (params.destination !== undefined) {

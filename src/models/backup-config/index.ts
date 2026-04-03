@@ -54,6 +54,7 @@ export interface IBackupConfig {
     backupStatus: string;   // PENDING | SUCCESS | FAILED
     lastBackupAt?: string;  // when the last backup job ran
     schemaChange?: boolean;
+    sizeInBytes?: number;
     createdAt: string;
     updatedAt: string;
 }
