@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter, triggerBackupJob } from '../../../services';
-import { BACKUP_CONFIG_TABLE } from '../../../constant';
+import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserAndCrm, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter, triggerBackupJob } from '../../../services';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
 
@@ -12,8 +12,28 @@ const sanitize = ({ destination, ...rest }: IBackupConfig) => ({
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const { crmId } = req.query;
     if (!crmId) return makeResponse(req, res, 400, false, 'crm_id_required');
-    const result = await getApexObjects(String(crmId));
-    makeResponse(req, res, 200, true, 'fetch', result);
+
+    const [apexResult, backupConfigs] = await Promise.all([
+        getApexObjects(String(crmId)),
+        getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
+    ]);
+
+    const backedUpMap = new Map<string, { schedule: string }>();
+    for (const config of backupConfigs) {
+        for (const objectName of config.objectNames) {
+            backedUpMap.set(objectName, {
+                schedule: config.schedule === SCHEDULE_MODE.realtime ? 'realtime' : 'schedule',
+            });
+        }
+    }
+
+    const objects = apexResult.objects.map((obj: { label: string; apiName: string }) => ({
+        ...obj,
+        isBackedUp: backedUpMap.has(obj.apiName),
+        schedule: backedUpMap.get(obj.apiName)?.schedule ?? null,
+    }));
+
+    makeResponse(req, res, 200, true, 'fetch', { ...apexResult, objects });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {

@@ -82,6 +82,17 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
     return (result.Items as IBackupConfig[] | undefined) ?? [];
 };
 
+const getBackupConfigsByUserAndCrm = async (userId: string, crmId: string): Promise<IBackupConfig[]> => {
+    const result = await docClient.send(new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :uid',
+        FilterExpression: 'crmId = :crmId',
+        ExpressionAttributeValues: { ':uid': userId, ':crmId': crmId },
+    }));
+    return (result.Items as IBackupConfig[] | undefined) ?? [];
+};
+
 const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> => {
     const result = await docClient.send(new ScanCommand({
         TableName: BACKUP_CONFIG_TABLE,
@@ -192,4 +203,4 @@ const getDestinationConfig = (config: IBackupConfig): Record<string, any> => {
     return JSON.parse(decrypt({ ciphertext, iv }));
 };
 
-export { createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getScheduledIncrementalBackupConfigs, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getDestinationConfig };
+export { createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserAndCrm, getScheduledIncrementalBackupConfigs, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getDestinationConfig };
