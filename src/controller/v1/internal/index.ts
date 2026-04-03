@@ -45,6 +45,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 
 const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const { eventType, backupJobId } = req.body;
+    console.log(`Received an hit from backup service for event ${eventType}`);
     makeResponse(req, res, 200, true, 'update');
 
     switch (eventType) {
