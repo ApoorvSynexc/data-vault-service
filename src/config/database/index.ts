@@ -76,9 +76,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
   {
     TableName: OAUTH_STATE_TABLE,
     BillingMode: 'PAY_PER_REQUEST',
-    AttributeDefinitions: [
-      { AttributeName: 'state', AttributeType: 'S' },
-    ],
+    AttributeDefinitions: [{ AttributeName: 'state', AttributeType: 'S' }],
     KeySchema: [{ AttributeName: 'state', KeyType: 'HASH' }],
   },
   {

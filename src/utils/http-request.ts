@@ -17,10 +17,13 @@ export async function httpRequest<TResponse = any, TBody = any>(
   let finalUrl = url;
   if (query) {
     const queryString = new URLSearchParams(
-      Object.entries(query).reduce((acc, [key, value]) => {
-        acc[key] = String(value);
-        return acc;
-      }, {} as Record<string, string>)
+      Object.entries(query).reduce(
+        (acc, [key, value]) => {
+          acc[key] = String(value);
+          return acc;
+        },
+        {} as Record<string, string>
+      )
     ).toString();
 
     finalUrl += `?${queryString}`;

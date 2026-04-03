@@ -1,136 +1,160 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getApexFields, getApexObjects, createBackupConfig, getBackupConfigById, getBackupConfigsByUser, getBackupConfigsByUserAndCrm, getBackupConfigsByUserWithPagination, updateBackupConfig, deleteBackupConfig, getTableCounter, triggerBackupJob } from '../../../services';
+import {
+  getApexFields,
+  getApexObjects,
+  createBackupConfig,
+  getBackupConfigById,
+  getBackupConfigsByUser,
+  getBackupConfigsByUserAndCrm,
+  getBackupConfigsByUserWithPagination,
+  updateBackupConfig,
+  deleteBackupConfig,
+  getTableCounter,
+  triggerBackupJob,
+} from '../../../services';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
 
 const sanitize = ({ destination, ...rest }: IBackupConfig) => ({
-    ...rest,
-    destination: { type: destination.type },
+  ...rest,
+  destination: { type: destination.type },
 });
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId } = req.query;
-    if (!crmId) return makeResponse(req, res, 400, false, 'crm_id_required');
+  const { crmId } = req.query;
+  if (!crmId) {
+    return makeResponse(req, res, 400, false, 'crm_id_required');
+  }
 
-    const [apexResult, backupConfigs] = await Promise.all([
-        getApexObjects(String(crmId)),
-        getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
-    ]);
+  const [apexResult, backupConfigs] = await Promise.all([
+    getApexObjects(String(crmId)),
+    getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
+  ]);
 
-    const backedUpMap = new Map<string, { schedule: string }>();
-    for (const config of backupConfigs) {
-        for (const objectName of config.objectNames) {
-            backedUpMap.set(objectName, {
-                schedule: config.schedule === SCHEDULE_MODE.realtime ? 'realtime' : 'schedule',
-            });
-        }
+  const backedUpMap = new Map<string, { schedule: string }>();
+  for (const config of backupConfigs) {
+    for (const objectName of config.objectNames) {
+      backedUpMap.set(objectName, {
+        schedule: config.schedule === SCHEDULE_MODE.realtime ? 'realtime' : 'schedule',
+      });
     }
+  }
 
-    const objects = apexResult.objects.map((obj: { label: string; apiName: string }) => ({
-        ...obj,
-        isBackedUp: backedUpMap.has(obj.apiName),
-        schedule: backedUpMap.get(obj.apiName)?.schedule ?? null,
-    }));
+  const objects = apexResult.objects.map((obj: { label: string; apiName: string }) => ({
+    ...obj,
+    isBackedUp: backedUpMap.has(obj.apiName),
+    schedule: backedUpMap.get(obj.apiName)?.schedule ?? null,
+  }));
 
-    makeResponse(req, res, 200, true, 'fetch', { ...apexResult, objects });
+  makeResponse(req, res, 200, true, 'fetch', { ...apexResult, objects });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, objectName } = req.query;
-    if (!crmId) return makeResponse(req, res, 400, false, 'crm_id_required');
-    if (!objectName) return makeResponse(req, res, 400, false, 'object_name_required');
-    const result = await getApexFields(String(crmId), String(objectName));
-    makeResponse(req, res, 200, true, 'fetch', result);
+  const { crmId, objectName } = req.query;
+  if (!crmId) {
+    return makeResponse(req, res, 400, false, 'crm_id_required');
+  }
+  if (!objectName) {
+    return makeResponse(req, res, 400, false, 'object_name_required');
+  }
+  const result = await getApexFields(String(crmId), String(objectName));
+  makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const config = await createBackupConfig({ userId: req.user!.userId, ...req.body });
-    makeResponse(req, res, 201, true, 'create', sanitize(config));
+  const config = await createBackupConfig({ userId: req.user!.userId, ...req.body });
+  makeResponse(req, res, 201, true, 'create', sanitize(config));
 };
 
 const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { pagination, limit, cursor } = req.query as Record<string, string>;
-    const userId = req.user!.userId;
+  const { pagination, limit, cursor } = req.query as Record<string, string>;
+  const userId = req.user!.userId;
 
-    if (pagination === 'true') {
-        const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
+  if (pagination === 'true') {
+    const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
-        const [{ documents, nextCursor }, counter] = await Promise.all([
-            getBackupConfigsByUserWithPagination(userId, { limit: limitNum, cursor }),
-            getTableCounter(BACKUP_CONFIG_TABLE, userId),
-        ]);
+    const [{ documents, nextCursor }, counter] = await Promise.all([
+      getBackupConfigsByUserWithPagination(userId, { limit: limitNum, cursor }),
+      getTableCounter(BACKUP_CONFIG_TABLE, userId),
+    ]);
 
-        return makeResponse(req, res, 200, true, 'fetch', documents.map(sanitize), {
-            limit: limitNum,
-            nextCursor,
-            totalRecords: counter?.count ?? 0,
-            totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
-        });
-    }
+    return makeResponse(req, res, 200, true, 'fetch', documents.map(sanitize), {
+      limit: limitNum,
+      nextCursor,
+      totalRecords: counter?.count ?? 0,
+      totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
+    });
+  }
 
-    const configs = await getBackupConfigsByUser(userId);
-    makeResponse(req, res, 200, true, 'fetch', configs.map(sanitize));
+  const configs = await getBackupConfigsByUser(userId);
+  makeResponse(req, res, 200, true, 'fetch', configs.map(sanitize));
 };
 
 const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { backupConfigId } = req.query;
-    if (!backupConfigId) return makeResponse(req, res, 400, false, 'id_required');
+  const { backupConfigId } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
 
-    const config = await getBackupConfigById(String(backupConfigId));
-    if (!config || config.userId !== req.user!.userId) {
-        makeResponse(req, res, 404, false, 'not_found');
-        return;
-    }
-    makeResponse(req, res, 200, true, 'fetch', sanitize(config));
+  const config = await getBackupConfigById(String(backupConfigId));
+  if (!config || config.userId !== req.user!.userId) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
+  makeResponse(req, res, 200, true, 'fetch', sanitize(config));
 };
 
 const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { backupConfigId } = req.query;
-    if (!backupConfigId) return makeResponse(req, res, 400, false, 'id_required');
+  const { backupConfigId } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
 
-    const existing = await getBackupConfigById(String(backupConfigId));
-    if (!existing || existing.userId !== req.user!.userId) {
-        makeResponse(req, res, 404, false, 'not_found');
-        return;
-    }
+  const existing = await getBackupConfigById(String(backupConfigId));
+  if (!existing || existing.userId !== req.user!.userId) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
 
-    const updated = await updateBackupConfig(String(backupConfigId), req.body);
-    makeResponse(req, res, 200, true, 'update', sanitize(updated!));
+  const updated = await updateBackupConfig(String(backupConfigId), req.body);
+  makeResponse(req, res, 200, true, 'update', sanitize(updated!));
 };
 
 const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { backupConfigId } = req.query;
-    if (!backupConfigId) return makeResponse(req, res, 400, false, 'id_required');
+  const { backupConfigId } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
 
-    const existing = await getBackupConfigById(String(backupConfigId));
-    if (!existing || existing.userId !== req.user!.userId) {
-        makeResponse(req, res, 404, false, 'not_found');
-        return;
-    }
+  const existing = await getBackupConfigById(String(backupConfigId));
+  if (!existing || existing.userId !== req.user!.userId) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
 
-    await deleteBackupConfig(String(backupConfigId));
-    makeResponse(req, res, 200, true, 'delete');
+  await deleteBackupConfig(String(backupConfigId));
+  makeResponse(req, res, 200, true, 'delete');
 };
 
 const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const existing = await getBackupConfigById(String(req.body.backupConfigId));
-    if (!existing || existing.userId !== req.user!.userId) {
-        makeResponse(req, res, 404, false, 'not_found');
-        return;
-    }
+  const existing = await getBackupConfigById(String(req.body.backupConfigId));
+  if (!existing || existing.userId !== req.user!.userId) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
 
-    const result = await triggerBackupJob(existing);
-    makeResponse(req, res, 200, true, 'fetch', result);
+  const result = await triggerBackupJob(existing);
+  makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 export const backupConfigController = wrapController({
-    getObjectsHanlder,
-    getFieldsHanlder,
-    createBackupConfigHandler,
-    listBackupConfigsHandler,
-    getBackupConfigHandler,
-    updateBackupConfigHandler,
-    deleteBackupConfigHandler,
-    testBackupHandler
+  getObjectsHanlder,
+  getFieldsHanlder,
+  createBackupConfigHandler,
+  listBackupConfigsHandler,
+  getBackupConfigHandler,
+  updateBackupConfigHandler,
+  deleteBackupConfigHandler,
+  testBackupHandler,
 });

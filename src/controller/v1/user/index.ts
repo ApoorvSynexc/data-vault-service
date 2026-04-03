@@ -47,7 +47,9 @@ const usersHandler = async (req: IRequest, res: IResponse) => {
   const { pagination, limit, search } = req.query as Record<string, string>;
 
   const searchFilter: Record<string, any> = {};
-  if (search) {searchFilter.search = search;}
+  if (search) {
+    searchFilter.search = search;
+  }
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));

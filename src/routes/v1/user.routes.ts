@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { userController } from '../../controller';
-import { authenticate } from '../../middlewares/authentication';
 import { changePasswordValidation } from '../../middlewares/joi/user';
 
 const router = Router();
