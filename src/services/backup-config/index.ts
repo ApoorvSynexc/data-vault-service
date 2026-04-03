@@ -30,6 +30,7 @@ interface UpdateBackupConfigParams {
     destination?: { type: string; config: Record<string, any> };
     backupStatus?: string;
     lastBackupAt?: string;
+    schemaChange?: boolean;
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
@@ -51,6 +52,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
         destination: { type: destination.type, ciphertext, iv },
         status: STATUS.active,
         backupStatus: BACKUP_STATUS.pending,
+        schemaChange: false,
         createdAt: now,
         updatedAt: now,
     };
@@ -115,6 +117,7 @@ const updateBackupConfig = async (backupConfigId: string, params: UpdateBackupCo
     if (params.schedule !== undefined) updates.schedule = params.schedule;
     if (params.backupStatus !== undefined) updates.backupStatus = params.backupStatus;
     if (params.lastBackupAt !== undefined) updates.lastBackupAt = params.lastBackupAt;
+    if (params.schemaChange !== undefined) updates.schemaChange = params.schemaChange;
     if (params.scheduleConfig !== undefined) updates.scheduleConfig = params.scheduleConfig;
     if (params.objects !== undefined) updates.objects = params.objects;
     if (params.destination !== undefined) {

@@ -1,5 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { getCrmById, getCrmTokens, getApexFields, updateCrmCredentials } from "../../../services";
+import { getCrmById, getCrmTokens, getApexFields, updateCrmCredentials, updateBackupConfig } from "../../../services";
+import { BACKUP_STATUS } from "../../../constant";
 import { refreashSalesforceToken, SalesforceAuthExpiredError } from "../../../services/third-party/salesforce";
 import { wrapController } from "../../../utils/helper";
 
@@ -43,9 +44,22 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    console.log({body: req.body});
-    
-     makeResponse(req, res, 200, true, 'update');
+    const { eventType, backupJobId } = req.body;
+    makeResponse(req, res, 200, true, 'update');
+
+    switch (eventType) {
+        case "backup.completed":
+            await updateBackupConfig(backupJobId, {
+                backupStatus: BACKUP_STATUS.success,
+                lastBackupAt: new Date().toISOString(),
+            });
+            break;
+        case "schema.updated":
+            await updateBackupConfig(backupJobId, { schemaChange: true });
+            break;
+        default:
+            break;
+    }
 };
 
 export const internalController = wrapController({
