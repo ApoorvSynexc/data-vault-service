@@ -44,25 +44,29 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { eventType, backupJobId } = req.body;
+    const { eventType, backupConfigId } = req.body;
     console.log(`Received an hit from backup service for event ${eventType}`);
     makeResponse(req, res, 200, true, 'update');
 
-    switch (eventType) {
-        case "backup.completed":
-            await updateBackupConfig(backupJobId, {
-                backupStatus: BACKUP_STATUS.success,
-                lastBackupAt: new Date().toISOString(),
-            });
-            break;
-        case "backup.size.updated":
-            await updateBackupConfig(backupJobId, { sizeInBytes: req.body.sizeInBytes });
-            break;
-        case "schema.updated":
-            await updateBackupConfig(backupJobId, { schemaChange: true });
-            break;
-        default:
-            break;
+    try {
+        switch (eventType) {
+            case "backup.completed":
+                await updateBackupConfig(backupConfigId, {
+                    backupStatus: BACKUP_STATUS.success,
+                    lastBackupAt: new Date().toISOString(),
+                });
+                break;
+            case "backup.size.updated":
+                await updateBackupConfig(backupConfigId, { sizeInBytes: req.body.sizeInBytes });
+                break;
+            case "schema.updated":
+                await updateBackupConfig(backupConfigId, { schemaChange: true });
+                break;
+            default:
+                break;
+        }
+    } catch (error) {
+        console.log(`Error in event ${eventType} `, error);
     }
 };
 
