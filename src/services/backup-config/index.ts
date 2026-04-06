@@ -274,6 +274,23 @@ const getBackupConfigsByUserWithPagination = async (
   };
 };
 
+const getBackupConfigBySlug = async (
+  userId: string,
+  slug: string
+): Promise<IBackupConfig | null> => {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: BACKUP_CONFIG_TABLE,
+      IndexName: 'userId-index',
+      KeyConditionExpression: 'userId = :uid',
+      FilterExpression: 'slug = :slug',
+      ExpressionAttributeValues: { ':uid': userId, ':slug': slug },
+      Limit: 1,
+    })
+  );
+  return (result.Items?.[0] as IBackupConfig) ?? null;
+};
+
 const getDestinationConfig = (config: IBackupConfig): Record<string, any> => {
   const { ciphertext, iv } = config.destination;
   return JSON.parse(decrypt({ ciphertext, iv }));
@@ -282,6 +299,7 @@ const getDestinationConfig = (config: IBackupConfig): Record<string, any> => {
 export {
   createBackupConfig,
   getBackupConfigById,
+  getBackupConfigBySlug,
   getBackupConfigsByUser,
   getBackupConfigsByUserAndCrm,
   getScheduledIncrementalBackupConfigs,

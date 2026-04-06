@@ -4,6 +4,7 @@ import {
   getApexObjects,
   createBackupConfig,
   getBackupConfigById,
+  getBackupConfigBySlug,
   getBackupConfigsByUser,
   getBackupConfigsByUserAndCrm,
   getBackupConfigsByUserWithPagination,
@@ -11,6 +12,7 @@ import {
   deleteBackupConfig,
   getTableCounter,
   triggerBackupJob,
+  getCrmById,
 } from '../../../services';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
@@ -92,17 +94,29 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 };
 
 const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId } = req.query;
-  if (!backupConfigId) {
-    return makeResponse(req, res, 400, false, 'id_required');
+  const { slug } = req.query;
+  if (!slug) {
+    return makeResponse(req, res, 400, false, 'slug_required');
   }
 
-  const config = await getBackupConfigById(String(backupConfigId));
-  if (!config || config.userId !== req.user!.userId) {
+  const config = await getBackupConfigBySlug(req.user!.userId, String(slug));
+  if (!config) {
     makeResponse(req, res, 404, false, 'not_found');
     return;
   }
-  makeResponse(req, res, 200, true, 'fetch', sanitize(config));
+
+  const crmPayload = await getCrmById(config.crmId);
+  if (!crmPayload) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
+  const crmDetail = {
+    crmId: crmPayload.crmId,
+    crmName: crmPayload.crmName,
+    slug: crmPayload.slug,
+    isConnected: crmPayload.isConnected,
+  };
+  makeResponse(req, res, 200, true, 'fetch', {...sanitize(config),crmDetail });
 };
 
 const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {

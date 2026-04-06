@@ -3,8 +3,8 @@ import {
   getBackupJobById,
   getBackupJobsByConfig,
   getBackupJobsByUser,
+  getBackupConfigBySlug,
 } from '../../../services';
-import { getBackupConfigById } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 
@@ -14,20 +14,18 @@ const sanitize = ({ source, destination, ...rest }: IBackupJob) => ({
 });
 
 const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, limit, cursor } = req.query as Record<string, string>;
+  const { slug, limit, cursor } = req.query as Record<string, string>;
   const userId = req.user!.userId;
   const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
-  console.log("kokookoko");
-  
-  if (backupConfigId) {
-    const config = await getBackupConfigById(backupConfigId);
-    if (!config || config.userId !== userId) {
-      makeResponse(req, res, 400, false, 'not_found');
+  if (slug) {
+    const config = await getBackupConfigBySlug(userId, slug);
+    if (!config) {
+      makeResponse(req, res, 404, false, 'not_found');
       return;
     }
 
-    const { items, nextCursor } = await getBackupJobsByConfig(backupConfigId, {
+    const { items, nextCursor } = await getBackupJobsByConfig(config.backupConfigId, {
       limit: limitNum,
       cursor,
     });
