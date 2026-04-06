@@ -11,6 +11,7 @@ import {
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
   TABLE_COUNTER_TABLE,
+  COUNTER_TABLE,
   OTP_TABLE,
   OAUTH_STATE_TABLE,
   CRM_TABLE,
@@ -167,6 +168,18 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     KeySchema: [
       { AttributeName: 'tableName', KeyType: 'HASH' },
       { AttributeName: 'entityId', KeyType: 'RANGE' },
+    ],
+  },
+  {
+    TableName: COUNTER_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'namespace', AttributeType: 'S' },
+      { AttributeName: 'key', AttributeType: 'S' },
+    ],
+    KeySchema: [
+      { AttributeName: 'namespace', KeyType: 'HASH' },
+      { AttributeName: 'key', KeyType: 'RANGE' },
     ],
   },
   {

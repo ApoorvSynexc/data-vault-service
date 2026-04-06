@@ -11,7 +11,8 @@ import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
 import { IBackupConfig, IObject, IScheduleConfig } from '../../models';
 import { decrypt, encrypt } from '../../utils/encryption';
-import { incrementTableCounter } from '../counter';
+import { toSlug, buildSlug } from '../../utils/helper';
+import { incrementAndGetCounter, incrementTableCounter } from '../counter';
 
 interface CreateBackupConfigParams {
   userId: string;
@@ -57,10 +58,15 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
   const now = new Date().toISOString();
   const { ciphertext, iv } = encrypt(JSON.stringify(destination.config));
 
+  const slugBase = name || objectNames[0] || 'backup-config';
+  const count = await incrementAndGetCounter('slug:backup-config', `${userId}::${toSlug(slugBase)}`);
+  const slug = buildSlug(slugBase, count);
+
   const item: IBackupConfig = {
     backupConfigId: uuidv4(),
     userId,
     crmId,
+    slug,
     ...(name && { name }),
     ...(description && { description }),
     environment,

@@ -42,6 +42,7 @@ export interface IBackupConfig {
   backupConfigId: string; // PK
   userId: string; // GSI: userId-index
   crmId: string;
+  slug: string; // unique per user, generated from name
   name?: string;
   description?: string;
   environment: string;

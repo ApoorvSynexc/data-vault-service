@@ -9,6 +9,7 @@ const OTP_TABLE = String(process.env.OTP_TABLE || 'data-vault-otps');
 const SESSION_TABLE = String(process.env.SESSION_TABLE || 'data-vault-sessions');
 const ROLE_TABLE = String(process.env.ROLE_TABLE || 'data-vault-roles');
 const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
+const COUNTER_TABLE = String(process.env.COUNTER_TABLE || 'data-vault-counters');
 
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
@@ -148,6 +149,7 @@ export {
   SESSION_TABLE,
   ROLE_TABLE,
   TABLE_COUNTER_TABLE,
+  COUNTER_TABLE,
 
   // JWT Config
   JWT_ACCESS_SECRET,

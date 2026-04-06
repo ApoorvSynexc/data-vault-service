@@ -59,4 +59,18 @@ const asyncHandler =
 const wrapController = <T extends Record<string, IHandler>>(controller: T): T =>
   Object.fromEntries(Object.entries(controller).map(([key, fn]) => [key, asyncHandler(fn)])) as T;
 
-export { randomNumber, generateTokens, parseExpiryToSeconds, wrapController };
+const toSlug = (text: string): string =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+
+// count comes from an atomic DB counter — 1 = first occurrence (no suffix), 2+ = append suffix
+const buildSlug = (base: string, count: number): string => {
+  const baseSlug = toSlug(base) || 'item';
+  return count === 1 ? baseSlug : `${baseSlug}-${count}`;
+};
+
+export { randomNumber, generateTokens, parseExpiryToSeconds, wrapController, toSlug, buildSlug };

@@ -10,6 +10,8 @@ import { docClient } from '../../config';
 import { CRM_TABLE, STATUS } from '../../constant';
 import { ICrm, ICrmProfile } from '../../models';
 import { decrypt, encrypt } from '../../utils/encryption';
+import { toSlug, buildSlug } from '../../utils/helper';
+import { incrementAndGetCounter } from '../counter';
 
 interface UpsertCrmParams {
   userId: string;
@@ -29,10 +31,15 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
   const now = new Date().toISOString();
   const { ciphertext, iv } = encrypt(JSON.stringify(crmCredentials));
 
+  const slugBase = crmProfile.name || crmName;
+  const count = await incrementAndGetCounter('slug:crm', `${userId}::${toSlug(slugBase)}`);
+  const slug = buildSlug(slugBase, count);
+
   const crm: ICrm = {
     crmId: uuidv4(),
     userId,
     crmName,
+    slug,
     isConnected: true,
     crmProfile,
     encryptedCredentials: ciphertext,

@@ -1,8 +1,24 @@
 import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
-import { TABLE_COUNTER_TABLE } from '../../constant';
+import { COUNTER_TABLE, TABLE_COUNTER_TABLE } from '../../constant';
 import { ITableCounter } from '../../models';
 
+// Atomically increment and return the new count — used for slug generation
+const incrementAndGetCounter = async (namespace: string, key: string): Promise<number> => {
+  const result = await docClient.send(
+    new UpdateCommand({
+      TableName: COUNTER_TABLE,
+      Key: { namespace, key },
+      UpdateExpression: 'ADD #count :amount SET #updatedAt = :updatedAt',
+      ExpressionAttributeNames: { '#count': 'count', '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: { ':amount': 1, ':updatedAt': new Date().toISOString() },
+      ReturnValues: 'UPDATED_NEW',
+    })
+  );
+  return result.Attributes!.count as number;
+};
+
+// Increment record count for a table/entity — used for pagination totals
 const incrementTableCounter = async (
   tableName: string,
   entityId: string,
@@ -29,4 +45,4 @@ const getTableCounter = async (
   return (result.Item as ITableCounter) ?? null;
 };
 
-export { incrementTableCounter, getTableCounter };
+export { incrementAndGetCounter, incrementTableCounter, getTableCounter };

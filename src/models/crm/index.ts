@@ -12,6 +12,7 @@ export interface ICrm {
   crmId: string; // PK
   userId: string; // GSI: userId-crmName-index
   crmName: string; // GSI sort key
+  slug: string; // unique per user, generated from crmProfile.name
   isConnected: boolean;
   crmProfile?: ICrmProfile;
   encryptedCredentials?: string;
