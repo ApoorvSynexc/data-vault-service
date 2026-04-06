@@ -4,7 +4,9 @@ import {
   getBackupJobsByConfig,
   getBackupJobsByUser,
   getBackupConfigBySlug,
+  getTableCounter,
 } from '../../../services';
+import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 
@@ -25,23 +27,30 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
       return;
     }
 
-    const { items, nextCursor } = await getBackupJobsByConfig(config.backupConfigId, {
-      limit: limitNum,
-      cursor,
-    });
+    const [{ items, nextCursor }, counter] = await Promise.all([
+      getBackupJobsByConfig(config.backupConfigId, { limit: limitNum, cursor }),
+      getTableCounter(BACKUP_JOB_TABLE, config.backupConfigId),
+    ]);
 
     makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
       limit: limitNum,
       nextCursor,
+      totalRecords: counter?.count ?? 0,
+      totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
     });
     return;
   }
 
-  const { items, nextCursor } = await getBackupJobsByUser(userId, { limit: limitNum, cursor });
+  const [{ items, nextCursor }, counter] = await Promise.all([
+    getBackupJobsByUser(userId, { limit: limitNum, cursor }),
+    getTableCounter(BACKUP_JOB_TABLE, userId),
+  ]);
 
   makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
     limit: limitNum,
     nextCursor,
+    totalRecords: counter?.count ?? 0,
+    totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
   });
 };
 
