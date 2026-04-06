@@ -9,6 +9,7 @@ import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import {
   AWS_REGION,
   BACKUP_CONFIG_TABLE,
+  BACKUP_JOB_TABLE,
   TABLE_COUNTER_TABLE,
   OTP_TABLE,
   OAUTH_STATE_TABLE,
@@ -37,6 +38,28 @@ const TTL_CONFIG: Record<string, string> = {
 };
 
 const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
+  {
+    TableName: BACKUP_JOB_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'backupJobId', AttributeType: 'S' },
+      { AttributeName: 'userId', AttributeType: 'S' },
+      { AttributeName: 'backupConfigId', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'backupJobId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'userId-index',
+        KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'backupConfigId-index',
+        KeySchema: [{ AttributeName: 'backupConfigId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
   {
     TableName: BACKUP_CONFIG_TABLE,
     BillingMode: 'PAY_PER_REQUEST',

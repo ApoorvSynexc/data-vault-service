@@ -1,5 +1,7 @@
-import { BACKUP_SERVICE } from '../../constant';
-import { IBackupConfig } from '../../models';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { docClient } from '../../config';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE } from '../../constant';
+import { IBackupConfig, IBackupJob } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { getDestinationConfig, updateBackupConfig } from '../backup-config';
 import { getCrmById, getCrmTokens } from '../crm';
@@ -53,4 +55,67 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
   return result;
 };
 
-export { triggerBackupJob };
+const getBackupJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
+  const result = await docClient.send(
+    new GetCommand({ TableName: BACKUP_JOB_TABLE, Key: { backupJobId } })
+  );
+  return (result.Item as IBackupJob) ?? null;
+};
+
+const getBackupJobsByUser = async (
+  userId: string,
+  options?: { limit?: number; cursor?: string }
+): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
+  const limit = options?.limit ?? 10;
+  const exclusiveStartKey = options?.cursor
+    ? JSON.parse(Buffer.from(options.cursor, 'base64').toString('utf8'))
+    : undefined;
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: BACKUP_JOB_TABLE,
+      IndexName: 'userId-index',
+      KeyConditionExpression: 'userId = :userId',
+      ExpressionAttributeValues: { ':userId': userId },
+      Limit: limit,
+      ScanIndexForward: false,
+      ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+    })
+  );
+
+  const nextCursor = result.LastEvaluatedKey
+    ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64')
+    : undefined;
+
+  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
+};
+
+const getBackupJobsByConfig = async (
+  backupConfigId: string,
+  options?: { limit?: number; cursor?: string }
+): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
+  const limit = options?.limit ?? 10;
+  const exclusiveStartKey = options?.cursor
+    ? JSON.parse(Buffer.from(options.cursor, 'base64').toString('utf8'))
+    : undefined;
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: BACKUP_JOB_TABLE,
+      IndexName: 'backupConfigId-index',
+      KeyConditionExpression: 'backupConfigId = :backupConfigId',
+      ExpressionAttributeValues: { ':backupConfigId': backupConfigId },
+      Limit: limit,
+      ScanIndexForward: false,
+      ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+    })
+  );
+
+  const nextCursor = result.LastEvaluatedKey
+    ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64')
+    : undefined;
+
+  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
+};
+
+export { triggerBackupJob, getBackupJobById, getBackupJobsByUser, getBackupJobsByConfig };

@@ -29,6 +29,7 @@ const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
+const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
 
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
@@ -79,6 +80,12 @@ const STATUS = {
 };
 const BACKUP_STATUS = {
   pending: 'PENDING',
+  success: 'SUCCESS',
+  failed: 'FAILED',
+};
+const JOB_STATUS = {
+  pending: 'PENDING',
+  running: 'RUNNING',
   success: 'SUCCESS',
   failed: 'FAILED',
 };
@@ -159,6 +166,7 @@ export {
 
   // Services
   BACKUP_SERVICE,
+  BACKUP_JOB_TABLE,
 
   // Enums
   STATUS,
@@ -177,6 +185,7 @@ export {
   DESTINATION_TYPE,
   FILTER_OPERATOR,
   BACKUP_STATUS,
+  JOB_STATUS,
   CONDITION_TYPE,
   ENVIRONMENT_TYPE,
 };

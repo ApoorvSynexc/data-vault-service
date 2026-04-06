@@ -4,6 +4,7 @@ import { userRouter } from './user.routes';
 import { authenticate } from '../../middlewares';
 import { crmRouter } from './crm.route';
 import { backupRouter } from './backup-config.route';
+import { backupJobRouter } from './backup-job.route';
 import { internalRouter } from './internal.route';
 import { publicRouter } from './public.routes';
 
@@ -18,5 +19,6 @@ router.use('/public', publicRouter);
 router.use('/user', authenticate, userRouter);
 router.use('/crm', authenticate, crmRouter);
 router.use('/backup-config', authenticate, backupRouter);
+router.use('/backup-job', authenticate, backupJobRouter);
 
 export const v1Routers = router;
