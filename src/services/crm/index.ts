@@ -3,6 +3,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
@@ -199,6 +200,18 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
   };
 };
 
+const getCrmByOrgId = async (orgId: string): Promise<ICrm | null> => {
+  const result = await docClient.send(
+    new ScanCommand({
+      TableName: CRM_TABLE,
+      FilterExpression: 'crmProfile.organizationId = :orgId',
+      ExpressionAttributeValues: { ':orgId': orgId },
+      Limit: 1,
+    })
+  );
+  return (result.Items?.[0] as ICrm) ?? null;
+};
+
 const getCrmTokens = (crm: ICrm): Record<string, any> => {
   if (!crm.encryptedCredentials || !crm.iv) {
     return {};
@@ -217,6 +230,7 @@ export {
   reconnectCrm,
   getCrmById,
   getCrmByUser,
+  getCrmByOrgId,
   getCrmsByUser,
   disconnectCrm,
   deleteCrm,
