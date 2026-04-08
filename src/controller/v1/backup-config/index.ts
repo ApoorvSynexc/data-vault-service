@@ -70,12 +70,12 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const config = await createBackupConfig({ userId: req.user!.userId, ...req.body });
+  makeResponse(req, res, 201, true, 'create', sanitize(config));
+  
   await triggerBackupJob(config);
-
   if (config.schedule === SCHEDULE_MODE.realtime) {
     await realTimeTriggerManagement('create', config);
   }
-  makeResponse(req, res, 201, true, 'create', sanitize(config));
 };
 
 const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
