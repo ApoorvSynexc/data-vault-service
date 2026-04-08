@@ -1,6 +1,6 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { getDestinationConfig, updateBackupConfig } from '../backup-config';
@@ -26,6 +26,8 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
   if (!crm) {
     throw new Error(`crm_not_found:${config.crmId}`);
   }
+
+  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
 
   const credentials = getCrmTokens(crm);
   const payload = {

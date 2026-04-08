@@ -2,9 +2,9 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { decrypt } from '../../../utils/encryption';
 import { wrapController } from '../../../utils/helper';
 import { getCrmByOrgId } from '../../../services/crm';
-import { getBackupConfigsByUserAndCrm, getDestinationConfig } from '../../../services/backup-config';
+import { getBackupConfigsByUserAndCrm, getDestinationConfig, updateBackupConfig } from '../../../services/backup-config';
 import { httpRequest } from '../../../utils/http-request';
-import { BACKUP_SERVICE, SCHEDULE_MODE } from '../../../constant';
+import { BACKUP_SERVICE, BACKUP_STATUS, SCHEDULE_MODE } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
@@ -18,6 +18,7 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
   if (!config) return;
 
   const destConfig = getDestinationConfig(config);
+  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
   await httpRequest({
     url: `${BACKUP_SERVICE}/v1/realtime-backup`,
     method: 'POST',
