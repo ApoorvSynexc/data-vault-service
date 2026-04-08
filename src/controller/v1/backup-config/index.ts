@@ -15,7 +15,6 @@ import {
   triggerBackupJob,
   getCrmById,
   getCrmTokens,
-  createTriggers,
   deleteTriggers,
   realTimeTriggerManagement,
 } from '../../../services';
@@ -196,11 +195,12 @@ const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> 
     accessToken: credentials.access_token,
     refreshToken: credentials.refresh_token,
     crmId: crm.crmId,
-  }
+  };
 
-  const dd = await deleteTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, [req.body.triggerName]);
+  const dd = await deleteTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, [
+    req.body.triggerName,
+  ]);
   makeResponse(req, res, 200, false, 'fetch', { isSetup: dd });
-
 };
 
 export const backupConfigController = wrapController({
@@ -212,5 +212,5 @@ export const backupConfigController = wrapController({
   updateBackupConfigHandler,
   deleteBackupConfigHandler,
   testBackupHandler,
-  testBackup2Handler
+  testBackup2Handler,
 });

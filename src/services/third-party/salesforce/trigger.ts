@@ -58,10 +58,10 @@ const fetchTrigger = async (
   const soql = `SELECT Id, Status FROM ApexTrigger WHERE Name = '${triggerName}' LIMIT 1`;
   const url = `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`;
 
-  const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string; Status: string }[] }>(
-    { url, method: 'GET' },
-    tokens
-  );
+  const { data } = await salesforceRequest<{
+    totalSize: number;
+    records: { Id: string; Status: string }[];
+  }>({ url, method: 'GET' }, tokens);
 
   return data.totalSize > 0 ? data.records[0] : null;
 };
@@ -76,13 +76,19 @@ const ensureHandlerClass = async (instanceUrl: string, tokens: SalesforceTokens)
     tokens
   );
 
-  if (data.totalSize > 0) return;
+  if (data.totalSize > 0) {
+    return;
+  }
 
   await salesforceRequest(
     {
       url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexClass`,
       method: 'POST',
-      body: JSON.stringify({ Name: HANDLER_CLASS_NAME, Body: HANDLER_CLASS_BODY, ApiVersion: API_VERSION }),
+      body: JSON.stringify({
+        Name: HANDLER_CLASS_NAME,
+        Body: HANDLER_CLASS_BODY,
+        ApiVersion: API_VERSION,
+      }),
     },
     tokens
   );
@@ -104,7 +110,9 @@ const createTriggers = async (
       const triggerName = `DataVault_${objectApiName}_Trigger`;
 
       const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
-      if (existing?.Status === 'Active') return { triggerName, created: false };
+      if (existing?.Status === 'Active') {
+        return { triggerName, created: false };
+      }
 
       await salesforceRequest(
         {
@@ -140,10 +148,15 @@ const deleteTriggers = async (
       const triggerName = `DataVault_${objectApiName}_Trigger`;
 
       const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
-      if (!trigger) return { triggerName, deleted: false };
+      if (!trigger) {
+        return { triggerName, deleted: false };
+      }
 
       await salesforceRequest(
-        { url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${trigger.Id}`, method: 'DELETE' },
+        {
+          url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${trigger.Id}`,
+          method: 'DELETE',
+        },
         tokens
       );
 
@@ -163,10 +176,14 @@ const realTimeTriggerManagement = async (
   config: IBackupConfig
 ): Promise<void> => {
   const crm = await getCrmById(config.crmId);
-  if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
+  if (!crm) {
+    throw new Error(`crm_not_found:${config.crmId}`);
+  }
 
   const instanceUrl = crm.crmProfile?.instanceUrl;
-  if (!instanceUrl) throw new Error(`instance_url_missing:${config.crmId}`);
+  if (!instanceUrl) {
+    throw new Error(`instance_url_missing:${config.crmId}`);
+  }
 
   const credentials = getCrmTokens(crm);
   const tokens: SalesforceTokens = {

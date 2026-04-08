@@ -83,7 +83,11 @@ const destinationSchema = Joi.object({
   }).required(),
 });
 
-export const createBackupConfigValidation = async (req: Request, res: Response, next: NextFunction) => {
+export const createBackupConfigValidation = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   const schema = Joi.object({
     crmId: Joi.string().required(),
     name: Joi.string().optional(),

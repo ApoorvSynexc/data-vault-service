@@ -59,7 +59,10 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
   const { ciphertext, iv } = encrypt(JSON.stringify(destination.config));
 
   const slugBase = name || objectNames[0] || 'backup-config';
-  const count = await incrementAndGetCounter('slug:backup-config', `${userId}::${toSlug(slugBase)}`);
+  const count = await incrementAndGetCounter(
+    'slug:backup-config',
+    `${userId}::${toSlug(slugBase)}`
+  );
   const slug = buildSlug(slugBase, count);
 
   const item: IBackupConfig = {

@@ -149,7 +149,9 @@ const deleteBackupJobsByConfig = async (backupConfigId: string, userId: string):
     const items = result.Items ?? [];
     lastKey = result.LastEvaluatedKey;
 
-    if (!items.length) continue;
+    if (!items.length) {
+      continue;
+    }
 
     // DynamoDB batch write accepts max 25 items per request
     for (let i = 0; i < items.length; i += 25) {
@@ -176,4 +178,11 @@ const deleteBackupJobsByConfig = async (backupConfigId: string, userId: string):
   }
 };
 
-export { triggerBackupJob, resumeBackupJob, getBackupJobById, getBackupJobsByUser, getBackupJobsByConfig, deleteBackupJobsByConfig };
+export {
+  triggerBackupJob,
+  resumeBackupJob,
+  getBackupJobById,
+  getBackupJobsByUser,
+  getBackupJobsByConfig,
+  deleteBackupJobsByConfig,
+};
