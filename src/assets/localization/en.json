@@ -30,6 +30,7 @@
   "salesforce_reauth_required": "Your Salesforce session has expired. Please reconnect your account",
   "salesforce_code_expired": "The authorization code has expired or is invalid. Please try connecting again",
   "not_found": "Record not found",
+  "invalid_aws_credentials": "Invalid AWS credentials or bucket not accessible",
   "reschedule": "Backup job rescheduled successfully",
   "resume": "Backup job resumed successfully"
 }

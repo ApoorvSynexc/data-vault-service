@@ -11,6 +11,7 @@ import {
   SCHEDULE_TYPE,
   WEEK_DAY,
 } from '../../../constant';
+import { validateS3Credentials } from '../../../utils/validate-aws-credentials';
 
 const fieldFilterSchema = Joi.object({
   operator: Joi.string()
@@ -82,7 +83,7 @@ const destinationSchema = Joi.object({
   }).required(),
 });
 
-export const createBackupConfigValidation = (req: Request, res: Response, next: NextFunction) => {
+export const createBackupConfigValidation = async (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     crmId: Joi.string().required(),
     name: Joi.string().optional(),
@@ -108,6 +109,14 @@ export const createBackupConfigValidation = (req: Request, res: Response, next: 
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }
+
+  try {
+    await validateS3Credentials(req.body.destination.config);
+  } catch {
+    makeResponse(req, res, 400, false, 'invalid_aws_credentials');
+    return;
+  }
+
   next();
 };
 
