@@ -10,6 +10,7 @@ import {
   getBackupConfigsByUserWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
+  deleteBackupJobsByConfig,
   getTableCounter,
   triggerBackupJob,
   getCrmById,
@@ -156,7 +157,11 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return;
   }
 
-  await deleteBackupConfig(String(backupConfigId));
+  await Promise.all([
+    deleteBackupConfig(String(backupConfigId)),
+    deleteBackupJobsByConfig(String(backupConfigId), existing.userId),
+  ]);
+
   if (existing.schedule === SCHEDULE_MODE.realtime) {
     await realTimeTriggerManagement('delete', existing);
   }

@@ -1,10 +1,11 @@
-import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchWriteCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { getDestinationConfig, updateBackupConfig } from '../backup-config';
 import { getCrmById, getCrmTokens } from '../crm';
+import { incrementTableCounter } from '../counter';
 
 const getSourceObjects = (config: IBackupConfig) => {
   if (config.objects?.length) {
@@ -129,4 +130,50 @@ const resumeBackupJob = async (backupJobId: string, config: IBackupConfig) => {
   });
 };
 
-export { triggerBackupJob, resumeBackupJob, getBackupJobById, getBackupJobsByUser, getBackupJobsByConfig };
+const deleteBackupJobsByConfig = async (backupConfigId: string, userId: string): Promise<void> => {
+  let lastKey: Record<string, any> | undefined;
+  let totalDeleted = 0;
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_JOB_TABLE,
+        IndexName: 'backupConfigId-index',
+        KeyConditionExpression: 'backupConfigId = :backupConfigId',
+        ExpressionAttributeValues: { ':backupConfigId': backupConfigId },
+        ProjectionExpression: 'backupJobId',
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      })
+    );
+
+    const items = result.Items ?? [];
+    lastKey = result.LastEvaluatedKey;
+
+    if (!items.length) continue;
+
+    // DynamoDB batch write accepts max 25 items per request
+    for (let i = 0; i < items.length; i += 25) {
+      const chunk = items.slice(i, i + 25);
+      await docClient.send(
+        new BatchWriteCommand({
+          RequestItems: {
+            [BACKUP_JOB_TABLE]: chunk.map((item) => ({
+              DeleteRequest: { Key: { backupJobId: item.backupJobId } },
+            })),
+          },
+        })
+      );
+    }
+
+    totalDeleted += items.length;
+  } while (lastKey);
+
+  if (totalDeleted > 0) {
+    await Promise.all([
+      incrementTableCounter(BACKUP_JOB_TABLE, backupConfigId, -totalDeleted),
+      incrementTableCounter(BACKUP_JOB_TABLE, userId, -totalDeleted),
+    ]);
+  }
+};
+
+export { triggerBackupJob, resumeBackupJob, getBackupJobById, getBackupJobsByUser, getBackupJobsByConfig, deleteBackupJobsByConfig };
