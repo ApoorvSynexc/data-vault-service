@@ -9,6 +9,7 @@ import {
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
+import { log } from 'winston';
 
 const sanitize = ({ source, destination, ...rest }: IBackupJob) => ({
   ...rest,
@@ -20,6 +21,8 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
   const userId = req.user!.userId;
   const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
+  console.log("koko", {slug});
+  
   if (slug) {
     const config = await getBackupConfigBySlug(userId, slug);
     console.log({config: config?.backupConfigId});
