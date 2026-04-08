@@ -46,22 +46,22 @@ public class ${HANDLER_CLASS_NAME} implements Queueable, Database.AllowsCallouts
 `.trim();
 
 // ---------------------------------------------------------------------------
-// Check whether a named ApexTrigger exists and is Active
+// Fetch a trigger record by name — returns null if not found
 // ---------------------------------------------------------------------------
-const isTriggerSetup = async (
+const fetchTrigger = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   triggerName: string
-): Promise<boolean> => {
-  const soql = `SELECT Id, Name, Status, Body FROM ApexTrigger WHERE Name = '${triggerName}'`;
+): Promise<{ Id: string; Status: string } | null> => {
+  const soql = `SELECT Id, Status FROM ApexTrigger WHERE Name = '${triggerName}' LIMIT 1`;
   const url = `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`;
 
-  const { data } = await salesforceRequest<{ totalSize: number; records: { Status: string }[] }>(
+  const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string; Status: string }[] }>(
     { url, method: 'GET' },
     tokens
   );
 
-  return data.totalSize > 0 && data.records[0].Status === 'Active';
+  return data.totalSize > 0 ? data.records[0] : null;
 };
 
 // ---------------------------------------------------------------------------
@@ -76,8 +76,8 @@ const createTrigger = async (
 ): Promise<{ triggerName: string; alreadyExists: boolean }> => {
   const triggerName = `DataVault_${objectApiName}_Trigger`;
 
-  const alreadyExists = await isTriggerSetup(instanceUrl, tokens, triggerName);
-  if (alreadyExists) return { triggerName, alreadyExists: true };
+  const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
+  if (existing?.Status === 'Active') return { triggerName, alreadyExists: true };
 
   // Create handler class if it doesn't exist yet (shared across all objects)
   const classCheckSoql = `SELECT Id FROM ApexClass WHERE Name = '${HANDLER_CLASS_NAME}' LIMIT 1`;
@@ -120,4 +120,27 @@ const createTrigger = async (
   return { triggerName, alreadyExists: false };
 };
 
-export { isTriggerSetup, createTrigger };
+// ---------------------------------------------------------------------------
+// Delete the ApexTrigger for a given object.
+// No-op if the trigger doesn't exist.
+// ---------------------------------------------------------------------------
+const deleteTrigger = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiName: string
+): Promise<{ triggerName: string; deleted: boolean }> => {
+  const triggerName = `DataVault_${objectApiName}_Trigger`;
+
+  const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
+  if (!trigger) return { triggerName, deleted: false };
+
+  const triggerId = trigger.Id;
+  await salesforceRequest(
+    { url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${triggerId}`, method: 'DELETE' },
+    tokens
+  );
+
+  return { triggerName, deleted: true };
+};
+
+export { fetchTrigger, createTrigger, deleteTrigger };

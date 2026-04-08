@@ -14,8 +14,8 @@ import {
   triggerBackupJob,
   getCrmById,
   getCrmTokens,
-  isTriggerSetup,
   createTrigger,
+  deleteTrigger,
 } from '../../../services';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
@@ -183,7 +183,7 @@ const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> 
     crmId: crm.crmId,
   }
   
-  const dd = await createTrigger(crm.crmProfile?.instanceUrl ?? '', tokens, req.body.triggerName);
+  const dd = await deleteTrigger(crm.crmProfile?.instanceUrl ?? '', tokens, req.body.triggerName);
   makeResponse(req, res, 200, false, 'fetch', { isSetup: dd });
 
 };
