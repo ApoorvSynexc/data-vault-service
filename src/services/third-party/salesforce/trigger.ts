@@ -65,82 +65,89 @@ const fetchTrigger = async (
 };
 
 // ---------------------------------------------------------------------------
-// Create the handler ApexClass + ApexTrigger for a given object.
-// Trigger name convention: DataVault{ObjectApiName}Trigger
-// Handler class is shared across all objects — skipped if already exists.
+// Ensure the shared handler ApexClass exists — runs once before any triggers
 // ---------------------------------------------------------------------------
-const createTrigger = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  objectApiName: string
-): Promise<{ triggerName: string; alreadyExists: boolean }> => {
-  const triggerName = `DataVault_${objectApiName}_Trigger`;
-
-  const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
-  if (existing?.Status === 'Active') return { triggerName, alreadyExists: true };
-
-  // Create handler class if it doesn't exist yet (shared across all objects)
-  const classCheckSoql = `SELECT Id FROM ApexClass WHERE Name = '${HANDLER_CLASS_NAME}' LIMIT 1`;
-  const { data: classCheck } = await salesforceRequest<{ totalSize: number }>(
-    { url: `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(classCheckSoql)}`, method: 'GET' },
+const ensureHandlerClass = async (instanceUrl: string, tokens: SalesforceTokens): Promise<void> => {
+  const soql = `SELECT Id FROM ApexClass WHERE Name = '${HANDLER_CLASS_NAME}' LIMIT 1`;
+  const { data } = await salesforceRequest<{ totalSize: number }>(
+    { url: `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
     tokens
   );
 
-  if (classCheck.totalSize === 0) {
-    await salesforceRequest(
-      {
-        url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexClass`,
-        method: 'POST',
-        body: JSON.stringify({
-          Name: HANDLER_CLASS_NAME,
-          Body: HANDLER_CLASS_BODY,
-          ApiVersion: API_VERSION,
-        }),
-      },
-      tokens
-    );
-  }
+  if (data.totalSize > 0) return;
 
-  // Create the trigger
   await salesforceRequest(
     {
-      url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger`,
+      url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexClass`,
       method: 'POST',
-      body: JSON.stringify({
-        Name: triggerName,
-        TableEnumOrId: objectApiName,
-        Body: `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n    ${HANDLER_CLASS_NAME}.enqueueSync(Trigger.new, Trigger.old, Trigger.operationType.name());\n}`,
-        Status: 'Active',
-        ApiVersion: API_VERSION,
-      }),
+      body: JSON.stringify({ Name: HANDLER_CLASS_NAME, Body: HANDLER_CLASS_BODY, ApiVersion: API_VERSION }),
     },
     tokens
   );
-
-  return { triggerName, alreadyExists: false };
 };
 
 // ---------------------------------------------------------------------------
-// Delete the ApexTrigger for a given object.
-// No-op if the trigger doesn't exist.
+// Create triggers for one or more objects in parallel.
+// Handler class is ensured once before all trigger creations.
 // ---------------------------------------------------------------------------
-const deleteTrigger = async (
+const createTriggers = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  objectApiName: string
-): Promise<{ triggerName: string; deleted: boolean }> => {
-  const triggerName = `DataVault_${objectApiName}_Trigger`;
+  objectApiNames: string[]
+): Promise<{ triggerName: string; created: boolean }[]> => {
+  await ensureHandlerClass(instanceUrl, tokens);
 
-  const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
-  if (!trigger) return { triggerName, deleted: false };
+  return Promise.all(
+    objectApiNames.map(async (objectApiName) => {
+      const triggerName = `DataVault_${objectApiName}_Trigger`;
 
-  const triggerId = trigger.Id;
-  await salesforceRequest(
-    { url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${triggerId}`, method: 'DELETE' },
-    tokens
+      const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
+      if (existing?.Status === 'Active') return { triggerName, created: false };
+
+      await salesforceRequest(
+        {
+          url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger`,
+          method: 'POST',
+          body: JSON.stringify({
+            Name: triggerName,
+            TableEnumOrId: objectApiName,
+            Body: `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n    ${HANDLER_CLASS_NAME}.enqueueSync(Trigger.new, Trigger.old, Trigger.operationType.name());\n}`,
+            Status: 'Active',
+            ApiVersion: API_VERSION,
+          }),
+        },
+        tokens
+      );
+
+      return { triggerName, created: true };
+    })
   );
-
-  return { triggerName, deleted: true };
 };
 
-export { fetchTrigger, createTrigger, deleteTrigger };
+// ---------------------------------------------------------------------------
+// Delete triggers for one or more objects in parallel.
+// No-op for objects whose trigger doesn't exist.
+// ---------------------------------------------------------------------------
+const deleteTriggers = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiNames: string[]
+): Promise<{ triggerName: string; deleted: boolean }[]> => {
+  return Promise.all(
+    objectApiNames.map(async (objectApiName) => {
+      const triggerName = `DataVault_${objectApiName}_Trigger`;
+
+      const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
+      if (!trigger) return { triggerName, deleted: false };
+
+      await salesforceRequest(
+        { url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${trigger.Id}`, method: 'DELETE' },
+        tokens
+      );
+
+      return { triggerName, deleted: true };
+    })
+  );
+};
+
+export { fetchTrigger, createTriggers, deleteTriggers };
