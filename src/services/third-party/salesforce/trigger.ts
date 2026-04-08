@@ -1,5 +1,7 @@
 import { salesforceRequest, SalesforceTokens } from './index';
 import { SALESFORCE_WEBHOOK_URL } from '../../../constant';
+import { IBackupConfig } from '../../../models';
+import { getCrmById, getCrmTokens } from '../../crm';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
 const HANDLER_CLASS_NAME = 'DataVaultRecordSyncTriggerHandler';
@@ -150,4 +152,36 @@ const deleteTriggers = async (
   );
 };
 
-export { fetchTrigger, createTriggers, deleteTriggers };
+// ---------------------------------------------------------------------------
+// Unified entry point — resolves CRM tokens + instanceUrl from the config,
+// then creates or deletes triggers for all objectNames in the config.
+// ---------------------------------------------------------------------------
+type TriggerOperation = 'create' | 'delete';
+
+const realTimeTriggerManagement = async (
+  operation: TriggerOperation,
+  config: IBackupConfig
+): Promise<void> => {
+  const crm = await getCrmById(config.crmId);
+  if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
+
+  const instanceUrl = crm.crmProfile?.instanceUrl;
+  if (!instanceUrl) throw new Error(`instance_url_missing:${config.crmId}`);
+
+  const credentials = getCrmTokens(crm);
+  const tokens: SalesforceTokens = {
+    accessToken: credentials.access_token,
+    refreshToken: credentials.refresh_token,
+    crmId: crm.crmId,
+  };
+
+  const objectApiNames = config.objectNames;
+
+  if (operation === 'create') {
+    await createTriggers(instanceUrl, tokens, objectApiNames);
+  } else {
+    await deleteTriggers(instanceUrl, tokens, objectApiNames);
+  }
+};
+
+export { fetchTrigger, createTriggers, deleteTriggers, realTimeTriggerManagement };

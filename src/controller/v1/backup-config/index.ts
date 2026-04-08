@@ -16,6 +16,7 @@ import {
   getCrmTokens,
   createTriggers,
   deleteTriggers,
+  realTimeTriggerManagement,
 } from '../../../services';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
@@ -72,17 +73,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   await triggerBackupJob(config);
 
   if (config.schedule === SCHEDULE_MODE.realtime) {
-    const crm = await getCrmById(config.crmId);
-    if (!crm) {
-      throw new Error(`crm_not_found:${config.crmId}`);
-    }
-    const credentials = getCrmTokens(crm) as any;
-    const tokens = {
-      accessToken: credentials.access_token,
-      refreshToken: credentials.refresh_token,
-      crmId: crm.crmId,
-    }
-    await createTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, config.objectNames);
+    await realTimeTriggerManagement('create', config);
   }
   makeResponse(req, res, 201, true, 'create', sanitize(config));
 };
@@ -166,20 +157,10 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   await deleteBackupConfig(String(backupConfigId));
-  
   if (existing.schedule === SCHEDULE_MODE.realtime) {
-    const crm = await getCrmById(existing.crmId);
-    if (!crm) {
-      throw new Error(`crm_not_found:${existing.crmId}`);
-    }
-    const credentials = getCrmTokens(crm) as any;
-    const tokens = {
-      accessToken: credentials.access_token,
-      refreshToken: credentials.refresh_token,
-      crmId: crm.crmId,
-    }
-    await deleteTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, existing.objectNames);
+    await realTimeTriggerManagement('delete', existing);
   }
+
   makeResponse(req, res, 200, true, 'delete');
 };
 
