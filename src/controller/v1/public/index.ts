@@ -5,6 +5,7 @@ import { getCrmByOrgId } from '../../../services/crm';
 import { getBackupConfigsByUserAndCrm, getDestinationConfig } from '../../../services/backup-config';
 import { httpRequest } from '../../../utils/http-request';
 import { BACKUP_SERVICE, SCHEDULE_MODE } from '../../../constant';
+import { logger } from '../../../middlewares';
 
 const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
   const { orgId } = decryptedBody;
@@ -37,21 +38,15 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
 const salesForceealTimeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
     const encryptedBody = req.body;
-    console.log({ encryptedBody });
-
     const decryptedBody = JSON.parse(
       decrypt({ ciphertext: encryptedBody.cipherText, iv: encryptedBody.iv })
     );
-    console.log(JSON.stringify({ decryptedBody }));
-
     makeResponse(req, res, 200, true, 'fetch');
 
-    processRealtimeWebhook(decryptedBody).catch((err) =>
-      console.error('realtime webhook processing error:', err)
-    );
+    await processRealtimeWebhook(decryptedBody);
+    logger.info(`Processed real-time webhook for orgId: ${decryptedBody.orgId}`);
   } catch (error) {
-    console.log(error);
-    makeResponse(req, res, 400, false, 'unknown_error');
+    logger.error('realtime webhook processing error:', error);
   }
 };
 

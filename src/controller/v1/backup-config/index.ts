@@ -69,6 +69,21 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const config = await createBackupConfig({ userId: req.user!.userId, ...req.body });
+  await triggerBackupJob(config);
+
+  if (config.schedule === SCHEDULE_MODE.realtime) {
+    const crm = await getCrmById(config.crmId);
+    if (!crm) {
+      throw new Error(`crm_not_found:${config.crmId}`);
+    }
+    const credentials = getCrmTokens(crm) as any;
+    const tokens = {
+      accessToken: credentials.access_token,
+      refreshToken: credentials.refresh_token,
+      crmId: crm.crmId,
+    }
+    await createTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, config.objectNames);
+  }
   makeResponse(req, res, 201, true, 'create', sanitize(config));
 };
 
@@ -151,6 +166,20 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   await deleteBackupConfig(String(backupConfigId));
+  
+  if (existing.schedule === SCHEDULE_MODE.realtime) {
+    const crm = await getCrmById(existing.crmId);
+    if (!crm) {
+      throw new Error(`crm_not_found:${existing.crmId}`);
+    }
+    const credentials = getCrmTokens(crm) as any;
+    const tokens = {
+      accessToken: credentials.access_token,
+      refreshToken: credentials.refresh_token,
+      crmId: crm.crmId,
+    }
+    await deleteTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, existing.objectNames);
+  }
   makeResponse(req, res, 200, true, 'delete');
 };
 
@@ -182,7 +211,7 @@ const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> 
     refreshToken: credentials.refresh_token,
     crmId: crm.crmId,
   }
-  
+
   const dd = await deleteTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, [req.body.triggerName]);
   makeResponse(req, res, 200, false, 'fetch', { isSetup: dd });
 
