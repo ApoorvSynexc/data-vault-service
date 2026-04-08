@@ -285,7 +285,6 @@ const getBackupConfigBySlug = async (
       KeyConditionExpression: 'userId = :uid',
       FilterExpression: 'slug = :slug',
       ExpressionAttributeValues: { ':uid': userId, ':slug': slug },
-      Limit: 1,
     })
   );
   return (result.Items?.[0] as IBackupConfig) ?? null;

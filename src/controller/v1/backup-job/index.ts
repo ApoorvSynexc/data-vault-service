@@ -22,6 +22,8 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
 
   if (slug) {
     const config = await getBackupConfigBySlug(userId, slug);
+    console.log({config: config?.backupConfigId});
+    
     if (!config) {
       makeResponse(req, res, 404, false, 'not_found');
       return;
