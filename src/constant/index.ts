@@ -28,6 +28,9 @@ const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vaul
 // Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
+// Webhook
+const SALESFORCE_WEBHOOK_URL = String(process.env.SALESFORCE_WEBHOOK_URL);
+
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
@@ -165,6 +168,9 @@ export {
   CRM_TABLE,
   BACKUP_CONFIG_TABLE,
   ENCRYPTION_KEY,
+
+  // Webhook
+  SALESFORCE_WEBHOOK_URL,
 
   // Services
   BACKUP_SERVICE,

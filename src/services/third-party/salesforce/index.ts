@@ -178,3 +178,5 @@ export {
   salesforceRequest,
 };
 export type { SalesforceTokens, SalesforceRequestResult };
+export * from './apex';
+export * from './trigger';

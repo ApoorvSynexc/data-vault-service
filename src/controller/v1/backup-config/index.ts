@@ -13,6 +13,9 @@ import {
   getTableCounter,
   triggerBackupJob,
   getCrmById,
+  getCrmTokens,
+  isTriggerSetup,
+  createTrigger,
 } from '../../../services';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
@@ -116,7 +119,7 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     slug: crmPayload.slug,
     isConnected: crmPayload.isConnected,
   };
-  makeResponse(req, res, 200, true, 'fetch', {...sanitize(config),crmDetail });
+  makeResponse(req, res, 200, true, 'fetch', { ...sanitize(config), crmDetail });
 };
 
 const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -162,6 +165,29 @@ const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> =
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 
+const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const existing = await getBackupConfigById(String(req.body.backupConfigId));
+  if (!existing || existing.userId !== req.user!.userId) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
+
+  const crm = await getCrmById(existing.crmId);
+  if (!crm) {
+    throw new Error(`crm_not_found:${existing.crmId}`);
+  }
+  const credentials = getCrmTokens(crm) as any;
+  const tokens = {
+    accessToken: credentials.access_token,
+    refreshToken: credentials.refresh_token,
+    crmId: crm.crmId,
+  }
+  
+  const dd = await createTrigger(crm.crmProfile?.instanceUrl ?? '', tokens, req.body.triggerName);
+  makeResponse(req, res, 200, false, 'fetch', { isSetup: dd });
+
+};
+
 export const backupConfigController = wrapController({
   getObjectsHanlder,
   getFieldsHanlder,
@@ -171,4 +197,5 @@ export const backupConfigController = wrapController({
   updateBackupConfigHandler,
   deleteBackupConfigHandler,
   testBackupHandler,
+  testBackup2Handler
 });
