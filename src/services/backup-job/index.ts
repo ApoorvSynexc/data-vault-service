@@ -120,4 +120,13 @@ const getBackupJobsByConfig = async (
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
-export { triggerBackupJob, getBackupJobById, getBackupJobsByUser, getBackupJobsByConfig };
+const resumeBackupJob = async (backupJobId: string, config: IBackupConfig) => {
+  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+
+  return httpRequest({
+    url: `${BACKUP_SERVICE}/v1/backup-job/resume?id=${backupJobId}`,
+    method: 'GET',
+  });
+};
+
+export { triggerBackupJob, resumeBackupJob, getBackupJobById, getBackupJobsByUser, getBackupJobsByConfig };

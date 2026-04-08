@@ -4,12 +4,13 @@ import {
   getBackupJobsByConfig,
   getBackupJobsByUser,
   getBackupConfigBySlug,
+  getBackupConfigById,
   getTableCounter,
+  resumeBackupJob,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
-import { log } from 'winston';
 
 const sanitize = ({ source, destination, ...rest }: IBackupJob) => ({
   ...rest,
@@ -75,7 +76,31 @@ const getBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void>
   makeResponse(req, res, 200, true, 'fetch', sanitize(job));
 };
 
+const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupJobId } = req.query;
+  if (!backupJobId) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const job = await getBackupJobById(String(backupJobId));
+  if (!job || job.userId !== req.user!.userId) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
+
+  const config = await getBackupConfigById(job.backupConfigId);
+  if (!config) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
+
+  await resumeBackupJob(String(backupJobId), config);
+  makeResponse(req, res, 200, true, 'resume');
+};
+
 export const backupJobController = wrapController({
   listBackupJobsHandler,
   getBackupJobHandler,
+  resumeBackupJobHandler,
 });
