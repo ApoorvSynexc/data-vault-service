@@ -80,6 +80,27 @@ const sendOtpHandler = async (req: IRequest, res: IResponse) => {
     otpType: string;
   };
 
+  if (otpType === OTP_TYPE.signup) {
+    const userSearch =
+      channel === OTP_CHANNEL.email
+        ? { 'contact.email': contact }
+        : {
+            'contact.mobile.number': (contact as any).number,
+            'contact.mobile.dialCode': (contact as any).dialCode,
+          };
+
+    const existing = await getUser(userSearch);
+    if (existing) {
+      return makeResponse(
+        req,
+        res,
+        400,
+        false,
+        channel === OTP_CHANNEL.email ? 'email_exit' : 'mobile_exit'
+      );
+    }
+  }
+
   const otpNumber = 123456;
   const expiresAt = dayjs().add(OTP_EXPIRY_MINUTES, 'minute').toDate();
 
