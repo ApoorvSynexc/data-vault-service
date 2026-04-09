@@ -2,6 +2,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  QueryCommandInput,
   ScanCommand,
   ScanCommandInput,
   UpdateCommand,
@@ -45,7 +46,25 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
   ]);
 };
 
+const buildStatusFilter = (
+  statuses: string[]
+): Pick<
+  QueryCommandInput,
+  'FilterExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'
+> | null => {
+  if (!statuses.length) return null;
+  const values: Record<string, any> = {};
+  statuses.forEach((s, i) => (values[`:s${i}`] = s));
+  return {
+    FilterExpression: statuses.map((_, i) => `#status = :s${i}`).join(' OR '),
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: values,
+  };
+};
+
 const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
+  const statusFilter = search.status ? buildStatusFilter([search.status].flat()) : null;
+
   // ── By email (GSI) ────────────────────────────────────────────────────────
   if (search['contact.email']) {
     const result = await docClient.send(
@@ -53,7 +72,9 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
         TableName: USER_TABLE,
         IndexName: 'email-index',
         KeyConditionExpression: 'contactEmail = :email',
-        ExpressionAttributeValues: { ':email': search['contact.email'] },
+        ExpressionAttributeValues: { ':email': search['contact.email'], ...statusFilter?.ExpressionAttributeValues },
+        ExpressionAttributeNames: statusFilter?.ExpressionAttributeNames,
+        FilterExpression: statusFilter?.FilterExpression,
         Limit: 1,
       })
     );
@@ -71,7 +92,9 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
         TableName: USER_TABLE,
         IndexName: 'mobile-index',
         KeyConditionExpression: 'contactMobileKey = :mobileKey',
-        ExpressionAttributeValues: { ':mobileKey': mobileKey },
+        ExpressionAttributeValues: { ':mobileKey': mobileKey, ...statusFilter?.ExpressionAttributeValues },
+        ExpressionAttributeNames: statusFilter?.ExpressionAttributeNames,
+        FilterExpression: statusFilter?.FilterExpression,
         Limit: 1,
       })
     );
@@ -82,7 +105,10 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
   const userId = search.userId ?? search._id;
   if (userId) {
     const result = await docClient.send(new GetCommand({ TableName: USER_TABLE, Key: { userId } }));
-    return (result.Item as IUser) ?? null;
+    const user = result.Item as IUser | undefined;
+    if (!user) return null;
+    if (statusFilter && !search.status.flat().includes(user.status)) return null;
+    return user;
   }
 
   return null;

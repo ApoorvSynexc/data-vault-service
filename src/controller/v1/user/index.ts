@@ -1,5 +1,5 @@
 import bcrypt from 'bcrypt';
-import { SESSION_STATUS, USER_TABLE } from '../../../constant';
+import { SESSION_STATUS, STATUS, USER_TABLE } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   getTableCounter,
@@ -41,6 +41,11 @@ const changePasswordHandler = async (req: IRequest, res: IResponse) => {
   await updateUser({ userId: user.userId }, { password: hashed });
 
   makeResponse(req, res, 200, true, 'update');
+};
+
+const deleteProfileHandler = async (req: IRequest, res: IResponse) => {
+  await updateUser({ userId: req.user!.userId }, { status: STATUS.deleted });
+  makeResponse(req, res, 200, true, 'delete');
 };
 
 const usersHandler = async (req: IRequest, res: IResponse) => {
@@ -91,5 +96,6 @@ export const userController = wrapController({
   myProfileHandler,
   logoutHandler,
   changePasswordHandler,
+  deleteProfileHandler,
   usersHandler,
 });

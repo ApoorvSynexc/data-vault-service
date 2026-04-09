@@ -21,7 +21,7 @@ const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): 
       return;
     }
 
-    const user = await getUser({ userId: payload.userId });
+    const user = await getUser({ userId: payload.userId, status: [STATUS.active, STATUS.inactive] });
     if (!user) {
       await makeResponse(req, res, 401, false, 'unauthorized');
       return;
