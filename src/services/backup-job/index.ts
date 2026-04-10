@@ -210,20 +210,17 @@ const getBackupJobStatsForUser = async (userId: string) => {
     lastKey = result.LastEvaluatedKey;
 
     for (const job of jobs) {
-      const jobSizeBytes = (job.object ?? []).reduce(
-        (sum, obj) => sum + (obj.sizeInBytes ?? 0),
-        0
-      );
+      const jobSizeBytes = (job.object ?? []).reduce((sum, obj) => sum + (obj.sizeInBytes ?? 0), 0);
 
       if (job.status === JOB_STATUS.success) {
         completedCount++;
         const completedAt = job.completedAt ? dayjs(job.completedAt) : null;
         if (completedAt) {
-          if (!completedAt.isBefore(today)) completedToday++;
-          else if (!completedAt.isBefore(yesterday)) completedYesterday++;
+          if (!completedAt.isBefore(today)) {completedToday++;}
+          else if (!completedAt.isBefore(yesterday)) {completedYesterday++;}
 
-          if (!completedAt.isBefore(startOfThisWeek)) dataThisWeek += jobSizeBytes;
-          else if (!completedAt.isBefore(startOfLastWeek)) dataLastWeek += jobSizeBytes;
+          if (!completedAt.isBefore(startOfThisWeek)) {dataThisWeek += jobSizeBytes;}
+          else if (!completedAt.isBefore(startOfLastWeek)) {dataLastWeek += jobSizeBytes;}
         }
       } else if (job.status === JOB_STATUS.running || job.status === JOB_STATUS.pending) {
         runningCount++;

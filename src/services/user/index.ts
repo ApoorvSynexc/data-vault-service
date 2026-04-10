@@ -52,7 +52,9 @@ const buildStatusFilter = (
   QueryCommandInput,
   'FilterExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'
 > | null => {
-  if (!statuses.length) {return null;}
+  if (!statuses.length) {
+    return null;
+  }
   const values: Record<string, any> = {};
   statuses.forEach((s, i) => (values[`:s${i}`] = s));
   return {
@@ -112,8 +114,12 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
   if (userId) {
     const result = await docClient.send(new GetCommand({ TableName: USER_TABLE, Key: { userId } }));
     const user = result.Item as IUser | undefined;
-    if (!user) {return null;}
-    if (statusFilter && !search.status.flat().includes(user.status)) {return null;}
+    if (!user) {
+      return null;
+    }
+    if (statusFilter && !search.status.flat().includes(user.status)) {
+      return null;
+    }
     return user;
   }
 
