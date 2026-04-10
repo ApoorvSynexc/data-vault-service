@@ -17,6 +17,7 @@ import {
   getCrmTokens,
   deleteTriggers,
   realTimeTriggerManagement,
+  getBackupJobStatsForUser,
 } from '../../../services';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
@@ -203,6 +204,11 @@ const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> 
   makeResponse(req, res, 200, false, 'fetch', { isSetup: dd });
 };
 
+const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const stats = await getBackupJobStatsForUser(req.user!.userId);
+  makeResponse(req, res, 200, true, 'fetch', stats);
+};
+
 export const backupConfigController = wrapController({
   getObjectsHanlder,
   getFieldsHanlder,
@@ -213,4 +219,5 @@ export const backupConfigController = wrapController({
   deleteBackupConfigHandler,
   testBackupHandler,
   testBackup2Handler,
+  getBackupJobStatsHandler,
 });

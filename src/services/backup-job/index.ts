@@ -1,6 +1,7 @@
+import dayjs from 'dayjs';
 import { BatchWriteCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, JOB_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { getDestinationConfig, updateBackupConfig } from '../backup-config';
@@ -178,6 +179,85 @@ const deleteBackupJobsByConfig = async (backupConfigId: string, userId: string):
   }
 };
 
+const getBackupJobStatsForUser = async (userId: string) => {
+  const today = dayjs().startOf('day');
+  const yesterday = today.subtract(1, 'day');
+  const startOfThisWeek = today.subtract(7, 'day');
+  const startOfLastWeek = today.subtract(14, 'day');
+
+  let completedCount = 0;
+  let completedToday = 0;
+  let completedYesterday = 0;
+  let runningCount = 0;
+  let failedCount = 0;
+  let dataThisWeek = 0;
+  let dataLastWeek = 0;
+
+  let lastKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_JOB_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      })
+    );
+
+    const jobs = (result.Items ?? []) as IBackupJob[];
+    lastKey = result.LastEvaluatedKey;
+
+    for (const job of jobs) {
+      const jobSizeBytes = (job.object ?? []).reduce(
+        (sum, obj) => sum + (obj.sizeInBytes ?? 0),
+        0
+      );
+
+      if (job.status === JOB_STATUS.success) {
+        completedCount++;
+        const completedAt = job.completedAt ? dayjs(job.completedAt) : null;
+        if (completedAt) {
+          if (!completedAt.isBefore(today)) completedToday++;
+          else if (!completedAt.isBefore(yesterday)) completedYesterday++;
+
+          if (!completedAt.isBefore(startOfThisWeek)) dataThisWeek += jobSizeBytes;
+          else if (!completedAt.isBefore(startOfLastWeek)) dataLastWeek += jobSizeBytes;
+        }
+      } else if (job.status === JOB_STATUS.running || job.status === JOB_STATUS.pending) {
+        runningCount++;
+      } else if (job.status === JOB_STATUS.failed) {
+        failedCount++;
+      }
+    }
+  } while (lastKey);
+
+  const weeklyChangePercent =
+    dataLastWeek > 0
+      ? Math.round(((dataThisWeek - dataLastWeek) / dataLastWeek) * 100)
+      : dataThisWeek > 0
+        ? 100
+        : 0;
+
+  return {
+    completedJobs: {
+      count: completedCount,
+      vsYesterday: completedToday - completedYesterday,
+    },
+    runningJobs: {
+      count: runningCount,
+    },
+    failedJobs: {
+      count: failedCount,
+    },
+    dataProcessed: {
+      bytes: dataThisWeek,
+      weeklyChangePercent,
+    },
+  };
+};
+
 export {
   triggerBackupJob,
   resumeBackupJob,
@@ -185,4 +265,5 @@ export {
   getBackupJobsByUser,
   getBackupJobsByConfig,
   deleteBackupJobsByConfig,
+  getBackupJobStatsForUser,
 };
