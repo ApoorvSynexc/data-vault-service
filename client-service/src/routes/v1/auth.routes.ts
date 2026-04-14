@@ -18,6 +18,11 @@ router.post('/verify-otp', authRateLimit, verifyOtpValidation, authController.ve
 router.post('/login', authRateLimit, loginValidation, authController.loginHandler);
 router.post('/refresh-token', authRateLimit, authController.refreshTokenHandler);
 router.post('/logout', authController.logoutHandler);
-router.post('/reset-password', authRateLimit, resetPasswordValidation, authController.resetPasswordHandler);
+router.post(
+  '/reset-password',
+  authRateLimit,
+  resetPasswordValidation,
+  authController.resetPasswordHandler
+);
 
 export const authRouter = router;

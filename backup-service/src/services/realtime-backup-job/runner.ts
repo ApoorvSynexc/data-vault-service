@@ -55,7 +55,7 @@ export const runRealtimeBackupJob = async (
       }),
       headers: {
         'x-internal-secret': INTERNAL_SECRET,
-      }
+      },
     });
   } catch (err: any) {
     logger.error(`Realtime job ${backupJobId} failed: ${err?.message}`);

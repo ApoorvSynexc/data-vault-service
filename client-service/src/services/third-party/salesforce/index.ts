@@ -51,7 +51,9 @@ const refreshInFlight = new Map<string, Promise<any>>();
 
 const deduplicatedRefresh = (crmId: string, refreshToken: string): Promise<any> => {
   const existing = refreshInFlight.get(crmId);
-  if (existing) return existing;
+  if (existing) {
+    return existing;
+  }
 
   const promise = refreashSalesforceToken(refreshToken).finally(() => {
     refreshInFlight.delete(crmId);
@@ -125,10 +127,14 @@ const salesforceRequest = async <T = any>(
     const newRefreshToken: string = refreshed.refresh_token ?? tokens.refreshToken;
 
     if (tokens.crmId) {
-      await updateCrmCredentials(tokens.crmId, {
-        access_token: newAccessToken,
-        refresh_token: newRefreshToken,
-      }, tokens.userId!);
+      await updateCrmCredentials(
+        tokens.crmId,
+        {
+          access_token: newAccessToken,
+          refresh_token: newRefreshToken,
+        },
+        tokens.userId!
+      );
     }
 
     const data = await makeCall(newAccessToken);

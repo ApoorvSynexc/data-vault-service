@@ -14,7 +14,14 @@ interface HttpRequestOptions<TBody = any> {
 export async function httpRequest<TResponse = any, TBody = any>(
   options: HttpRequestOptions<TBody>
 ): Promise<TResponse> {
-  const { url, method = 'GET', headers = {}, body, query, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+  const {
+    url,
+    method = 'GET',
+    headers = {},
+    body,
+    query,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  } = options;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -59,7 +66,9 @@ export async function httpRequest<TResponse = any, TBody = any>(
     return (text ? JSON.parse(text) : null) as TResponse;
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      throw new Error(`HTTP request timed out after ${timeoutMs}ms: ${url}`);
+      const err = new Error(`HTTP request timed out after ${timeoutMs}ms: ${url}`);
+      (err as any).cause = error;
+      throw err;
     }
     throw error;
   } finally {
