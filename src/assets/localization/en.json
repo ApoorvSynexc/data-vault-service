@@ -32,5 +32,6 @@
   "not_found": "Record not found",
   "invalid_aws_credentials": "Invalid AWS credentials or bucket not accessible",
   "reschedule": "Backup job rescheduled successfully",
-  "resume": "Backup job resumed successfully"
+  "resume": "Backup job resumed successfully",
+  "too_many_requests": "Too many requests. Please wait and try again"
 }

@@ -40,6 +40,28 @@ export class SalesforceAuthExpiredError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// Per-crmId refresh deduplication
+//   Prevents thundering herd: if N concurrent requests all get a 401 for the
+//   same CRM, only the first fires a refresh call. The rest await the same
+//   promise. Without this, N parallel refreshes race to write to DynamoDB and
+//   each one invalidates the previous token, causing cascading 401s.
+// ---------------------------------------------------------------------------
+
+const refreshInFlight = new Map<string, Promise<any>>();
+
+const deduplicatedRefresh = (crmId: string, refreshToken: string): Promise<any> => {
+  const existing = refreshInFlight.get(crmId);
+  if (existing) return existing;
+
+  const promise = refreashSalesforceToken(refreshToken).finally(() => {
+    refreshInFlight.delete(crmId);
+  });
+
+  refreshInFlight.set(crmId, promise);
+  return promise;
+};
+
+// ---------------------------------------------------------------------------
 // Centralized Salesforce API request
 //   - Injects Authorization header automatically
 //   - On 401 (expired access token) → refreshes token and retries once
@@ -82,11 +104,15 @@ const salesforceRequest = async <T = any>(
       throw error;
     }
 
-    // Access token expired — refresh and retry once
+    // Access token expired — refresh and retry once.
+    // Use deduplicatedRefresh when crmId is available so that N concurrent
+    // callers on the same CRM share a single refresh call instead of racing.
     let refreshed: any;
     try {
       console.log('Refreshing Token');
-      refreshed = await refreashSalesforceToken(tokens.refreshToken);
+      refreshed = tokens.crmId
+        ? await deduplicatedRefresh(tokens.crmId, tokens.refreshToken)
+        : await refreashSalesforceToken(tokens.refreshToken);
       console.log('Refreshing Token success');
     } catch (e: any) {
       console.log('Refreshing Token failed', e?.message);
