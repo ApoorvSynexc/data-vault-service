@@ -301,19 +301,7 @@ const buildProjectionExpression = (projection: Record<string, any>) => {
   };
 };
 
-const decodeCursor = (cursor?: string): Record<string, any> | undefined => {
-  if (!cursor) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8'));
-  } catch {
-    return undefined;
-  }
-};
-
-const encodeCursor = (key: Record<string, any>): string =>
-  Buffer.from(JSON.stringify(key)).toString('base64url');
+import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getUsersWithPagination = async (
   search: Record<string, any> = {},

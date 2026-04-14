@@ -20,7 +20,7 @@ import {
   getBackupJobStatsForUser,
 } from '../../../services';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
-import { wrapController } from '../../../utils/helper';
+import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
 
 const sanitize = ({ destination, ...rest }: IBackupConfig) => ({
@@ -136,7 +136,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   const existing = await getBackupConfigById(String(backupConfigId));
-  if (!existing || existing.userId !== req.user!.userId) {
+  if (!isOwner(existing, req.user!.userId)) {
     makeResponse(req, res, 404, false, 'not_found');
     return;
   }
@@ -152,18 +152,19 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   const existing = await getBackupConfigById(String(backupConfigId));
-  if (!existing || existing.userId !== req.user!.userId) {
+  if (!isOwner(existing, req.user!.userId)) {
     makeResponse(req, res, 404, false, 'not_found');
     return;
   }
+  const config = existing!;
 
   await Promise.all([
     deleteBackupConfig(String(backupConfigId)),
-    deleteBackupJobsByConfig(String(backupConfigId), existing.userId),
+    deleteBackupJobsByConfig(String(backupConfigId), config.userId),
   ]);
 
-  if (existing.schedule === SCHEDULE_MODE.realtime) {
-    await realTimeTriggerManagement('delete', existing);
+  if (config.schedule === SCHEDULE_MODE.realtime) {
+    await realTimeTriggerManagement('delete', config);
   }
 
   makeResponse(req, res, 200, true, 'delete');
@@ -171,25 +172,25 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
 const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const existing = await getBackupConfigById(String(req.body.backupConfigId));
-  if (!existing || existing.userId !== req.user!.userId) {
+  if (!isOwner(existing, req.user!.userId)) {
     makeResponse(req, res, 404, false, 'not_found');
     return;
   }
 
-  const result = await triggerBackupJob(existing);
+  const result = await triggerBackupJob(existing!);
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> => {
   const existing = await getBackupConfigById(String(req.body.backupConfigId));
-  if (!existing || existing.userId !== req.user!.userId) {
+  if (!isOwner(existing, req.user!.userId)) {
     makeResponse(req, res, 404, false, 'not_found');
     return;
   }
 
-  const crm = await getCrmById(existing.crmId);
+  const crm = await getCrmById(existing!.crmId);
   if (!crm) {
-    throw new Error(`crm_not_found:${existing.crmId}`);
+    throw new Error(`crm_not_found:${existing!.crmId}`);
   }
   const credentials = getCrmTokens(crm) as any;
   const tokens = {

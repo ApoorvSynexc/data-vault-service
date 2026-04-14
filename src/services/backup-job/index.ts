@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import { BatchWriteCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, JOB_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob } from '../../models';
@@ -97,9 +98,7 @@ const getBackupJobsByUser = async (
   options?: { limit?: number; cursor?: string }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
-  const exclusiveStartKey = options?.cursor
-    ? JSON.parse(Buffer.from(options.cursor, 'base64').toString('utf8'))
-    : undefined;
+  const exclusiveStartKey = decodeCursor(options?.cursor);
 
   const result = await docClient.send(
     new QueryCommand({
@@ -113,10 +112,7 @@ const getBackupJobsByUser = async (
     })
   );
 
-  const nextCursor = result.LastEvaluatedKey
-    ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64')
-    : undefined;
-
+  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
@@ -125,9 +121,7 @@ const getBackupJobsByConfig = async (
   options?: { limit?: number; cursor?: string }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
-  const exclusiveStartKey = options?.cursor
-    ? JSON.parse(Buffer.from(options.cursor, 'base64').toString('utf8'))
-    : undefined;
+  const exclusiveStartKey = decodeCursor(options?.cursor);
 
   const result = await docClient.send(
     new QueryCommand({
@@ -141,10 +135,7 @@ const getBackupJobsByConfig = async (
     })
   );
 
-  const nextCursor = result.LastEvaluatedKey
-    ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64')
-    : undefined;
-
+  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 

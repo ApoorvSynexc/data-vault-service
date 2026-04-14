@@ -73,4 +73,9 @@ const buildSlug = (base: string, count: number): string => {
   return count === 1 ? baseSlug : `${baseSlug}-${count}`;
 };
 
-export { randomNumber, generateTokens, parseExpiryToSeconds, wrapController, toSlug, buildSlug };
+// Returns false when entity is null/undefined or belongs to a different user.
+// Use this in controllers instead of repeating the ownership check inline.
+const isOwner = (entity: { userId: string } | null | undefined, userId: string): boolean =>
+  !!entity && entity.userId === userId;
+
+export { randomNumber, generateTokens, parseExpiryToSeconds, wrapController, toSlug, buildSlug, isOwner };

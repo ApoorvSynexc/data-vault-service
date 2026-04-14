@@ -9,7 +9,7 @@ import {
   resumeBackupJob,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
-import { wrapController } from '../../../utils/helper';
+import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 
 const sanitize = ({ destination, ...rest }: IBackupJob) => ({
@@ -68,12 +68,12 @@ const getBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void>
   }
 
   const job = await getBackupJobById(String(backupJobId));
-  if (!job || job.userId !== req.user!.userId) {
+  if (!isOwner(job, req.user!.userId)) {
     makeResponse(req, res, 404, false, 'not_found');
     return;
   }
 
-  makeResponse(req, res, 200, true, 'fetch', sanitize(job));
+  makeResponse(req, res, 200, true, 'fetch', sanitize(job!));
 };
 
 const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -84,12 +84,12 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   }
 
   const job = await getBackupJobById(String(backupJobId));
-  if (!job || job.userId !== req.user!.userId) {
+  if (!isOwner(job, req.user!.userId)) {
     makeResponse(req, res, 404, false, 'not_found');
     return;
   }
 
-  const config = await getBackupConfigById(job.backupConfigId);
+  const config = await getBackupConfigById(job!.backupConfigId);
   if (!config) {
     makeResponse(req, res, 404, false, 'not_found');
     return;
