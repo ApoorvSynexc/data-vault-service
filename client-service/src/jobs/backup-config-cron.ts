@@ -1,0 +1,41 @@
+import cron from 'node-cron';
+import { getScheduledIncrementalBackupConfigs, triggerBackupJob } from '../services';
+import { logger } from '../middlewares';
+
+let isBackupCronRunning = false;
+
+const runScheduledIncrementalBackups = async (): Promise<void> => {
+  if (isBackupCronRunning) {
+    return;
+  }
+
+  isBackupCronRunning = true;
+
+  try {
+    const configs = await getScheduledIncrementalBackupConfigs();
+
+    if (configs.length === 0) {
+      return;
+    }
+    logger.info(`Running ${configs.length} scheduled incremental backups...`);
+    for (const config of configs) {
+      try {
+        await triggerBackupJob(config, config.lastBackupAt);
+      } catch (error) {
+        console.error(`Scheduled backup failed for ${config.backupConfigId}`, error);
+      }
+    }
+  } finally {
+    isBackupCronRunning = false;
+  }
+};
+
+const startBackupConfigCron = (): void => {
+  cron.schedule('*/5 * * * *', async () => {
+    logger.info('Running scheduled incremental backups...');
+    await runScheduledIncrementalBackups();
+    logger.info('Scheduled incremental backups completed.');
+  });
+};
+
+export { startBackupConfigCron, runScheduledIncrementalBackups };

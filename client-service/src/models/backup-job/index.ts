@@ -1,0 +1,39 @@
+export interface IBackupField {
+  name: string;
+  filter?: {
+    value: string;
+    operator: string;
+  };
+}
+
+export interface IBackupObject {
+  name: string;
+  condition?: {
+    type: string;
+    expression?: string;
+  };
+  field?: IBackupField[];
+  status?: string;
+  bulkJobId?: string;
+  totalRecordCount?: number;
+  completedRecordCount?: number;
+  sizeInBytes?: number;
+  currentLocator?: string;
+  errorMessage?: string;
+}
+
+export interface IBackupJob {
+  backupJobId: string; // PK
+  userId: string; // GSI: userId-index
+  backupConfigId: string; // GSI: backupConfigId-index
+  source: { ciphertext: string; iv: string }; // encrypted — never expose
+  destination: { type: string; ciphertext: string; iv: string; authTag: string }; // encrypted — never expose
+  object?: IBackupObject[];
+  status: string; // PENDING | RUNNING | SUCCESS | FAILED
+  lastUpdatedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
