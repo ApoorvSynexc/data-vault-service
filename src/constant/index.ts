@@ -30,6 +30,10 @@ const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
 // Webhook
 const SALESFORCE_WEBHOOK_URL = String(process.env.SALESFORCE_WEBHOOK_URL);
+const SALESFORCE_WEBHOOK_SECRET = String(process.env.SALESFORCE_WEBHOOK_SECRET);
+
+// Internal service auth — shared secret between this service and the backup service
+const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
@@ -171,6 +175,8 @@ export {
 
   // Webhook
   SALESFORCE_WEBHOOK_URL,
+  SALESFORCE_WEBHOOK_SECRET,
+  INTERNAL_SECRET,
 
   // Services
   BACKUP_SERVICE,
