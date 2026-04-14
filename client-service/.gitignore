@@ -1,0 +1,10 @@
+node_modules
+
+.vscode
+.DS_Store
+.env
+
+dist
+src/assets/logs/
+uploads/
+

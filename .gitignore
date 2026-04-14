@@ -38,6 +38,8 @@ bower_components
 build/Release
 
 # Dependency directories
+backup-service/node_modules/
+client-service/node_modules/
 node_modules/
 jspm_packages/
 
@@ -81,6 +83,8 @@ out
 # Nuxt.js build / generate output
 .nuxt
 dist
+backup-service/dist
+client-service/dist
 
 # Gatsby files
 .cache/
