@@ -14,7 +14,14 @@ interface HttpRequestOptions<TBody = any> {
 export async function httpRequest<TResponse = any, TBody = any>(
   options: HttpRequestOptions<TBody>
 ): Promise<TResponse> {
-  const { url, method = 'GET', headers = {}, body, query, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+  const {
+    url,
+    method = 'GET',
+    headers = {},
+    body,
+    query,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  } = options;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 

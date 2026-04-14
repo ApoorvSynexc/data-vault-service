@@ -51,10 +51,14 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
   const newAccessToken: string = refreshed.access_token;
   const newRefreshToken: string = refreshed.refresh_token ?? tokens.refresh_token;
 
-  await updateCrmCredentials(String(crmId), {
-    access_token: newAccessToken,
-    refresh_token: newRefreshToken,
-  }, crm.userId);
+  await updateCrmCredentials(
+    String(crmId),
+    {
+      access_token: newAccessToken,
+      refresh_token: newRefreshToken,
+    },
+    crm.userId
+  );
 
   makeResponse(req, res, 200, true, 'update', refreshed);
 };
@@ -69,15 +73,27 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
       case 'backup.completed':
         await updateBackupConfig(
           backupConfigId,
-          { backupStatus: BACKUP_STATUS.success, lastBackupAt: new Date().toISOString(), lastEventId: eventId },
+          {
+            backupStatus: BACKUP_STATUS.success,
+            lastBackupAt: new Date().toISOString(),
+            lastEventId: eventId,
+          },
           eventId
         );
         break;
       case 'backup.size.updated':
-        await updateBackupConfig(backupConfigId, { sizeInBytes: req.body.sizeInBytes, lastEventId: eventId }, eventId);
+        await updateBackupConfig(
+          backupConfigId,
+          { sizeInBytes: req.body.sizeInBytes, lastEventId: eventId },
+          eventId
+        );
         break;
       case 'schema.updated':
-        await updateBackupConfig(backupConfigId, { schemaChange: true, lastEventId: eventId }, eventId);
+        await updateBackupConfig(
+          backupConfigId,
+          { schemaChange: true, lastEventId: eventId },
+          eventId
+        );
         break;
       default:
         break;

@@ -78,4 +78,12 @@ const buildSlug = (base: string, count: number): string => {
 const isOwner = (entity: { userId: string } | null | undefined, userId: string): boolean =>
   !!entity && entity.userId === userId;
 
-export { randomNumber, generateTokens, parseExpiryToSeconds, wrapController, toSlug, buildSlug, isOwner };
+export {
+  randomNumber,
+  generateTokens,
+  parseExpiryToSeconds,
+  wrapController,
+  toSlug,
+  buildSlug,
+  isOwner,
+};

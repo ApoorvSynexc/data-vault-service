@@ -205,7 +205,10 @@ const updateBackupConfig = async (
     updates.objects = params.objects;
   }
   if (params.destination !== undefined) {
-    const { ciphertext, iv } = encryptForTenant(JSON.stringify(params.destination.config), existing.userId);
+    const { ciphertext, iv } = encryptForTenant(
+      JSON.stringify(params.destination.config),
+      existing.userId
+    );
     updates.destination = { type: params.destination.type, ciphertext, iv };
   }
 
