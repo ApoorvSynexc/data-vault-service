@@ -23,7 +23,33 @@ const getSourceObjects = (config: IBackupConfig) => {
   }));
 };
 
+// Returns true if a PENDING or RUNNING job already exists for this config.
+// Used to prevent duplicate concurrent backup jobs on the same config.
+const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: BACKUP_JOB_TABLE,
+      IndexName: 'backupConfigId-index',
+      KeyConditionExpression: 'backupConfigId = :backupConfigId',
+      FilterExpression: '#status = :pending OR #status = :running',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':backupConfigId': backupConfigId,
+        ':pending': JOB_STATUS.pending,
+        ':running': JOB_STATUS.running,
+      },
+      Limit: 1,
+    })
+  );
+  return (result.Count ?? 0) > 0;
+};
+
 const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) => {
+  const active = await hasActiveBackupJob(config.backupConfigId);
+  if (active) {
+    return null;
+  }
+
   const crm = await getCrmById(config.crmId);
   if (!crm) {
     throw new Error(`crm_not_found:${config.crmId}`);
@@ -257,6 +283,7 @@ const getBackupJobStatsForUser = async (userId: string) => {
 
 export {
   triggerBackupJob,
+  hasActiveBackupJob,
   resumeBackupJob,
   getBackupJobById,
   getBackupJobsByUser,
