@@ -12,7 +12,6 @@ import { makeResponse } from '../../lib';
 export const webhookAuth = (req: Request, res: Response, next: NextFunction): void => {
   const provided = req.headers['x-webhook-secret'];
 
-  console.log({ provided });
   if (
     typeof provided === 'string' &&
     SALESFORCE_WEBHOOK_SECRET.length > 0 &&

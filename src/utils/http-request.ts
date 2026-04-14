@@ -66,7 +66,9 @@ export async function httpRequest<TResponse = any, TBody = any>(
     return (text ? JSON.parse(text) : null) as TResponse;
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      throw new Error(`HTTP request timed out after ${timeoutMs}ms: ${url}`);
+      const timeoutError = new Error(`HTTP request timed out after ${timeoutMs}ms: ${url}`);
+      (timeoutError as any).cause = error;
+      throw timeoutError;
     }
     throw error;
   } finally {
