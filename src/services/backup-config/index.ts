@@ -38,6 +38,7 @@ interface UpdateBackupConfigParams {
   destination?: { type: string; config: Record<string, any> };
   backupStatus?: string;
   lastBackupAt?: string;
+  lastEventId?: string;
   schemaChange?: boolean;
   sizeInBytes?: number;
 }
@@ -155,7 +156,8 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
 
 const updateBackupConfig = async (
   backupConfigId: string,
-  params: UpdateBackupConfigParams
+  params: UpdateBackupConfigParams,
+  idempotencyEventId?: string
 ): Promise<IBackupConfig | null> => {
   const existing = await getBackupConfigById(backupConfigId);
   if (!existing) {
@@ -187,6 +189,9 @@ const updateBackupConfig = async (
   if (params.lastBackupAt !== undefined) {
     updates.lastBackupAt = params.lastBackupAt;
   }
+  if (params.lastEventId !== undefined) {
+    updates.lastEventId = params.lastEventId;
+  }
   if (params.schemaChange !== undefined) {
     updates.schemaChange = params.schemaChange;
   }
@@ -214,6 +219,15 @@ const updateBackupConfig = async (
 
   const values = Object.fromEntries(Object.entries(updates).map(([k, v]) => [`:${k}`, v]));
 
+  // When an idempotency key is provided, reject the write if this event was
+  // already applied (lastEventId = :eventId). DynamoDB raises
+  // ConditionalCheckFailedException which the caller can safely swallow.
+  let conditionExpression: string | undefined;
+  if (idempotencyEventId) {
+    values[':eventId'] = idempotencyEventId;
+    conditionExpression = 'attribute_not_exists(lastEventId) OR lastEventId <> :eventId';
+  }
+
   await docClient.send(
     new UpdateCommand({
       TableName: BACKUP_CONFIG_TABLE,
@@ -221,6 +235,7 @@ const updateBackupConfig = async (
       UpdateExpression: `SET ${setExpr}`,
       ExpressionAttributeNames: names,
       ExpressionAttributeValues: values,
+      ...(conditionExpression ? { ConditionExpression: conditionExpression } : {}),
     })
   );
 

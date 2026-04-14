@@ -60,28 +60,34 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { eventType, backupConfigId } = req.body;
+  const { eventType, eventId, backupConfigId } = req.body;
   console.log(`Received an hit from backup service for event ${eventType}`);
   makeResponse(req, res, 200, true, 'update');
 
   try {
     switch (eventType) {
       case 'backup.completed':
-        await updateBackupConfig(backupConfigId, {
-          backupStatus: BACKUP_STATUS.success,
-          lastBackupAt: new Date().toISOString(),
-        });
+        await updateBackupConfig(
+          backupConfigId,
+          { backupStatus: BACKUP_STATUS.success, lastBackupAt: new Date().toISOString(), lastEventId: eventId },
+          eventId
+        );
         break;
       case 'backup.size.updated':
-        await updateBackupConfig(backupConfigId, { sizeInBytes: req.body.sizeInBytes });
+        await updateBackupConfig(backupConfigId, { sizeInBytes: req.body.sizeInBytes, lastEventId: eventId }, eventId);
         break;
       case 'schema.updated':
-        await updateBackupConfig(backupConfigId, { schemaChange: true });
+        await updateBackupConfig(backupConfigId, { schemaChange: true, lastEventId: eventId }, eventId);
         break;
       default:
         break;
     }
-  } catch (error) {
+  } catch (error: any) {
+    // ConditionalCheckFailedException means this eventId was already applied — safe to ignore
+    if (error?.name === 'ConditionalCheckFailedException') {
+      console.log(`Duplicate event ignored: ${eventType} eventId=${eventId}`);
+      return;
+    }
     console.log(`Error in event ${eventType} `, error);
   }
 };

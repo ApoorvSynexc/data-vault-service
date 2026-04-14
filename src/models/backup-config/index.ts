@@ -54,6 +54,7 @@ export interface IBackupConfig {
   status: string;
   backupStatus: string; // PENDING | SUCCESS | FAILED
   lastBackupAt?: string; // when the last backup job ran
+  lastEventId?: string; // idempotency key — last processed backup-service event ID
   schemaChange?: boolean;
   sizeInBytes?: number;
   createdAt: string;
