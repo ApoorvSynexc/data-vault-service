@@ -79,6 +79,7 @@ interface SalesforceTokens {
   accessToken: string;
   refreshToken: string;
   crmId?: string;
+  userId?: string;
 }
 
 interface SalesforceRequestResult<T> {
@@ -127,7 +128,7 @@ const salesforceRequest = async <T = any>(
       await updateCrmCredentials(tokens.crmId, {
         access_token: newAccessToken,
         refresh_token: newRefreshToken,
-      });
+      }, tokens.userId!);
     }
 
     const data = await makeCall(newAccessToken);

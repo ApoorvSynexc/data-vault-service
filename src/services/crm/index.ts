@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { CRM_TABLE, STATUS } from '../../constant';
 import { ICrm, ICrmProfile } from '../../models';
-import { decrypt, encrypt } from '../../utils/encryption';
+import { decrypt, encryptForTenant } from '../../utils/encryption';
 import { toSlug, buildSlug } from '../../utils/helper';
 import { incrementAndGetCounter } from '../counter';
 
@@ -30,7 +30,7 @@ interface ReconnectCrmParams {
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
   const { userId, crmName, crmProfile, crmCredentials } = params;
   const now = new Date().toISOString();
-  const { ciphertext, iv } = encrypt(JSON.stringify(crmCredentials));
+  const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), userId);
 
   const slugBase = crmProfile.name || crmName;
   const count = await incrementAndGetCounter('slug:crm', `${userId}::${toSlug(slugBase)}`);
@@ -139,9 +139,10 @@ const deleteCrm = async (crmId: string): Promise<boolean> => {
 
 const updateCrmCredentials = async (
   crmId: string,
-  credentials: Record<string, any>
+  credentials: Record<string, any>,
+  userId: string
 ): Promise<void> => {
-  const { ciphertext, iv } = encrypt(JSON.stringify(credentials));
+  const { ciphertext, iv } = encryptForTenant(JSON.stringify(credentials), userId);
   const updatedAt = new Date().toISOString();
 
   await docClient.send(
@@ -166,7 +167,7 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
     return null;
   }
 
-  const { ciphertext, iv } = encrypt(JSON.stringify(crmCredentials));
+  const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), existing.userId);
   const updatedAt = new Date().toISOString();
 
   await docClient.send(
@@ -218,10 +219,7 @@ const getCrmTokens = (crm: ICrm): Record<string, any> => {
   }
 
   return JSON.parse(
-    decrypt({
-      ciphertext: crm.encryptedCredentials,
-      iv: crm.iv,
-    })
+    decrypt({ ciphertext: crm.encryptedCredentials, iv: crm.iv }, crm.userId)
   );
 };
 

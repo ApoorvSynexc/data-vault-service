@@ -196,6 +196,7 @@ const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> 
     accessToken: credentials.access_token,
     refreshToken: credentials.refresh_token,
     crmId: crm.crmId,
+    userId: crm.userId,
   };
 
   const dd = await deleteTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, [

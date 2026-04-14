@@ -190,6 +190,7 @@ const realTimeTriggerManagement = async (
     accessToken: credentials.access_token,
     refreshToken: credentials.refresh_token,
     crmId: crm.crmId,
+    userId: crm.userId,
   };
 
   const objectApiNames = config.objectNames;

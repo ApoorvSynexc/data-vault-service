@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
 import { IBackupConfig, IObject, IScheduleConfig } from '../../models';
-import { decrypt, encrypt } from '../../utils/encryption';
+import { decrypt, encryptForTenant } from '../../utils/encryption';
 import { toSlug, buildSlug } from '../../utils/helper';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
 
@@ -56,7 +56,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     destination,
   } = params;
   const now = new Date().toISOString();
-  const { ciphertext, iv } = encrypt(JSON.stringify(destination.config));
+  const { ciphertext, iv } = encryptForTenant(JSON.stringify(destination.config), userId);
 
   const slugBase = name || objectNames[0] || 'backup-config';
   const count = await incrementAndGetCounter(
@@ -200,7 +200,7 @@ const updateBackupConfig = async (
     updates.objects = params.objects;
   }
   if (params.destination !== undefined) {
-    const { ciphertext, iv } = encrypt(JSON.stringify(params.destination.config));
+    const { ciphertext, iv } = encryptForTenant(JSON.stringify(params.destination.config), existing.userId);
     updates.destination = { type: params.destination.type, ciphertext, iv };
   }
 
@@ -295,7 +295,7 @@ const getBackupConfigBySlug = async (
 
 const getDestinationConfig = (config: IBackupConfig): Record<string, any> => {
   const { ciphertext, iv } = config.destination;
-  return JSON.parse(decrypt({ ciphertext, iv }));
+  return JSON.parse(decrypt({ ciphertext, iv }, config.userId));
 };
 
 export {

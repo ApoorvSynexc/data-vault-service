@@ -104,6 +104,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { data: sfProfile } = await getSalesforceProfile({
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
+    userId: oauthState.userId,
   });
 
   const duplicate = existingCrms.find(
@@ -220,7 +221,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
   await updateCrmCredentials(String(crmId), {
     access_token: newAccessToken,
     refresh_token: newRefreshToken,
-  });
+  }, crm.userId);
 
   makeResponse(req, res, 200, true, 'update', refreshed);
 };
