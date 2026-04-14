@@ -99,8 +99,7 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
 
     const existingBuffer = await downloadFromS3(destConfig, schemaKey);
     const schemaChanged =
-      !existingBuffer ||
-      !schemasAreEqual(JSON.parse(existingBuffer.toString()), latestSchema);
+      !existingBuffer || !schemasAreEqual(JSON.parse(existingBuffer.toString()), latestSchema);
 
     if (schemaChanged) {
       await uploadToS3(destConfig, schemaKey, Buffer.from(JSON.stringify(latestSchema, null, 2)));

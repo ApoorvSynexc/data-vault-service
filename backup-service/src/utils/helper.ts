@@ -100,7 +100,9 @@ const buildSchemaS3Key = (
 // JSON.stringify-based comparisons.
 // ---------------------------------------------------------------------------
 const schemasAreEqual = (existing: any[], latest: any[]): boolean => {
-  if (existing.length !== latest.length) return false;
+  if (existing.length !== latest.length) {
+    return false;
+  }
   const key = (f: any): string => f.apiName ?? f.name ?? '';
   const sorted = (arr: any[]) => [...arr].sort((a, b) => key(a).localeCompare(key(b)));
   return sorted(existing).every((ef, i) => {

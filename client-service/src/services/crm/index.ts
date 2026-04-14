@@ -218,9 +218,7 @@ const getCrmTokens = (crm: ICrm): Record<string, any> => {
     return {};
   }
 
-  return JSON.parse(
-    decrypt({ ciphertext: crm.encryptedCredentials, iv: crm.iv }, crm.userId)
-  );
+  return JSON.parse(decrypt({ ciphertext: crm.encryptedCredentials, iv: crm.iv }, crm.userId));
 };
 
 export {

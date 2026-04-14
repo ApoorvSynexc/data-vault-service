@@ -38,8 +38,8 @@ const deriveKey = (userId: string): Buffer =>
     crypto.hkdfSync(
       'sha256',
       Buffer.from(ENCRYPTION_KEY, 'base64'), // input key material
-      Buffer.from(userId),                    // salt  — unique per tenant
-      Buffer.from('data-vault-tenant-v1'),    // info  — domain separation
+      Buffer.from(userId), // salt  — unique per tenant
+      Buffer.from('data-vault-tenant-v1'), // info  — domain separation
       32
     )
   );
@@ -70,9 +70,7 @@ const decrypt = ({ ciphertext, iv }: EncryptedPayload, userId?: string): string 
     throw new Error('userId is required to decrypt tenant-encrypted data');
   }
 
-  const key = isTenantKey
-    ? deriveKey(userId!)
-    : Buffer.from(ENCRYPTION_KEY, 'base64');
+  const key = isTenantKey ? deriveKey(userId!) : Buffer.from(ENCRYPTION_KEY, 'base64');
 
   const rawCiphertext = isTenantKey ? ciphertext.slice(TENANT_KEY_PREFIX.length) : ciphertext;
 

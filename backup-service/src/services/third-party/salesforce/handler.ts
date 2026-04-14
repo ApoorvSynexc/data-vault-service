@@ -2,7 +2,12 @@ import { CORE_SERVICE, INTERNAL_SECRET, OBJECT_STATUS } from '../../../constant'
 import { logger } from '../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig, ISource } from '../../../models';
 import { updateBackupObject } from '../../backup-job';
-import { buildS3KeyPrefix, buildSchemaS3Key, toParquetDataType, schemasAreEqual } from '../../../utils/helper';
+import {
+  buildS3KeyPrefix,
+  buildSchemaS3Key,
+  toParquetDataType,
+  schemasAreEqual,
+} from '../../../utils/helper';
 import { ICrmBackupHandler } from '../types';
 import { httpRequest } from '../../../utils/http-request';
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../../destination/s3';
@@ -30,7 +35,7 @@ const MAX_RETRIES = 3;
 //               whitespace, parentheses, and the keywords AND / OR / NOT
 // ---------------------------------------------------------------------------
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
-const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+\-]+$/;
+const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
 
 const buildFilterCondition = (name: string, operator: string, value: string): string => {
@@ -148,13 +153,7 @@ const exportFirstTime = async (
     });
   }
 
-  const insertPrefix = buildS3KeyPrefix(
-    crmId,
-    crmName,
-    backupConfigId,
-    objectName,
-    'inserts'
-  );
+  const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
   await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
 
   const { sizeInBytes, completedRecordCount: finalCompletedCount } = await uploadBulkResultsByPage({
@@ -226,7 +225,10 @@ const exportIncremental = async (
   const objectName = object.name;
 
   // One HTTP call — fieldNames used for SOQL below, schema used for comparison at the end.
-  const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(crmId, objectName);
+  const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
+    crmId,
+    objectName
+  );
 
   // ── Phase 1: query new + updated + deleted records in one queryAll job ────
   let bulkJobId = object.bulkJobId;
@@ -287,27 +289,9 @@ const exportIncremental = async (
     logger.info(
       `Backup job ${backupJobId}: Total changes ${totalRecordCount} records to transfer for ${objectName}`
     );
-    const insertPrefix = buildS3KeyPrefix(
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      'inserts'
-    );
-    const updatePrefix = buildS3KeyPrefix(
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      'updates'
-    );
-    const deletePrefix = buildS3KeyPrefix(
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      'deletes'
-    );
+    const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+    const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
+    const deletePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'deletes');
     await updateBackupObject({
       backupJobId,
       objectIndex,

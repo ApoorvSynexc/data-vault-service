@@ -218,10 +218,14 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
   const newAccessToken: string = refreshed.access_token;
   const newRefreshToken: string = refreshed.refresh_token ?? tokens.refresh_token;
 
-  await updateCrmCredentials(String(crmId), {
-    access_token: newAccessToken,
-    refresh_token: newRefreshToken,
-  }, crm.userId);
+  await updateCrmCredentials(
+    String(crmId),
+    {
+      access_token: newAccessToken,
+      refresh_token: newRefreshToken,
+    },
+    crm.userId
+  );
 
   makeResponse(req, res, 200, true, 'update', refreshed);
 };

@@ -89,7 +89,9 @@ export const listS3Objects = async (
       })
     );
     for (const obj of result.Contents ?? []) {
-      if (obj.Key) keys.push(obj.Key);
+      if (obj.Key) {
+        keys.push(obj.Key);
+      }
     }
     continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
   } while (continuationToken !== undefined);
