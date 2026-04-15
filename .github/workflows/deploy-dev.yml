@@ -1,0 +1,94 @@
+name: Deploy DEV to EC2
+
+on:
+  push:
+    branches:
+      - DEV
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy via SSH
+        id: deploy_step
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+          "VITE_API_URL='${{ secrets.VITE_API_URL }}' \
+          VITE_ENV='DEV' \
+          bash -s" << 'EOF'
+
+            echo "🔧 Loading NVM..."
+
+            export NVM_DIR="$HOME/.nvm"
+
+            # Load nvm
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+            
+            set -euo pipefail
+
+            cd /var/www/DataVault-Backend-NodeJS
+
+            echo "📥 Pulling latest code..."
+            git fetch origin
+            git checkout DEV
+            git pull origin DEV
+
+            echo "🔧 Ensuring Node is available..."
+
+            export PATH=$PATH:/usr/bin:/usr/local/bin
+
+            if ! command -v npm &> /dev/null; then
+              echo "❌ npm not found. Please install Node.js on EC2"
+              exit 1
+            fi
+
+            echo "🔧 Installing dependencies of client-service..."
+            cd /var/www/DataVault-Backend-NodeJS/client-service
+            npm ci
+
+            echo "🏗️ Building client-service..."
+            npm run build
+            echo "✅ Deployment completed successfully for client-service!"
+            
+            echo "📦 Installing dependencies of backup-service..."
+            cd /var/www/DataVault-Backend-NodeJS/backup-service
+            npm ci
+
+            echo "🏗️ Building backup-service..."
+            npm run build
+            echo "✅ Deployment completed successfully for backup-service!"
+
+            echo "🔄 Reloading all services..."
+            pm2 flush
+            pm2 reload all
+
+            echo "✅ Deployment completed successfully for all services!"
+          EOF
+
+      # # ✅ SUCCESS WEBHOOK
+      # - name: Notify Success
+      #   if: success()
+      #   run: |
+      #     curl -X POST "$WEBHOOK_URL" \
+      #     -H "Content-Type: application/json" \
+      #     -d '{"text":"<h1>✅ Code Successfully Deployed to Dev - DataVault-Frontend-App</h1>"}'
+
+      # - name: Notify Failure
+      #   if: failure()
+      #   run: |
+      #     curl -X POST "$WEBHOOK_URL" \
+      #     -H "Content-Type: application/json" \
+      #     -d '{"text":"<h1>❌ Error in code deployment to Dev - DataVault-Frontend-App</h1>"}'
