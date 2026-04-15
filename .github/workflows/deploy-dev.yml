@@ -25,7 +25,7 @@ jobs:
         id: deploy_step
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-          bash -s" << 'EOF'
+          bash -s << 'EOF'
 
             echo "🔧 Loading NVM..."
 
@@ -76,17 +76,17 @@ jobs:
             echo "✅ Deployment completed successfully for all services!"
           EOF
 
-      # # ✅ SUCCESS WEBHOOK
-      # - name: Notify Success
-      #   if: success()
-      #   run: |
-      #     curl -X POST "$WEBHOOK_URL" \
-      #     -H "Content-Type: application/json" \
-      #     -d '{"text":"<h1>✅ Code Successfully Deployed to Dev - DataVault-Frontend-App</h1>"}'
+      # ✅ SUCCESS WEBHOOK
+      - name: Notify Success
+        if: success()
+        run: |
+          curl -X POST "$WEBHOOK_URL" \
+          -H "Content-Type: application/json" \
+          -d '{"text":"<h1>✅ Code Successfully Deployed to Dev - DataVault-Backend-NodeJS</h1>"}'
 
-      # - name: Notify Failure
-      #   if: failure()
-      #   run: |
-      #     curl -X POST "$WEBHOOK_URL" \
-      #     -H "Content-Type: application/json" \
-      #     -d '{"text":"<h1>❌ Error in code deployment to Dev - DataVault-Frontend-App</h1>"}'
+      - name: Notify Failure
+        if: failure()
+        run: |
+          curl -X POST "$WEBHOOK_URL" \
+          -H "Content-Type: application/json" \
+          -d '{"text":"<h1>❌ Error in code deployment to Dev - DataVault-Backend-NodeJS</h1>"}'
