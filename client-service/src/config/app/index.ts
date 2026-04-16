@@ -15,6 +15,9 @@ const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || 'http://localhost:5173')
 
 const app = express();
 
+// Enable trust proxy to properly handle X-Forwarded-For header from load balancers
+app.set('trust proxy', true);
+
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(cookieParser());
 app.use(express.json());

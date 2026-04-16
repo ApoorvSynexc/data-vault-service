@@ -1,4 +1,5 @@
 {
+  "heath_check": "Service is running",
   "fetch": "Record fetched successfully",
   "delete": "Record deleted successfully",
   "create": "Record created successfully",
