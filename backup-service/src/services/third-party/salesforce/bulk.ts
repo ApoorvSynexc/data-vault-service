@@ -441,7 +441,7 @@ export const classifyAndUploadBulkResultsByPage = async (
         // Deleted records are excluded from completedRecordCount to match
         // Salesforce's numberRecordsProcessed, which does not count soft-deleted
         // rows returned by queryAll.
-        completedRecordCount += insertRaws.length + updateRaws.length;
+        completedRecordCount += insertRaws.length + updateRaws.length + deleteRaws.length;
       }
       sizeInBytes += pageSizeInBytes;
       locator = nextLocator;
