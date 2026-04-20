@@ -61,13 +61,13 @@ jobs:
             npm run build
             echo "✅ Deployment completed successfully for client-service!"
             
-            echo "📦 Installing dependencies of backup-service..."
-            cd /var/www/DataVault-Backend-NodeJS/backup-service
-            npm ci
+            # echo "📦 Installing dependencies of backup-service..."
+            # cd /var/www/DataVault-Backend-NodeJS/backup-service
+            # npm ci
 
-            echo "🏗️ Building backup-service..."
-            npm run build
-            echo "✅ Deployment completed successfully for backup-service!"
+            # echo "🏗️ Building backup-service..."
+            # npm run build
+            # echo "✅ Deployment completed successfully for backup-service!"
 
             echo "🔄 Reloading all services..."
             pm2 flush
