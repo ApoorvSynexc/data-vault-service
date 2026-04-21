@@ -19,6 +19,12 @@ import {
   realTimeTriggerManagement,
   getBackupJobStatsForUser,
 } from '../../../services';
+import {
+  createScheduleFromConfig,
+  updateScheduleFromConfig,
+  deleteSchedule,
+  generateScheduleId,
+} from '../../../services/third-party/event-bridge-scheduler';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
@@ -74,6 +80,23 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   makeResponse(req, res, 201, true, 'create', sanitize(config));
 
   await triggerBackupJob(config);
+
+  if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
+    await createScheduleFromConfig({
+      scheduleId: generateScheduleId(config.backupConfigId, config.userId),
+      targetArn: process.env.BACKUP_LAMBDA_ARN || '',
+      roleArn: process.env.SCHEDULER_ROLE_ARN || '',
+      timezone: config.scheduleConfig.timeZone,
+      scheduleConfig: config.scheduleConfig.scheduling!,
+      payload: {
+        backupConfigId: config.backupConfigId,
+        userId: config.userId,
+        crmId: config.crmId,
+        objectNames: config.objectNames,
+      },
+    });
+  }
+
   if (config.schedule === SCHEDULE_MODE.realtime) {
     await realTimeTriggerManagement('create', config);
   }
@@ -142,6 +165,23 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   const updated = await updateBackupConfig(String(backupConfigId), req.body);
+
+  if (updated && updated.schedule === SCHEDULE_MODE.schedule && updated.scheduleConfig) {
+    await updateScheduleFromConfig({
+      scheduleId: generateScheduleId(updated.backupConfigId, updated.userId),
+      targetArn: process.env.BACKUP_LAMBDA_ARN || '',
+      roleArn: process.env.SCHEDULER_ROLE_ARN || '',
+      timezone: updated.scheduleConfig.timeZone,
+      scheduleConfig: updated.scheduleConfig.scheduling!,
+      payload: {
+        backupConfigId: updated.backupConfigId,
+        userId: updated.userId,
+        crmId: updated.crmId,
+        objectNames: updated.objectNames,
+      },
+    });
+  }
+
   makeResponse(req, res, 200, true, 'update', sanitize(updated!));
 };
 
@@ -162,6 +202,10 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     deleteBackupConfig(String(backupConfigId)),
     deleteBackupJobsByConfig(String(backupConfigId), config.userId),
   ]);
+
+  if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
+    await deleteSchedule(generateScheduleId(config.backupConfigId, config.userId));
+  }
 
   if (config.schedule === SCHEDULE_MODE.realtime) {
     await realTimeTriggerManagement('delete', config);
