@@ -59,6 +59,18 @@ const salesForceealTimeHandler = async (req: IRequest, res: IResponse): Promise<
   }
 };
 
+const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  try {
+    
+    const event = req.body;
+    console.log("Event Bridge: ", JSON.stringify({event}));
+    makeResponse(req, res, 200, true, 'fetch');
+  } catch (error) {
+    logger.error('realtime webhook processing error:', error);
+  }
+};
+
 export const publicController = wrapController({
   salesForceealTimeHandler,
+  eventBridgeHandler
 });

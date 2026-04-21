@@ -84,10 +84,11 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
     await createScheduleFromConfig({
       scheduleId: generateScheduleId(config.backupConfigId, config.userId),
-      targetArn: process.env.BACKUP_LAMBDA_ARN || '',
+      targetArn: process.env.BACKUP_TRIGGER_URL || process.env.BACKUP_LAMBDA_ARN || '',
       roleArn: process.env.SCHEDULER_ROLE_ARN || '',
       timezone: config.scheduleConfig.timeZone,
       scheduleConfig: config.scheduleConfig.scheduling!,
+      targetType: process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP' || 'LAMBDA',
       payload: {
         backupConfigId: config.backupConfigId,
         userId: config.userId,
@@ -169,10 +170,11 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   if (updated && updated.schedule === SCHEDULE_MODE.schedule && updated.scheduleConfig) {
     await updateScheduleFromConfig({
       scheduleId: generateScheduleId(updated.backupConfigId, updated.userId),
-      targetArn: process.env.BACKUP_LAMBDA_ARN || '',
+      targetArn: process.env.BACKUP_TRIGGER_URL || '',
       roleArn: process.env.SCHEDULER_ROLE_ARN || '',
       timezone: updated.scheduleConfig.timeZone,
       scheduleConfig: updated.scheduleConfig.scheduling!,
+      targetType: 'HTTP',
       payload: {
         backupConfigId: updated.backupConfigId,
         userId: updated.userId,
