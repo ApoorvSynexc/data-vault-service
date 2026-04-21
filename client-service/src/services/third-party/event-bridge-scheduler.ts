@@ -27,10 +27,12 @@ export interface IScheduleInput {
   roleArn: string;
   payload?: Record<string, any>;
   flexibleWindow?: number; // minutes
+  targetType?: 'LAMBDA' | 'HTTP'; // NEW: support both Lambda and HTTP
 }
 
 export interface IScheduleInputWithConfig extends Omit<IScheduleInput, 'expression'> {
   scheduleConfig: IScheduleConfig;
+  targetType?: 'LAMBDA' | 'HTTP';
 }
 
 export interface IScheduleResponse {
@@ -41,6 +43,28 @@ export interface IScheduleResponse {
 
 export const createSchedule = async (input: IScheduleInput): Promise<IScheduleResponse> => {
   try {
+    const targetType = input.targetType || 'LAMBDA';
+    const target: any = {
+      RoleArn: input.roleArn,
+    };
+
+    if (targetType === 'HTTP') {
+      target.Arn = input.targetArn;
+      target.HttpParameters = {
+        HeaderParameters: {
+          'Content-Type': 'application/json',
+        },
+      };
+      if (input.payload) {
+        target.Input = JSON.stringify(input.payload);
+      }
+    } else {
+      target.Arn = input.targetArn;
+      if (input.payload) {
+        target.Input = JSON.stringify(input.payload);
+      }
+    }
+
     const command = new CreateScheduleCommand({
       Name: input.scheduleId,
       ScheduleExpression: input.expression,
@@ -48,17 +72,13 @@ export const createSchedule = async (input: IScheduleInput): Promise<IScheduleRe
         Mode: FlexibleTimeWindowMode.FLEXIBLE,
         MaximumWindowInMinutes: input.flexibleWindow || 15,
       },
-      Target: {
-        Arn: input.targetArn,
-        RoleArn: input.roleArn,
-        Input: input.payload ? JSON.stringify(input.payload) : undefined,
-      },
+      Target: target,
       StartDate: new Date(),
     });
 
     const response = await schedulerClient.send(command);
 
-    logger.info(`EventBridge schedule created: ${input.scheduleId}`, { scheduleArn: response.ScheduleArn });
+    logger.info(`EventBridge schedule created: ${input.scheduleId}`, { scheduleArn: response.ScheduleArn, targetType });
 
     return {
       scheduleArn: response.ScheduleArn || '',
@@ -73,6 +93,28 @@ export const createSchedule = async (input: IScheduleInput): Promise<IScheduleRe
 
 export const updateSchedule = async (input: IScheduleInput): Promise<IScheduleResponse> => {
   try {
+    const targetType = input.targetType || 'LAMBDA';
+    const target: any = {
+      RoleArn: input.roleArn,
+    };
+
+    if (targetType === 'HTTP') {
+      target.Arn = input.targetArn;
+      target.HttpParameters = {
+        HeaderParameters: {
+          'Content-Type': 'application/json',
+        },
+      };
+      if (input.payload) {
+        target.Input = JSON.stringify(input.payload);
+      }
+    } else {
+      target.Arn = input.targetArn;
+      if (input.payload) {
+        target.Input = JSON.stringify(input.payload);
+      }
+    }
+
     const command = new UpdateScheduleCommand({
       Name: input.scheduleId,
       ScheduleExpression: input.expression,
@@ -80,16 +122,12 @@ export const updateSchedule = async (input: IScheduleInput): Promise<IScheduleRe
         Mode: FlexibleTimeWindowMode.FLEXIBLE,
         MaximumWindowInMinutes: input.flexibleWindow || 15,
       },
-      Target: {
-        Arn: input.targetArn,
-        RoleArn: input.roleArn,
-        Input: input.payload ? JSON.stringify(input.payload) : undefined,
-      },
+      Target: target,
     });
 
     const response = await schedulerClient.send(command);
 
-    logger.info(`EventBridge schedule updated: ${input.scheduleId}`, { scheduleArn: response.ScheduleArn });
+    logger.info(`EventBridge schedule updated: ${input.scheduleId}`, { scheduleArn: response.ScheduleArn, targetType });
 
     return {
       scheduleArn: response.ScheduleArn || '',
