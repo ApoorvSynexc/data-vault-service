@@ -522,9 +522,15 @@ export const salesforceHandler: ICrmBackupHandler = {
 
     if (errors.length > 0) {
       const summary = errors
-        .map((e) => `${e.objectName}: ${e.error?.message ?? e.error}`)
-        .join('; ');
-      throw new Error(`Backup job ${backupJobId}: ${errors.length} object(s) failed - ${summary}`);
+        .map((e) => {
+          const errorMsg = e.error?.message ?? String(e.error);
+          return `${e.objectName}: ${errorMsg}`;
+        })
+        .join(' | ');
+      const failedObjects = errors.map((e) => e.objectName).join(', ');
+      throw new Error(
+        `Backup job ${backupJobId}: Failed to backup ${errors.length} object(s): ${failedObjects}. Details: ${summary}`
+      );
     }
 
     await httpRequest({
