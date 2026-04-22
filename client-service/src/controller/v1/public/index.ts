@@ -38,8 +38,8 @@ const introspectSalesforceToken = async (accessToken: string): Promise<boolean> 
 };
 
 const extractBearerToken = (authHeader: string | undefined | string[]): string | null => {
-  if (Array.isArray(authHeader)) return null;
-  if (!authHeader?.startsWith('Bearer ')) return null;
+  if (Array.isArray(authHeader)) {return null;}
+  if (!authHeader?.startsWith('Bearer ')) {return null;}
   const token = authHeader.slice(7).trim();
   return token.length > 0 ? token : null;
 };
@@ -108,9 +108,8 @@ const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise
 
 const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
-    
     const event = req.body;
-    console.log("Event Bridge: ", JSON.stringify({event}));
+    console.log('Event Bridge: ', JSON.stringify({ event }));
     makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
     logger.error('realtime webhook processing error:', error);
