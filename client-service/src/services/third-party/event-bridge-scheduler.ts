@@ -7,6 +7,7 @@ import {
   ListSchedulesCommand,
   FlexibleTimeWindowMode,
 } from '@aws-sdk/client-scheduler';
+import { createHash } from 'crypto';
 import { logger } from '../../middlewares/logger';
 
 const schedulerClient = new SchedulerClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -213,7 +214,8 @@ export const listSchedules = async (filters?: { namePrefix?: string }) => {
 };
 
 export const generateScheduleId = (backupConfigId: string, userId: string): string => {
-  return `backup-${userId}-${backupConfigId}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const hash = createHash('sha256').update(`${userId}${backupConfigId}`).digest('hex').slice(0, 48);
+  return `backup-${hash}`;
 };
 
 export const convertScheduleConfigToCron = (config: IScheduleConfig): string => {
