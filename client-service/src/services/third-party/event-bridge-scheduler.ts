@@ -79,7 +79,10 @@ export const createSchedule = async (input: IScheduleInput): Promise<IScheduleRe
 
     const response = await schedulerClient.send(command);
 
-    logger.info(`EventBridge schedule created: ${input.scheduleId}`, { scheduleArn: response.ScheduleArn, targetType });
+    logger.info(`EventBridge schedule created: ${input.scheduleId}`, {
+      scheduleArn: response.ScheduleArn,
+      targetType,
+    });
 
     return {
       scheduleArn: response.ScheduleArn || '',
@@ -88,7 +91,9 @@ export const createSchedule = async (input: IScheduleInput): Promise<IScheduleRe
     };
   } catch (error) {
     logger.error(`Failed to create EventBridge schedule: ${input.scheduleId}`, error);
-    throw new Error(`Failed to create schedule: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to create schedule: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 };
 
@@ -128,7 +133,10 @@ export const updateSchedule = async (input: IScheduleInput): Promise<IScheduleRe
 
     const response = await schedulerClient.send(command);
 
-    logger.info(`EventBridge schedule updated: ${input.scheduleId}`, { scheduleArn: response.ScheduleArn, targetType });
+    logger.info(`EventBridge schedule updated: ${input.scheduleId}`, {
+      scheduleArn: response.ScheduleArn,
+      targetType,
+    });
 
     return {
       scheduleArn: response.ScheduleArn || '',
@@ -137,7 +145,9 @@ export const updateSchedule = async (input: IScheduleInput): Promise<IScheduleRe
     };
   } catch (error) {
     logger.error(`Failed to update EventBridge schedule: ${input.scheduleId}`, error);
-    throw new Error(`Failed to update schedule: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to update schedule: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 };
 
@@ -152,7 +162,9 @@ export const deleteSchedule = async (scheduleId: string): Promise<void> => {
     logger.info(`EventBridge schedule deleted: ${scheduleId}`);
   } catch (error) {
     logger.error(`Failed to delete EventBridge schedule: ${scheduleId}`, error);
-    throw new Error(`Failed to delete schedule: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to delete schedule: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 };
 
@@ -181,7 +193,9 @@ export const getSchedule = async (scheduleId: string) => {
       return null;
     }
     logger.error(`Failed to get EventBridge schedule: ${scheduleId}`, error);
-    throw new Error(`Failed to get schedule: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to get schedule: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 };
 
@@ -209,7 +223,9 @@ export const listSchedules = async (filters?: { namePrefix?: string }) => {
     };
   } catch (error) {
     logger.error('Failed to list EventBridge schedules', error);
-    throw new Error(`Failed to list schedules: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to list schedules: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 };
 
@@ -232,7 +248,15 @@ export const convertScheduleConfigToCron = (config: IScheduleConfig): string => 
       if (!config.weekDays || config.weekDays.length === 0) {
         throw new Error('weekDays required for WEEK frequency');
       }
-      const dayMap: Record<string, number> = { MON: 2, TUE: 3, WED: 4, THU: 5, FRI: 6, SAT: 7, SUN: 1 };
+      const dayMap: Record<string, number> = {
+        MON: 2,
+        TUE: 3,
+        WED: 4,
+        THU: 5,
+        FRI: 6,
+        SAT: 7,
+        SUN: 1,
+      };
       const days = config.weekDays.map((day) => dayMap[day]).join(',');
       return `cron(${minutes} ${hours} ? * ${days} *)`;
     }

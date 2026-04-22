@@ -88,7 +88,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         roleArn: process.env.SCHEDULER_ROLE_ARN || '',
         timezone: config.scheduleConfig.timeZone,
         scheduleConfig: config.scheduleConfig.scheduling!,
-        targetType: process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP' || 'LAMBDA',
+        targetType: (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'LAMBDA',
         payload: {
           backupConfigId: config.backupConfigId,
           userId: config.userId,
@@ -96,7 +96,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
           objectNames: config.objectNames,
         },
       });
-    } 
+    }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
       await realTimeTriggerManagement('create', config);
