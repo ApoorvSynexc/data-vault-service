@@ -18,13 +18,12 @@ const sanitize = ({ destination, ...rest }: IBackupJob) => ({
 });
 
 const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { slug, limit, cursor } = req.query as Record<string, string>;
+  const { slug, limit, cursor, status } = req.query as Record<string, string>;
   const userId = req.user!.userId;
   const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
   if (slug) {
     const config = await getBackupConfigBySlug(userId, slug);
-    console.log({ config: config?.backupConfigId });
 
     if (!config) {
       makeResponse(req, res, 404, false, 'not_found');
@@ -32,7 +31,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
     }
 
     const [{ items, nextCursor }, counter] = await Promise.all([
-      getBackupJobsByConfig(config.backupConfigId, { limit: limitNum, cursor }),
+      getBackupJobsByConfig(config.backupConfigId, { limit: limitNum, cursor, status }),
       getTableCounter(BACKUP_JOB_TABLE, config.backupConfigId),
     ]);
 
@@ -46,7 +45,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   const [{ items, nextCursor }, counter] = await Promise.all([
-    getBackupJobsByUser(userId, { limit: limitNum, cursor }),
+    getBackupJobsByUser(userId, { limit: limitNum, cursor, status }),
     getTableCounter(BACKUP_JOB_TABLE, userId),
   ]);
 
