@@ -45,7 +45,16 @@ export async function httpRequest<TResponse = any, TBody = any>(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`HTTP Error ${response.status}: ${errorText}`);
+    let errorMessage = errorText;
+
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.message || errorJson.error || errorText;
+    } catch {
+      // If not JSON, use raw text
+    }
+
+    throw new Error(`HTTP Error ${response.status}: ${errorMessage}`);
   }
 
   return response.json() as Promise<TResponse>;
