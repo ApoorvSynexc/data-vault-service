@@ -95,22 +95,28 @@ const getBackupJobById = async (backupJobId: string): Promise<IBackupJob | null>
 
 const getBackupJobsByUser = async (
   userId: string,
-  options?: { limit?: number; cursor?: string }
+  options?: { limit?: number; cursor?: string; status?: string }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
   const exclusiveStartKey = decodeCursor(options?.cursor);
 
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_JOB_TABLE,
-      IndexName: 'userId-index',
-      KeyConditionExpression: 'userId = :userId',
-      ExpressionAttributeValues: { ':userId': userId },
-      Limit: limit,
-      ScanIndexForward: false,
-      ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-    })
-  );
+  const queryParams: any = {
+    TableName: BACKUP_JOB_TABLE,
+    IndexName: 'userId-index',
+    KeyConditionExpression: 'userId = :userId',
+    ExpressionAttributeValues: { ':userId': userId },
+    Limit: limit,
+    ScanIndexForward: false,
+    ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+  };
+
+  if (options?.status) {
+    queryParams.FilterExpression = '#status = :status';
+    queryParams.ExpressionAttributeNames = { '#status': 'status' };
+    queryParams.ExpressionAttributeValues[':status'] = options.status;
+  }
+
+  const result = await docClient.send(new QueryCommand(queryParams));
 
   const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
@@ -118,22 +124,28 @@ const getBackupJobsByUser = async (
 
 const getBackupJobsByConfig = async (
   backupConfigId: string,
-  options?: { limit?: number; cursor?: string }
+  options?: { limit?: number; cursor?: string; status?: string }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
   const exclusiveStartKey = decodeCursor(options?.cursor);
 
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_JOB_TABLE,
-      IndexName: 'backupConfigId-index',
-      KeyConditionExpression: 'backupConfigId = :backupConfigId',
-      ExpressionAttributeValues: { ':backupConfigId': backupConfigId },
-      Limit: limit,
-      ScanIndexForward: false,
-      ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-    })
-  );
+  const queryParams: any = {
+    TableName: BACKUP_JOB_TABLE,
+    IndexName: 'backupConfigId-index',
+    KeyConditionExpression: 'backupConfigId = :backupConfigId',
+    ExpressionAttributeValues: { ':backupConfigId': backupConfigId },
+    Limit: limit,
+    ScanIndexForward: false,
+    ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+  };
+
+  if (options?.status) {
+    queryParams.FilterExpression = '#status = :status';
+    queryParams.ExpressionAttributeNames = { '#status': 'status' };
+    queryParams.ExpressionAttributeValues[':status'] = options.status;
+  }
+
+  const result = await docClient.send(new QueryCommand(queryParams));
 
   const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
