@@ -77,29 +77,35 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const config = await createBackupConfig({ userId: req.user!.userId, ...req.body });
-  makeResponse(req, res, 201, true, 'create', sanitize(config));
 
-  await triggerBackupJob(config);
+  try {
+    await triggerBackupJob(config);
 
-  if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
-    await createScheduleFromConfig({
-      scheduleId: generateScheduleId(config.backupConfigId, config.userId),
-      targetArn: process.env.BACKUP_TRIGGER_URL || process.env.BACKUP_LAMBDA_ARN || '',
-      roleArn: process.env.SCHEDULER_ROLE_ARN || '',
-      timezone: config.scheduleConfig.timeZone,
-      scheduleConfig: config.scheduleConfig.scheduling!,
-      targetType: (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'LAMBDA',
-      payload: {
-        backupConfigId: config.backupConfigId,
-        userId: config.userId,
-        crmId: config.crmId,
-        objectNames: config.objectNames,
-      },
-    });
-  }
+    if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
+      await createScheduleFromConfig({
+        scheduleId: generateScheduleId(config.backupConfigId, config.userId),
+        targetArn: process.env.BACKUP_TRIGGER_URL || process.env.BACKUP_LAMBDA_ARN || '',
+        roleArn: process.env.SCHEDULER_ROLE_ARN || '',
+        timezone: config.scheduleConfig.timeZone,
+        scheduleConfig: config.scheduleConfig.scheduling!,
+        targetType: (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'LAMBDA',
+        payload: {
+          backupConfigId: config.backupConfigId,
+          userId: config.userId,
+          crmId: config.crmId,
+          objectNames: config.objectNames,
+        },
+      });
+    }
 
-  if (config.schedule === SCHEDULE_MODE.realtime) {
-    await realTimeTriggerManagement('create', config);
+    if (config.schedule === SCHEDULE_MODE.realtime) {
+      await realTimeTriggerManagement('create', config);
+    }
+
+    makeResponse(req, res, 201, true, 'create', sanitize(config));
+  } catch (error) {
+    await deleteBackupConfig(config.backupConfigId);
+    throw error;
   }
 };
 
