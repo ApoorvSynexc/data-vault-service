@@ -39,6 +39,12 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
 
+// EventBridge Scheduler Config
+const SCHEDULER_ROLE_ARN = String(process.env.SCHEDULER_ROLE_ARN);
+const BACKUP_TRIGGER_URL = String(process.env.BACKUP_TRIGGER_URL);
+const BACKUP_LAMBDA_ARN = String(process.env.BACKUP_LAMBDA_ARN);
+const SCHEDULER_TARGET_TYPE = (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'HTTP';
+
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
   schedule: 'SCHEDULE',
@@ -181,6 +187,12 @@ export {
   // Services
   BACKUP_SERVICE,
   BACKUP_JOB_TABLE,
+
+  // EventBridge Scheduler Config
+  SCHEDULER_ROLE_ARN,
+  BACKUP_TRIGGER_URL,
+  BACKUP_LAMBDA_ARN,
+  SCHEDULER_TARGET_TYPE,
 
   // Enums
   STATUS,
