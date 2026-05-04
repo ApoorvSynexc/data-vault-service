@@ -1,3 +1,4 @@
+import { defaultRoles } from '../../../assets';
 import {
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
@@ -130,6 +131,7 @@ const socialLoginCallbackHandler = async (
     const [firstName, ...lastNameParts] = sfProfile.name.split(' ');
     const lastName = lastNameParts.join(' ') || '';
 
+    const userRole = defaultRoles.find((r) => r.name === 'user')!;
     await createUser({
       firstName,
       lastName,
@@ -137,8 +139,9 @@ const socialLoginCallbackHandler = async (
         email: sfProfile.email,
         isEmailVerified: true,
       },
-      authProvider: authProviderStr,
+      authProvider: authProviderStr.toUpperCase(),
       status: STATUS.active,
+      role: { name: userRole.name, roleId: userRole.roleId },
     });
 
     // Fetch the newly created user
