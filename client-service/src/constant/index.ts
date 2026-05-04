@@ -21,6 +21,7 @@ const JWT_REFRESH_EXPIRY = String(process.env.JWT_REFRESH_EXPIRY || '7d');
 const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
 const SALESFORCE_CLIENT_SECRET = String(process.env.SALESFORCE_CLIENT_SECRET);
 const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
+const SALESFORCE_LOGIN_REDIRECT_URI = String(process.env.SALESFORCE_LOGIN_REDIRECT_URI);
 const OAUTH_STATE_TABLE = String(process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states');
 const CRM_TABLE = String(process.env.CRM_TABLE || 'data-vault-crms');
 const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
@@ -117,6 +118,7 @@ const AUTH_PROVIDER = {
   google: 'GOOGLE',
   facebook: 'FACEBOOK',
   apple: 'APPLE',
+  salesforce: 'SALESFORCE',
 };
 const LANGUAGE = {
   en: 'en',
@@ -174,6 +176,7 @@ export {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
+  SALESFORCE_LOGIN_REDIRECT_URI,
   OAUTH_STATE_TABLE,
   CRM_TABLE,
   BACKUP_CONFIG_TABLE,
