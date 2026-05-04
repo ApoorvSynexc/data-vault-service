@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authController } from '../../controller';
+import { socialLoginController } from '../../controller/v1/auth/social-login';
 import {
   authRateLimit,
   otpRateLimit,
@@ -23,6 +24,14 @@ router.post(
   authRateLimit,
   resetPasswordValidation,
   authController.resetPasswordHandler
+);
+
+// Social login endpoints
+router.get('/social-login', authRateLimit, socialLoginController.socialLoginHandler);
+router.get(
+  '/social-login/callback',
+  authRateLimit,
+  socialLoginController.socialLoginCallbackHandler
 );
 
 export const authRouter = router;

@@ -146,15 +146,16 @@ const salesforceRequest = async <T = any>(
 // Auth
 // ---------------------------------------------------------------------------
 
-const getSalesforceLoginUrl = (stateOverride?: string) => {
+const getSalesforceLoginUrl = (stateOverride?: string, redirectUri?: string) => {
   const state = stateOverride ?? generateState();
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
+  const uri = redirectUri ?? SALESFORCE_REDIRECT_URI;
 
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: SALESFORCE_CLIENT_ID,
-    redirect_uri: SALESFORCE_REDIRECT_URI,
+    redirect_uri: uri,
     state,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
