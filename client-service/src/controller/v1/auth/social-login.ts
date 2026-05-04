@@ -15,6 +15,7 @@ import {
   getSalesforceProfile,
   getSalesforceToken,
   getUser,
+  upsertCrm,
 } from '../../../services';
 import {
   generateTokens,
@@ -150,6 +151,31 @@ const socialLoginCallbackHandler = async (
     if (!user) {
       makeResponse(req, res, 500, false, 'unknown_error');
       return;
+    }
+
+    // Create CRM connection for Salesforce
+    if (authProviderStr === 'salesforce') {
+      const crmProfile = {
+        instanceUrl: token.instance_url,
+        organizationId: sfProfile.organization_id,
+        userId: sfProfile.user_id,
+        name: sfProfile.name,
+        email: sfProfile.email,
+        username: sfProfile.preferred_username,
+        photoUrl: sfProfile.photos?.thumbnail,
+      };
+
+      const crmCredentials = {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+      };
+
+      await upsertCrm({
+        userId: user.userId,
+        crmName: 'salesforce',
+        crmProfile,
+        crmCredentials,
+      });
     }
   }
 
