@@ -10,6 +10,7 @@ import {
   AWS_REGION,
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
+  DESTINATION_TABLE,
   TABLE_COUNTER_TABLE,
   COUNTER_TABLE,
   OTP_TABLE,
@@ -64,6 +65,22 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
           { AttributeName: 'backupConfigId', KeyType: 'HASH' },
           { AttributeName: 'createdAt', KeyType: 'RANGE' },
         ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  {
+    TableName: DESTINATION_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'destinationId', AttributeType: 'S' },
+      { AttributeName: 'userId', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'destinationId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'userId-index',
+        KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],
