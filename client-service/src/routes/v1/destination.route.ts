@@ -7,7 +7,7 @@ const router = Router();
 router.post('/', createDestinationValidation, destinationController.createDestinationHandler);
 router.get('/list', destinationController.listDestinationsHandler);
 router.get('/', destinationController.getDestinationHandler);
-router.get('/config', destinationController.getDestinationConfigHandler);
+// router.get('/config', destinationController.getDestinationConfigHandler);
 router.put('/', updateDestinationValidation, destinationController.updateDestinationHandler);
 router.delete('/', destinationController.deleteDestinationHandler);
 
