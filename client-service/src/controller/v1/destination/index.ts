@@ -1,3 +1,4 @@
+import { access } from 'node:fs';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   createDestination,
@@ -76,7 +77,7 @@ const getDestinationConfigHandler = async (req: IRequest, res: IResponse): Promi
   }
 
   const config = getDecryptedDestinationConfig(destination);
-  makeResponse(req, res, 200, true, 'fetch', config);
+  makeResponse(req, res, 200, true, 'fetch', {...config, accessKeyId: undefined, secretAccessKey: undefined});
 };
 
 const updateDestinationHandler = async (req: IRequest, res: IResponse): Promise<void> => {
