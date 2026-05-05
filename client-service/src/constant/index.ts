@@ -133,6 +133,7 @@ const GENDER = {
 const OTP_TYPE = {
   forgotPassword: 'FORGOT-PASSWORD',
   signup: 'SIGNUP',
+  login: 'LOGIN',
   updateContact: 'UPDATE-CONTACT',
 };
 const OTP_STATUS = {

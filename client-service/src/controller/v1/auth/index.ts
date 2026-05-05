@@ -80,15 +80,15 @@ const sendOtpHandler = async (req: IRequest, res: IResponse) => {
     otpType: string;
   };
 
-  if (otpType === OTP_TYPE.signup) {
-    const userSearch =
-      channel === OTP_CHANNEL.email
-        ? { 'contact.email': contact }
-        : {
-            'contact.mobile.number': (contact as any).number,
-            'contact.mobile.dialCode': (contact as any).dialCode,
-          };
+  const userSearch =
+    channel === OTP_CHANNEL.email
+      ? { 'contact.email': contact }
+      : {
+          'contact.mobile.number': (contact as any).number,
+          'contact.mobile.dialCode': (contact as any).dialCode,
+        };
 
+  if (otpType === OTP_TYPE.signup) {
     const existing = await getUser(userSearch);
     if (existing) {
       return makeResponse(
@@ -98,6 +98,13 @@ const sendOtpHandler = async (req: IRequest, res: IResponse) => {
         false,
         channel === OTP_CHANNEL.email ? 'email_exit' : 'mobile_exit'
       );
+    }
+  }
+
+  if (otpType === OTP_TYPE.login) {
+    const existing = await getUser(userSearch);
+    if (!existing) {
+      return makeResponse(req, res, 400, false, 'unauthorized');
     }
   }
 
@@ -151,6 +158,46 @@ const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
   }
 
   await updateOtp({ _id: record._id }, { $set: { status: OTP_STATUS.verified } });
+
+  // Handle OTP-based login
+  if (otpType === OTP_TYPE.login) {
+    const userSearch =
+      channel === OTP_CHANNEL.email
+        ? { 'contact.email': contact }
+        : {
+            'contact.mobile.number': (contact as any).number,
+            'contact.mobile.dialCode': (contact as any).dialCode,
+          };
+
+    const user = await getUser(userSearch);
+    if (!user) {
+      return makeResponse(req, res, 401, false, 'unauthorized');
+    }
+
+    if (user.status === STATUS.inactive) {
+      return makeResponse(req, res, 403, false, 'blocked_or_removed');
+    }
+
+    const deviceInfo = {
+      userAgent: req.headers['user-agent'],
+      ipAddress: (req.headers['x-forwarded-for'] as string) ?? req.socket.remoteAddress,
+    };
+
+    const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
+    const session = await createSession(user.userId, ttlSeconds, deviceInfo);
+    const tokens = generateTokens(user.userId, session.sessionId);
+
+    res.cookie('accessToken', tokens.accessToken, {
+      ...baseCookieOptions,
+      maxAge: parseExpiryToSeconds(JWT_ACCESS_EXPIRY) * 1000,
+    });
+    res.cookie('refreshToken', tokens.refreshToken, {
+      ...baseCookieOptions,
+      maxAge: parseExpiryToSeconds(JWT_REFRESH_EXPIRY) * 1000,
+    });
+
+    return makeResponse(req, res, 200, true, 'login');
+  }
 
   makeResponse(req, res, 200, true, 'otp_verify');
 };
