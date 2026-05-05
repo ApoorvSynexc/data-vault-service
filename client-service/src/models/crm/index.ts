@@ -17,6 +17,8 @@ export interface ICrm {
   crmProfile?: ICrmProfile;
   encryptedCredentials?: string;
   iv?: string;
+  environment?: 'production' | 'sandbox' | 'custom';
+  customUrl?: string;
   status: string;
   createdAt: string;
   updatedAt: string;

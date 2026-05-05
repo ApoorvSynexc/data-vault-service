@@ -19,16 +19,20 @@ interface UpsertCrmParams {
   crmName: string;
   crmProfile: ICrmProfile;
   crmCredentials: Record<string, any>;
+  environment?: 'production' | 'sandbox' | 'custom';
+  customUrl?: string;
 }
 
 interface ReconnectCrmParams {
   crmId: string;
   crmProfile: ICrmProfile;
   crmCredentials: Record<string, any>;
+  environment?: 'production' | 'sandbox' | 'custom';
+  customUrl?: string;
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
-  const { userId, crmName, crmProfile, crmCredentials } = params;
+  const { userId, crmName, crmProfile, crmCredentials, environment, customUrl } = params;
   const now = new Date().toISOString();
   const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), userId);
 
@@ -45,6 +49,8 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     crmProfile,
     encryptedCredentials: ciphertext,
     iv,
+    environment: environment ?? 'production',
+    customUrl,
     status: STATUS.active,
     createdAt: now,
     updatedAt: now,
@@ -160,7 +166,7 @@ const updateCrmCredentials = async (
 };
 
 const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> => {
-  const { crmId, crmProfile, crmCredentials } = params;
+  const { crmId, crmProfile, crmCredentials, environment, customUrl } = params;
   const existing = await getCrmById(crmId);
 
   if (!existing) {
@@ -169,13 +175,14 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
 
   const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), existing.userId);
   const updatedAt = new Date().toISOString();
+  const resolvedEnvironment = environment ?? 'production';
 
   await docClient.send(
     new UpdateCommand({
       TableName: CRM_TABLE,
       Key: { crmId },
       UpdateExpression:
-        'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :enc, iv = :iv, #status = :status, updatedAt = :updatedAt',
+        'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :enc, iv = :iv, #status = :status, environment = :environment, customUrl = :customUrl, updatedAt = :updatedAt',
       ExpressionAttributeNames: {
         '#status': 'status',
       },
@@ -185,6 +192,8 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
         ':enc': ciphertext,
         ':iv': iv,
         ':status': STATUS.active,
+        ':environment': resolvedEnvironment,
+        ':customUrl': customUrl ?? null,
         ':updatedAt': updatedAt,
       },
     })
@@ -196,6 +205,8 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
     crmProfile,
     encryptedCredentials: ciphertext,
     iv,
+    environment: resolvedEnvironment,
+    customUrl,
     status: STATUS.active,
     updatedAt,
   };

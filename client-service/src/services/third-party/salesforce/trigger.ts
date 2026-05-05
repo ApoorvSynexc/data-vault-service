@@ -191,6 +191,8 @@ const realTimeTriggerManagement = async (
     refreshToken: credentials.refresh_token,
     crmId: crm.crmId,
     userId: crm.userId,
+    environment: crm.environment,
+    customUrl: crm.customUrl,
   };
 
   const objectApiNames = config.objectNames;
