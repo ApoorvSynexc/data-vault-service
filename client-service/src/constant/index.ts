@@ -25,6 +25,7 @@ const SALESFORCE_LOGIN_REDIRECT_URI = String(process.env.SALESFORCE_LOGIN_REDIRE
 const OAUTH_STATE_TABLE = String(process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states');
 const CRM_TABLE = String(process.env.CRM_TABLE || 'data-vault-crms');
 const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
+const DESTINATION_TABLE = String(process.env.DESTINATION_TABLE || 'data-vault-destinations');
 
 // Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
@@ -75,6 +76,12 @@ const WEEK_DAY = {
 
 const DESTINATION_TYPE = {
   s3: 'S3',
+};
+
+const CLOUD_PROVIDER = {
+  aws: 'AWS',
+  azure: 'AZURE',
+  gcp: 'GCP',
 };
 
 const FILTER_OPERATOR = {
@@ -181,6 +188,7 @@ export {
   OAUTH_STATE_TABLE,
   CRM_TABLE,
   BACKUP_CONFIG_TABLE,
+  DESTINATION_TABLE,
   ENCRYPTION_KEY,
 
   // Webhook
@@ -213,6 +221,7 @@ export {
   DURATION_TYPE,
   WEEK_DAY,
   DESTINATION_TYPE,
+  CLOUD_PROVIDER,
   FILTER_OPERATOR,
   BACKUP_STATUS,
   JOB_STATUS,

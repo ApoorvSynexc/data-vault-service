@@ -27,6 +27,7 @@
   "crm_name_required": "crmName is required",
   "custom_url_required": "customUrl is required when environment is custom",
   "crm_id_required": "crmId is required",
+  "destination_id_required": "destinationId is required",
   "object_name_required": "objectName is required",
   "auth_provider_required": "Auth provider is required",
   "unsupported_auth_provider": "The specified auth provider is not supported",
