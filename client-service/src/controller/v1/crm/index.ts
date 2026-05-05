@@ -16,6 +16,7 @@ import {
 import {
   refreashSalesforceToken,
   SalesforceAuthExpiredError,
+  SalesforceEnvironment,
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
 
@@ -31,10 +32,17 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmName, crmId } = req.query;
+  const { crmName, crmId, environment, customUrl } = req.query;
 
   if (!crmName && !crmId) {
     makeResponse(req, res, 400, false, 'crm_name_required');
+    return;
+  }
+
+  const env = (environment as SalesforceEnvironment) ?? 'production';
+
+  if (env === 'custom' && !customUrl) {
+    makeResponse(req, res, 400, false, 'custom_url_required');
     return;
   }
 
@@ -58,13 +66,20 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
   switch (resolvedCrmName) {
     case 'salesforce':
     default: {
-      const { url, codeVerifier, state } = getSalesforceLoginUrl(oauthStateKey);
+      const { url, codeVerifier, state } = getSalesforceLoginUrl(
+        oauthStateKey,
+        undefined,
+        env,
+        customUrl ? String(customUrl) : undefined
+      );
       await createOAuthState(
         state,
         codeVerifier,
         userId,
         resolvedCrmName,
-        crmId ? String(crmId) : undefined
+        crmId ? String(crmId) : undefined,
+        env,
+        customUrl ? String(customUrl) : undefined
       );
       redirectUrl = url;
       break;
@@ -88,7 +103,12 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     switch (crmName) {
       case 'salesforce':
       default:
-        token = await getSalesforceToken(String(code), oauthState.codeVerifier);
+        token = await getSalesforceToken(
+          String(code),
+          oauthState.codeVerifier,
+          oauthState.environment,
+          oauthState.customUrl
+        );
         break;
     }
   } catch (error: any) {
@@ -101,11 +121,15 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   }
 
   const existingCrms = await getCrmsByUser(oauthState.userId);
-  const { data: sfProfile } = await getSalesforceProfile({
-    accessToken: token.access_token,
-    refreshToken: token.refresh_token,
-    userId: oauthState.userId,
-  });
+  const { data: sfProfile } = await getSalesforceProfile(
+    {
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token,
+      userId: oauthState.userId,
+    },
+    oauthState.environment,
+    oauthState.customUrl
+  );
 
   const duplicate = existingCrms.find(
     (i) =>
@@ -139,6 +163,8 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       crmId: oauthState.crmId,
       crmProfile: nextCrmProfile,
       crmCredentials: nextCrmCredentials,
+      environment: oauthState.environment,
+      customUrl: oauthState.customUrl,
     });
 
     if (!reconnected) {
@@ -151,6 +177,8 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       crmName: oauthState.crmName,
       crmProfile: nextCrmProfile,
       crmCredentials: nextCrmCredentials,
+      environment: oauthState.environment,
+      customUrl: oauthState.customUrl,
     });
   }
 
@@ -210,7 +238,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   let refreshed: any;
   try {
-    refreshed = await refreashSalesforceToken(tokens.refresh_token);
+    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment, crm.customUrl);
   } catch {
     throw new SalesforceAuthExpiredError();
   }

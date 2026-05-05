@@ -43,7 +43,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   let refreshed: any;
   try {
-    refreshed = await refreashSalesforceToken(tokens.refresh_token);
+    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment, crm.customUrl);
   } catch {
     throw new SalesforceAuthExpiredError();
   }

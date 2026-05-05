@@ -25,6 +25,7 @@
   "mobile_exit": "Mobile number already exits",
   "email_exit": "Email already exits",
   "crm_name_required": "crmName is required",
+  "custom_url_required": "customUrl is required when environment is custom",
   "crm_id_required": "crmId is required",
   "object_name_required": "objectName is required",
   "auth_provider_required": "Auth provider is required",

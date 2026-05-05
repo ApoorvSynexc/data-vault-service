@@ -16,7 +16,7 @@ const getApexObjects = async (crmId: string) => {
   const url = `${instanceUrl}/services/apexrest/v1/accessible-objects`;
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET' },
-    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId }
+    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
   );
   return JSON.parse(
     decrypt({ ciphertext: encryptedResult.data.cipherText, iv: encryptedResult.data.iv })
@@ -38,7 +38,7 @@ const getApexFields = async (crmId: string, objectName: string) => {
   const url = `${instanceUrl}/services/apexrest/v1/object-fields-metadata?objectApiName=${objectName}`;
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET' },
-    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId }
+    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
   );
   return JSON.parse(
     decrypt({ ciphertext: encryptedResult.data.cipherText, iv: encryptedResult.data.iv })

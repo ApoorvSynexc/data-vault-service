@@ -7,9 +7,28 @@ import {
   SALESFORCE_REDIRECT_URI,
 } from '../../../constant';
 
-const AUTH_URL = 'https://login.salesforce.com/services/oauth2/authorize';
-const TOKEN_URL = 'https://login.salesforce.com/services/oauth2/token';
-const PROFILE_URL = 'https://login.salesforce.com/services/oauth2/userinfo';
+const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
+const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
+
+type SalesforceEnvironment = 'production' | 'sandbox' | 'custom';
+
+const getSalesforceBaseUrl = (environment?: SalesforceEnvironment, customUrl?: string): string => {
+  if (environment === 'sandbox') return SALESFORCE_SANDBOX_BASE;
+  if (environment === 'custom') {
+    if (!customUrl) throw new Error('customUrl is required for custom environment');
+    return customUrl.replace(/\/$/, '');
+  }
+  return SALESFORCE_PRODUCTION_BASE;
+};
+
+const getSalesforceUrls = (environment?: SalesforceEnvironment, customUrl?: string) => {
+  const base = getSalesforceBaseUrl(environment, customUrl);
+  return {
+    authUrl: `${base}/services/oauth2/authorize`,
+    tokenUrl: `${base}/services/oauth2/token`,
+    profileUrl: `${base}/services/oauth2/userinfo`,
+  };
+};
 
 // ---------------------------------------------------------------------------
 // PKCE / state helpers
@@ -49,13 +68,18 @@ export class SalesforceAuthExpiredError extends Error {
 
 const refreshInFlight = new Map<string, Promise<any>>();
 
-const deduplicatedRefresh = (crmId: string, refreshToken: string): Promise<any> => {
+const deduplicatedRefresh = (
+  crmId: string,
+  refreshToken: string,
+  environment?: SalesforceEnvironment,
+  customUrl?: string
+): Promise<any> => {
   const existing = refreshInFlight.get(crmId);
   if (existing) {
     return existing;
   }
 
-  const promise = refreashSalesforceToken(refreshToken).finally(() => {
+  const promise = refreashSalesforceToken(refreshToken, environment, customUrl).finally(() => {
     refreshInFlight.delete(crmId);
   });
 
@@ -82,6 +106,8 @@ interface SalesforceTokens {
   refreshToken: string;
   crmId?: string;
   userId?: string;
+  environment?: SalesforceEnvironment;
+  customUrl?: string;
 }
 
 interface SalesforceRequestResult<T> {
@@ -114,8 +140,8 @@ const salesforceRequest = async <T = any>(
     try {
       console.log('Refreshing Token');
       refreshed = tokens.crmId
-        ? await deduplicatedRefresh(tokens.crmId, tokens.refreshToken)
-        : await refreashSalesforceToken(tokens.refreshToken);
+        ? await deduplicatedRefresh(tokens.crmId, tokens.refreshToken, tokens.environment, tokens.customUrl)
+        : await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
       console.log('Refreshing Token success');
     } catch (e: any) {
       console.log('Refreshing Token failed', e?.message);
@@ -146,11 +172,17 @@ const salesforceRequest = async <T = any>(
 // Auth
 // ---------------------------------------------------------------------------
 
-const getSalesforceLoginUrl = (stateOverride?: string, redirectUri?: string) => {
+const getSalesforceLoginUrl = (
+  stateOverride?: string,
+  redirectUri?: string,
+  environment?: SalesforceEnvironment,
+  customUrl?: string
+) => {
   const state = stateOverride ?? generateState();
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const uri = redirectUri ?? SALESFORCE_REDIRECT_URI;
+  const { authUrl } = getSalesforceUrls(environment, customUrl);
 
   const params = new URLSearchParams({
     response_type: 'code',
@@ -161,10 +193,16 @@ const getSalesforceLoginUrl = (stateOverride?: string, redirectUri?: string) => 
     code_challenge_method: 'S256',
   });
 
-  return { url: `${AUTH_URL}?${params}`, codeVerifier, state };
+  return { url: `${authUrl}?${params}`, codeVerifier, state };
 };
 
-const getSalesforceToken = async (code: string, code_verifier: string) => {
+const getSalesforceToken = async (
+  code: string,
+  code_verifier: string,
+  environment?: SalesforceEnvironment,
+  customUrl?: string
+) => {
+  const { tokenUrl } = getSalesforceUrls(environment, customUrl);
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
@@ -175,16 +213,21 @@ const getSalesforceToken = async (code: string, code_verifier: string) => {
   }).toString();
 
   return httpRequest({
-    url: TOKEN_URL,
+    url: tokenUrl,
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
   });
 };
 
-const refreashSalesforceToken = async (refreshToken: string) => {
+const refreashSalesforceToken = async (
+  refreshToken: string,
+  environment?: SalesforceEnvironment,
+  customUrl?: string
+) => {
+  const { tokenUrl } = getSalesforceUrls(environment, customUrl);
   return httpRequest({
-    url: TOKEN_URL,
+    url: tokenUrl,
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -200,8 +243,13 @@ const refreashSalesforceToken = async (refreshToken: string) => {
 // API methods — all go through salesforceRequest
 // ---------------------------------------------------------------------------
 
-const getSalesforceProfile = async (tokens: SalesforceTokens) => {
-  return salesforceRequest({ url: PROFILE_URL, method: 'GET' }, tokens);
+const getSalesforceProfile = async (
+  tokens: SalesforceTokens,
+  environment?: SalesforceEnvironment,
+  customUrl?: string
+) => {
+  const { profileUrl } = getSalesforceUrls(environment, customUrl);
+  return salesforceRequest({ url: profileUrl, method: 'GET' }, tokens);
 };
 
 export {
@@ -211,6 +259,7 @@ export {
   refreashSalesforceToken,
   salesforceRequest,
 };
+export type { SalesforceEnvironment };
 export type { SalesforceTokens, SalesforceRequestResult };
 export * from './apex';
 export * from './trigger';
