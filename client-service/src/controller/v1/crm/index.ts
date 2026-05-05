@@ -135,8 +135,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     (i) =>
       i.crmId !== oauthState.crmId &&
       i.crmProfile?.organizationId === sfProfile.organization_id &&
-      i.crmProfile?.userId === sfProfile.user_id &&
-      i.isConnected === true
+      i.crmProfile?.userId === sfProfile.user_id
   );
   if (duplicate) {
     makeResponse(req, res, 409, false, 'exit');
