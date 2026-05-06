@@ -102,10 +102,11 @@ const STATUS = {
 };
 const BACKUP_STATUS = {
   draft: 'DRAFT',
-  pending: 'PENDING',
+  active: 'ACTIVE',
   success: 'SUCCESS',
   failed: 'FAILED',
   paused: 'PAUSED',
+  resumed: 'RESUMED',
 };
 const JOB_STATUS = {
   pending: 'PENDING',
