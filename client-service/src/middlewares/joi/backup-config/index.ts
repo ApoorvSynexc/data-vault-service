@@ -112,7 +112,6 @@ export const createBackupConfigValidation = (
     objects: Joi.array().items(objectSchema).optional(),
     backupStatus: Joi.string()
       .valid('DRAFT', ...Object.values(BACKUP_STATUS))
-      .default('PENDING')
       .optional(),
   });
 
@@ -140,7 +139,7 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
     objects: Joi.array().items(objectSchema).optional(),
     destinationId: Joi.string().optional(),
     backupStatus: Joi.string()
-      .valid('DRAFT', 'PAUSED', ...Object.values(BACKUP_STATUS))
+      .valid('DRAFT', ...Object.values(BACKUP_STATUS))
       .optional(),
   }).min(1);
 

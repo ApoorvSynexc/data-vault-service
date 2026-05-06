@@ -114,14 +114,20 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   const normalizedBody = {
     ...req.body,
     scheduleConfig: normalizeScheduleConfig(req.body.scheduleConfig),
-    backupStatus: req.body.backupStatus || 'PENDING',
+    backupStatus: req.body.backupStatus || 'ACTIVE',
   };
-
+  
   const config = await createBackupConfig({ userId: req.user!.userId, ...normalizedBody });
 
   try {
     // Skip schedule/trigger setup if backupStatus is DRAFT
     if (config.backupStatus === 'DRAFT') {
+      makeResponse(req, res, 201, true, 'create', sanitize(config));
+      return;
+    }
+
+    // Setup triggers/schedules for ACTIVE backups
+    if (config.backupStatus !== 'ACTIVE') {
       makeResponse(req, res, 201, true, 'create', sanitize(config));
       return;
     }
