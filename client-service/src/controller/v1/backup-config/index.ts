@@ -39,29 +39,26 @@ const sanitize = (config: IBackupConfig) => config;
  * Backend expects: HOUR, DAY, WEEK, MONTH
  */
 const normalizeScheduleConfig = (scheduleConfig?: IScheduleConfig): IScheduleConfig | undefined => {
-  if (!scheduleConfig) return undefined;
+  if (!scheduleConfig || !scheduleConfig.scheduling) return scheduleConfig;
 
   const frequencyMap: Record<string, string> = {
     HOURLY: DURATION_TYPE.hour,
     DAILY: DURATION_TYPE.days,
     WEEKLY: DURATION_TYPE.week,
     MONTHLY: DURATION_TYPE.month,
-    CUSTOM: DURATION_TYPE.days, // Default to daily for custom
+    CUSTOM: DURATION_TYPE.days,
     ONCE: 'ONCE',
   };
 
-  const normalizedFrequency = frequencyMap[scheduleConfig.scheduling?.frequency] ||
-    scheduleConfig.scheduling?.frequency ||
-    DURATION_TYPE.days;
+  const currentFrequency = scheduleConfig.scheduling.frequency || DURATION_TYPE.days;
+  const normalizedFrequency = frequencyMap[currentFrequency] || currentFrequency;
 
   return {
     ...scheduleConfig,
-    scheduling: scheduleConfig.scheduling
-      ? {
-          ...scheduleConfig.scheduling,
-          frequency: normalizedFrequency,
-        }
-      : undefined,
+    scheduling: {
+      ...scheduleConfig.scheduling,
+      frequency: normalizedFrequency,
+    },
   };
 };
 
@@ -140,20 +137,20 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         throw new Error('BACKUP_LAMBDA_ARN/BACKUP_TRIGGER_URL and SCHEDULER_ROLE_ARN are required');
       }
 
-      await createScheduleFromConfig({
-        scheduleId,
-        scheduleConfig: config.scheduleConfig.scheduling as any,
-        timezone: config.scheduleConfig.timeZone,
-        targetArn,
-        roleArn,
-        targetType,
-        payload: {
-          backupConfigId: config.backupConfigId,
-          userId: config.userId,
-          crmId: config.crmId,
-          destinationId: config.destinationId,
-        },
-      });
+      // await createScheduleFromConfig({
+      //   scheduleId,
+      //   scheduleConfig: config.scheduleConfig.scheduling as any,
+      //   timezone: config.scheduleConfig.timeZone,
+      //   targetArn,
+      //   roleArn,
+      //   targetType,
+      //   payload: {
+      //     backupConfigId: config.backupConfigId,
+      //     userId: config.userId,
+      //     crmId: config.crmId,
+      //     destinationId: config.destinationId,
+      //   },
+      // });
     }
 
     makeResponse(req, res, 201, true, 'create', sanitize(config));
