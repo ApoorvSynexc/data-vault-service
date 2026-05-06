@@ -101,9 +101,11 @@ const STATUS = {
   deleted: 'DELETED',
 };
 const BACKUP_STATUS = {
+  draft: 'DRAFT',
   pending: 'PENDING',
   success: 'SUCCESS',
   failed: 'FAILED',
+  paused: 'PAUSED',
 };
 const JOB_STATUS = {
   pending: 'PENDING',

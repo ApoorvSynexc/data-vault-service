@@ -114,11 +114,18 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   const normalizedBody = {
     ...req.body,
     scheduleConfig: normalizeScheduleConfig(req.body.scheduleConfig),
+    backupStatus: req.body.backupStatus || 'PENDING',
   };
 
   const config = await createBackupConfig({ userId: req.user!.userId, ...normalizedBody });
 
   try {
+    // Skip schedule/trigger setup if backupStatus is DRAFT
+    if (config.backupStatus === 'DRAFT') {
+      makeResponse(req, res, 201, true, 'create', sanitize(config));
+      return;
+    }
+
     if (config.schedule === SCHEDULE_MODE.realtime) {
       // Handle real-time backup with triggers
       await realTimeTriggerManagement('create', config);
