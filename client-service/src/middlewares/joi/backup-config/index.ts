@@ -69,6 +69,9 @@ const schedulingSchema = Joi.object({
       .optional(),
     otherwise: Joi.forbidden(),
   }),
+  startDate: Joi.string().isoDate().optional(),
+  endDate: Joi.string().isoDate().optional(),
+  startTime: Joi.string().pattern(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
 });
 
 const scheduleConfigSchema = Joi.object({

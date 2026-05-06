@@ -10,6 +10,9 @@ export interface IScheduling {
   weekDays?: string[];
   monthDate?: number;
   selectedMonths?: string[]; // JAN, FEB, MAR, etc. for MONTH frequency
+  startDate?: string; // ISO date string (YYYY-MM-DD)
+  endDate?: string; // ISO date string (YYYY-MM-DD)
+  startTime?: string; // HH:mm format (24-hour)
 }
 
 export interface IFieldFilter {
