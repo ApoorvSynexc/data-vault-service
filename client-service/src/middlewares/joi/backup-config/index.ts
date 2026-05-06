@@ -70,7 +70,11 @@ const schedulingSchema = Joi.object({
     otherwise: Joi.forbidden(),
   }),
   startDate: Joi.string().isoDate().optional(),
-  endDate: Joi.string().isoDate().optional(),
+  endDate: Joi.when('frequency', {
+    is: 'CUSTOM',
+    then: Joi.string().isoDate().required(),
+    otherwise: Joi.string().isoDate().optional(),
+  }),
   startTime: Joi.string().pattern(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
 });
 

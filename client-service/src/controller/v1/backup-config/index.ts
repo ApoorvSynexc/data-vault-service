@@ -46,7 +46,7 @@ const normalizeScheduleConfig = (scheduleConfig?: IScheduleConfig): IScheduleCon
     DAILY: DURATION_TYPE.days,
     WEEKLY: DURATION_TYPE.week,
     MONTHLY: DURATION_TYPE.month,
-    CUSTOM: DURATION_TYPE.days,
+    CUSTOM: 'CUSTOM',
     ONCE: 'ONCE',
   };
 
