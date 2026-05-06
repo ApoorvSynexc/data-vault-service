@@ -4,9 +4,12 @@ import { wrapController } from '../../../utils/helper';
 import { getCrmByOrgId } from '../../../services/crm';
 import {
   getBackupConfigsByUserAndCrm,
-  getDestinationConfig,
   updateBackupConfig,
 } from '../../../services/backup-config';
+import {
+  getDestinationById,
+  getDecryptedDestinationConfig,
+} from '../../../services/destination';
 import { httpRequest } from '../../../utils/http-request';
 import {
   BACKUP_SERVICE,
@@ -58,7 +61,11 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
     return;
   }
 
-  const destConfig = getDestinationConfig(config);
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) {
+    return;
+  }
+
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
   await httpRequest({
     url: `${BACKUP_SERVICE}/v1/realtime-backup`,
@@ -69,8 +76,8 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
       crmId: crm.crmId,
       crmName: crm.crmName,
       destination: {
-        type: config.destination.type,
-        config: destConfig,
+        type: destination.type,
+        config: getDecryptedDestinationConfig(destination),
       },
       realtimePayload: decryptedBody,
     }),

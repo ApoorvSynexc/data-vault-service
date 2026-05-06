@@ -15,6 +15,7 @@ import {
   triggerBackupJob,
   getCrmById,
   getCrmTokens,
+  getDestinationById,
   deleteTriggers,
   realTimeTriggerManagement,
   getBackupJobStatsForUser,
@@ -23,10 +24,7 @@ import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupConfig } from '../../../models';
 
-const sanitize = ({ destination, ...rest }: IBackupConfig) => ({
-  ...rest,
-  destination: { type: destination.type },
-});
+const sanitize = (config: IBackupConfig) => config;
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crmId } = req.query;
@@ -70,6 +68,12 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 };
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const destination = await getDestinationById(String(req.body.destinationId));
+  if (!destination || destination.userId !== req.user!.userId) {
+    makeResponse(req, res, 404, false, 'not_found');
+    return;
+  }
+
   const config = await createBackupConfig({ userId: req.user!.userId, ...req.body });
 
   try {

@@ -10,13 +10,13 @@ import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
 import { IBackupConfig, IObject, IScheduleConfig } from '../../models';
-import { decrypt, encryptForTenant } from '../../utils/encryption';
 import { toSlug, buildSlug } from '../../utils/helper';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
 
 interface CreateBackupConfigParams {
   userId: string;
   crmId: string;
+  destinationId: string;
   name?: string;
   description?: string;
   environment: string;
@@ -24,7 +24,6 @@ interface CreateBackupConfigParams {
   schedule: string;
   scheduleConfig?: IScheduleConfig;
   objects?: IObject[];
-  destination: { type: string; config: Record<string, any> };
 }
 
 interface UpdateBackupConfigParams {
@@ -35,7 +34,7 @@ interface UpdateBackupConfigParams {
   schedule?: string;
   scheduleConfig?: IScheduleConfig;
   objects?: IObject[];
-  destination?: { type: string; config: Record<string, any> };
+  destinationId?: string;
   backupStatus?: string;
   lastBackupAt?: string;
   lastEventId?: string;
@@ -47,6 +46,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
   const {
     userId,
     crmId,
+    destinationId,
     name,
     description,
     environment,
@@ -54,10 +54,8 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     schedule,
     scheduleConfig,
     objects,
-    destination,
   } = params;
   const now = new Date().toISOString();
-  const { ciphertext, iv } = encryptForTenant(JSON.stringify(destination.config), userId);
 
   const slugBase = name || objectNames[0] || 'backup-config';
   const count = await incrementAndGetCounter(
@@ -70,6 +68,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     backupConfigId: uuidv4(),
     userId,
     crmId,
+    destinationId,
     slug,
     ...(name && { name }),
     ...(description && { description }),
@@ -78,7 +77,6 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     schedule,
     scheduleConfig,
     objects,
-    destination: { type: destination.type, ciphertext, iv },
     status: STATUS.active,
     backupStatus: BACKUP_STATUS.pending,
     schemaChange: false,
@@ -204,12 +202,8 @@ const updateBackupConfig = async (
   if (params.objects !== undefined) {
     updates.objects = params.objects;
   }
-  if (params.destination !== undefined) {
-    const { ciphertext, iv } = encryptForTenant(
-      JSON.stringify(params.destination.config),
-      existing.userId
-    );
-    updates.destination = { type: params.destination.type, ciphertext, iv };
+  if (params.destinationId !== undefined) {
+    updates.destinationId = params.destinationId;
   }
 
   const setExpr = Object.keys(updates)
@@ -299,11 +293,6 @@ const getBackupConfigBySlug = async (
   return (result.Items?.[0] as IBackupConfig) ?? null;
 };
 
-const getDestinationConfig = (config: IBackupConfig): Record<string, any> => {
-  const { ciphertext, iv } = config.destination;
-  return JSON.parse(decrypt({ ciphertext, iv }, config.userId));
-};
-
 export {
   createBackupConfig,
   getBackupConfigById,
@@ -314,5 +303,4 @@ export {
   getBackupConfigsByUserWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
-  getDestinationConfig,
 };
