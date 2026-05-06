@@ -42,11 +42,14 @@ const objectSchema = Joi.object({
 
 const schedulingSchema = Joi.object({
   frequency: Joi.string()
-    .valid(...Object.values(DURATION_TYPE))
+    .valid(
+      ...Object.values(DURATION_TYPE),
+      'HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY', 'CUSTOM', 'ONCE' // Frontend format support
+    )
     .required(),
   interval: Joi.number().integer().min(1).required(),
   weekDays: Joi.when('frequency', {
-    is: DURATION_TYPE.week,
+    is: Joi.alternatives().try(DURATION_TYPE.week, 'WEEKLY'),
     then: Joi.array()
       .items(Joi.string().valid(...Object.values(WEEK_DAY)))
       .min(1)
@@ -54,7 +57,7 @@ const schedulingSchema = Joi.object({
     otherwise: Joi.forbidden(),
   }),
   monthDate: Joi.when('frequency', {
-    is: DURATION_TYPE.month,
+    is: Joi.alternatives().try(DURATION_TYPE.month, 'MONTHLY'),
     then: Joi.number().integer().min(1).max(31).required(),
     otherwise: Joi.forbidden(),
   }),

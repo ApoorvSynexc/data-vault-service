@@ -20,11 +20,50 @@ import {
   realTimeTriggerManagement,
   getBackupJobStatsForUser,
 } from '../../../services';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
+import {
+  createScheduleFromConfig,
+  deleteSchedule,
+  generateScheduleId,
+  updateScheduleFromConfig,
+  convertScheduleConfigToCron,
+} from '../../../services/third-party/event-bridge-scheduler';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, DURATION_TYPE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
-import { IBackupConfig } from '../../../models';
+import { IBackupConfig, IScheduleConfig, IScheduling } from '../../../models';
 
 const sanitize = (config: IBackupConfig) => config;
+
+/**
+ * Normalize schedule config by mapping frontend frequency values to backend constants
+ * Frontend sends: HOURLY, DAILY, WEEKLY, MONTHLY, CUSTOM, ONCE
+ * Backend expects: HOUR, DAY, WEEK, MONTH
+ */
+const normalizeScheduleConfig = (scheduleConfig?: IScheduleConfig): IScheduleConfig | undefined => {
+  if (!scheduleConfig) return undefined;
+
+  const frequencyMap: Record<string, string> = {
+    HOURLY: DURATION_TYPE.hour,
+    DAILY: DURATION_TYPE.days,
+    WEEKLY: DURATION_TYPE.week,
+    MONTHLY: DURATION_TYPE.month,
+    CUSTOM: DURATION_TYPE.days, // Default to daily for custom
+    ONCE: 'ONCE',
+  };
+
+  const normalizedFrequency = frequencyMap[scheduleConfig.scheduling?.frequency] ||
+    scheduleConfig.scheduling?.frequency ||
+    DURATION_TYPE.days;
+
+  return {
+    ...scheduleConfig,
+    scheduling: scheduleConfig.scheduling
+      ? {
+          ...scheduleConfig.scheduling,
+          frequency: normalizedFrequency,
+        }
+      : undefined,
+  };
+};
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crmId } = req.query;
@@ -74,13 +113,47 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return;
   }
 
-  const config = await createBackupConfig({ userId: req.user!.userId, ...req.body });
+  // Normalize schedule config if present
+  const normalizedBody = {
+    ...req.body,
+    scheduleConfig: normalizeScheduleConfig(req.body.scheduleConfig),
+  };
+
+  const config = await createBackupConfig({ userId: req.user!.userId, ...normalizedBody });
 
   try {
-    // await triggerBackupJob(config);
-
     if (config.schedule === SCHEDULE_MODE.realtime) {
+      // Handle real-time backup with triggers
       await realTimeTriggerManagement('create', config);
+    } else if (config.schedule === SCHEDULE_MODE.schedule) {
+      // Handle scheduled backup with EventBridge Scheduler
+      if (!config.scheduleConfig) {
+        throw new Error('scheduleConfig is required for scheduled backups');
+      }
+
+      const scheduleId = generateScheduleId(config.backupConfigId, config.userId);
+      const targetArn = String(process.env.BACKUP_LAMBDA_ARN || process.env.BACKUP_TRIGGER_URL);
+      const roleArn = String(process.env.SCHEDULER_ROLE_ARN);
+      const targetType = (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'HTTP';
+
+      if (!targetArn || !roleArn) {
+        throw new Error('BACKUP_LAMBDA_ARN/BACKUP_TRIGGER_URL and SCHEDULER_ROLE_ARN are required');
+      }
+
+      await createScheduleFromConfig({
+        scheduleId,
+        scheduleConfig: config.scheduleConfig.scheduling as any,
+        timezone: config.scheduleConfig.timeZone,
+        targetArn,
+        roleArn,
+        targetType,
+        payload: {
+          backupConfigId: config.backupConfigId,
+          userId: config.userId,
+          crmId: config.crmId,
+          destinationId: config.destinationId,
+        },
+      });
     }
 
     makeResponse(req, res, 201, true, 'create', sanitize(config));
@@ -152,8 +225,51 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return;
   }
 
-  const updated = await updateBackupConfig(String(backupConfigId), req.body);
-  makeResponse(req, res, 200, true, 'update', sanitize(updated!));
+  // Normalize schedule config if present
+  const normalizedBody = {
+    ...req.body,
+    ...(req.body.scheduleConfig && {
+      scheduleConfig: normalizeScheduleConfig(req.body.scheduleConfig),
+    }),
+  };
+
+  const updated = await updateBackupConfig(String(backupConfigId), normalizedBody);
+
+  try {
+    // Handle schedule updates if schedule type or config changed
+    if (updated && req.body.schedule === SCHEDULE_MODE.schedule && req.body.scheduleConfig) {
+      const scheduleId = generateScheduleId(updated.backupConfigId, updated.userId);
+      const targetArn = String(process.env.BACKUP_LAMBDA_ARN || process.env.BACKUP_TRIGGER_URL);
+      const roleArn = String(process.env.SCHEDULER_ROLE_ARN);
+      const targetType = (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'HTTP';
+
+      if (!targetArn || !roleArn) {
+        throw new Error('BACKUP_LAMBDA_ARN/BACKUP_TRIGGER_URL and SCHEDULER_ROLE_ARN are required');
+      }
+
+      const normalizedScheduleConfig = normalizeScheduleConfig(req.body.scheduleConfig);
+      if (normalizedScheduleConfig?.scheduling) {
+        await updateScheduleFromConfig({
+          scheduleId,
+          scheduleConfig: normalizedScheduleConfig.scheduling,
+          timezone: normalizedScheduleConfig.timeZone,
+          targetArn,
+          roleArn,
+          targetType,
+          payload: {
+            backupConfigId: updated.backupConfigId,
+            userId: updated.userId,
+            crmId: updated.crmId,
+            destinationId: updated.destinationId,
+          },
+        });
+      }
+    }
+
+    makeResponse(req, res, 200, true, 'update', sanitize(updated!));
+  } catch (error) {
+    throw error;
+  }
 };
 
 const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -169,16 +285,24 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
   const config = existing!;
 
-  await Promise.all([
-    deleteBackupConfig(String(backupConfigId)),
-    deleteBackupJobsByConfig(String(backupConfigId), config.userId),
-  ]);
+  try {
+    await Promise.all([
+      deleteBackupConfig(String(backupConfigId)),
+      deleteBackupJobsByConfig(String(backupConfigId), config.userId),
+    ]);
 
-  if (config.schedule === SCHEDULE_MODE.realtime) {
-    await realTimeTriggerManagement('delete', config);
+    if (config.schedule === SCHEDULE_MODE.realtime) {
+      await realTimeTriggerManagement('delete', config);
+    } else if (config.schedule === SCHEDULE_MODE.schedule) {
+      // Delete EventBridge schedule for scheduled backups
+      const scheduleId = generateScheduleId(config.backupConfigId, config.userId);
+      await deleteSchedule(scheduleId);
+    }
+
+    makeResponse(req, res, 200, true, 'delete');
+  } catch (error) {
+    throw error;
   }
-
-  makeResponse(req, res, 200, true, 'delete');
 };
 
 const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
