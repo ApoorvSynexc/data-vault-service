@@ -9,6 +9,7 @@ export interface IScheduling {
   interval: number;
   weekDays?: string[];
   monthDate?: number;
+  selectedMonths?: string[]; // JAN, FEB, MAR, etc. for MONTH frequency
 }
 
 export interface IFieldFilter {

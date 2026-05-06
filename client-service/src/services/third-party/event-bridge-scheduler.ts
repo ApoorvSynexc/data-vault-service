@@ -265,7 +265,14 @@ export const convertScheduleConfigToCron = (config: IScheduleConfig): string => 
       if (!config.monthDate || config.monthDate < 1 || config.monthDate > 31) {
         throw new Error('monthDate required and must be 1-31 for MONTH frequency');
       }
-      return `cron(${minutes} ${hours} ${config.monthDate} */${config.interval} ? *)`;
+      const monthMap: Record<string, number> = {
+        JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
+        JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12,
+      };
+      const months = config.selectedMonths && config.selectedMonths.length > 0
+        ? config.selectedMonths.map((m) => monthMap[m]).join(',')
+        : '*';
+      return `cron(${minutes} ${hours} ${config.monthDate} ${months} ? *)`;
     }
 
     default:

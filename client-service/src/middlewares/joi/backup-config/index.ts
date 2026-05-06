@@ -61,6 +61,14 @@ const schedulingSchema = Joi.object({
     then: Joi.number().integer().min(1).max(31).required(),
     otherwise: Joi.forbidden(),
   }),
+  selectedMonths: Joi.when('frequency', {
+    is: Joi.alternatives().try(DURATION_TYPE.month, 'MONTHLY'),
+    then: Joi.array()
+      .items(Joi.string().valid('JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'))
+      .min(1)
+      .optional(),
+    otherwise: Joi.forbidden(),
+  }),
 });
 
 const scheduleConfigSchema = Joi.object({
