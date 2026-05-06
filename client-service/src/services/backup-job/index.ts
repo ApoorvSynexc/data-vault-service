@@ -5,8 +5,9 @@ import { docClient } from '../../config';
 import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, JOB_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { httpRequest } from '../../utils/http-request';
-import { getDestinationConfig, updateBackupConfig } from '../backup-config';
+import { updateBackupConfig } from '../backup-config';
 import { getCrmById, getCrmTokens } from '../crm';
+import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { incrementTableCounter } from '../counter';
 
 const getSourceObjects = (config: IBackupConfig) => {
@@ -51,10 +52,13 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
     return null;
   }
 
-  const crm = await getCrmById(config.crmId);
-  if (!crm) {
-    throw new Error(`crm_not_found:${config.crmId}`);
-  }
+  const [crm, destination] = await Promise.all([
+    getCrmById(config.crmId),
+    getDestinationById(config.destinationId),
+  ]);
+
+  if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
+  if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
 
@@ -70,8 +74,8 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
       object: getSourceObjects(config),
     },
     destination: {
-      type: config.destination.type,
-      config: getDestinationConfig(config),
+      type: destination.type,
+      config: getDecryptedDestinationConfig(destination),
     },
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
   };

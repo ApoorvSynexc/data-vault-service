@@ -3,7 +3,6 @@ import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 import {
   CONDITION_TYPE,
-  DESTINATION_TYPE,
   DURATION_TYPE,
   ENVIRONMENT_TYPE,
   FILTER_OPERATOR,
@@ -11,7 +10,6 @@ import {
   SCHEDULE_TYPE,
   WEEK_DAY,
 } from '../../../constant';
-import { validateS3Credentials } from '../../../utils/validate-aws-credentials';
 
 const fieldFilterSchema = Joi.object({
   operator: Joi.string()
@@ -70,26 +68,14 @@ const scheduleConfigSchema = Joi.object({
   scheduling: schedulingSchema.optional(),
 });
 
-const destinationSchema = Joi.object({
-  type: Joi.string()
-    .valid(...Object.values(DESTINATION_TYPE))
-    .required(),
-  config: Joi.object({
-    bucketName: Joi.string().required(),
-    region: Joi.string().required(),
-    accessKeyId: Joi.string().required(),
-    secretAccessKey: Joi.string().required(),
-    folderPath: Joi.string().optional(),
-  }).required(),
-});
-
-export const createBackupConfigValidation = async (
+export const createBackupConfigValidation = (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
   const schema = Joi.object({
     crmId: Joi.string().required(),
+    destinationId: Joi.string().required(),
     name: Joi.string().optional(),
     description: Joi.string().optional().allow(''),
     environment: Joi.string()
@@ -105,19 +91,11 @@ export const createBackupConfigValidation = async (
       otherwise: Joi.forbidden(),
     }),
     objects: Joi.array().items(objectSchema).optional(),
-    destination: destinationSchema.required(),
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });
   if (error) {
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
-    return;
-  }
-
-  try {
-    await validateS3Credentials(req.body.destination.config);
-  } catch {
-    makeResponse(req, res, 400, false, 'invalid_aws_credentials');
     return;
   }
 
@@ -137,7 +115,7 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
       .optional(),
     scheduleConfig: scheduleConfigSchema.optional(),
     objects: Joi.array().items(objectSchema).optional(),
-    destination: destinationSchema.optional(),
+    destinationId: Joi.string().optional(),
   }).min(1);
 
   const { error } = schema.validate(req.body, { abortEarly: false });

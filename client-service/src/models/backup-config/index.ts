@@ -32,16 +32,11 @@ export interface IObject {
   condition?: IObjectCondition;
 }
 
-export interface IBackupDestination {
-  type: string;
-  ciphertext: string;
-  iv: string;
-}
-
 export interface IBackupConfig {
   backupConfigId: string; // PK
   userId: string; // GSI: userId-index
   crmId: string;
+  destinationId: string;
   slug: string; // unique per user, generated from name
   name?: string;
   description?: string;
@@ -50,7 +45,6 @@ export interface IBackupConfig {
   schedule: string; // REALTIME | SCHEDULE
   scheduleConfig?: IScheduleConfig;
   objects?: IObject[];
-  destination: IBackupDestination;
   status: string;
   backupStatus: string; // PENDING | SUCCESS | FAILED
   lastBackupAt?: string; // when the last backup job ran
