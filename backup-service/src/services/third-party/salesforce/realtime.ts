@@ -199,76 +199,76 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     );
 
     // ── Real-time schema comparison using latest schema from API ────────────
-    let schemaChanged = false;
-    let detectionInfo = {
-      newFields: [] as string[],
-      removedFields: [] as string[],
-      incomingFields: [] as string[],
-    };
+    // let schemaChanged = false;
+    // let detectionInfo = {
+    //   newFields: [] as string[],
+    //   removedFields: [] as string[],
+    //   incomingFields: [] as string[],
+    // };
 
-    try {
-      const schemaComparison = await compareSchemaInRealtime(
-        crmId,
-        objectApiName,
-        destConfig,
-        records
-      );
+    // try {
+    //   const schemaComparison = await compareSchemaInRealtime(
+    //     crmId,
+    //     objectApiName,
+    //     destConfig,
+    //     records
+    //   );
 
-      schemaChanged = schemaComparison.schemaChanged;
-      detectionInfo = {
-        newFields: schemaComparison.newFields,
-        removedFields: schemaComparison.removedFields,
-        incomingFields: schemaComparison.incomingFields,
-      };
+    //   schemaChanged = schemaComparison.schemaChanged;
+    //   detectionInfo = {
+    //     newFields: schemaComparison.newFields,
+    //     removedFields: schemaComparison.removedFields,
+    //     incomingFields: schemaComparison.incomingFields,
+    //   };
 
-      // If schema changed, upload new schema and notify core service
-      if (schemaChanged) {
-        const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
-        const schemaBuffer = Buffer.from(
-          JSON.stringify(schemaComparison.latestSchema, null, 2)
-        );
-        await uploadToS3(destConfig, schemaKey, schemaBuffer);
+    //   // If schema changed, upload new schema and notify core service
+    //   if (schemaChanged) {
+    //     const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
+    //     const schemaBuffer = Buffer.from(
+    //       JSON.stringify(schemaComparison.latestSchema, null, 2)
+    //     );
+    //     await uploadToS3(destConfig, schemaKey, schemaBuffer);
 
-        logger.info(
-          `Realtime job ${realtimeJobId}: schema changed for ${objectApiName}`,
-          {
-            newFields: schemaComparison.newFields,
-            removedFields: schemaComparison.removedFields,
-          }
-        );
+    //     logger.info(
+    //       `Realtime job ${realtimeJobId}: schema changed for ${objectApiName}`,
+    //       {
+    //         newFields: schemaComparison.newFields,
+    //         removedFields: schemaComparison.removedFields,
+    //       }
+    //     );
 
-        // Notify core service of schema change
-        await httpRequest({
-          url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-          method: 'POST',
-          body: JSON.stringify({
-            eventType: 'schema.updated',
-            crmId,
-            objectName: objectApiName,
-            backupJobId: realtimeJobId,
-            backupConfigId,
-            schemaChange: true,
-          }),
-          headers: {
-            'x-internal-secret': INTERNAL_SECRET,
-          },
-        });
+    //     // Notify core service of schema change
+    //     await httpRequest({
+    //       url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+    //       method: 'POST',
+    //       body: JSON.stringify({
+    //         eventType: 'schema.updated',
+    //         crmId,
+    //         objectName: objectApiName,
+    //         backupJobId: realtimeJobId,
+    //         backupConfigId,
+    //         schemaChange: true,
+    //       }),
+    //       headers: {
+    //         'x-internal-secret': INTERNAL_SECRET,
+    //       },
+    //     });
 
-        logger.info(
-          `Realtime job ${realtimeJobId}: core service notified of schema changes`
-        );
-      }
-    } catch (err: any) {
-      logger.error(
-        `Realtime job ${realtimeJobId}: schema comparison failed for ${objectApiName}: ${err?.message}`
-      );
-      // Continue processing even if schema comparison fails — don't block data upload
-    }
+    //     logger.info(
+    //       `Realtime job ${realtimeJobId}: core service notified of schema changes`
+    //     );
+    //   }
+    // } catch (err: any) {
+    //   logger.error(
+    //     `Realtime job ${realtimeJobId}: schema comparison failed for ${objectApiName}: ${err?.message}`
+    //   );
+    //   // Continue processing even if schema comparison fails — don't block data upload
+    // }
 
-    logger.info(
-      `Realtime job ${realtimeJobId} completed with schemaChanged=${schemaChanged}`,
-      detectionInfo
-    );
-    return { s3Path, schemaChanged, sizeInBytes };
+    // logger.info(
+    //   `Realtime job ${realtimeJobId} completed with schemaChanged=${schemaChanged}`,
+    //   detectionInfo
+    // );
+    return { s3Path, sizeInBytes };
   },
 };
