@@ -13,7 +13,7 @@ import { logger } from '../../middlewares/logger';
 const schedulerClient = new SchedulerClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 export interface IScheduleConfig {
-  frequency: 'HOUR' | 'DAY' | 'WEEK' | 'MONTH' | string;
+  frequency: 'HOURLY' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | string;
   interval: number;
   weekDays?: (('MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT' | 'SUN') | string)[];
   monthDate?: number;
@@ -238,15 +238,15 @@ export const convertScheduleConfigToCron = (config: IScheduleConfig): string => 
   const [hours, minutes] = config.time ? config.time.split(':').map(Number) : [0, 0];
 
   switch (config.frequency) {
-    case 'HOUR':
+    case 'HOURLY':
       return `cron(0 */${config.interval} * * ? *)`;
 
-    case 'DAY':
+    case 'DAILY':
       return `cron(${minutes} ${hours} */${config.interval} * ? *)`;
 
-    case 'WEEK': {
+    case 'WEEKLY': {
       if (!config.weekDays || config.weekDays.length === 0) {
-        throw new Error('weekDays required for WEEK frequency');
+        throw new Error('weekDays required for WEEKLY frequency');
       }
       const dayMap: Record<string, number> = {
         MON: 2,
@@ -261,9 +261,9 @@ export const convertScheduleConfigToCron = (config: IScheduleConfig): string => 
       return `cron(${minutes} ${hours} ? * ${days} *)`;
     }
 
-    case 'MONTH': {
+    case 'MONTHLY': {
       if (!config.monthDate || config.monthDate < 1 || config.monthDate > 31) {
-        throw new Error('monthDate required and must be 1-31 for MONTH frequency');
+        throw new Error('monthDate required and must be 1-31 for MONTHLY frequency');
       }
       const monthMap: Record<string, number> = {
         JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,

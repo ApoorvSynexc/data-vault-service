@@ -20,42 +20,8 @@ import {
   realTimeTriggerManagement,
   getBackupJobStatsForUser,
 } from '../../../services';
-import {
-} from '../../../services/third-party/event-bridge-scheduler';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, DURATION_TYPE } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
-import { IBackupConfig, IScheduleConfig, IScheduling } from '../../../models';
-
-const sanitize = (config: IBackupConfig) => config;
-
-/**
- * Normalize schedule config by mapping frontend frequency values to backend constants
- * Frontend sends: HOURLY, DAILY, WEEKLY, MONTHLY, CUSTOM, ONCE
- * Backend expects: HOUR, DAY, WEEK, MONTH
- */
-const normalizeScheduleConfig = (scheduleConfig?: IScheduleConfig): IScheduleConfig | undefined => {
-  if (!scheduleConfig || !scheduleConfig.scheduling) return scheduleConfig;
-
-  const frequencyMap: Record<string, string> = {
-    HOURLY: DURATION_TYPE.hour,
-    DAILY: DURATION_TYPE.days,
-    WEEKLY: DURATION_TYPE.week,
-    MONTHLY: DURATION_TYPE.month,
-    CUSTOM: 'CUSTOM',
-    ONCE: 'ONCE',
-  };
-
-  const currentFrequency = scheduleConfig.scheduling.frequency || DURATION_TYPE.days;
-  const normalizedFrequency = frequencyMap[currentFrequency] || currentFrequency;
-
-  return {
-    ...scheduleConfig,
-    scheduling: {
-      ...scheduleConfig.scheduling,
-      frequency: normalizedFrequency,
-    },
-  };
-};
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crmId } = req.query;
@@ -105,19 +71,16 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return;
   }
 
-  // Normalize schedule config if present
-  const normalizedBody = {
+  const config = await createBackupConfig({
+    userId: req.user!.userId,
     ...req.body,
-    scheduleConfig: normalizeScheduleConfig(req.body.scheduleConfig),
     backupStatus: req.body.backupStatus || 'ACTIVE',
-  };
-
-  const config = await createBackupConfig({ userId: req.user!.userId, ...normalizedBody });
+  });
 
   try {
     // Skip schedule/trigger setup if backupStatus is DRAFT
     if (config.backupStatus === 'DRAFT') {
-      makeResponse(req, res, 201, true, 'create', sanitize(config));
+      makeResponse(req, res, 201, true, 'create', config);
       return;
     }
 
@@ -128,7 +91,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
     }
 
-    makeResponse(req, res, 201, true, 'create', sanitize(config));
+    makeResponse(req, res, 201, true, 'create', config);
   } catch (error) {
     await deleteBackupConfig(config.backupConfigId);
     throw error;
@@ -147,7 +110,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
       getTableCounter(BACKUP_CONFIG_TABLE, userId),
     ]);
 
-    return makeResponse(req, res, 200, true, 'fetch', documents.map(sanitize), {
+    return makeResponse(req, res, 200, true, 'fetch', documents, {
       limit: limitNum,
       nextCursor,
       totalRecords: counter?.count ?? 0,
@@ -156,7 +119,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
   }
 
   const configs = await getBackupConfigsByUser(userId);
-  makeResponse(req, res, 200, true, 'fetch', configs.map(sanitize));
+  makeResponse(req, res, 200, true, 'fetch', configs);
 };
 
 const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -182,7 +145,7 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     slug: crmPayload.slug,
     isConnected: crmPayload.isConnected,
   };
-  makeResponse(req, res, 200, true, 'fetch', { ...sanitize(config), crmDetail });
+  makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail });
 };
 
 const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -197,16 +160,8 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return;
   }
 
-  // Normalize schedule config if present
-  const normalizedBody = {
-    ...req.body,
-    ...(req.body.scheduleConfig && {
-      scheduleConfig: normalizeScheduleConfig(req.body.scheduleConfig),
-    }),
-  };
-
-  const updated = await updateBackupConfig(String(backupConfigId), normalizedBody);
-  makeResponse(req, res, 200, true, 'update', sanitize(updated!));
+  const updated = await updateBackupConfig(String(backupConfigId), req.body);
+  makeResponse(req, res, 200, true, 'update', updated!);
 };
 
 const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
