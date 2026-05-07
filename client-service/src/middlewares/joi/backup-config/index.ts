@@ -43,14 +43,11 @@ const objectSchema = Joi.object({
 
 const schedulingSchema = Joi.object({
   frequency: Joi.string()
-    .valid(
-      ...Object.values(DURATION_TYPE),
-      'HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY', 'CUSTOM', 'ONCE' // Frontend format support
-    )
+    .valid(...Object.values(DURATION_TYPE))
     .required(),
   interval: Joi.number().integer().min(1).required(),
   weekDays: Joi.when('frequency', {
-    is: Joi.alternatives().try(DURATION_TYPE.week, 'WEEKLY'),
+    is: Joi.alternatives().try(DURATION_TYPE.weekly),
     then: Joi.array()
       .items(Joi.string().valid(...Object.values(WEEK_DAY)))
       .min(1)
@@ -58,12 +55,12 @@ const schedulingSchema = Joi.object({
     otherwise: Joi.forbidden(),
   }),
   monthDate: Joi.when('frequency', {
-    is: Joi.alternatives().try(DURATION_TYPE.month, 'MONTHLY'),
+    is: Joi.alternatives().try(DURATION_TYPE.monthly),
     then: Joi.number().integer().min(1).max(31).required(),
     otherwise: Joi.forbidden(),
   }),
   selectedMonths: Joi.when('frequency', {
-    is: Joi.alternatives().try(DURATION_TYPE.month, 'MONTHLY'),
+    is: Joi.alternatives().try(DURATION_TYPE.monthly),
     then: Joi.array()
       .items(Joi.string().valid('JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'))
       .min(1)
@@ -72,7 +69,7 @@ const schedulingSchema = Joi.object({
   }),
   startDate: Joi.string().isoDate().optional(),
   endDate: Joi.when('frequency', {
-    is: 'CUSTOM',
+    is: DURATION_TYPE.custom,
     then: Joi.string().isoDate().required(),
     otherwise: Joi.string().isoDate().optional(),
   }),

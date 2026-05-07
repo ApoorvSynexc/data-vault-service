@@ -58,10 +58,12 @@ const SCHEDULE_TYPE = {
 };
 
 const DURATION_TYPE = {
-  hour: 'HOUR',
-  days: 'DAY',
-  week: 'WEEK',
-  month: 'MONTH',
+  hourly: 'HOURLY',
+  daily: 'DAILY',
+  weekly: 'WEEKLY',
+  monthly: 'MONTHLY',
+  custom: 'CUSTOM',
+  once: 'ONCE',
 };
 
 const WEEK_DAY = {
@@ -102,6 +104,7 @@ const STATUS = {
 };
 const BACKUP_STATUS = {
   draft: 'DRAFT',
+  pending: 'PENDING',
   active: 'ACTIVE',
   success: 'SUCCESS',
   failed: 'FAILED',
