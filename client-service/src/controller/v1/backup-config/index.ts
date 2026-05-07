@@ -88,7 +88,15 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       // Handle real-time backup with triggers
       await realTimeTriggerManagement('create', config);
     } else if (config.schedule === SCHEDULE_MODE.schedule) {
+      const scheduleConfig = req.body.scheduleConfig;
+      const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
+        && !scheduleConfig?.scheduling?.startDate
+        && !scheduleConfig?.scheduling?.startTime;
 
+      if (isOnceImmediate) {
+        console.log("Run immediate");
+        await triggerBackupJob(config);
+      }
     }
 
     makeResponse(req, res, 201, true, 'create', config);
