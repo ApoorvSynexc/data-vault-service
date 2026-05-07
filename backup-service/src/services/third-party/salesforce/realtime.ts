@@ -3,7 +3,7 @@ import { logger } from '../../../middlewares/logger';
 import { httpRequest } from '../../../utils/http-request';
 import { CORE_SERVICE, INTERNAL_SECRET } from '../../../constant';
 import { buildSchemaS3Key, toParquetDataType, schemasAreEqual } from '../../../utils/helper';
-import { downloadFromS3, uploadToS3 } from '../../destination/s3';
+import { downloadFromS3, uploadToS3, listS3Objects } from '../../destination/s3';
 import { ICrmRealtimeHandler } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -83,11 +83,21 @@ const compareSchemaInRealtime = async (
   const latestSchema = enrichSchemaWithParquetTypes(payloadSchema);
 
   // Get existing schema from S3
+  // Compare against the latest versioned file (fields_<timestamp>.json with the
+  // highest timestamp). Fall back to the original fields.json only when no
+  // versioned files exist yet.
   const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
+  const schemaFolder = schemaKey.replace('/fields.json', '/');
+  const allSchemaKeys = await listS3Objects(destConfig, schemaFolder);
+  const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
+  // Keys are sorted alphabetically; since timestamps are fixed-width numbers the
+  // last entry is also the most recent.
+  const currentSchemaKey =
+    versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
   let existingSchemaBuffer: Buffer | null = null;
 
   try {
-    existingSchemaBuffer = await downloadFromS3(destConfig, schemaKey);
+    existingSchemaBuffer = await downloadFromS3(destConfig, currentSchemaKey);
   } catch {
     logger.debug(`No existing schema found for ${objectApiName}, treating as new`);
   }
@@ -148,10 +158,13 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
 
       if (schemaChanged) {
         const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
-        const schemaBuffer = Buffer.from(JSON.stringify(schemaComparison.latestSchema, null, 2));
-        await uploadToS3(destConfig, schemaKey, schemaBuffer);
+        const newSchemaBuffer = Buffer.from(JSON.stringify(schemaComparison.latestSchema, null, 2));
+        const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
+        await uploadToS3(destConfig, versionedKey, newSchemaBuffer);
 
-        logger.info(`Realtime job ${realtimeJobId}: schema changed for ${objectApiName}`);
+        logger.info(
+          `Realtime job ${realtimeJobId}: schema changed for ${objectApiName}, uploaded to ${versionedKey}`
+        );
 
         await httpRequest({
           url: `${CORE_SERVICE}/v1/internal/backup-payload`,
