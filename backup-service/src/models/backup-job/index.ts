@@ -1,7 +1,14 @@
 import { EncryptedPayload } from '../../utils/encryption';
 
+export interface ISchemaField {
+  label: string;
+  dataType: string;
+  apiName: string;
+}
+
 export interface IRealtimePayload {
   records: Record<string, any>[];
+  schema: ISchemaField[];
   orgId: string;
   operation: 'INSERT' | 'UPDATE' | 'DELETE' | 'UNDELETE';
   objectApiName: string;
