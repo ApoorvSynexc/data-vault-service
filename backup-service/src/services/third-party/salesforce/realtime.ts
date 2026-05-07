@@ -5,7 +5,6 @@ import { CORE_SERVICE, INTERNAL_SECRET } from '../../../constant';
 import { buildSchemaS3Key, toParquetDataType, schemasAreEqual } from '../../../utils/helper';
 import { downloadFromS3, uploadToS3 } from '../../destination/s3';
 import { ICrmRealtimeHandler } from '../types';
-import { getObjectMetadata } from './bulk';
 
 // ---------------------------------------------------------------------------
 // Map Salesforce CDC operation to the S3 folder convention used by bulk jobs
@@ -54,127 +53,61 @@ const recordsToCsv = (records: Record<string, any>[]): Buffer => {
 };
 
 // ---------------------------------------------------------------------------
-// Fetch latest schema from API using getObjectMetadata
-// Returns schema with Parquet data types for consistency
+// Convert schema from payload to include parquetDataType
 // ---------------------------------------------------------------------------
-const fetchLatestSchemaFromApi = async (
-  crmId: string,
-  objectApiName: string
-): Promise<{ apiName: string; dataType: string; parquetDataType: string }[]> => {
-  try {
-    const { schema } = await getObjectMetadata(crmId, objectApiName);
-    const schemaWithParquet = schema.map((field: any) => ({
-      apiName: field.apiName,
-      dataType: field.dataType,
-      parquetDataType: toParquetDataType(field.dataType),
-    }));
-    logger.debug(
-      `Real-time schema fetched from API for ${objectApiName}: ${schema.length} fields`
-    );
-    return schemaWithParquet;
-  } catch (err: any) {
-    logger.warn(
-      `Failed to fetch latest schema from API for ${objectApiName}: ${err?.message}`
-    );
-    throw err;
-  }
-};
-
-// ---------------------------------------------------------------------------
-// Derive schema from realtime payload records (fallback if API fetch fails)
-// Realtime payloads carry no Salesforce type metadata, so every field is
-// treated as STRING/BYTE_ARRAY — consistent with the bulk-job schema helper.
-// ---------------------------------------------------------------------------
-const deriveSchema = (
-  records: Record<string, any>[]
+const enrichSchemaWithParquetTypes = (
+  payloadSchema: { label: string; dataType: string; apiName: string }[]
 ): { apiName: string; dataType: string; parquetDataType: string }[] => {
-  if (!records.length) {
-    return [];
-  }
-  return Object.keys(records[0])
-    .filter((k) => k !== 'attributes')
-    .map((name) => ({
-      apiName: name,
-      dataType: 'STRING',
-      parquetDataType: toParquetDataType('STRING'),
-    }));
+  return payloadSchema.map((field) => ({
+    ...field,
+    parquetDataType: toParquetDataType(field.dataType),
+  }));
 };
 
 // ---------------------------------------------------------------------------
-// Real-time schema comparison: fetch latest from API and compare with stored
-// Returns { schemaChanged, latestSchema, detectedFields, removedFields }
+// Real-time schema comparison: compare payload schema with stored schema
+// Returns { schemaChanged, latestSchema }
 // ---------------------------------------------------------------------------
 const compareSchemaInRealtime = async (
   crmId: string,
+  crmName: string,
+  backupConfigId: string,
   objectApiName: string,
   destConfig: IDestinationConfig,
-  payloadRecords: Record<string, any>[]
+  payloadSchema: { label: string; dataType: string; apiName: string }[]
 ): Promise<{
   schemaChanged: boolean;
   latestSchema: { apiName: string; dataType: string; parquetDataType: string }[];
-  newFields: string[];
-  removedFields: string[];
-  incomingFields: string[];
 }> => {
-  // Fetch latest schema from API
-  let latestSchema: { apiName: string; dataType: string; parquetDataType: string }[];
-  try {
-    latestSchema = await fetchLatestSchemaFromApi(crmId, objectApiName);
-  } catch (err) {
-    logger.warn(
-      `Could not fetch latest schema from API, falling back to payload-derived schema`
-    );
-    latestSchema = deriveSchema(payloadRecords);
-  }
-
-  // Get incoming fields from payload records
-  const incomingFields = payloadRecords.length
-    ? Object.keys(payloadRecords[0]).filter((k) => k !== 'attributes')
-    : [];
+  // Enrich payload schema with parquetDataType
+  const latestSchema = enrichSchemaWithParquetTypes(payloadSchema);
 
   // Get existing schema from S3
-  const schemaKey = buildSchemaS3Key(crmId, objectApiName.split('/')[0], '', objectApiName);
-  let existingSchema: { apiName: string; dataType: string; parquetDataType: string }[] = [];
+  const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
+  let existingSchemaBuffer: Buffer | null = null;
 
   try {
-    const existingBuffer = await downloadFromS3(destConfig, schemaKey);
-    if (existingBuffer) {
-      existingSchema = JSON.parse(existingBuffer.toString());
-    }
-  } catch (err: any) {
+    existingSchemaBuffer = await downloadFromS3(destConfig, schemaKey);
+  } catch {
     logger.debug(`No existing schema found for ${objectApiName}, treating as new`);
   }
 
-  // Compare schemas
-  const existingFieldNames = new Set(existingSchema.map((f) => f.apiName));
-  const latestFieldNames = new Set(latestSchema.map((f) => f.apiName));
+  // Compare schemas - only mark as changed if existing schema differs
+  const schemaChanged = existingSchemaBuffer
+    ? !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchema)
+    : false;
 
-  // Detect new and removed fields
-  const newFields = Array.from(latestFieldNames).filter((f) => !existingFieldNames.has(f));
-  const removedFields = Array.from(existingFieldNames).filter((f) => !latestFieldNames.has(f));
-
-  // Check if schema truly changed
-  const schemaChanged =
-    !schemasAreEqual(existingSchema, latestSchema) ||
-    newFields.length > 0 ||
-    removedFields.length > 0;
-
-  logger.info(
-    `Real-time schema comparison for ${objectApiName}: changed=${schemaChanged}, newFields=${newFields.length}, removedFields=${removedFields.length}`
-  );
+  logger.info(`Real-time schema comparison for ${objectApiName}: changed=${schemaChanged}`);
 
   return {
     schemaChanged,
     latestSchema,
-    newFields,
-    removedFields,
-    incomingFields,
   };
 };
 
 // ---------------------------------------------------------------------------
 // Salesforce realtime handler — implements ICrmRealtimeHandler
-// Performs real-time schema comparison using latest schema from API
+// Performs real-time schema comparison using payload schema
 // ---------------------------------------------------------------------------
 export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
   async processPayload(
@@ -198,77 +131,52 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
       `Realtime job ${realtimeJobId}: uploaded ${records.length} ${operation} record(s) for ${objectApiName} → ${s3Path}`
     );
 
-    // ── Real-time schema comparison using latest schema from API ────────────
-    // let schemaChanged = false;
-    // let detectionInfo = {
-    //   newFields: [] as string[],
-    //   removedFields: [] as string[],
-    //   incomingFields: [] as string[],
-    // };
+    // ── Real-time schema comparison using payload schema ────────────────────
+    let schemaChanged = false;
 
-    // try {
-    //   const schemaComparison = await compareSchemaInRealtime(
-    //     crmId,
-    //     objectApiName,
-    //     destConfig,
-    //     records
-    //   );
+    try {
+      const schemaComparison = await compareSchemaInRealtime(
+        crmId,
+        crmName,
+        backupConfigId,
+        objectApiName,
+        destConfig,
+        payload.schema
+      );
 
-    //   schemaChanged = schemaComparison.schemaChanged;
-    //   detectionInfo = {
-    //     newFields: schemaComparison.newFields,
-    //     removedFields: schemaComparison.removedFields,
-    //     incomingFields: schemaComparison.incomingFields,
-    //   };
+      schemaChanged = schemaComparison.schemaChanged;
 
-    //   // If schema changed, upload new schema and notify core service
-    //   if (schemaChanged) {
-    //     const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
-    //     const schemaBuffer = Buffer.from(
-    //       JSON.stringify(schemaComparison.latestSchema, null, 2)
-    //     );
-    //     await uploadToS3(destConfig, schemaKey, schemaBuffer);
+      if (schemaChanged) {
+        const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
+        const schemaBuffer = Buffer.from(JSON.stringify(schemaComparison.latestSchema, null, 2));
+        await uploadToS3(destConfig, schemaKey, schemaBuffer);
 
-    //     logger.info(
-    //       `Realtime job ${realtimeJobId}: schema changed for ${objectApiName}`,
-    //       {
-    //         newFields: schemaComparison.newFields,
-    //         removedFields: schemaComparison.removedFields,
-    //       }
-    //     );
+        logger.info(`Realtime job ${realtimeJobId}: schema changed for ${objectApiName}`);
 
-    //     // Notify core service of schema change
-    //     await httpRequest({
-    //       url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-    //       method: 'POST',
-    //       body: JSON.stringify({
-    //         eventType: 'schema.updated',
-    //         crmId,
-    //         objectName: objectApiName,
-    //         backupJobId: realtimeJobId,
-    //         backupConfigId,
-    //         schemaChange: true,
-    //       }),
-    //       headers: {
-    //         'x-internal-secret': INTERNAL_SECRET,
-    //       },
-    //     });
+        await httpRequest({
+          url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+          method: 'POST',
+          body: JSON.stringify({
+            eventType: 'schema.updated',
+            crmId,
+            objectName: objectApiName,
+            backupJobId: realtimeJobId,
+            backupConfigId,
+            schemaChange: true,
+          }),
+          headers: {
+            'x-internal-secret': INTERNAL_SECRET,
+          },
+        });
 
-    //     logger.info(
-    //       `Realtime job ${realtimeJobId}: core service notified of schema changes`
-    //     );
-    //   }
-    // } catch (err: any) {
-    //   logger.error(
-    //     `Realtime job ${realtimeJobId}: schema comparison failed for ${objectApiName}: ${err?.message}`
-    //   );
-    //   // Continue processing even if schema comparison fails — don't block data upload
-    // }
+        logger.info(`Realtime job ${realtimeJobId}: core service notified of schema changes`);
+      }
+    } catch (err: any) {
+      logger.error(
+        `Realtime job ${realtimeJobId}: schema comparison failed for ${objectApiName}: ${err?.message}`
+      );
+    }
 
-    // logger.info(
-    //   `Realtime job ${realtimeJobId} completed with schemaChanged=${schemaChanged}`,
-    //   detectionInfo
-    // );
-    return { s3Path, sizeInBytes };
+    return { s3Path, schemaChanged, sizeInBytes };
   },
 };

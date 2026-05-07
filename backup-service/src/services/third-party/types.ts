@@ -20,5 +20,5 @@ export interface ICrmRealtimeHandler {
     crmName: string,
     destConfig: IDestinationConfig,
     payload: IRealtimePayload
-  ): Promise<{ s3Path: string; sizeInBytes: number }>;
+  ): Promise<{ s3Path: string; schemaChanged: boolean; sizeInBytes: number }>;
 }
