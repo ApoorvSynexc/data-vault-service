@@ -21,11 +21,6 @@ import {
   getBackupJobStatsForUser,
 } from '../../../services';
 import {
-  createScheduleFromConfig,
-  deleteSchedule,
-  generateScheduleId,
-  updateScheduleFromConfig,
-  convertScheduleConfigToCron,
 } from '../../../services/third-party/event-bridge-scheduler';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, DURATION_TYPE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -116,7 +111,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     scheduleConfig: normalizeScheduleConfig(req.body.scheduleConfig),
     backupStatus: req.body.backupStatus || 'ACTIVE',
   };
-  
+
   const config = await createBackupConfig({ userId: req.user!.userId, ...normalizedBody });
 
   try {
@@ -126,44 +121,11 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       return;
     }
 
-    // Setup triggers/schedules for ACTIVE backups
-    if (config.backupStatus !== 'ACTIVE') {
-      makeResponse(req, res, 201, true, 'create', sanitize(config));
-      return;
-    }
-
     if (config.schedule === SCHEDULE_MODE.realtime) {
       // Handle real-time backup with triggers
       await realTimeTriggerManagement('create', config);
     } else if (config.schedule === SCHEDULE_MODE.schedule) {
-      // Handle scheduled backup with EventBridge Scheduler
-      if (!config.scheduleConfig) {
-        throw new Error('scheduleConfig is required for scheduled backups');
-      }
 
-      const scheduleId = generateScheduleId(config.backupConfigId, config.userId);
-      const targetArn = String(process.env.BACKUP_LAMBDA_ARN || process.env.BACKUP_TRIGGER_URL);
-      const roleArn = String(process.env.SCHEDULER_ROLE_ARN);
-      const targetType = (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'HTTP';
-
-      if (!targetArn || !roleArn) {
-        throw new Error('BACKUP_LAMBDA_ARN/BACKUP_TRIGGER_URL and SCHEDULER_ROLE_ARN are required');
-      }
-
-      // await createScheduleFromConfig({
-      //   scheduleId,
-      //   scheduleConfig: config.scheduleConfig.scheduling as any,
-      //   timezone: config.scheduleConfig.timeZone,
-      //   targetArn,
-      //   roleArn,
-      //   targetType,
-      //   payload: {
-      //     backupConfigId: config.backupConfigId,
-      //     userId: config.userId,
-      //     crmId: config.crmId,
-      //     destinationId: config.destinationId,
-      //   },
-      // });
     }
 
     makeResponse(req, res, 201, true, 'create', sanitize(config));
@@ -244,42 +206,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   };
 
   const updated = await updateBackupConfig(String(backupConfigId), normalizedBody);
-
-  try {
-    // Handle schedule updates if schedule type or config changed
-    if (updated && req.body.schedule === SCHEDULE_MODE.schedule && req.body.scheduleConfig) {
-      const scheduleId = generateScheduleId(updated.backupConfigId, updated.userId);
-      const targetArn = String(process.env.BACKUP_LAMBDA_ARN || process.env.BACKUP_TRIGGER_URL);
-      const roleArn = String(process.env.SCHEDULER_ROLE_ARN);
-      const targetType = (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'HTTP';
-
-      if (!targetArn || !roleArn) {
-        throw new Error('BACKUP_LAMBDA_ARN/BACKUP_TRIGGER_URL and SCHEDULER_ROLE_ARN are required');
-      }
-
-      const normalizedScheduleConfig = normalizeScheduleConfig(req.body.scheduleConfig);
-      if (normalizedScheduleConfig?.scheduling) {
-        await updateScheduleFromConfig({
-          scheduleId,
-          scheduleConfig: normalizedScheduleConfig.scheduling,
-          timezone: normalizedScheduleConfig.timeZone,
-          targetArn,
-          roleArn,
-          targetType,
-          payload: {
-            backupConfigId: updated.backupConfigId,
-            userId: updated.userId,
-            crmId: updated.crmId,
-            destinationId: updated.destinationId,
-          },
-        });
-      }
-    }
-
-    makeResponse(req, res, 200, true, 'update', sanitize(updated!));
-  } catch (error) {
-    throw error;
-  }
+  makeResponse(req, res, 200, true, 'update', sanitize(updated!));
 };
 
 const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
