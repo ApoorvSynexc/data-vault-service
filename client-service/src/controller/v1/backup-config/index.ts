@@ -162,13 +162,13 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   const config = await getBackupConfigBySlug(req.user!.userId, String(slug));
   if (!config) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_found');
     return;
   }
 
   const crmPayload = await getCrmById(config.crmId);
   if (!crmPayload) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_found');
     return;
   }
   const crmDetail = {
