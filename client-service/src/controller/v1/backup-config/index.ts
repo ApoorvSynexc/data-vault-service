@@ -19,6 +19,7 @@ import {
   deleteTriggers,
   realTimeTriggerManagement,
   computeJobStats,
+  getApexObjectsCount,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
@@ -74,6 +75,19 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
   }));
 
   makeResponse(req, res, 200, true, 'fetch', { ...apexResult, objects });
+};
+
+const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { crmId, objectApiNames } = req.body;
+  if (!crmId) {
+    return makeResponse(req, res, 400, false, 'crm_id_required');
+  }
+
+  const [apexResult] = await Promise.all([
+    getApexObjectsCount(String(crmId), objectApiNames),
+  ]);
+
+  makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -302,6 +316,7 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
 
 export const backupConfigController = wrapController({
   getObjectsHanlder,
+  getObjectsCountHanlder,
   getFieldsHanlder,
   createBackupConfigHandler,
   listBackupConfigsHandler,

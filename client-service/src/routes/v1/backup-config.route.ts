@@ -5,6 +5,7 @@ import { createBackupConfigValidation, updateBackupConfigValidation } from '../.
 const router = Router();
 
 router.get('/objects', backupConfigController.getObjectsHanlder);
+router.post('/objects-count', backupConfigController.getObjectsCountHanlder);
 router.get('/fields', backupConfigController.getFieldsHanlder);
 
 router.post('/', createBackupConfigValidation, backupConfigController.createBackupConfigHandler);

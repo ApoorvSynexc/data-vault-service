@@ -24,6 +24,25 @@ const getApexObjects = async (crmId: string) => {
   // );
 };
 
+const getApexObjectsCount = async (crmId: string, objectApiNames: string[]) => {
+  const crm = await getCrmById(crmId);
+  if (!crm) {
+    throw new Error('CRM not found');
+  }
+
+  const { access_token, refresh_token } = getCrmTokens(crm);
+  const instanceUrl = crm.crmProfile?.instanceUrl;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+  const url = `${instanceUrl}/services/apexrest/v1/data-vault/object-record-count`;
+  const encryptedResult = await salesforceRequest(
+    { url, method: 'POST', body: JSON.stringify({objectApiNames}) },
+    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
+  );
+  return encryptedResult.data;
+};
+
 const getApexFields = async (crmId: string, objectName: string) => {
   const crm = await getCrmById(crmId);
   if (!crm) {
@@ -47,4 +66,4 @@ const getApexFields = async (crmId: string, objectName: string) => {
   // );
 };
 
-export { getApexObjects, getApexFields };
+export { getApexObjects, getApexObjectsCount, getApexFields };
