@@ -12,10 +12,11 @@ const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vaul
 const COUNTER_TABLE = String(process.env.COUNTER_TABLE || 'data-vault-counters');
 
 // Event Bridge Scheduler Config
-const AWS_SCHEDULER_ROLE_ARN = String(process.env.AWS_AWS_SCHEDULER_ROLE_ARN);
-const AWS_EVENT_BUS_ARN = String(process.env.AWS_AWS_EVENT_BUS_ARN);
+const AWS_SCHEDULER_REGION = String(process.env.AWS_SCHEDULER_REGION);
+const AWS_SCHEDULER_ROLE_ARN = String(process.env.AWS_SCHEDULER_ROLE_ARN);
+const AWS_EVENT_BUS_ARN = String(process.env.AWS_EVENT_BUS_ARN);
 const AWS_EVENT_DETAIL_TYPE = String(process.env.AWS_EVENT_DETAIL_TYPE);
-const AWS_EVENT_SOURCE = String(process.env.AWS_AWS_EVENT_SOURCE);
+const AWS_EVENT_SOURCE = String(process.env.AWS_EVENT_SOURCE);
 
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
@@ -181,6 +182,7 @@ export {
   COUNTER_TABLE,
 
   // AWS EventBridge Scheduler Config
+  AWS_SCHEDULER_REGION,
   AWS_SCHEDULER_ROLE_ARN,
   AWS_EVENT_BUS_ARN,
   AWS_EVENT_SOURCE,
