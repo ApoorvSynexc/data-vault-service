@@ -11,6 +11,12 @@ const ROLE_TABLE = String(process.env.ROLE_TABLE || 'data-vault-roles');
 const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
 const COUNTER_TABLE = String(process.env.COUNTER_TABLE || 'data-vault-counters');
 
+// Event Bridge Scheduler Config
+const AWS_SCHEDULER_ROLE_ARN = String(process.env.AWS_AWS_SCHEDULER_ROLE_ARN);
+const AWS_EVENT_BUS_ARN = String(process.env.AWS_AWS_EVENT_BUS_ARN);
+const AWS_EVENT_DETAIL_TYPE = String(process.env.AWS_EVENT_DETAIL_TYPE);
+const AWS_EVENT_SOURCE = String(process.env.AWS_AWS_EVENT_SOURCE);
+
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
@@ -40,12 +46,6 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
-
-// EventBridge Scheduler Config
-const SCHEDULER_ROLE_ARN = String(process.env.SCHEDULER_ROLE_ARN);
-const BACKUP_TRIGGER_URL = String(process.env.BACKUP_TRIGGER_URL);
-const BACKUP_LAMBDA_ARN = String(process.env.BACKUP_LAMBDA_ARN);
-const SCHEDULER_TARGET_TYPE = (process.env.SCHEDULER_TARGET_TYPE as 'LAMBDA' | 'HTTP') || 'HTTP';
 
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
@@ -180,6 +180,12 @@ export {
   TABLE_COUNTER_TABLE,
   COUNTER_TABLE,
 
+  // AWS EventBridge Scheduler Config
+  AWS_SCHEDULER_ROLE_ARN,
+  AWS_EVENT_BUS_ARN,
+  AWS_EVENT_SOURCE,
+  AWS_EVENT_DETAIL_TYPE,
+
   // JWT Config
   JWT_ACCESS_SECRET,
   JWT_REFRESH_SECRET,
@@ -205,12 +211,6 @@ export {
   // Services
   BACKUP_SERVICE,
   BACKUP_JOB_TABLE,
-
-  // EventBridge Scheduler Config
-  SCHEDULER_ROLE_ARN,
-  BACKUP_TRIGGER_URL,
-  BACKUP_LAMBDA_ARN,
-  SCHEDULER_TARGET_TYPE,
 
   // Enums
   STATUS,
