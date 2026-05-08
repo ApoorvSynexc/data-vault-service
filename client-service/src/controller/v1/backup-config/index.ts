@@ -20,7 +20,28 @@ import {
   realTimeTriggerManagement,
   getBackupJobStatsForUser,
 } from '../../../services';
+import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
+import { IBackupConfig, IScheduleConfig } from '../../../models';
+
+const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
+  const s = scheduleConfig.scheduling;
+  if (!s) return 'cron(0/2 * * * ? *)';
+
+  switch (s.frequency) {
+    case 'HOUR':   return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
+    case 'DAYS':   return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
+    case 'WEEK':   return `rate(${s.interval * 7} days)`;
+    case 'MONTH':  return `cron(0 0 ${s.monthDate ?? 1} * ? *)`;
+    default:       return 'cron(0/2 * * * ? *)';
+  }
+};
+
+const buildEventScheduleInput = (config: IBackupConfig) => ({
+  name: `datavault-${config.backupConfigId}`,
+  scheduleExpression: toAwsCronExpression(config.scheduleConfig!),
+  payload: { backupConfigId: config.backupConfigId, userId: config.userId },
+});
 import { wrapController, isOwner } from '../../../utils/helper';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -85,16 +106,17 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      // Handle real-time backup with triggers
       await realTimeTriggerManagement('create', config);
       await triggerBackupJob(config);
-    } else if (config.schedule === SCHEDULE_MODE.schedule) {
+    } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
       const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
         await triggerBackupJob(config);
+      } else {
+        await createAwsEventScheduler(buildEventScheduleInput(config));
       }
     }
 
@@ -168,6 +190,11 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   const updated = await updateBackupConfig(String(backupConfigId), req.body);
+
+  if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
+    await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+  }
+
   makeResponse(req, res, 200, true, 'update', updated!);
 };
 
@@ -192,6 +219,8 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
       await realTimeTriggerManagement('delete', config);
+    } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
+      await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
     }
 
     makeResponse(req, res, 200, true, 'delete');
