@@ -212,7 +212,7 @@ const deleteBackupJobsByConfig = async (backupConfigId: string, userId: string):
   }
 };
 
-const getBackupJobStatsForUser = async (userId: string) => {
+const computeJobStats = async (query: { indexName: string; keyName: string; keyValue: string }) => {
   const today = dayjs().startOf('day');
   const yesterday = today.subtract(1, 'day');
   const startOfThisWeek = today.subtract(7, 'day');
@@ -232,9 +232,9 @@ const getBackupJobStatsForUser = async (userId: string) => {
     const result = await docClient.send(
       new QueryCommand({
         TableName: BACKUP_JOB_TABLE,
-        IndexName: 'userId-index',
-        KeyConditionExpression: 'userId = :userId',
-        ExpressionAttributeValues: { ':userId': userId },
+        IndexName: query.indexName,
+        KeyConditionExpression: `${query.keyName} = :keyValue`,
+        ExpressionAttributeValues: { ':keyValue': query.keyValue },
         ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
       })
     );
@@ -277,22 +277,13 @@ const getBackupJobStatsForUser = async (userId: string) => {
         : 0;
 
   return {
-    completedJobs: {
-      count: completedCount,
-      vsYesterday: completedToday - completedYesterday,
-    },
-    runningJobs: {
-      count: runningCount,
-    },
-    failedJobs: {
-      count: failedCount,
-    },
-    dataProcessed: {
-      bytes: dataThisWeek,
-      weeklyChangePercent,
-    },
+    completedJobs: { count: completedCount, vsYesterday: completedToday - completedYesterday },
+    runningJobs: { count: runningCount },
+    failedJobs: { count: failedCount },
+    dataProcessed: { bytes: dataThisWeek, weeklyChangePercent },
   };
 };
+
 
 export {
   triggerBackupJob,
@@ -302,5 +293,5 @@ export {
   getBackupJobsByUser,
   getBackupJobsByConfig,
   deleteBackupJobsByConfig,
-  getBackupJobStatsForUser,
+  computeJobStats,
 };
