@@ -110,6 +110,9 @@ interface UpdateBackupObjectParams {
   bulkJobId?: string;
   totalRecordCount?: number;
   completedRecordCount?: number;
+  insertCount?: number;
+  updateCount?: number;
+  deleteCount?: number;
   sizeInBytes?: number;
   currentLocator?: string;
   errorMessage?: string;
@@ -123,6 +126,9 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     bulkJobId,
     totalRecordCount,
     completedRecordCount,
+    insertCount,
+    updateCount,
+    deleteCount,
     sizeInBytes,
     currentLocator,
     errorMessage,
@@ -158,6 +164,24 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     expressionParts.push(`#object[${objectIndex}].#completedRecordCount = :completedRecordCount`);
     expressionNames['#completedRecordCount'] = 'completedRecordCount';
     expressionValues[':completedRecordCount'] = completedRecordCount;
+  }
+
+  if (insertCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#insertCount = :insertCount`);
+    expressionNames['#insertCount'] = 'insertCount';
+    expressionValues[':insertCount'] = insertCount;
+  }
+
+  if (updateCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#updateCount = :updateCount`);
+    expressionNames['#updateCount'] = 'updateCount';
+    expressionValues[':updateCount'] = updateCount;
+  }
+
+  if (deleteCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#deleteCount = :deleteCount`);
+    expressionNames['#deleteCount'] = 'deleteCount';
+    expressionValues[':deleteCount'] = deleteCount;
   }
 
   if (sizeInBytes !== undefined) {

@@ -35,7 +35,7 @@ export const initializeApp = () => {
   const server: Server = createServer(app);
   server.listen(PORT, HOST, async () => {
     startBackupConfigCron();
-    // startNightlyCron();
+    startNightlyCron();
     console.log(`* App is running at PORT: ${PORT} *`);
   });
 };

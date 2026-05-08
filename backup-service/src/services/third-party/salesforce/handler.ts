@@ -156,7 +156,7 @@ const exportFirstTime = async (
   const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
   await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
 
-  const { sizeInBytes, completedRecordCount: finalCompletedCount } = await uploadBulkResultsByPage({
+  const { sizeInBytes, completedRecordCount: finalCompletedCount, insertCount } = await uploadBulkResultsByPage({
     instanceUrl,
     tokens,
     jobId,
@@ -174,6 +174,7 @@ const exportFirstTime = async (
     backupJobId,
     objectIndex,
     totalRecordCount: finalCompletedCount,
+    insertCount,
   });
 
   await httpRequest({
@@ -298,7 +299,7 @@ const exportIncremental = async (
       status: OBJECT_STATUS.transferInProgress,
     });
 
-    const sizeInBytes = await classifyAndUploadBulkResultsByPage({
+    const { sizeInBytes, insertCount, updateCount, deleteCount } = await classifyAndUploadBulkResultsByPage({
       instanceUrl,
       tokens,
       jobId: bulkJobId,
@@ -311,6 +312,8 @@ const exportIncremental = async (
       startLocator: object.currentLocator ?? null,
       startCompletedRecordCount: object.completedRecordCount ?? 0,
     });
+
+    await updateBackupObject({ backupJobId, objectIndex, insertCount, updateCount, deleteCount });
 
     await httpRequest({
       url: `${CORE_SERVICE}/v1/internal/backup-payload`,
