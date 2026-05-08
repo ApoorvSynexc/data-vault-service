@@ -18,7 +18,7 @@ import {
   getDestinationById,
   deleteTriggers,
   realTimeTriggerManagement,
-  getBackupJobStatsForUser,
+  computeJobStats,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE } from '../../../constant';
@@ -283,7 +283,12 @@ const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> 
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const stats = await getBackupJobStatsForUser(req.user!.userId);
+  const { backupConfigId } = req.query;
+  const stats = await computeJobStats(
+    backupConfigId
+      ? { indexName: 'backupConfigId-index', keyName: 'backupConfigId', keyValue: String(backupConfigId) }
+      : { indexName: 'userId-index', keyName: 'userId', keyValue: req.user!.userId }
+  );
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
