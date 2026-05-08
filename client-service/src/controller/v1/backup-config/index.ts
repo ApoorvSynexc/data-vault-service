@@ -29,11 +29,14 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   if (!s) return 'cron(0/2 * * * ? *)';
 
   switch (s.frequency) {
-    case 'HOUR':   return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
-    case 'DAYS':   return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
-    case 'WEEK':   return `rate(${s.interval * 7} days)`;
-    case 'MONTH':  return `cron(0 0 ${s.monthDate ?? 1} * ? *)`;
-    default:       return 'cron(0/2 * * * ? *)';
+    case 'HOURLY':   return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
+    case 'DAILY':    return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
+    case 'WEEKLY':   return `rate(${s.interval * 7} days)`;
+    case 'MONTHLY':  return `cron(0 0 ${s.monthDate ?? 1} * ? *)`;
+    case 'CUSTOM':   return s.startDate && s.startTime
+      ? `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`
+      : 'cron(0/2 * * * ? *)';
+    default:         return 'cron(0/2 * * * ? *)';
   }
 };
 
