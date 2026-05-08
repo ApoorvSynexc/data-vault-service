@@ -166,7 +166,7 @@ export interface IUploadBulkResultsByPage {
 // ---------------------------------------------------------------------------
 export const uploadBulkResultsByPage = async (
   payload: IUploadBulkResultsByPage
-): Promise<{ sizeInBytes: number; completedRecordCount: number }> => {
+): Promise<{ sizeInBytes: number; completedRecordCount: number; insertCount: number }> => {
   const {
     instanceUrl,
     tokens,
@@ -240,7 +240,7 @@ export const uploadBulkResultsByPage = async (
     throw new Error(errorMessage, { cause: err });
   }
 
-  return { sizeInBytes, completedRecordCount };
+  return { sizeInBytes, completedRecordCount, insertCount: completedRecordCount };
 };
 
 // ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ export interface IClassifyAndUploadBulkResultsByPage {
 
 export const classifyAndUploadBulkResultsByPage = async (
   payload: IClassifyAndUploadBulkResultsByPage
-): Promise<number> => {
+): Promise<{ sizeInBytes: number; insertCount: number; updateCount: number; deleteCount: number }> => {
   const {
     instanceUrl,
     tokens,
@@ -370,6 +370,9 @@ export const classifyAndUploadBulkResultsByPage = async (
   let locator: string | null = startLocator;
   let completedRecordCount = startCompletedRecordCount;
   let sizeInBytes = 0;
+  let insertCount = 0;
+  let updateCount = 0;
+  let deleteCount = 0;
 
   try {
     do {
@@ -441,6 +444,9 @@ export const classifyAndUploadBulkResultsByPage = async (
         // Deleted records are excluded from completedRecordCount to match
         // Salesforce's numberRecordsProcessed, which does not count soft-deleted
         // rows returned by queryAll.
+        insertCount += insertRaws.length;
+        updateCount += updateRaws.length;
+        deleteCount += deleteRaws.length;
         completedRecordCount += insertRaws.length + updateRaws.length + deleteRaws.length;
       }
       sizeInBytes += pageSizeInBytes;
@@ -450,6 +456,9 @@ export const classifyAndUploadBulkResultsByPage = async (
         backupJobId,
         objectIndex,
         completedRecordCount,
+        insertCount,
+        updateCount,
+        deleteCount,
         sizeInBytes,
         ...(locator ? { currentLocator: locator } : { status: OBJECT_STATUS.completed }),
       });
@@ -469,5 +478,5 @@ export const classifyAndUploadBulkResultsByPage = async (
     throw new Error(errorMessage, { cause: err });
   }
 
-  return sizeInBytes;
+  return { sizeInBytes, insertCount, updateCount, deleteCount };
 };
