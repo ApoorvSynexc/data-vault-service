@@ -162,22 +162,34 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   const config = await getBackupConfigBySlug(req.user!.userId, String(slug));
   if (!config) {
-    makeResponse(req, res, 400, false, 'not_found');
+    makeResponse(req, res, 400, false, 'backup_config_not_found');
     return;
   }
 
   const crmPayload = await getCrmById(config.crmId);
   if (!crmPayload) {
-    makeResponse(req, res, 400, false, 'not_found');
+    makeResponse(req, res, 400, false, 'crm_not_found');
     return;
   }
+
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) {
+    makeResponse(req, res, 400, false, 'destination_not_found');
+    return;
+  }
+
   const crmDetail = {
     crmId: crmPayload.crmId,
     crmName: crmPayload.crmName,
     slug: crmPayload.slug,
     isConnected: crmPayload.isConnected,
   };
-  makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail });
+  const destinationDetail = {
+    destinationId: destination.destinationId,
+    destinationName: destination.name,
+    type: destination.type,
+  };
+  makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail, destinationDetail });
 };
 
 const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
