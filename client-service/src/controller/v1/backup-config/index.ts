@@ -283,12 +283,20 @@ const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> 
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId } = req.query;
-  const stats = await computeJobStats(
-    backupConfigId
-      ? { indexName: 'backupConfigId-index', keyName: 'backupConfigId', keyValue: String(backupConfigId) }
-      : { indexName: 'userId-index', keyName: 'userId', keyValue: req.user!.userId }
-  );
+  const { slug } = req.query;
+
+  if (slug) {
+    const config = await getBackupConfigBySlug(req.user!.userId, String(slug));
+    if (!config) {
+      makeResponse(req, res, 400, false, 'backup_config_not_found');
+      return;
+    }
+    const stats = await computeJobStats({ indexName: 'backupConfigId-index', keyName: 'backupConfigId', keyValue: config.backupConfigId });
+    makeResponse(req, res, 200, true, 'fetch', stats);
+    return;
+  }
+
+  const stats = await computeJobStats({ indexName: 'userId-index', keyName: 'userId', keyValue: req.user!.userId });
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
