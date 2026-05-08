@@ -1,7 +1,6 @@
 import {
     SchedulerClient,
     CreateScheduleCommand,
-    GetScheduleCommand,
     UpdateScheduleCommand,
     DeleteScheduleCommand,
     DeleteScheduleCommandOutput,
@@ -41,13 +40,12 @@ const createAwsEventScheduler = async (input: ScheduleInput): Promise<CreateSche
     const { name, scheduleExpression, payload } = input;
 
     try {
-        await scheduler.send(new GetScheduleCommand({ Name: name }));
-        throw new Error(`Schedule "${name}" already exists. Use update instead.`);
+        return await scheduler.send(new CreateScheduleCommand(buildParams({ name, scheduleExpression, payload })));
     } catch (err: any) {
-        if (err.name !== "ResourceNotFoundException") throw err;
+        if (err.name === "ConflictException")
+            throw new Error(`Schedule "${name}" already exists. Use update instead.`);
+        throw err;
     }
-
-    return scheduler.send(new CreateScheduleCommand(buildParams({ name, scheduleExpression, payload })));
 };
 
 const updateAwsEventSchedule = async (input: ScheduleInput): Promise<UpdateScheduleCommandOutput> => {
@@ -66,14 +64,12 @@ const updateAwsEventSchedule = async (input: ScheduleInput): Promise<UpdateSched
 
 const deleteAwsEventScheduler = async (name: string): Promise<DeleteScheduleCommandOutput> => {
     try {
-        await scheduler.send(new GetScheduleCommand({ Name: name }));
+        return await scheduler.send(new DeleteScheduleCommand({ Name: name }));
     } catch (err: any) {
         if (err.name === "ResourceNotFoundException")
             throw new Error(`Schedule "${name}" does not exist.`);
         throw err;
     }
-
-    return scheduler.send(new DeleteScheduleCommand({ Name: name }));
 };
 
 export { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler };
