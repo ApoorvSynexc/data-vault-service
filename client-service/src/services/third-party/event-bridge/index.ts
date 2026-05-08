@@ -9,10 +9,9 @@ import {
     CreateScheduleCommandOutput,
     UpdateScheduleCommandOutput,
 } from "@aws-sdk/client-scheduler";
-import { AWS_EVENT_BUS_ARN, AWS_EVENT_DETAIL_TYPE, AWS_EVENT_SOURCE, AWS_REGION, AWS_SCHEDULER_ROLE_ARN } from "../../../constant";
+import { AWS_EVENT_BUS_ARN, AWS_EVENT_DETAIL_TYPE, AWS_EVENT_SOURCE, AWS_SCHEDULER_REGION, AWS_SCHEDULER_ROLE_ARN } from "../../../constant";
 
-
-const scheduler = new SchedulerClient({ region: AWS_REGION });
+const scheduler = new SchedulerClient({ region: AWS_SCHEDULER_REGION });
 
 interface ScheduleInput {
     name: string;
