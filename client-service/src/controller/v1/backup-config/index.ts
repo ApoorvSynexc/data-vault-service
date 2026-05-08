@@ -192,10 +192,6 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
       await realTimeTriggerManagement('delete', config);
-    } else if (config.schedule === SCHEDULE_MODE.schedule) {
-      // Delete EventBridge schedule for scheduled backups
-      // const scheduleId = generateScheduleId(config.backupConfigId, config.userId);
-      // await deleteSchedule(scheduleId);
     }
 
     makeResponse(req, res, 200, true, 'delete');
