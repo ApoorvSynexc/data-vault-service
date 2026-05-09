@@ -65,7 +65,7 @@ const buildStatusFilter = (
 };
 
 const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
-  const statusFilter = search.status ? buildStatusFilter([search.status].flat()) : null;
+  const statusFilter = search.status ? buildStatusFilter(Array.isArray(search.status) ? search.status : [search.status]) : null;
 
   // ── By email (GSI) ────────────────────────────────────────────────────────
   if (search['contact.email']) {
@@ -117,8 +117,11 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
     if (!user) {
       return null;
     }
-    if (statusFilter && !search.status.flat().includes(user.status)) {
-      return null;
+    if (search.status) {
+      const allowedStatuses = Array.isArray(search.status) ? search.status : [search.status];
+      if (!allowedStatuses.includes(user.status)) {
+        return null;
+      }
     }
     return user;
   }
