@@ -20,7 +20,7 @@ import {
 } from './bulk';
 import { SalesforceTokens } from '.';
 
-const CONCURRENCY_LIMIT = 5;
+const CONCURRENCY_LIMIT = 3;
 const MAX_RETRIES = 3;
 
 // ---------------------------------------------------------------------------
