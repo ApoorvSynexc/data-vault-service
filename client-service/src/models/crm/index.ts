@@ -14,6 +14,7 @@ export interface ICrm {
   spaceId?: string;
   crmName: string; // GSI sort key
   slug: string; // unique per user, generated from crmProfile.name
+  name?: string;
   isConnected: boolean;
   crmProfile?: ICrmProfile;
   encryptedCredentials?: string;

@@ -6,6 +6,7 @@ export interface IOAuthState {
   crmId?: string;
   environment?: 'production' | 'sandbox' | 'custom';
   customUrl?: string;
+  name?: string;
   ttl: number; // Unix epoch seconds — DynamoDB TTL attribute
   createdAt: string;
 }

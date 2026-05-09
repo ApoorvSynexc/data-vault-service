@@ -22,6 +22,7 @@ interface UpsertCrmParams {
   environment?: 'production' | 'sandbox' | 'custom';
   customUrl?: string;
   spaceId?: string;
+  name?: string;
 }
 
 interface ReconnectCrmParams {
@@ -30,10 +31,11 @@ interface ReconnectCrmParams {
   crmCredentials: Record<string, any>;
   environment?: 'production' | 'sandbox' | 'custom';
   customUrl?: string;
+  name?: string;
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
-  const { userId, crmName, crmProfile, crmCredentials, environment, customUrl, spaceId } = params;
+  const { userId, crmName, crmProfile, crmCredentials, environment, customUrl, spaceId, name } = params;
   const now = new Date().toISOString();
   const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), userId);
 
@@ -54,6 +56,7 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     customUrl,
     status: STATUS.active,
     ...(spaceId && { spaceId }),
+    ...(name && { name }),
     createdAt: now,
     updatedAt: now,
   };
@@ -168,7 +171,7 @@ const updateCrmCredentials = async (
 };
 
 const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> => {
-  const { crmId, crmProfile, crmCredentials, environment, customUrl } = params;
+  const { crmId, crmProfile, crmCredentials, environment, customUrl, name } = params;
   const existing = await getCrmById(crmId);
 
   if (!existing) {
@@ -199,6 +202,11 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
     updateExpressionParts.push('REMOVE customUrl');
   }
 
+  if (name) {
+    updateExpressionParts[0] += ', #name = :name';
+    expressionAttributeValues[':name'] = name;
+  }
+
   await docClient.send(
     new UpdateCommand({
       TableName: CRM_TABLE,
@@ -206,6 +214,7 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
       UpdateExpression: updateExpressionParts.join(' '),
       ExpressionAttributeNames: {
         '#status': 'status',
+        ...(name && { '#name': 'name' }),
       },
       ExpressionAttributeValues: expressionAttributeValues,
     })
@@ -219,6 +228,7 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
     iv,
     environment: resolvedEnvironment,
     customUrl,
+    name,
     status: STATUS.active,
     updatedAt,
   };
