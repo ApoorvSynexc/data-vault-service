@@ -137,7 +137,7 @@ export const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
 };
 
 const INITIAL_PAGE_KEY = `initial`;
-const MAX_RECORDS_PER_PAGE = 10_000; // Capped well below SF max (50k) to bound per-page memory
+const MAX_RECORDS_PER_PAGE = 5000; // Capped well below SF
 
 export interface IUploadBulkResultsByPage {
   instanceUrl: string;
