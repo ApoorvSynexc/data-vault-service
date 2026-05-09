@@ -27,10 +27,9 @@ router.post(
 );
 
 // Social login endpoints
-router.get('/social-login', authRateLimit, socialLoginController.socialLoginHandler);
+router.get('/social-login', socialLoginController.socialLoginHandler);
 router.get(
   '/social-login/callback',
-  authRateLimit,
   socialLoginController.socialLoginCallbackHandler
 );
 
