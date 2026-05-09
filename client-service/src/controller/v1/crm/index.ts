@@ -38,7 +38,7 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmName, crmId, environment, customUrl } = req.query;
+  const { crmName, crmId, environment, customUrl, name } = req.query;
 
   if (!crmName && !crmId) {
     makeResponse(req, res, 400, false, 'crm_name_required');
@@ -85,7 +85,8 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
         resolvedCrmName,
         crmId ? String(crmId) : undefined,
         env,
-        customUrl ? String(customUrl) : undefined
+        customUrl ? String(customUrl) : undefined,
+        name ? String(name) : undefined
       );
       redirectUrl = url;
       break;
@@ -170,6 +171,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       crmCredentials: nextCrmCredentials,
       environment: oauthState.environment,
       customUrl: oauthState.customUrl,
+      name: oauthState.name,
     });
 
     if (!reconnected) {
@@ -213,6 +215,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       environment: oauthState.environment,
       customUrl: oauthState.customUrl,
       ...(spaceId && { spaceId }),
+      ...(oauthState.name && { name: oauthState.name }),
     });
   }
 

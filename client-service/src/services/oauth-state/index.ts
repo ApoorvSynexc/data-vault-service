@@ -12,7 +12,8 @@ const createOAuthState = async (
   crmName: string,
   crmId?: string,
   environment?: 'production' | 'sandbox' | 'custom',
-  customUrl?: string
+  customUrl?: string,
+  name?: string
 ): Promise<void> => {
   const item: IOAuthState = {
     state,
@@ -22,6 +23,7 @@ const createOAuthState = async (
     crmId,
     environment,
     customUrl,
+    name,
     ttl: Math.floor(Date.now() / 1000) + OAUTH_STATE_TTL_SECONDS,
     createdAt: new Date().toISOString(),
   };
