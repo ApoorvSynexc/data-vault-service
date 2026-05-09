@@ -78,6 +78,7 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
       config: getDecryptedDestinationConfig(destination),
     },
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
+    ...(config.spaceId && { spaceId: config.spaceId }),
   };
 
   const result = await httpRequest({

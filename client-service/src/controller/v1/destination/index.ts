@@ -14,7 +14,14 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   const { name, provider, type, config } = req.body;
   const userId = req.user!.userId;
 
-  const destination = await createDestination({ userId, name, provider, type, config });
+  const destination = await createDestination({
+    userId,
+    name,
+    provider,
+    type,
+    config,
+    ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
+  });
 
   makeResponse(req, res, 201, true, 'create', {
     ...destination,
