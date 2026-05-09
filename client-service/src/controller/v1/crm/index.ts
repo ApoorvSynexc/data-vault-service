@@ -200,11 +200,6 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
         role: { name: userRole.name, roleId: userRole.roleId },
         ...(spaceId && { spaceId }),
       });
-
-      if (spaceId) {
-        await addMemberToSpace(spaceId, oauthState.userId);
-        await updateUser({ userId: oauthState.userId }, { spaceId });
-      }
     }
 
     await upsertCrm({
