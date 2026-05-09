@@ -14,12 +14,15 @@ import {
   updateCrmCredentials,
   createUser,
   getUser,
+  addMemberToSpace,
+  updateUser,
 } from '../../../services';
 import {
   refreashSalesforceToken,
   SalesforceAuthExpiredError,
   SalesforceEnvironment,
 } from '../../../services/third-party/salesforce';
+import { STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { defaultRoles } from '../../../assets';
 
@@ -174,8 +177,11 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       return;
     }
   } else {
+    // Get spaceId from authenticated user's token
+    const spaceId = req.user?.spaceId;
+
     // Create user account with Salesforce profile data if user doesn't exist
-    const existingUser = await getUser({ 'contact.email': nextCrmProfile.email });
+    const existingUser = await getUser({ 'contact.email': nextCrmProfile.email, status: STATUS.active });
 
     if (!existingUser) {
       const nameParts = nextCrmProfile.name?.split(' ') ?? [];
@@ -190,7 +196,13 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
           isEmailVerified: true,
         },
         role: { name: userRole.name, roleId: userRole.roleId },
+        ...(spaceId && { spaceId }),
       });
+
+      if (spaceId) {
+        await addMemberToSpace(spaceId, oauthState.userId);
+        await updateUser({ userId: oauthState.userId }, { spaceId });
+      }
     }
 
     await upsertCrm({
@@ -200,6 +212,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       crmCredentials: nextCrmCredentials,
       environment: oauthState.environment,
       customUrl: oauthState.customUrl,
+      ...(spaceId && { spaceId }),
     });
   }
 

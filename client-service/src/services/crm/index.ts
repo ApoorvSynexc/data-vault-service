@@ -21,6 +21,7 @@ interface UpsertCrmParams {
   crmCredentials: Record<string, any>;
   environment?: 'production' | 'sandbox' | 'custom';
   customUrl?: string;
+  spaceId?: string;
 }
 
 interface ReconnectCrmParams {
@@ -32,7 +33,7 @@ interface ReconnectCrmParams {
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
-  const { userId, crmName, crmProfile, crmCredentials, environment, customUrl } = params;
+  const { userId, crmName, crmProfile, crmCredentials, environment, customUrl, spaceId } = params;
   const now = new Date().toISOString();
   const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), userId);
 
@@ -52,6 +53,7 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     environment: environment ?? 'production',
     customUrl,
     status: STATUS.active,
+    ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
   };

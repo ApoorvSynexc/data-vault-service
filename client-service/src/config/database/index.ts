@@ -19,6 +19,7 @@ import {
   ROLE_TABLE,
   SESSION_TABLE,
   USER_TABLE,
+  SPACE_TABLE,
   DYNAMODB_ENDPOINT,
 } from '../../constant';
 
@@ -227,6 +228,12 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         Projection: { ProjectionType: 'ALL' },
       },
     ],
+  },
+  {
+    TableName: SPACE_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [{ AttributeName: 'spaceId', AttributeType: 'S' }],
+    KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
   },
 ];
 

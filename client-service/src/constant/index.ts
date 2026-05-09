@@ -47,6 +47,7 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
+const SPACE_TABLE = String(process.env.SPACE_TABLE || 'data-vault-spaces');
 
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
@@ -213,6 +214,7 @@ export {
   // Services
   BACKUP_SERVICE,
   BACKUP_JOB_TABLE,
+  SPACE_TABLE,
 
   // Enums
   STATUS,
