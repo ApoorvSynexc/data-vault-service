@@ -113,6 +113,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     userId: req.user!.userId,
     ...req.body,
     backupStatus: req.body.backupStatus || 'ACTIVE',
+    ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
   });
 
   try {

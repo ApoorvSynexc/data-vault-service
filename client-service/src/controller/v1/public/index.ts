@@ -50,6 +50,7 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
         config: getDecryptedDestinationConfig(destination),
       },
       realtimePayload: decryptedBody,
+      ...(config.spaceId && { spaceId: config.spaceId }),
     }),
   });
 };
