@@ -55,6 +55,7 @@ export interface IBackupConfig {
   lastEventId?: string; // idempotency key — last processed backup-service event ID
   schemaChange?: boolean;
   sizeInBytes?: number;
+  spaceId?: string;
   createdAt: string;
   updatedAt: string;
 }
