@@ -12,6 +12,7 @@ const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<voi
     crmName,
     destination,
     realtimePayload,
+    spaceId,
   }: {
     userId: string;
     backupConfigId: string;
@@ -19,6 +20,7 @@ const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<voi
     crmName: string;
     destination: { type: string; config: IDestinationConfig };
     realtimePayload: IRealtimePayload;
+    spaceId?: string;
   } = req.body;
 
   const job = await createRealtimeBackupJob({
@@ -30,6 +32,7 @@ const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<voi
     objectApiName: realtimePayload.objectApiName,
     operation: realtimePayload.operation,
     recordCount: realtimePayload.records.length,
+    ...(spaceId && { spaceId }),
   });
 
   makeResponse(req, res, 202, true, 'create', {
