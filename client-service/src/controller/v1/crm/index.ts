@@ -12,6 +12,8 @@ import {
   reconnectCrm,
   upsertCrm,
   updateCrmCredentials,
+  createUser,
+  getUser,
 } from '../../../services';
 import {
   refreashSalesforceToken,
@@ -19,6 +21,7 @@ import {
   SalesforceEnvironment,
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
+import { defaultRoles } from '../../../assets';
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
 // e.g. "HTTP Error 400: {"error":"invalid_grant",...}" → "invalid_grant"
@@ -171,6 +174,25 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       return;
     }
   } else {
+    // Create user account with Salesforce profile data if user doesn't exist
+    const existingUser = await getUser({ 'contact.email': nextCrmProfile.email });
+
+    if (!existingUser) {
+      const nameParts = nextCrmProfile.name?.split(' ') ?? [];
+      const userRole = defaultRoles.find((r) => r.name === 'user')!;
+
+      await createUser({
+        userId: oauthState.userId,
+        firstName: nameParts[0] ?? '',
+        lastName: nameParts.slice(1).join(' ') ?? '',
+        contact: {
+          email: nextCrmProfile.email,
+          isEmailVerified: true,
+        },
+        role: { name: userRole.name, roleId: userRole.roleId },
+      });
+    }
+
     await upsertCrm({
       userId: oauthState.userId,
       crmName: oauthState.crmName,
