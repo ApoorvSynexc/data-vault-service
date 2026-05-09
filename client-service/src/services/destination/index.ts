@@ -18,6 +18,7 @@ interface CreateDestinationParams {
   provider: 'AWS' | 'AZURE' | 'GCP';
   type: string;
   config: Record<string, any>;
+  spaceId?: string;
 }
 
 interface UpdateDestinationParams {
@@ -28,7 +29,7 @@ interface UpdateDestinationParams {
 }
 
 const createDestination = async (params: CreateDestinationParams): Promise<IDestination> => {
-  const { userId, name, provider, type, config } = params;
+  const { userId, name, provider, type, config, spaceId } = params;
   const now = new Date().toISOString();
   const { ciphertext, iv } = encryptForTenant(JSON.stringify(config), userId);
 
@@ -41,6 +42,7 @@ const createDestination = async (params: CreateDestinationParams): Promise<IDest
     ciphertext,
     iv,
     status: STATUS.active,
+    ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
   };
