@@ -179,25 +179,35 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
   const updatedAt = new Date().toISOString();
   const resolvedEnvironment = environment ?? 'production';
 
+  const updateExpressionParts = [
+    'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :enc, iv = :iv, #status = :status, environment = :environment, updatedAt = :updatedAt',
+  ];
+  const expressionAttributeValues: Record<string, any> = {
+    ':isConnected': true,
+    ':crmProfile': crmProfile,
+    ':enc': ciphertext,
+    ':iv': iv,
+    ':status': STATUS.active,
+    ':environment': resolvedEnvironment,
+    ':updatedAt': updatedAt,
+  };
+
+  if (customUrl) {
+    updateExpressionParts[0] += ', customUrl = :customUrl';
+    expressionAttributeValues[':customUrl'] = customUrl;
+  } else if (existing.customUrl) {
+    updateExpressionParts.push('REMOVE customUrl');
+  }
+
   await docClient.send(
     new UpdateCommand({
       TableName: CRM_TABLE,
       Key: { crmId },
-      UpdateExpression:
-        'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :enc, iv = :iv, #status = :status, environment = :environment, customUrl = :customUrl, updatedAt = :updatedAt',
+      UpdateExpression: updateExpressionParts.join(' '),
       ExpressionAttributeNames: {
         '#status': 'status',
       },
-      ExpressionAttributeValues: {
-        ':isConnected': true,
-        ':crmProfile': crmProfile,
-        ':enc': ciphertext,
-        ':iv': iv,
-        ':status': STATUS.active,
-        ':environment': resolvedEnvironment,
-        ':customUrl': customUrl ?? null,
-        ':updatedAt': updatedAt,
-      },
+      ExpressionAttributeValues: expressionAttributeValues,
     })
   );
 
