@@ -248,7 +248,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
       await realTimeTriggerManagement('delete', config);
-    } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
+    } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
       await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
     }
 
