@@ -13,7 +13,9 @@ const getApexObjects = async (crmId: string) => {
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/v1/data-vault/accessible-objects`;
+  
+  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/accessible-objects`;
+  console.log({url});
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET' },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
@@ -55,7 +57,7 @@ const getApexFields = async (crmId: string, objectName: string) => {
     throw new Error('Instance URL not found');
   }
 
-  const url = `${instanceUrl}/services/apexrest/v1/data-vault/object-fields-metadata?objectApiName=${objectName}`;
+  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-fields-metadata?objectApiName=${objectName}`;
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET' },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
