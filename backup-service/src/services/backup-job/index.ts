@@ -12,10 +12,11 @@ interface CreateBackupJobParams {
   source: ISource & { object?: IBackupObject[] };
   destination: { type: string; config: IDestinationConfig };
   lastUpdatedAt?: string;
+  spaceId?: string;
 }
 
 const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination, lastUpdatedAt } = params;
+  const { userId, backupConfigId, source, destination, lastUpdatedAt, spaceId } = params;
   const { object, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
@@ -38,6 +39,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     ...(trackedObjects?.length ? { object: trackedObjects } : {}),
     status: JOB_STATUS.pending,
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
+    ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
   };

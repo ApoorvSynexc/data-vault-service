@@ -15,6 +15,7 @@ interface CreateRealtimeBackupJobParams {
   objectApiName: string;
   operation: string;
   recordCount: number;
+  spaceId?: string;
 }
 
 const createRealtimeBackupJob = async (
@@ -29,6 +30,7 @@ const createRealtimeBackupJob = async (
     objectApiName,
     operation,
     recordCount,
+    spaceId,
   } = params;
   const now = new Date().toISOString();
   const encryptedDest = encrypt(JSON.stringify(destination.config));
@@ -45,6 +47,7 @@ const createRealtimeBackupJob = async (
     operation,
     recordCount,
     status: JOB_STATUS.pending,
+    ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
   };
