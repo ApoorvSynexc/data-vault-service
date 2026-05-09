@@ -145,10 +145,12 @@ const updateUser = async (
   const values: Record<string, any> = { ':updatedAt': now };
   const parts: string[] = ['#updatedAt = :updatedAt'];
 
-  Object.entries($set).forEach(([key, val], i) => {
-    if (key === 'userId') {
+  let valueIndex = 0;
+  Object.entries($set).forEach(([key, val]) => {
+    if (key === 'userId' || val === undefined || val === null) {
       return;
-    } // never overwrite the PK
+    } // never overwrite the PK or include undefined/null values
+    const i = valueIndex++;
     names[`#f${i}`] = key;
     values[`:v${i}`] = val;
     parts.push(`#f${i} = :v${i}`);
