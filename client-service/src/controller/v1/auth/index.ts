@@ -47,7 +47,7 @@ const signupHandler = async (req: IRequest, res: IResponse) => {
 
   if (isEmailSignup) {
     body.contact.isEmailVerified = true;
-    const existing = await getUser({ 'contact.email': body.contact.email });
+    const existing = await getUser({ 'contact.email': body.contact.email, status: STATUS.active });
     if (existing) {
       return makeResponse(req, res, 400, false, 'email_exit');
     }
@@ -56,6 +56,7 @@ const signupHandler = async (req: IRequest, res: IResponse) => {
     const existing = await getUser({
       'contact.mobile.number': body.contact.mobile.number,
       'contact.mobile.dialCode': body.contact.mobile.dialCode,
+      status: STATUS.active,
     });
     if (existing) {
       return makeResponse(req, res, 400, false, 'mobile_exit');
@@ -89,7 +90,7 @@ const sendOtpHandler = async (req: IRequest, res: IResponse) => {
         };
 
   if (otpType === OTP_TYPE.signup) {
-    const existing = await getUser(userSearch);
+    const existing = await getUser({ ...userSearch, status: STATUS.active });
     if (existing) {
       return makeResponse(
         req,
@@ -102,7 +103,7 @@ const sendOtpHandler = async (req: IRequest, res: IResponse) => {
   }
 
   if (otpType === OTP_TYPE.login) {
-    const existing = await getUser(userSearch);
+    const existing = await getUser({ ...userSearch, status: STATUS.active });
     if (!existing) {
       return makeResponse(req, res, 400, false, 'unauthorized');
     }
@@ -169,13 +170,9 @@ const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
             'contact.mobile.dialCode': (contact as any).dialCode,
           };
 
-    const user = await getUser(userSearch);
+    const user = await getUser({ ...userSearch, status: STATUS.active });
     if (!user) {
       return makeResponse(req, res, 401, false, 'unauthorized');
-    }
-
-    if (user.status === STATUS.inactive) {
-      return makeResponse(req, res, 403, false, 'blocked_or_removed');
     }
 
     const deviceInfo = {
@@ -185,7 +182,7 @@ const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
 
     const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
     const session = await createSession(user.userId, ttlSeconds, deviceInfo);
-    const tokens = generateTokens(user.userId, session.sessionId);
+    const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
 
     res.cookie('accessToken', tokens.accessToken, {
       ...baseCookieOptions,
@@ -217,14 +214,10 @@ const loginHandler = async (req: IRequest, res: IResponse) => {
     ? { 'contact.email': email }
     : { 'contact.mobile.number': mobile.number, 'contact.mobile.dialCode': mobile.dialCode };
 
-  const user = await getUser(search);
+  const user = await getUser({ ...search, status: STATUS.active });
 
   if (!user) {
     return makeResponse(req, res, 401, false, 'unauthorized');
-  }
-
-  if (user.status === STATUS.inactive) {
-    return makeResponse(req, res, 403, false, 'blocked_or_removed');
   }
 
   const isPasswordValid = await bcrypt.compare(password, user.password ?? '');
@@ -240,7 +233,7 @@ const loginHandler = async (req: IRequest, res: IResponse) => {
   const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
 
-  const tokens = generateTokens(user.userId, session.sessionId);
+  const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
 
   res.cookie('accessToken', tokens.accessToken, {
     ...baseCookieOptions,
@@ -263,13 +256,9 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
 
   const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
 
-  const user = await getUser({ userId: payload.userId });
+  const user = await getUser({ userId: payload.userId, status: STATUS.active });
   if (!user) {
     return makeResponse(req, res, 401, false, 'unauthorized');
-  }
-
-  if (user.status === STATUS.inactive) {
-    return makeResponse(req, res, 403, false, 'blocked_or_removed');
   }
 
   const session = await getSession(payload.sessionId);
@@ -279,7 +268,7 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
 
   await updateSession(session.sessionId, { lastAccessedAt: new Date().toISOString() });
 
-  const tokens = generateTokens(user.userId, session.sessionId);
+  const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
 
   res.cookie('accessToken', tokens.accessToken, {
     ...baseCookieOptions,

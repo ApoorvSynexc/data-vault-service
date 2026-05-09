@@ -2,6 +2,7 @@ import { IMedia, IPhone } from '../shared';
 
 export interface IUser {
   userId: string;
+  spaceId?: string;
   profile?: IMedia;
   firstName?: string;
   lastName?: string;

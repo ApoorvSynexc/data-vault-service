@@ -16,6 +16,8 @@ import {
   getSalesforceToken,
   getUser,
   upsertCrm,
+  createSpace,
+  updateUser,
 } from '../../../services';
 import {
   generateTokens,
@@ -124,8 +126,8 @@ const socialLoginCallbackHandler = async (
     return;
   }
 
-  // Check if user exists by email
-  let user = await getUser({ 'contact.email': sfProfile.email });
+  // Check if user exists by email (only match active users)
+  let user = await getUser({ 'contact.email': sfProfile.email, status: STATUS.active });
 
   // Create new user if doesn't exist
   if (!user) {
@@ -153,6 +155,11 @@ const socialLoginCallbackHandler = async (
       return;
     }
 
+    // Create space for new user
+    const space = await createSpace(user.userId);
+    await updateUser({ userId: user.userId }, { spaceId: space.spaceId });
+    user.spaceId = space.spaceId;
+
     // Create CRM connection for Salesforce
     if (authProviderStr === 'salesforce') {
       const crmProfile = {
@@ -175,6 +182,7 @@ const socialLoginCallbackHandler = async (
         crmName: 'salesforce',
         crmProfile,
         crmCredentials,
+        spaceId: space.spaceId,
       });
     }
   }
@@ -193,7 +201,7 @@ const socialLoginCallbackHandler = async (
 
   const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
-  const tokens = generateTokens(user.userId, session.sessionId);
+  const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
 
   // Set cookies
   res.cookie('accessToken', tokens.accessToken, {
