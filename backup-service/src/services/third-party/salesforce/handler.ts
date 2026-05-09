@@ -118,6 +118,11 @@ const exportFirstTime = async (
 
   // One HTTP call — fieldNames used for SOQL below, schema used for upload at the end.
   const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
+  console.log(JSON.stringify({
+    objectName,
+    allFieldNames
+  }));
+  
 
   if (object.bulkJobId) {
     jobId = object.bulkJobId;
@@ -518,7 +523,22 @@ export const salesforceHandler: ICrmBackupHandler = {
 
       results.forEach((result, batchIndex) => {
         if (result.status === 'rejected') {
-          errors.push({ objectName: batch[batchIndex].name, error: result.reason });
+          const failedObject = batch[batchIndex];
+          const objectIndex = i + batchIndex;
+          const errorMsg = result.reason?.message ?? String(result.reason);
+
+          errors.push({ objectName: failedObject.name, error: result.reason });
+
+          updateBackupObject({
+            backupJobId,
+            objectIndex,
+            status: OBJECT_STATUS.failed,
+            errorMessage: errorMsg,
+          }).catch((updateErr) => {
+            logger.error(
+              `Backup job ${backupJobId}: failed to update object status for ${failedObject.name} - ${updateErr?.message}`
+            );
+          });
         }
       });
     }
@@ -531,8 +551,8 @@ export const salesforceHandler: ICrmBackupHandler = {
         })
         .join(' | ');
       const failedObjects = errors.map((e) => e.objectName).join(', ');
-      throw new Error(
-        `Backup job ${backupJobId}: Failed to backup ${errors.length} object(s): ${failedObjects}. Details: ${summary}`
+      logger.warn(
+        `Backup job ${backupJobId}: ${errors.length} object(s) failed: ${failedObjects}. Details: ${summary}`
       );
     }
 
