@@ -32,6 +32,8 @@ export interface IObjectCondition {
 
 export interface IObject {
   name: string;
+  type: string; // STANDARD | CUSTOM
+  sizeInBytes?: number;
   field: IObjectField[];
   condition?: IObjectCondition;
 }

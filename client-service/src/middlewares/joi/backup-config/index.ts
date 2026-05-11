@@ -6,6 +6,7 @@ import {
   DURATION_TYPE,
   ENVIRONMENT_TYPE,
   FILTER_OPERATOR,
+  OBJECT_TYPE,
   SCHEDULE_MODE,
   SCHEDULE_TYPE,
   WEEK_DAY,
@@ -37,6 +38,9 @@ const conditionSchema = Joi.object({
 
 const objectSchema = Joi.object({
   name: Joi.string().required(),
+  type: Joi.string()
+    .valid(...Object.values(OBJECT_TYPE))
+    .required(),
   condition: conditionSchema.optional(),
   field: Joi.array().items(objectFieldSchema).required(),
 });
