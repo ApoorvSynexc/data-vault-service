@@ -116,96 +116,103 @@ const exportFirstTime = async (
   const objectName = object.name;
   let jobId: string;
 
-  // One HTTP call — fieldNames used for SOQL below, schema used for upload at the end.
-  const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
-  console.log(JSON.stringify({
-    objectName,
-    allFieldNames
-  }));
-  
+  try {
+    // One HTTP call — fieldNames used for SOQL below, schema used for upload at the end.
+    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
 
-  if (object.bulkJobId) {
-    jobId = object.bulkJobId;
-  } else {
+    if (object.bulkJobId) {
+      jobId = object.bulkJobId;
+    } else {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: OBJECT_STATUS.bulkQueryInProgress,
+      });
+
+      const fieldNames = object.field?.length ? object.field.map((f) => f.name) : allFieldNames;
+
+      const whereClause = buildWhereClause(object);
+      const soql = `SELECT ${fieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
+
+      try {
+        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
+      } catch (err: any) {
+        throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      try {
+        await pollBulkJob({ instanceUrl, tokens, jobId, backupJobId, objectIndex });
+      } catch (err: any) {
+        throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: OBJECT_STATUS.bulkQueryCompleted,
+        bulkJobId: jobId,
+      });
+    }
+
+    const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
+
+    const { sizeInBytes, completedRecordCount: finalCompletedCount, insertCount } = await uploadBulkResultsByPage({
+      instanceUrl,
+      tokens,
+      jobId,
+      backupJobId,
+      objectIndex,
+      destConfig,
+      s3KeyPrefix: insertPrefix,
+      startLocator: object.currentLocator ?? null,
+      startCompletedRecordCount: object.completedRecordCount ?? 0,
+    });
+
+    // Sync totalRecordCount to the header-derived count so it always matches
+    // completedRecordCount (polling's numberRecordsProcessed can differ).
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.bulkQueryInProgress,
+      totalRecordCount: finalCompletedCount,
+      insertCount,
     });
 
-    const fieldNames = object.field?.length ? object.field.map((f) => f.name) : allFieldNames;
+    await httpRequest({
+      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+      method: 'POST',
+      body: JSON.stringify({
+        eventType: 'backup.size.updated',
+        crmId,
+        objectName,
+        backupJobId,
+        backupConfigId,
+        sizeInBytes,
+      }),
+      headers: {
+        'x-internal-secret': INTERNAL_SECRET,
+      },
+    });
 
-    const whereClause = buildWhereClause(object);
-    const soql = `SELECT ${fieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
-
-    try {
-      jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
-    } catch (err: any) {
-      throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
-    }
-
-    try {
-      await pollBulkJob({ instanceUrl, tokens, jobId, backupJobId, objectIndex });
-    } catch (err: any) {
-      throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
-    }
-
+    // Upload schema (fields) to schema/
+    const schemaWithParquet = schema.map((field: { dataType: string }) => ({
+      ...field,
+      parquetDataType: toParquetDataType(field.dataType),
+    }));
+    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    await uploadToS3(destConfig, schemaKey, Buffer.from(JSON.stringify(schemaWithParquet, null, 2)));
+    logger.info(`Backup job ${backupJobId}: first-time backup of ${objectName} complete`);
+  } catch (err: any) {
+    const errorMsg = err?.message ?? String(err);
+    logger.error(`Backup job ${backupJobId}: failed to export ${objectName} - ${errorMsg}`);
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.bulkQueryCompleted,
-      bulkJobId: jobId,
+      status: OBJECT_STATUS.failed,
+      errorMessage: errorMsg,
     });
+    throw err;
   }
-
-  const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-  await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
-
-  const { sizeInBytes, completedRecordCount: finalCompletedCount, insertCount } = await uploadBulkResultsByPage({
-    instanceUrl,
-    tokens,
-    jobId,
-    backupJobId,
-    objectIndex,
-    destConfig,
-    s3KeyPrefix: insertPrefix,
-    startLocator: object.currentLocator ?? null,
-    startCompletedRecordCount: object.completedRecordCount ?? 0,
-  });
-
-  // Sync totalRecordCount to the header-derived count so it always matches
-  // completedRecordCount (polling's numberRecordsProcessed can differ).
-  await updateBackupObject({
-    backupJobId,
-    objectIndex,
-    totalRecordCount: finalCompletedCount,
-    insertCount,
-  });
-
-  await httpRequest({
-    url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-    method: 'POST',
-    body: JSON.stringify({
-      eventType: 'backup.size.updated',
-      crmId,
-      objectName,
-      backupJobId,
-      backupConfigId,
-      sizeInBytes,
-    }),
-    headers: {
-      'x-internal-secret': INTERNAL_SECRET,
-    },
-  });
-
-  // Upload schema (fields) to schema/
-  const schemaWithParquet = schema.map((field: { dataType: string }) => ({
-    ...field,
-    parquetDataType: toParquetDataType(field.dataType),
-  }));
-  const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
-  await uploadToS3(destConfig, schemaKey, Buffer.from(JSON.stringify(schemaWithParquet, null, 2)));
-  logger.info(`Backup job ${backupJobId}: first-time backup of ${objectName} complete`);
 };
 
 // ---------------------------------------------------------------------------
@@ -230,169 +237,181 @@ const exportIncremental = async (
   const { crmId } = tokens;
   const objectName = object.name;
 
-  // One HTTP call — fieldNames used for SOQL below, schema used for comparison at the end.
-  const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
-    crmId,
-    objectName
-  );
-
-  // ── Phase 1: query new + updated + deleted records in one queryAll job ────
-  let bulkJobId = object.bulkJobId;
-  let totalRecordCount = object.totalRecordCount ?? 0;
-
-  if (!bulkJobId) {
-    await updateBackupObject({
-      backupJobId,
-      objectIndex,
-      status: OBJECT_STATUS.bulkQueryInProgress,
-    });
-
-    const fieldNames = object.field?.length ? object.field.map((f) => f.name) : allFieldNames;
-
-    // IsDeleted, CreatedDate, LastModifiedDate required for classify/delete split
-    const fieldsWithMeta = Array.from(
-      new Set([...fieldNames, 'IsDeleted', 'CreatedDate', 'LastModifiedDate'])
+  try {
+    // One HTTP call — fieldNames used for SOQL below, schema used for comparison at the end.
+    const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
+      crmId,
+      objectName
     );
 
-    const userWhere = buildWhereClause(object);
-    const dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
-    const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
-    const soql = `SELECT ${fieldsWithMeta.join(', ')} FROM ${objectName} ${where} ORDER BY Id ASC`;
+    // ── Phase 1: query new + updated + deleted records in one queryAll job ────
+    let bulkJobId = object.bulkJobId;
+    let totalRecordCount = object.totalRecordCount ?? 0;
 
-    // queryAll so Salesforce includes soft-deleted records in the result set
-    try {
-      bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
-    } catch (err: any) {
-      throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
+    if (!bulkJobId) {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: OBJECT_STATUS.bulkQueryInProgress,
+      });
+
+      const fieldNames = object.field?.length ? object.field.map((f) => f.name) : allFieldNames;
+
+      // IsDeleted, CreatedDate, LastModifiedDate required for classify/delete split
+      const fieldsWithMeta = Array.from(
+        new Set([...fieldNames, 'IsDeleted', 'CreatedDate', 'LastModifiedDate'])
+      );
+
+      const userWhere = buildWhereClause(object);
+      const dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
+      const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
+      const soql = `SELECT ${fieldsWithMeta.join(', ')} FROM ${objectName} ${where} ORDER BY Id ASC`;
+
+      // queryAll so Salesforce includes soft-deleted records in the result set
+      try {
+        bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
+      } catch (err: any) {
+        throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      try {
+        totalRecordCount = await pollBulkJob({
+          instanceUrl,
+          tokens,
+          jobId: bulkJobId,
+          backupJobId,
+          objectIndex,
+        });
+      } catch (err: any) {
+        throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: OBJECT_STATUS.bulkQueryCompleted,
+        bulkJobId,
+      });
     }
 
-    try {
-      totalRecordCount = await pollBulkJob({
+    // ── Phase 2: classify results → insert/ update/ delete/ ──────────────────
+    if (
+      totalRecordCount > 0 &&
+      object.status !== OBJECT_STATUS.transferInProgress &&
+      object.status !== OBJECT_STATUS.completed
+    ) {
+      logger.info(
+        `Backup job ${backupJobId}: Total changes ${totalRecordCount} records to transfer for ${objectName}`
+      );
+      const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+      const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
+      const deletePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'deletes');
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: OBJECT_STATUS.transferInProgress,
+      });
+
+      const { sizeInBytes, insertCount, updateCount, deleteCount } = await classifyAndUploadBulkResultsByPage({
         instanceUrl,
         tokens,
         jobId: bulkJobId,
         backupJobId,
         objectIndex,
+        destConfig,
+        insertS3KeyPrefix: insertPrefix,
+        updateS3KeyPrefix: updatePrefix,
+        deleteS3KeyPrefix: deletePrefix,
+        startLocator: object.currentLocator ?? null,
+        startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
-    } catch (err: any) {
-      throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
+
+      await updateBackupObject({ backupJobId, objectIndex, insertCount, updateCount, deleteCount });
+
+      await httpRequest({
+        url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+        method: 'POST',
+        body: JSON.stringify({
+          eventType: 'backup.size.updated',
+          crmId,
+          objectName,
+          backupJobId,
+          backupConfigId,
+          sizeInBytes,
+        }),
+        headers: {
+          'x-internal-secret': INTERNAL_SECRET,
+        },
+      });
+    } else if (totalRecordCount === 0) {
+      logger.info(
+        `Backup job ${backupJobId}: skipping data transfer for ${objectName} because no changed records were found`
+      );
     }
 
+    // ── Phase 3: schema comparison ─────────────────────────────────────────────
+    // Compare against the latest versioned file (fields_<timestamp>.json with the
+    // highest timestamp). Fall back to the original fields.json only when no
+    // versioned files exist yet. fields.json is never overwritten — every new
+    // schema version is written as a new fields_<timestamp>.json so no version
+    // is ever lost.
+    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    const schemaFolder = schemaKey.replace('/fields.json', '/');
+    const allSchemaKeys = await listS3Objects(destConfig, schemaFolder);
+    const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
+    // Keys are sorted alphabetically; since timestamps are fixed-width numbers the
+    // last entry is also the most recent.
+    const currentSchemaKey =
+      versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
+    const existingSchemaBuffer = await downloadFromS3(destConfig, currentSchemaKey);
+
+    const latestSchemaWithParquet = latestSchema.map((field: { dataType: string }) => ({
+      ...field,
+      parquetDataType: toParquetDataType(field.dataType),
+    }));
+
+    const schemaChanged =
+      !existingSchemaBuffer ||
+      !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchemaWithParquet);
+
+    if (schemaChanged) {
+      const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
+      const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
+      await uploadToS3(destConfig, versionedKey, newSchemaBuffer);
+
+      await httpRequest({
+        url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+        method: 'POST',
+        body: JSON.stringify({
+          eventType: 'schema.updated',
+          crmId,
+          objectName,
+          backupJobId,
+          backupConfigId,
+          schemaChange: true,
+        }),
+        headers: {
+          'x-internal-secret': INTERNAL_SECRET,
+        },
+      });
+      logger.info(
+        `Backup job ${backupJobId}: schema changed for ${objectName}, core service notified`
+      );
+    }
+
+    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.completed });
+    logger.info(`Backup job ${backupJobId}: incremental backup of ${objectName} complete`);
+  } catch (err: any) {
+    const errorMsg = err?.message ?? String(err);
+    logger.error(`Backup job ${backupJobId}: failed to export ${objectName} - ${errorMsg}`);
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.bulkQueryCompleted,
-      bulkJobId,
+      status: OBJECT_STATUS.failed,
+      errorMessage: errorMsg,
     });
+    throw err;
   }
-
-  // ── Phase 2: classify results → insert/ update/ delete/ ──────────────────
-  if (
-    totalRecordCount > 0 &&
-    object.status !== OBJECT_STATUS.transferInProgress &&
-    object.status !== OBJECT_STATUS.completed
-  ) {
-    logger.info(
-      `Backup job ${backupJobId}: Total changes ${totalRecordCount} records to transfer for ${objectName}`
-    );
-    const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-    const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
-    const deletePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'deletes');
-    await updateBackupObject({
-      backupJobId,
-      objectIndex,
-      status: OBJECT_STATUS.transferInProgress,
-    });
-
-    const { sizeInBytes, insertCount, updateCount, deleteCount } = await classifyAndUploadBulkResultsByPage({
-      instanceUrl,
-      tokens,
-      jobId: bulkJobId,
-      backupJobId,
-      objectIndex,
-      destConfig,
-      insertS3KeyPrefix: insertPrefix,
-      updateS3KeyPrefix: updatePrefix,
-      deleteS3KeyPrefix: deletePrefix,
-      startLocator: object.currentLocator ?? null,
-      startCompletedRecordCount: object.completedRecordCount ?? 0,
-    });
-
-    await updateBackupObject({ backupJobId, objectIndex, insertCount, updateCount, deleteCount });
-
-    await httpRequest({
-      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-      method: 'POST',
-      body: JSON.stringify({
-        eventType: 'backup.size.updated',
-        crmId,
-        objectName,
-        backupJobId,
-        backupConfigId,
-        sizeInBytes,
-      }),
-      headers: {
-        'x-internal-secret': INTERNAL_SECRET,
-      },
-    });
-  } else if (totalRecordCount === 0) {
-    logger.info(
-      `Backup job ${backupJobId}: skipping data transfer for ${objectName} because no changed records were found`
-    );
-  }
-
-  // ── Phase 3: schema comparison ─────────────────────────────────────────────
-  // Compare against the latest versioned file (fields_<timestamp>.json with the
-  // highest timestamp). Fall back to the original fields.json only when no
-  // versioned files exist yet. fields.json is never overwritten — every new
-  // schema version is written as a new fields_<timestamp>.json so no version
-  // is ever lost.
-  const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
-  const schemaFolder = schemaKey.replace('/fields.json', '/');
-  const allSchemaKeys = await listS3Objects(destConfig, schemaFolder);
-  const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
-  // Keys are sorted alphabetically; since timestamps are fixed-width numbers the
-  // last entry is also the most recent.
-  const currentSchemaKey =
-    versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
-  const existingSchemaBuffer = await downloadFromS3(destConfig, currentSchemaKey);
-
-  const latestSchemaWithParquet = latestSchema.map((field: { dataType: string }) => ({
-    ...field,
-    parquetDataType: toParquetDataType(field.dataType),
-  }));
-
-  const schemaChanged =
-    !existingSchemaBuffer ||
-    !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchemaWithParquet);
-
-  if (schemaChanged) {
-    const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
-    const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
-    await uploadToS3(destConfig, versionedKey, newSchemaBuffer);
-
-    await httpRequest({
-      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-      method: 'POST',
-      body: JSON.stringify({
-        eventType: 'schema.updated',
-        crmId,
-        objectName,
-        backupJobId,
-        backupConfigId,
-        schemaChange: true,
-      }),
-      headers: {
-        'x-internal-secret': INTERNAL_SECRET,
-      },
-    });
-    logger.info(
-      `Backup job ${backupJobId}: schema changed for ${objectName}, core service notified`
-    );
-  }
-
-  await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.completed });
-  logger.info(`Backup job ${backupJobId}: incremental backup of ${objectName} complete`);
 };
 
 const exportObjectToDestination = async (
@@ -500,11 +519,9 @@ export const salesforceHandler: ICrmBackupHandler = {
       `Backup job ${backupJobId}: ${lastUpdatedAt ? 'incremental' : 'first-time'} backup of ${object.length} objects from ${instanceUrl}`
     );
 
-    const errors: { objectName: string; error: any }[] = [];
-
     for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
       const batch = object.slice(i, i + CONCURRENCY_LIMIT);
-      const results = await Promise.allSettled(
+      await Promise.allSettled(
         batch.map((item, batchIndex) =>
           exportWithRetry(
             backupConfigId,
@@ -519,40 +536,6 @@ export const salesforceHandler: ICrmBackupHandler = {
             lastUpdatedAt
           )
         )
-      );
-
-      results.forEach((result, batchIndex) => {
-        if (result.status === 'rejected') {
-          const failedObject = batch[batchIndex];
-          const objectIndex = i + batchIndex;
-          const errorMsg = result.reason?.message ?? String(result.reason);
-
-          errors.push({ objectName: failedObject.name, error: result.reason });
-
-          updateBackupObject({
-            backupJobId,
-            objectIndex,
-            status: OBJECT_STATUS.failed,
-            errorMessage: errorMsg,
-          }).catch((updateErr) => {
-            logger.error(
-              `Backup job ${backupJobId}: failed to update object status for ${failedObject.name} - ${updateErr?.message}`
-            );
-          });
-        }
-      });
-    }
-
-    if (errors.length > 0) {
-      const summary = errors
-        .map((e) => {
-          const errorMsg = e.error?.message ?? String(e.error);
-          return `${e.objectName}: ${errorMsg}`;
-        })
-        .join(' | ');
-      const failedObjects = errors.map((e) => e.objectName).join(', ');
-      logger.warn(
-        `Backup job ${backupJobId}: ${errors.length} object(s) failed: ${failedObjects}. Details: ${summary}`
       );
     }
 
