@@ -105,6 +105,20 @@ const getCrmsByUser = async (userId: string): Promise<ICrm[]> => {
   return (result.Items as ICrm[] | undefined) ?? [];
 };
 
+const getCrmsBySpace = async (spaceId: string): Promise<ICrm[]> => {
+  const result = await docClient.send(
+    new ScanCommand({
+      TableName: CRM_TABLE,
+      FilterExpression: 'spaceId = :spaceId',
+      ProjectionExpression: 'crmId, userId, spaceId, crmName, slug, #name, isConnected, crmProfile, encryptedCredentials, iv, environment, customUrl, #status, createdAt, updatedAt',
+      ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
+      ExpressionAttributeValues: { ':spaceId': spaceId },
+    })
+  );
+
+  return (result.Items as ICrm[] | undefined) ?? [];
+};
+
 const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
   const existing = await getCrmById(crmId);
 
@@ -265,6 +279,7 @@ export {
   getCrmByUser,
   getCrmByOrgId,
   getCrmsByUser,
+  getCrmsBySpace,
   disconnectCrm,
   deleteCrm,
   getCrmTokens,
