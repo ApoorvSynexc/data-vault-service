@@ -191,7 +191,11 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     return makeResponse(req, res, 400, false, 'slug_required');
   }
 
-  const config = await getBackupConfigBySlug(req.user!.userId, String(slug));
+  const config = await getBackupConfigBySlug({
+    userId: req.user!.userId,
+    slug: String(slug),
+    spaceId: req.user?.spaceId,
+  });
   if (!config) {
     makeResponse(req, res, 400, false, 'backup_config_not_found');
     return;
@@ -317,7 +321,11 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
   const { slug } = req.query;
 
   if (slug) {
-    const config = await getBackupConfigBySlug(req.user!.userId, String(slug));
+    const config = await getBackupConfigBySlug({
+      userId: req.user!.userId,
+      slug: String(slug),
+      spaceId: req.user?.spaceId,
+    });
     if (!config) {
       makeResponse(req, res, 400, false, 'backup_config_not_found');
       return;

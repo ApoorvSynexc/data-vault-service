@@ -313,10 +313,30 @@ const getBackupConfigsBySpaceWithPagination = async (
   };
 };
 
-const getBackupConfigBySlug = async (
-  userId: string,
-  slug: string
-): Promise<IBackupConfig | null> => {
+const getBackupConfigBySlug = async (params: {
+  userId: string;
+  slug: string;
+  spaceId?: string;
+}): Promise<IBackupConfig | null> => {
+  const { userId, slug, spaceId } = params;
+
+  // Try to find by spaceId first if provided
+  if (spaceId) {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: 'spaceId-index',
+        KeyConditionExpression: 'spaceId = :spaceId',
+        FilterExpression: 'slug = :slug',
+        ExpressionAttributeValues: { ':spaceId': spaceId, ':slug': slug },
+      })
+    );
+    if (result.Items?.[0]) {
+      return result.Items[0] as IBackupConfig;
+    }
+  }
+
+  // Fall back to userId query
   const result = await docClient.send(
     new QueryCommand({
       TableName: BACKUP_CONFIG_TABLE,
