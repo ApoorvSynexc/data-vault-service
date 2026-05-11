@@ -236,6 +236,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
         IndexName: query.indexName,
         KeyConditionExpression: `${query.keyName} = :keyValue`,
         ExpressionAttributeValues: { ':keyValue': query.keyValue },
+        Limit: 100,
         ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
       })
     );
