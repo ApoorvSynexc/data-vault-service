@@ -105,8 +105,10 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const destination = await getDestinationById(String(req.body.destinationId));
-  if (!destination || destination.userId !== req.user!.userId) {
-    makeResponse(req, res, 400, false, 'not_found');
+  const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
+
+  if (!isOwner) {
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
