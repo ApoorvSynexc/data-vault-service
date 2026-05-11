@@ -60,7 +60,7 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
   if (!resolvedCrmName && crmId) {
     const crm = await getCrmById(String(crmId));
     if (!crm || crm.userId !== userId) {
-      makeResponse(req, res, 404, false, 'not_found');
+      makeResponse(req, res, 400, false, 'not_exist');
       return;
     }
 
@@ -176,7 +176,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     });
 
     if (!reconnected) {
-      makeResponse(req, res, 404, false, 'not_found');
+      makeResponse(req, res, 400, false, 'not_exist');
       return;
     }
   } else {
@@ -275,7 +275,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   const crm = await getCrmById(String(crmId));
   if (!crm) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 

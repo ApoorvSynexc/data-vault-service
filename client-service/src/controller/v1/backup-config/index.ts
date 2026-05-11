@@ -229,7 +229,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
   const existing = await getBackupConfigById(String(backupConfigId));
   if (!isOwner(existing, req.user!.userId)) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
@@ -250,7 +250,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
   const existing = await getBackupConfigById(String(backupConfigId));
   if (!isOwner(existing, req.user!.userId)) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
   const config = existing!;
@@ -276,7 +276,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const existing = await getBackupConfigById(String(req.body.backupConfigId));
   if (!isOwner(existing, req.user!.userId)) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
@@ -287,7 +287,7 @@ const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> =
 const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> => {
   const existing = await getBackupConfigById(String(req.body.backupConfigId));
   if (!isOwner(existing, req.user!.userId)) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
