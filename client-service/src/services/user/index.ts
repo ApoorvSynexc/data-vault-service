@@ -74,11 +74,12 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
         TableName: USER_TABLE,
         IndexName: 'email-index',
         KeyConditionExpression: 'contactEmail = :email',
+        ProjectionExpression: 'userId, contactEmail, contactMobileKey, firstName, lastName, gender, #status, spaceId, createdAt, updatedAt',
         ExpressionAttributeValues: {
           ':email': search['contact.email'],
           ...statusFilter?.ExpressionAttributeValues,
         },
-        ExpressionAttributeNames: statusFilter?.ExpressionAttributeNames,
+        ExpressionAttributeNames: { '#status': 'status', ...statusFilter?.ExpressionAttributeNames },
         FilterExpression: statusFilter?.FilterExpression,
         Limit: 1,
       })
@@ -97,11 +98,12 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
         TableName: USER_TABLE,
         IndexName: 'mobile-index',
         KeyConditionExpression: 'contactMobileKey = :mobileKey',
+        ProjectionExpression: 'userId, contactEmail, contactMobileKey, firstName, lastName, gender, #status, spaceId, createdAt, updatedAt',
         ExpressionAttributeValues: {
           ':mobileKey': mobileKey,
           ...statusFilter?.ExpressionAttributeValues,
         },
-        ExpressionAttributeNames: statusFilter?.ExpressionAttributeNames,
+        ExpressionAttributeNames: { '#status': 'status', ...statusFilter?.ExpressionAttributeNames },
         FilterExpression: statusFilter?.FilterExpression,
         Limit: 1,
       })

@@ -32,7 +32,8 @@ const getRole = async (search: Record<string, any>): Promise<IRole | null> => {
         TableName: ROLE_TABLE,
         IndexName: 'name-index',
         KeyConditionExpression: '#name = :name',
-        ExpressionAttributeNames: { '#name': 'name' },
+        ProjectionExpression: 'roleId, #name, description, permissions, isDefault, #status, createdAt, updatedAt',
+        ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
         ExpressionAttributeValues: { ':name': search.name },
         Limit: 1,
       })
@@ -50,7 +51,13 @@ const getRole = async (search: Record<string, any>): Promise<IRole | null> => {
 };
 
 const getRoles = async (): Promise<IRole[]> => {
-  const result = await docClient.send(new ScanCommand({ TableName: ROLE_TABLE }));
+  const result = await docClient.send(
+    new ScanCommand({
+      TableName: ROLE_TABLE,
+      ProjectionExpression: 'roleId, #name, description, permissions, isDefault, #status, createdAt, updatedAt',
+      ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
+    })
+  );
   return (result.Items ?? []) as IRole[];
 };
 

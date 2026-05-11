@@ -85,6 +85,8 @@ const getOtp = async (search: Record<string, any>): Promise<IOtp | null> => {
       TableName: OTP_TABLE,
       IndexName: 'contact-otptype-index',
       KeyConditionExpression: 'contactOtpKey = :key',
+      ProjectionExpression: 'otpId, createdAt, contactOtpKey, contact, otp, expiresAt, otpType, channel, #status, otpFor, updatedAt',
+      ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: { ':key': contactOtpKey },
       ScanIndexForward: false, // descending createdAt → latest first
       Limit: 10, // small window; filtered below

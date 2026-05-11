@@ -112,6 +112,8 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, environment, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+      ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId },
     })
   );
@@ -128,6 +130,8 @@ const getBackupConfigsByUserAndCrm = async (
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
       FilterExpression: 'crmId = :crmId',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, environment, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+      ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId, ':crmId': crmId },
     })
   );
@@ -140,11 +144,13 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
       TableName: BACKUP_CONFIG_TABLE,
       FilterExpression:
         '#status = :active AND #schedule = :schedule AND #scheduleConfig.#type = :type',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, environment, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: {
         '#status': 'status',
         '#schedule': 'schedule',
         '#scheduleConfig': 'scheduleConfig',
         '#type': 'type',
+        '#name': 'name',
       },
       ExpressionAttributeValues: {
         ':active': STATUS.active,
