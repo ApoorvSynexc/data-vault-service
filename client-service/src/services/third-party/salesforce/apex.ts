@@ -37,7 +37,7 @@ const getApexObjectsCount = async (crmId: string, objectApiNames: string[]) => {
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/v1/data-vault/object-record-count`;
+  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-record-count`;
   const encryptedResult = await salesforceRequest(
     { url, method: 'POST', body: JSON.stringify({objectApiNames}) },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
