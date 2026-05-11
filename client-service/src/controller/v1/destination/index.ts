@@ -66,8 +66,10 @@ const getDestinationHandler = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   const destination = await getDestinationById(String(destinationId));
-  if (!destination || destination.userId !== req.user!.userId) {
-    makeResponse(req, res, 400, false, 'not_found');
+  const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
+
+  if (!isOwner) {
+    makeResponse(req, res, 404, false, 'not_found');
     return;
   }
 
@@ -87,12 +89,14 @@ const getDestinationConfigHandler = async (req: IRequest, res: IResponse): Promi
   }
 
   const destination = await getDestinationById(String(destinationId));
-  if (!destination || destination.userId !== req.user!.userId) {
-    makeResponse(req, res, 400, false, 'not_found');
+  const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
+
+  if (!isOwner) {
+    makeResponse(req, res, 404, false, 'not_found');
     return;
   }
 
-  const config = getDecryptedDestinationConfig(destination);
+  const config = getDecryptedDestinationConfig(destination!);
   makeResponse(req, res, 200, true, 'fetch', {...config, accessKeyId: undefined, secretAccessKey: undefined});
 };
 
@@ -106,8 +110,10 @@ const updateDestinationHandler = async (req: IRequest, res: IResponse): Promise<
 
   const userId = req.user!.userId;
   const destination = await getDestinationById(String(destinationId));
-  if (!destination || destination.userId !== userId) {
-    makeResponse(req, res, 400, false, 'not_found');
+  const isOwner = destination && (destination.userId === userId || destination.spaceId === req.user?.spaceId);
+
+  if (!isOwner) {
+    makeResponse(req, res, 404, false, 'not_found');
     return;
   }
 
@@ -129,8 +135,10 @@ const deleteDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   }
 
   const destination = await getDestinationById(String(destinationId));
-  if (!destination || destination.userId !== req.user!.userId) {
-    makeResponse(req, res, 400, false, 'not_exist');
+  const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
+
+  if (!isOwner) {
+    makeResponse(req, res, 404, false, 'not_found');
     return;
   }
 
