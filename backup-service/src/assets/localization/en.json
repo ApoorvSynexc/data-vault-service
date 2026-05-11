@@ -14,7 +14,7 @@
   "login": "You have been successfully logged in",
   "logout": "You have been successfully logged out",
   "exit": "Record already exits",
-  "not_exit": "Record not exits",
+  "not_exist": "Record not exits",
   "unknown_error": "An unknown error occurred",
   "unauthorized": "unauthorized",
   "id_required": "_id is required",

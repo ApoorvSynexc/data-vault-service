@@ -5,6 +5,7 @@ import {
   deleteDestination,
   getDestinationById,
   getDestinationsByUser,
+  getDestinationsBySpace,
   getDecryptedDestinationConfig,
   updateDestination,
 } from '../../../services';
@@ -31,11 +32,19 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
 };
 
 const listDestinationsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
   const limit = Math.min(Number(req.query.limit) || 20, 100);
   const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
 
-  const { documents, nextCursor } = await getDestinationsByUser(userId, { limit, cursor });
+  let result;
+  if (spaceId) {
+    result = await getDestinationsBySpace(spaceId, { limit, cursor });
+  } else {
+    result = await getDestinationsByUser(userId, { limit, cursor });
+  }
+
+  const { documents, nextCursor } = result;
 
   makeResponse(
     req,
@@ -58,7 +67,7 @@ const getDestinationHandler = async (req: IRequest, res: IResponse): Promise<voi
 
   const destination = await getDestinationById(String(destinationId));
   if (!destination || destination.userId !== req.user!.userId) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_found');
     return;
   }
 
@@ -79,7 +88,7 @@ const getDestinationConfigHandler = async (req: IRequest, res: IResponse): Promi
 
   const destination = await getDestinationById(String(destinationId));
   if (!destination || destination.userId !== req.user!.userId) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_found');
     return;
   }
 
@@ -98,7 +107,7 @@ const updateDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   const userId = req.user!.userId;
   const destination = await getDestinationById(String(destinationId));
   if (!destination || destination.userId !== userId) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_found');
     return;
   }
 
@@ -121,7 +130,7 @@ const deleteDestinationHandler = async (req: IRequest, res: IResponse): Promise<
 
   const destination = await getDestinationById(String(destinationId));
   if (!destination || destination.userId !== req.user!.userId) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
