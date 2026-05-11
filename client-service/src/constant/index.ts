@@ -128,6 +128,10 @@ const CONDITION_TYPE = {
   or: 'OR',
   custom: 'CUSTOM',
 };
+const OBJECT_TYPE = {
+  standard: 'STANDARD',
+  custom: 'CUSTOM',
+};
 const AUTH_PROVIDER = {
   email: 'EMAIL',
   google: 'GOOGLE',
@@ -236,5 +240,6 @@ export {
   BACKUP_STATUS,
   JOB_STATUS,
   CONDITION_TYPE,
+  OBJECT_TYPE,
   ENVIRONMENT_TYPE,
 };
