@@ -323,7 +323,7 @@ const resetPasswordHandler = async (req: IRequest, res: IResponse) => {
 
   const user = await getUser(userSearch);
   if (!user) {
-    return makeResponse(req, res, 404, false, 'not_exit');
+    return makeResponse(req, res, 404, false, 'not_exist');
   }
 
   const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);

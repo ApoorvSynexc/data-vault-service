@@ -8,6 +8,7 @@ import {
   getBackupConfigsByUser,
   getBackupConfigsByUserAndCrm,
   getBackupConfigsByUserWithPagination,
+  getBackupConfigsBySpaceWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
   deleteBackupJobsByConfig,
@@ -105,7 +106,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const destination = await getDestinationById(String(req.body.destinationId));
   if (!destination || destination.userId !== req.user!.userId) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_found');
     return;
   }
 
@@ -147,15 +148,21 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
 const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { pagination, limit, cursor } = req.query as Record<string, string>;
+  const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
-    const [{ documents, nextCursor }, counter] = await Promise.all([
-      getBackupConfigsByUserWithPagination(userId, { limit: limitNum, cursor }),
-      getTableCounter(BACKUP_CONFIG_TABLE, userId),
-    ]);
+    let result;
+    if (spaceId) {
+      result = await getBackupConfigsBySpaceWithPagination(spaceId, { limit: limitNum, cursor });
+    } else {
+      result = await getBackupConfigsByUserWithPagination(userId, { limit: limitNum, cursor });
+    }
+
+    const { documents, nextCursor } = result;
+    const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, userId);
 
     return makeResponse(req, res, 200, true, 'fetch', documents, {
       limit: limitNum,
@@ -165,7 +172,14 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
     });
   }
 
-  const configs = await getBackupConfigsByUser(userId);
+  let configs;
+  if (spaceId) {
+    const { documents } = await getBackupConfigsBySpaceWithPagination(spaceId, { limit: 1000 });
+    configs = documents;
+  } else {
+    configs = await getBackupConfigsByUser(userId);
+  }
+
   makeResponse(req, res, 200, true, 'fetch', configs);
 };
 

@@ -107,9 +107,10 @@ const getCrmsByUser = async (userId: string): Promise<ICrm[]> => {
 
 const getCrmsBySpace = async (spaceId: string): Promise<ICrm[]> => {
   const result = await docClient.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: CRM_TABLE,
-      FilterExpression: 'spaceId = :spaceId',
+      IndexName: 'spaceId-index',
+      KeyConditionExpression: 'spaceId = :spaceId',
       ProjectionExpression: 'crmId, userId, spaceId, crmName, slug, #name, isConnected, crmProfile, encryptedCredentials, iv, environment, customUrl, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':spaceId': spaceId },

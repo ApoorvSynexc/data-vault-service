@@ -258,7 +258,7 @@ const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void
   const disconnected = await disconnectCrm(String(crmId));
 
   if (!disconnected) {
-    makeResponse(req, res, 400, false, 'not_exit');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 

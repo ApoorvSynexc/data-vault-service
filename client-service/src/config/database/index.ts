@@ -76,12 +76,18 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     AttributeDefinitions: [
       { AttributeName: 'destinationId', AttributeType: 'S' },
       { AttributeName: 'userId', AttributeType: 'S' },
+      { AttributeName: 'spaceId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'destinationId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'userId-index',
         KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'spaceId-index',
+        KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],
@@ -92,12 +98,18 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     AttributeDefinitions: [
       { AttributeName: 'backupConfigId', AttributeType: 'S' },
       { AttributeName: 'userId', AttributeType: 'S' },
+      { AttributeName: 'spaceId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'backupConfigId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'userId-index',
         KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'spaceId-index',
+        KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],
@@ -109,6 +121,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       { AttributeName: 'crmId', AttributeType: 'S' },
       { AttributeName: 'userId', AttributeType: 'S' },
       { AttributeName: 'crmName', AttributeType: 'S' },
+      { AttributeName: 'spaceId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'crmId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
@@ -118,6 +131,11 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
           { AttributeName: 'userId', KeyType: 'HASH' },
           { AttributeName: 'crmName', KeyType: 'RANGE' },
         ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'spaceId-index',
+        KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],

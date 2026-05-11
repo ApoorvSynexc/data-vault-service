@@ -84,6 +84,32 @@ const getDestinationsByUser = async (
   };
 };
 
+const getDestinationsBySpace = async (
+  spaceId: string,
+  optional: { limit: number; cursor?: string }
+): Promise<{ documents: IDestination[]; nextCursor: string | null }> => {
+  const exclusiveStartKey = decodeCursor(optional.cursor);
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: DESTINATION_TABLE,
+      IndexName: 'spaceId-index',
+      KeyConditionExpression: 'spaceId = :spaceId',
+      FilterExpression: '#status = :active',
+      ProjectionExpression: 'destinationId, userId, #name, provider, #type, ciphertext, iv, #status, spaceId, createdAt, updatedAt',
+      ExpressionAttributeNames: { '#status': 'status', '#name': 'name', '#type': 'type' },
+      ExpressionAttributeValues: { ':spaceId': spaceId, ':active': STATUS.active },
+      Limit: optional.limit,
+      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
+    })
+  );
+
+  return {
+    documents: (result.Items as IDestination[] | undefined) ?? [],
+    nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+  };
+};
+
 const updateDestination = async (
   destinationId: string,
   params: UpdateDestinationParams,
@@ -145,6 +171,7 @@ export {
   createDestination,
   getDestinationById,
   getDestinationsByUser,
+  getDestinationsBySpace,
   updateDestination,
   deleteDestination,
   getDecryptedDestinationConfig,

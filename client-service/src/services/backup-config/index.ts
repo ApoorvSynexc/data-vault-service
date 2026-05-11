@@ -288,6 +288,31 @@ const getBackupConfigsByUserWithPagination = async (
   };
 };
 
+const getBackupConfigsBySpaceWithPagination = async (
+  spaceId: string,
+  optional: { limit: number; cursor?: string }
+): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
+  const exclusiveStartKey = decodeCursor(optional.cursor);
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: BACKUP_CONFIG_TABLE,
+      IndexName: 'spaceId-index',
+      KeyConditionExpression: 'spaceId = :spaceId',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, environment, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+      ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status' },
+      ExpressionAttributeValues: { ':spaceId': spaceId },
+      Limit: optional.limit,
+      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
+    })
+  );
+
+  return {
+    documents: (result.Items as IBackupConfig[] | undefined) ?? [],
+    nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+  };
+};
+
 const getBackupConfigBySlug = async (
   userId: string,
   slug: string
@@ -312,6 +337,7 @@ export {
   getBackupConfigsByUserAndCrm,
   getScheduledIncrementalBackupConfigs,
   getBackupConfigsByUserWithPagination,
+  getBackupConfigsBySpaceWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
 };
