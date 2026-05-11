@@ -81,6 +81,8 @@ const getCrmByUser = async (userId: string, crmName: string): Promise<ICrm | nul
       TableName: CRM_TABLE,
       IndexName: 'userId-crmName-index',
       KeyConditionExpression: 'userId = :uid AND crmName = :crm',
+      ProjectionExpression: 'crmId, userId, spaceId, crmName, slug, #name, isConnected, crmProfile, encryptedCredentials, iv, environment, customUrl, #status, createdAt, updatedAt',
+      ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId, ':crm': crmName },
       Limit: 1,
     })
@@ -94,6 +96,8 @@ const getCrmsByUser = async (userId: string): Promise<ICrm[]> => {
       TableName: CRM_TABLE,
       IndexName: 'userId-crmName-index',
       KeyConditionExpression: 'userId = :uid',
+      ProjectionExpression: 'crmId, userId, spaceId, crmName, slug, #name, isConnected, crmProfile, encryptedCredentials, iv, environment, customUrl, #status, createdAt, updatedAt',
+      ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId },
     })
   );
