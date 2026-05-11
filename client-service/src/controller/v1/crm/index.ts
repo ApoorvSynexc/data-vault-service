@@ -5,6 +5,7 @@ import {
   getCrmById,
   getCrmTokens,
   getCrmsByUser,
+  getCrmsBySpace,
   getOAuthState,
   getSalesforceLoginUrl,
   getSalesforceProfile,
@@ -223,7 +224,14 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const crms = await getCrmsByUser(req.user!.userId);
+  const spaceId = req.user?.spaceId;
+  let crms;
+
+  if (spaceId) {
+    crms = await getCrmsBySpace(spaceId);
+  } else {
+    crms = await getCrmsByUser(req.user!.userId);
+  }
 
   makeResponse(
     req,
