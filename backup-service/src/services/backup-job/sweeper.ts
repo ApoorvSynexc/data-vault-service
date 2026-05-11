@@ -3,8 +3,8 @@ import { logger } from '../../middlewares/logger';
 import { IBackupJob } from '../../models';
 import { getStaleRunningJobs, updateBackupObject, updateJobStatus } from './index';
 
-const STALE_THRESHOLD_MINUTES = 15;
-const SWEEP_INTERVAL_MS = 1 * 60 * 1000; // 5 minutes
+const STALE_THRESHOLD_MINUTES = 30;
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 const STUCK_STATUSES = new Set([
   OBJECT_STATUS.transferInProgress,
@@ -44,11 +44,13 @@ const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
 };
 
 const sweepStaleJobs = async (): Promise<void> => {
+  logger.info('Stale job sweeper: started...');
   try {
     await getStaleRunningJobs(STALE_THRESHOLD_MINUTES, processStaleJobPage);
   } catch (err: any) {
     logger.error(`Stale job sweeper error: ${err?.message}`);
   }
+  logger.info('Stale job sweeper: ended...');
 };
 
 export const startStaleJobSweeper = (): void => {
