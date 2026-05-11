@@ -26,7 +26,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
     const config = await getBackupConfigBySlug(userId, slug);
 
     if (!config) {
-      makeResponse(req, res, 404, false, 'not_found');
+      makeResponse(req, res, 400, false, 'not_exist');
       return;
     }
 
@@ -66,7 +66,7 @@ const getBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void>
 
   const job = await getBackupJobById(String(backupJobId));
   if (!isOwner(job, req.user!.userId)) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
@@ -82,13 +82,13 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   const job = await getBackupJobById(String(backupJobId));
   if (!isOwner(job, req.user!.userId)) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
   const config = await getBackupConfigById(job!.backupConfigId);
   if (!config) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 

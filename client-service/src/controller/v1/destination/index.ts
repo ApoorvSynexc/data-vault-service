@@ -69,7 +69,7 @@ const getDestinationHandler = async (req: IRequest, res: IResponse): Promise<voi
   const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
 
   if (!isOwner) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
@@ -92,7 +92,7 @@ const getDestinationConfigHandler = async (req: IRequest, res: IResponse): Promi
   const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
 
   if (!isOwner) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
@@ -113,7 +113,7 @@ const updateDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   const isOwner = destination && (destination.userId === userId || destination.spaceId === req.user?.spaceId);
 
   if (!isOwner) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
@@ -138,7 +138,7 @@ const deleteDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
 
   if (!isOwner) {
-    makeResponse(req, res, 404, false, 'not_found');
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
