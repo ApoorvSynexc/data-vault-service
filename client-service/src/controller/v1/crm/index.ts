@@ -22,7 +22,7 @@ import {
   SalesforceAuthExpiredError,
   SalesforceEnvironment,
 } from '../../../services/third-party/salesforce';
-import { STATUS } from '../../../constant';
+import { AUTH_PROVIDER, STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { defaultRoles } from '../../../assets';
 
@@ -181,16 +181,20 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   } else {
     // Get spaceId from authenticated user's token
     const spaceId = req.user?.spaceId;
+    console.log({spaceId});
+    
 
     // Create user account with Salesforce profile data if user doesn't exist
     const existingUser = await getUser({ 'contact.email': nextCrmProfile.email, status: STATUS.active });
-
+    console.log({existingUser});
+    
     if (!existingUser) {
       const nameParts = nextCrmProfile.name?.split(' ') ?? [];
       const userRole = defaultRoles.find((r) => r.name === 'user')!;
-
+      console.log("Before user created");
+      
       await createUser({
-        userId: oauthState.userId,
+        authProvider: AUTH_PROVIDER.email,
         firstName: nameParts[0] ?? '',
         lastName: nameParts.slice(1).join(' ') ?? '',
         contact: {
@@ -200,6 +204,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
         role: { name: userRole.name, roleId: userRole.roleId },
         ...(spaceId && { spaceId }),
       });
+      console.log("After user created");
     }
 
     await upsertCrm({
