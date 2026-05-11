@@ -15,7 +15,6 @@ const getApexObjects = async (crmId: string) => {
   }
   
   const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/accessible-objects`;
-  console.log({url});
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET' },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
