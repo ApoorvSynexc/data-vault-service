@@ -5,6 +5,7 @@ import {
   getApexFields,
   updateCrmCredentials,
   updateBackupConfig,
+  getBackupConfigById,
 } from '../../../services';
 import { BACKUP_STATUS } from '../../../constant';
 import {
@@ -82,11 +83,20 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         );
         break;
       case 'backup.size.updated':
-        await updateBackupConfig(
-          backupConfigId,
-          { sizeInBytes: req.body.sizeInBytes, lastEventId: eventId },
-          eventId
-        );
+        const { objectName, sizeInBytes } = req.body;
+        const updateParams: any = { sizeInBytes, lastEventId: eventId };
+
+        if (objectName) {
+          const backupConfig = await getBackupConfigById(backupConfigId);
+          if (backupConfig?.objects) {
+            const updatedObjects = backupConfig.objects.map((obj) =>
+              obj.name === objectName ? { ...obj, sizeInBytes } : obj
+            );
+            updateParams.objects = updatedObjects;
+          }
+        }
+
+        await updateBackupConfig(backupConfigId, updateParams, eventId);
         break;
       case 'schema.updated':
         await updateBackupConfig(
