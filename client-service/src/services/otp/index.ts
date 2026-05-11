@@ -146,7 +146,7 @@ const updateOtp = async (
     return;
   }
 
-  // ── Case 2: upsert — update existing record or insert if none exists ────────
+  // ── Case 2: upsert — insert fresh OTP (old ones expire via TTL) ────────────
   const contactKey = buildContactKey(search);
   if (!contactKey) {
     return;
@@ -157,42 +157,8 @@ const updateOtp = async (
   const expiresAt = (payload as any).expiresAt;
   const expiresAtStr = expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt;
 
-  // Check if a record already exists for this contact + otpType
-  const existing = await docClient.send(
-    new QueryCommand({
-      TableName: OTP_TABLE,
-      IndexName: 'contact-otptype-index',
-      KeyConditionExpression: 'contactOtpKey = :key',
-      ExpressionAttributeValues: { ':key': contactOtpKey },
-      ScanIndexForward: false,
-      Limit: 1,
-    })
-  );
-
-  const existingItem = existing.Items?.[0];
-
-  if (existingItem) {
-    // Record exists — update it in place (same otpId + createdAt)
-    await docClient.send(
-      new UpdateCommand({
-        TableName: OTP_TABLE,
-        Key: { otpId: existingItem.otpId, createdAt: existingItem.createdAt },
-        UpdateExpression:
-          'SET otp = :otp, expiresAt = :expiresAt, #status = :status, channel = :channel, updatedAt = :updatedAt',
-        ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: {
-          ':otp': (payload as any).otp,
-          ':expiresAt': expiresAtStr,
-          ':status': (payload as any).status,
-          ':channel': (payload as any).channel,
-          ':updatedAt': now,
-        },
-      })
-    );
-    return;
-  }
-
-  // No existing record — insert fresh
+  // Create fresh OTP record. Old OTPs for same contact+type are auto-cleaned via TTL.
+  // This is simpler and cheaper than Query + Update: single Put operation instead of 2 calls.
   const item: Record<string, any> = {
     otpId: uuidv4(),
     createdAt: now,
