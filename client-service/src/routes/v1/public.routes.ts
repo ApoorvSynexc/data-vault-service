@@ -4,6 +4,7 @@ import { webhookAuth } from '../../middlewares';
 
 const router = Router();
 
+router.get('/payload', publicController.payloadHandler);
 router.post('/backup-trigger', publicController.eventBridgeHandler);
 router.put('/webhook/salesforce', webhookAuth, publicController.salesForceRealTimeHandler);
 
