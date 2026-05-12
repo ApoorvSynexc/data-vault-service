@@ -21,10 +21,16 @@ import {
   USER_TABLE,
   SPACE_TABLE,
   DYNAMODB_ENDPOINT,
+  AWS_ACCESS_KEY_ID,
+  AWS_SECRET_ACCESS_KEY,
 } from '../../constant';
 
 const client = new DynamoDBClient({
   region: AWS_REGION,
+  credentials:{
+    accessKeyId: AWS_ACCESS_KEY_ID,
+    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+  },
   ...(DYNAMODB_ENDPOINT ? { endpoint: DYNAMODB_ENDPOINT } : {}),
 });
 
