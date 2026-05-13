@@ -79,13 +79,13 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
 };
 
 const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, objectApiNames } = req.body;
+  const { crmId, ...body } = req.body;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
   const [apexResult] = await Promise.all([
-    getApexObjectsCount(String(crmId), objectApiNames),
+    getApexObjectsCount(String(crmId), body),
   ]);
 
   makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
