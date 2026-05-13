@@ -122,7 +122,8 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
 
 const getBackupConfigsByUserAndCrm = async (
   userId: string,
-  crmId: string
+  crmId: string,
+  limit?: number
 ): Promise<IBackupConfig[]> => {
   const result = await docClient.send(
     new QueryCommand({
@@ -133,6 +134,7 @@ const getBackupConfigsByUserAndCrm = async (
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, environment, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId, ':crmId': crmId },
+      ...(limit && { Limit: limit }),
     })
   );
   return (result.Items as IBackupConfig[] | undefined) ?? [];
