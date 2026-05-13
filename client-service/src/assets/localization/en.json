@@ -44,5 +44,6 @@
   "resume": "Backup job resumed successfully",
   "too_many_requests": "Too many requests. Please wait and try again",
   "backup_configs_exist": "Cannot delete CRM with existing backup configurations",
-  "deletion_failed": "Failed to delete CRM"
+  "deletion_failed": "Failed to delete CRM",
+  "backup_pending_cannot_delete": "Cannot delete backup configuration with PENDING status"
 }
