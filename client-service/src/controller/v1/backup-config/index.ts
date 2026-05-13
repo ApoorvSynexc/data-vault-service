@@ -255,7 +255,11 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   const existing = await getBackupConfigById(String(backupConfigId));
-  if (!isOwner(existing, req.user!.userId)) {
+  const spaceId = req.user?.spaceId;
+  const userId = req.user!.userId;
+
+  const isConfigOwner = spaceId ? existing?.spaceId === spaceId : existing?.userId === userId;
+  if (!isConfigOwner) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
