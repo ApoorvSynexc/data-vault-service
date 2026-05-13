@@ -13,6 +13,7 @@ import {
   reconnectCrm,
   upsertCrm,
   updateCrmCredentials,
+  updateCrm,
   createUser,
   getUser,
   addMemberToSpace,
@@ -303,10 +304,34 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
   makeResponse(req, res, 200, true, 'update', refreshed);
 };
 
+const updateCrmHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { crmId } = req.query;
+
+  const crm = await getCrmById(String(crmId));
+  if (!crm) {
+    makeResponse(req, res, 404, false, 'not_exist');
+    return;
+  }
+
+  const spaceId = req.user?.spaceId;
+  const userId = req.user!.userId;
+
+  const isCrmOwner = spaceId ? crm.spaceId === spaceId : crm.userId === userId;
+  if (!isCrmOwner) {
+    makeResponse(req, res, 403, false, 'not_exist');
+    return;
+  }
+
+  const updatedCrm = await updateCrm(String(crmId), req.body);
+
+  makeResponse(req, res, 200, true, 'update', updatedCrm);
+};
+
 export const crmController = wrapController({
   crmLoginHanlder,
   crmCodeHanlder,
   crmListHandler,
   crmDisconnectHandler,
   crmRefreshTokenHandler,
+  updateCrmHandler,
 });
