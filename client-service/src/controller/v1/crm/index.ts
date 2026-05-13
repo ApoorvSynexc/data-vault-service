@@ -14,10 +14,10 @@ import {
   upsertCrm,
   updateCrmCredentials,
   updateCrm,
+  deleteCrm,
+  getBackupConfigsByUserAndCrm,
   createUser,
   getUser,
-  addMemberToSpace,
-  updateUser,
 } from '../../../services';
 import {
   refreashSalesforceToken,
@@ -327,6 +327,44 @@ const updateCrmHandler = async (req: IRequest, res: IResponse): Promise<void> =>
   makeResponse(req, res, 200, true, 'update', updatedCrm);
 };
 
+const crmDeleteHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { crmId } = req.query;
+
+  if (!crmId) {
+    makeResponse(req, res, 400, false, 'crm_id_required');
+    return;
+  }
+
+  const crm = await getCrmById(String(crmId));
+  if (!crm) {
+    makeResponse(req, res, 404, false, 'not_exist');
+    return;
+  }
+
+  const spaceId = req.user?.spaceId;
+  const userId = req.user!.userId;
+
+  const isCrmOwner = spaceId ? crm.spaceId === spaceId : crm.userId === userId;
+  if (!isCrmOwner) {
+    makeResponse(req, res, 403, false, 'not_exist');
+    return;
+  }
+
+  const backupConfigs = await getBackupConfigsByUserAndCrm(crm.userId, String(crmId), 1);
+  if (backupConfigs.length > 0) {
+    makeResponse(req, res, 400, false, 'backup_configs_exist');
+    return;
+  }
+
+  const deleted = await deleteCrm(String(crmId));
+  if (!deleted) {
+    makeResponse(req, res, 400, false, 'deletion_failed');
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'delete');
+};
+
 export const crmController = wrapController({
   crmLoginHanlder,
   crmCodeHanlder,
@@ -334,4 +372,5 @@ export const crmController = wrapController({
   crmDisconnectHandler,
   crmRefreshTokenHandler,
   updateCrmHandler,
+  crmDeleteHandler,
 });

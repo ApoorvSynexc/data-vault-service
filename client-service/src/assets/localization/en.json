@@ -42,5 +42,7 @@
   "invalid_aws_credentials": "Invalid AWS credentials or bucket not accessible",
   "reschedule": "Backup job rescheduled successfully",
   "resume": "Backup job resumed successfully",
-  "too_many_requests": "Too many requests. Please wait and try again"
+  "too_many_requests": "Too many requests. Please wait and try again",
+  "backup_configs_exist": "Cannot delete CRM with existing backup configurations",
+  "deletion_failed": "Failed to delete CRM"
 }
