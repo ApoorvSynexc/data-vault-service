@@ -1,5 +1,6 @@
 export * from './auth';
 export * from './backup-config';
+export * from './crm';
 export * from './destination';
 export * from './user';
 export * from './shared';

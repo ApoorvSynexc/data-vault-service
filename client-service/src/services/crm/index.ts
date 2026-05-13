@@ -273,6 +273,56 @@ const getCrmTokens = (crm: ICrm): Record<string, any> => {
   return JSON.parse(decrypt({ ciphertext: crm.encryptedCredentials, iv: crm.iv }, crm.userId));
 };
 
+const updateCrm = async (crmId: string, updates: Record<string, any>): Promise<ICrm | null> => {
+  const existing = await getCrmById(crmId);
+  if (!existing) {
+    return null;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const updateExpressionParts: string[] = [];
+  const expressionAttributeNames: Record<string, string> = {};
+  const expressionAttributeValues: Record<string, any> = {
+    ':updatedAt': updatedAt,
+  };
+
+  let partIndex = 0;
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined && value !== null) {
+      const placeholder = `:val${partIndex}`;
+      const nameKey = `#attr${partIndex}`;
+
+      // Use attribute name placeholder for reserved words
+      expressionAttributeNames[nameKey] = key;
+      expressionAttributeValues[placeholder] = value;
+      updateExpressionParts.push(`${nameKey} = ${placeholder}`);
+      partIndex++;
+    }
+  }
+
+  if (updateExpressionParts.length === 0) {
+    return existing;
+  }
+
+  const updateExpression = `SET ${updateExpressionParts.join(', ')}, updatedAt = :updatedAt`;
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: CRM_TABLE,
+      Key: { crmId },
+      UpdateExpression: updateExpression,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
+    })
+  );
+
+  return {
+    ...existing,
+    ...updates,
+    updatedAt,
+  };
+};
+
 export {
   upsertCrm,
   reconnectCrm,
@@ -285,4 +335,5 @@ export {
   deleteCrm,
   getCrmTokens,
   updateCrmCredentials,
+  updateCrm,
 };
