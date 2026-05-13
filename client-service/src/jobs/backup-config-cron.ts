@@ -6,10 +6,10 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
   try {
     const configs = await getScheduledIncrementalBackupConfigs();
 
+    logger.info(`Running ${configs.length} scheduled incremental backups...`);
     if (configs.length === 0) {
       return;
     }
-    logger.info(`Running ${configs.length} scheduled incremental backups...`);
     for (const config of configs) {
       try {
         // await triggerBackupJob(config, config.lastBackupAt);
