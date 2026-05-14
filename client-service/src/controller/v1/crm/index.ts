@@ -312,7 +312,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const updateCrmHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId } = req.query;
+  const { crmId, ...body } = req.body;
 
   const crm = await getCrmById(String(crmId));
   if (!crm) {
@@ -329,7 +329,7 @@ const updateCrmHandler = async (req: IRequest, res: IResponse): Promise<void> =>
     return;
   }
 
-  const updatedCrm = await updateCrm(String(crmId), req.body);
+  const updatedCrm = await updateCrm(String(crmId), body);
 
   makeResponse(req, res, 200, true, 'update', updatedCrm);
 };
