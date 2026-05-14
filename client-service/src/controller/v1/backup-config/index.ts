@@ -31,14 +31,14 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   if (!s) return 'cron(0/2 * * * ? *)';
 
   switch (s.frequency) {
-    case 'HOURLY':   return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
-    case 'DAILY':    return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
-    case 'WEEKLY':   return `rate(${s.interval * 7} days)`;
-    case 'MONTHLY':  return `cron(0 0 ${s.monthDate ?? 1} * ? *)`;
-    case 'CUSTOM':   return s.startDate && s.startTime
+    case 'HOURLY': return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
+    case 'DAILY': return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
+    case 'WEEKLY': return `rate(${s.interval * 7} days)`;
+    case 'MONTHLY': return `cron(0 0 ${s.monthDate ?? 1} * ? *)`;
+    case 'CUSTOM': return s.startDate && s.startTime
       ? `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`
       : 'cron(0/2 * * * ? *)';
-    default:         return 'cron(0/2 * * * ? *)';
+    default: return 'cron(0/2 * * * ? *)';
   }
 };
 
@@ -48,6 +48,7 @@ const buildEventScheduleInput = (config: IBackupConfig) => ({
   payload: { backupConfigId: config.backupConfigId, userId: config.userId },
 });
 import { wrapController, isOwner } from '../../../utils/helper';
+import { logger } from '../../../middlewares';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crmId } = req.query;
@@ -127,8 +128,6 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      const triggerResults = await realTimeTriggerManagement('create', config);
-      await updateBackupConfig(config.backupConfigId, { triggerResults: triggerResults ?? [] });
       await triggerBackupJob(config);
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;

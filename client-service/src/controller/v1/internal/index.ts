@@ -91,8 +91,8 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
           if (backupConfig?.objects) {
             const updatedObjects = backupConfig.objects.map((obj) =>
               obj.name === objectName ? { ...obj, sizeInBytes } : obj
-            );
-            updateParams.sizeInBytes = backupConfig.sizeInBytes + sizeInBytes;
+          );
+            updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
             updateParams.objects = updatedObjects;
           }
         }
