@@ -43,6 +43,13 @@ const changePasswordHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'update');
 };
 
+const updateProfileHandler = async (req: IRequest, res: IResponse) => {
+  const body = req.body;
+
+  await updateUser({ userId: req.user!.userId }, body);
+  makeResponse(req, res, 200, true, 'update', { ...req.user, ...body, password: undefined });
+};
+
 const deleteProfileHandler = async (req: IRequest, res: IResponse) => {
   await updateUser({ userId: req.user!.userId }, { status: STATUS.deleted });
   makeResponse(req, res, 200, true, 'delete');
@@ -96,6 +103,7 @@ export const userController = wrapController({
   myProfileHandler,
   logoutHandler,
   changePasswordHandler,
+  updateProfileHandler,
   deleteProfileHandler,
   usersHandler,
 });
