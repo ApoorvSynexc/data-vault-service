@@ -157,7 +157,7 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 
     const payload = {
       jobType: 'BACKUP',
-      jobId: backupConfigId,
+      backupConfigId: backupConfigId,
       details: {
         clientId: backupConfig.userId,
         backupType: backupConfig.schedule,
