@@ -41,7 +41,7 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
     const storageUsedBytes = stats.dataProcessed.bytes;
     const storageChange = stats.dataProcessed.weeklyChangePercent;
     const protectedRecordsCount = stats.protectedRecords.count;
-    const recordsChange = stats.completedJobs.vsYesterday;
+    const recordsChange = stats.protectedRecords.weeklyChangePercent;
 
     const totalActiveJobs = stats.runningJobs.count;
 
