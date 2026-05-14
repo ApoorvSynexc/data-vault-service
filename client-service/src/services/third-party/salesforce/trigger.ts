@@ -5,7 +5,7 @@ import { getCrmById, getCrmTokens } from '../../crm';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
 const NAMESPACE_PREFIX = 'SYX_DVV';
-const HANDLER_CLASS_NAME = `${NAMESPACE_PREFIX}__DataVaultRecordSyncTriggerHandler`;
+const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
 const API_VERSION = '66.0';
 
 
@@ -196,7 +196,7 @@ const createTriggers = async (
           body: JSON.stringify({
             Name: triggerName,
             TableEnumOrId: objectApiName,
-            Body: `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n    try {\n        ${HANDLER_CLASS_NAME}.enqueueSync(Trigger.new, Trigger.old, Trigger.operationType.name());\n    } catch (Exception e) {\n        System.debug('DataVault: Real-time sync failed for ${objectApiName}. ' + e.getMessage() + ' | TODO: Retry functionality pending. Error log functionality pending.');\n    }\n}`,
+            Body: `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n    try {\n        ${NAMESPACE_PREFIX}.${HANDLER_CLASS_NAME}.enqueueSync(Trigger.new, Trigger.old, Trigger.operationType.name());\n    } catch (Exception e) {\n        System.debug('DataVault: Real-time sync failed for ${objectApiName}. ' + e.getMessage() + ' | TODO: Retry functionality pending. Error log functionality pending.');\n    }\n}`,
             Status: 'Active',
             ApiVersion: API_VERSION,
           }),
