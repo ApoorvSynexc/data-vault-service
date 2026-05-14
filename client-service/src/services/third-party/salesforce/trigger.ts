@@ -4,48 +4,10 @@ import { IBackupConfig } from '../../../models';
 import { getCrmById, getCrmTokens } from '../../crm';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
-const HANDLER_CLASS_NAME = 'DataVaultRecordSyncTriggerHandler';
+const NAMESPACE_PREFIX = 'SYX_DVV';
+const HANDLER_CLASS_NAME = `${NAMESPACE_PREFIX}__DataVaultRecordSyncTriggerHandler`;
 const API_VERSION = '66.0';
 
-const HANDLER_CLASS_BODY = `
-public class ${HANDLER_CLASS_NAME} implements Queueable, Database.AllowsCallouts {
-    private List<SObject> newRecords;
-    private List<SObject> oldRecords;
-    private String operation;
-    private String objectApiName;
-
-    public ${HANDLER_CLASS_NAME}(List<SObject> newRecs, List<SObject> oldRecs, String op, String objName) {
-        this.newRecords    = newRecs;
-        this.oldRecords    = oldRecs;
-        this.operation     = op;
-        this.objectApiName = objName;
-    }
-
-    public static void enqueueSync(List<SObject> newRecs, List<SObject> oldRecs, String op) {
-        String objName = newRecs != null && !newRecs.isEmpty()
-            ? newRecs[0].getSObjectType().getDescribe().getName()
-            : oldRecs[0].getSObjectType().getDescribe().getName();
-        System.enqueueJob(new ${HANDLER_CLASS_NAME}(newRecs, oldRecs, op, objName));
-    }
-
-    public void execute(QueueableContext ctx) {
-        List<SObject> records = newRecords != null ? newRecords : oldRecords;
-        Map<String, Object> payload = new Map<String, Object>{
-            'records'       => records,
-            'orgId'         => UserInfo.getOrganizationId(),
-            'operation'     => this.operation,
-            'objectApiName' => this.objectApiName
-        };
-        HttpRequest req = new HttpRequest();
-        req.setEndpoint('${SALESFORCE_WEBHOOK_URL}');
-        req.setMethod('PUT');
-        req.setHeader('Content-Type', 'application/json');
-        req.setTimeout(10000);
-        req.setBody(JSON.serialize(payload));
-        new Http().send(req);
-    }
-}
-`.trim();
 
 // ---------------------------------------------------------------------------
 // Fetch a trigger record by name — returns null if not found
@@ -67,36 +29,149 @@ const fetchTrigger = async (
 };
 
 // ---------------------------------------------------------------------------
-// Ensure the shared handler ApexClass exists — runs once before any triggers
+// Ensure the shared handler ApexClass exists — throws if not installed.
+// The class ships with the DataVault managed package (namespace: SYX_DVV).
+// Install the package in the org before creating real-time triggers.
 // ---------------------------------------------------------------------------
-const ensureHandlerClass = async (instanceUrl: string, tokens: SalesforceTokens): Promise<void> => {
+const ensureHandlerClass = async (instanceUrl: string, tokens: SalesforceTokens): Promise<string> => {
   const soql = `SELECT Id FROM ApexClass WHERE Name = '${HANDLER_CLASS_NAME}' LIMIT 1`;
-  const { data } = await salesforceRequest<{ totalSize: number }>(
+  const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
     { url: `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
     tokens
   );
 
-  if (data.totalSize > 0) {
-    return;
+  if (data.totalSize === 0) {
+    throw new Error(
+      `handler_class_not_present: ApexClass '${HANDLER_CLASS_NAME}' was not found in this org. ` +
+      `Install the DataVault managed package (namespace: ${NAMESPACE_PREFIX}) before enabling real-time triggers.`
+    );
   }
+
+  return data.records[0].Id;
+};
+
+// ---------------------------------------------------------------------------
+// Resolve an ApexClass Id by name — used for permission set setup
+// ---------------------------------------------------------------------------
+const fetchApexClassId = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  className: string
+): Promise<string | null> => {
+  const soql = `SELECT Id FROM ApexClass WHERE Name = '${className}' LIMIT 1`;
+  const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
+    { url: `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
+    tokens
+  );
+  return data.totalSize > 0 ? data.records[0].Id : null;
+};
+
+// ---------------------------------------------------------------------------
+// Permission Set helpers
+// ---------------------------------------------------------------------------
+const PERMISSION_SET_NAME = 'DataVaultRealTimeTriggerAccess';
+
+const fetchPermissionSetId = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens
+): Promise<string | null> => {
+  const soql = `SELECT Id FROM PermissionSet WHERE Name = '${PERMISSION_SET_NAME}' LIMIT 1`;
+  const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
+    { url: `${instanceUrl}/services/data/v${API_VERSION}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
+    tokens
+  );
+  return data.totalSize > 0 ? data.records[0].Id : null;
+};
+
+// Creates the permission set if absent; returns its Id either way.
+const upsertPermissionSet = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens
+): Promise<string> => {
+  const existing = await fetchPermissionSetId(instanceUrl, tokens);
+  if (existing) { return existing; }
+
+  const { data } = await salesforceRequest<{ id: string }>(
+    {
+      url: `${instanceUrl}/services/data/v${API_VERSION}/sobjects/PermissionSet`,
+      method: 'POST',
+      body: JSON.stringify({
+        Name: PERMISSION_SET_NAME,
+        Label: 'DataVault Real-Time Trigger Access',
+        Description:
+          'Grants access to the DataVault handler class and all real-time backup triggers created by DataVault.',
+      }),
+    },
+    tokens
+  );
+
+  return data.id;
+};
+
+// Grants Apex class access on the permission set (idempotent — skips if already present).
+const grantApexClassAccess = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  permissionSetId: string,
+  apexClassId: string
+): Promise<void> => {
+  const soql =
+    `SELECT Id FROM SetupEntityAccess ` +
+    `WHERE ParentId = '${permissionSetId}' AND SetupEntityId = '${apexClassId}' LIMIT 1`;
+  const { data: check } = await salesforceRequest<{ totalSize: number }>(
+    { url: `${instanceUrl}/services/data/v${API_VERSION}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
+    tokens
+  );
+  if (check.totalSize > 0) { return; }
 
   await salesforceRequest(
     {
-      url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexClass`,
+      url: `${instanceUrl}/services/data/v${API_VERSION}/sobjects/SetupEntityAccess`,
       method: 'POST',
-      body: JSON.stringify({
-        Name: HANDLER_CLASS_NAME,
-        Body: HANDLER_CLASS_BODY,
-        ApiVersion: API_VERSION,
-      }),
+      body: JSON.stringify({ ParentId: permissionSetId, SetupEntityId: apexClassId }),
     },
     tokens
   );
 };
 
 // ---------------------------------------------------------------------------
+// Create the DataVaultRealTimeTriggerAccess permission set and wire up:
+//   1. ApexClassAccess  → the handler class
+//   2. ApexClassAccess  → each newly-created trigger's backing class (if any)
+// Note: ApexTrigger records themselves are not directly added to permission sets;
+// access is controlled via the handler class and the org's profile/permission model.
+// ---------------------------------------------------------------------------
+const createPermissionSet = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  triggerNames: string[]
+): Promise<{ permissionSetId: string; permissionSetName: string }> => {
+  const permissionSetId = await upsertPermissionSet(instanceUrl, tokens);
+
+  // Grant access to the handler class
+  const handlerClassId = await fetchApexClassId(instanceUrl, tokens, HANDLER_CLASS_NAME);
+  if (handlerClassId) {
+    await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
+  }
+
+  // Grant access to any trigger-backing Apex classes that share the trigger name
+  await Promise.all(
+    triggerNames.map(async (triggerName) => {
+      const classId = await fetchApexClassId(instanceUrl, tokens, triggerName);
+      if (classId) {
+        await grantApexClassAccess(instanceUrl, tokens, permissionSetId, classId);
+      }
+    })
+  );
+
+  return { permissionSetId, permissionSetName: PERMISSION_SET_NAME };
+};
+
+// ---------------------------------------------------------------------------
 // Create triggers for one or more objects in parallel.
 // Handler class is ensured once before all trigger creations.
+// After all triggers settle, the permission set is created/updated using only
+// the trigger names that were successfully created in this run.
 // ---------------------------------------------------------------------------
 const createTriggers = async (
   instanceUrl: string,
@@ -105,7 +180,7 @@ const createTriggers = async (
 ): Promise<{ triggerName: string; created: boolean }[]> => {
   await ensureHandlerClass(instanceUrl, tokens);
 
-  return Promise.all(
+  const results = await Promise.all(
     objectApiNames.map(async (objectApiName) => {
       const triggerName = `DataVault_${objectApiName}_Trigger`;
 
@@ -121,7 +196,7 @@ const createTriggers = async (
           body: JSON.stringify({
             Name: triggerName,
             TableEnumOrId: objectApiName,
-            Body: `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n    ${HANDLER_CLASS_NAME}.enqueueSync(Trigger.new, Trigger.old, Trigger.operationType.name());\n}`,
+            Body: `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n    try {\n        ${HANDLER_CLASS_NAME}.enqueueSync(Trigger.new, Trigger.old, Trigger.operationType.name());\n    } catch (Exception e) {\n        System.debug('DataVault: Real-time sync failed for ${objectApiName}. ' + e.getMessage() + ' | TODO: Retry functionality pending. Error log functionality pending.');\n    }\n}`,
             Status: 'Active',
             ApiVersion: API_VERSION,
           }),
@@ -132,6 +207,17 @@ const createTriggers = async (
       return { triggerName, created: true };
     })
   );
+
+  // Run permission set setup only for triggers that were successfully created.
+  const successfulTriggerNames = results
+    .filter((r) => r.created)
+    .map((r) => r.triggerName);
+
+  if (successfulTriggerNames.length > 0) {
+    await createPermissionSet(instanceUrl, tokens, successfulTriggerNames);
+  }
+
+  return results;
 };
 
 // ---------------------------------------------------------------------------
@@ -205,4 +291,4 @@ const realTimeTriggerManagement = async (
   }
 };
 
-export { fetchTrigger, createTriggers, deleteTriggers, realTimeTriggerManagement };
+export { fetchTrigger, createTriggers, deleteTriggers, realTimeTriggerManagement, createPermissionSet };
