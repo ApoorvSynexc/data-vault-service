@@ -233,6 +233,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
   let failedCount = 0;
   let dataThisWeek = 0;
   let dataLastWeek = 0;
+  let totalRecordCount = 0;
 
   let lastKey: Record<string, any> | undefined;
 
@@ -256,6 +257,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
 
       if (job.status === JOB_STATUS.success) {
         completedCount++;
+        totalRecordCount += job.recordCount ?? 0;
         const completedAt = job.completedAt ? dayjs(job.completedAt) : null;
         if (completedAt) {
           if (!completedAt.isBefore(today)) {
@@ -290,6 +292,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
     runningJobs: { count: runningCount },
     failedJobs: { count: failedCount },
     dataProcessed: { bytes: dataThisWeek, weeklyChangePercent },
+    protectedRecords: { count: totalRecordCount },
   };
 };
 

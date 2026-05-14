@@ -34,6 +34,7 @@ export interface IBackupJob {
   startedAt?: string;
   completedAt?: string;
   errorMessage?: string;
+  recordCount?: number;
   spaceId?: string;
   createdAt: string;
   updatedAt: string;
