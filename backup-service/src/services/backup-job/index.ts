@@ -172,42 +172,27 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     expressionParts.push(`#object[${objectIndex}].#insertCount = :insertCount`);
     expressionNames['#insertCount'] = 'insertCount';
     expressionValues[':insertCount'] = insertCount;
-
-    // Update job-level recordCount: set if empty, otherwise add
-    const job = await getBackupJob(backupJobId);
-    if (job) {
-      const currentJobRecordCount = job.recordCount ?? 0;
-      const newJobRecordCount = currentJobRecordCount + insertCount;
-      expressionParts.push('recordCount = :recordCount');
-      expressionValues[':recordCount'] = newJobRecordCount;
-    }
   }
 
   if (updateCount !== undefined) {
     expressionParts.push(`#object[${objectIndex}].#updateCount = :updateCount`);
     expressionNames['#updateCount'] = 'updateCount';
     expressionValues[':updateCount'] = updateCount;
-
-    // Update job-level recordCount: set if empty, otherwise add
-    const job = await getBackupJob(backupJobId);
-    if (job) {
-      const currentJobRecordCount = job.recordCount ?? 0;
-      const newJobRecordCount = currentJobRecordCount + updateCount;
-      expressionParts.push('recordCount = :recordCount');
-      expressionValues[':recordCount'] = newJobRecordCount;
-    }
   }
 
   if (deleteCount !== undefined) {
     expressionParts.push(`#object[${objectIndex}].#deleteCount = :deleteCount`);
     expressionNames['#deleteCount'] = 'deleteCount';
     expressionValues[':deleteCount'] = deleteCount;
+  }
 
-    // Update job-level recordCount: set if empty, otherwise add
+  // Update job-level recordCount once if any counts are provided
+  if (insertCount !== undefined || updateCount !== undefined || deleteCount !== undefined) {
     const job = await getBackupJob(backupJobId);
     if (job) {
       const currentJobRecordCount = job.recordCount ?? 0;
-      const newJobRecordCount = currentJobRecordCount + deleteCount;
+      const recordCountDelta = (insertCount ?? 0) + (updateCount ?? 0) + (deleteCount ?? 0);
+      const newJobRecordCount = currentJobRecordCount + recordCountDelta;
       expressionParts.push('recordCount = :recordCount');
       expressionValues[':recordCount'] = newJobRecordCount;
     }
