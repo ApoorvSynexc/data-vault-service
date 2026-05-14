@@ -160,15 +160,6 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     expressionParts.push(`#object[${objectIndex}].#totalRecordCount = :totalRecordCount`);
     expressionNames['#totalRecordCount'] = 'totalRecordCount';
     expressionValues[':totalRecordCount'] = totalRecordCount;
-
-    // Update job-level recordCount: set if empty, otherwise add
-    const job = await getBackupJob(backupJobId);
-    if (job) {
-      const currentJobRecordCount = job.recordCount ?? 0;
-      const newJobRecordCount = currentJobRecordCount + totalRecordCount;
-      expressionParts.push('recordCount = :recordCount');
-      expressionValues[':recordCount'] = newJobRecordCount;
-    }
   }
 
   if (completedRecordCount !== undefined) {
@@ -181,18 +172,45 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     expressionParts.push(`#object[${objectIndex}].#insertCount = :insertCount`);
     expressionNames['#insertCount'] = 'insertCount';
     expressionValues[':insertCount'] = insertCount;
+
+    // Update job-level recordCount: set if empty, otherwise add
+    const job = await getBackupJob(backupJobId);
+    if (job) {
+      const currentJobRecordCount = job.recordCount ?? 0;
+      const newJobRecordCount = currentJobRecordCount + insertCount;
+      expressionParts.push('recordCount = :recordCount');
+      expressionValues[':recordCount'] = newJobRecordCount;
+    }
   }
 
   if (updateCount !== undefined) {
     expressionParts.push(`#object[${objectIndex}].#updateCount = :updateCount`);
     expressionNames['#updateCount'] = 'updateCount';
     expressionValues[':updateCount'] = updateCount;
+
+    // Update job-level recordCount: set if empty, otherwise add
+    const job = await getBackupJob(backupJobId);
+    if (job) {
+      const currentJobRecordCount = job.recordCount ?? 0;
+      const newJobRecordCount = currentJobRecordCount + updateCount;
+      expressionParts.push('recordCount = :recordCount');
+      expressionValues[':recordCount'] = newJobRecordCount;
+    }
   }
 
   if (deleteCount !== undefined) {
     expressionParts.push(`#object[${objectIndex}].#deleteCount = :deleteCount`);
     expressionNames['#deleteCount'] = 'deleteCount';
     expressionValues[':deleteCount'] = deleteCount;
+
+    // Update job-level recordCount: set if empty, otherwise add
+    const job = await getBackupJob(backupJobId);
+    if (job) {
+      const currentJobRecordCount = job.recordCount ?? 0;
+      const newJobRecordCount = currentJobRecordCount + deleteCount;
+      expressionParts.push('recordCount = :recordCount');
+      expressionValues[':recordCount'] = newJobRecordCount;
+    }
   }
 
   if (sizeInBytes !== undefined) {
