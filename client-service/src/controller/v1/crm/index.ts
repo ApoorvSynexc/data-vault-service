@@ -60,7 +60,14 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
 
   if (!resolvedCrmName && crmId) {
     const crm = await getCrmById(String(crmId));
-    if (!crm || crm.userId !== userId) {
+    if (!crm) {
+      makeResponse(req, res, 400, false, 'not_exist');
+      return;
+    }
+
+    const spaceId = req.user?.spaceId;
+    const isCrmOwner = spaceId ? crm.spaceId === spaceId : crm.userId === userId;
+    if (!isCrmOwner) {
       makeResponse(req, res, 400, false, 'not_exist');
       return;
     }
