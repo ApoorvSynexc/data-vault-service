@@ -38,6 +38,13 @@ export interface IObject {
   condition?: IObjectCondition;
 }
 
+export interface ITriggerResult {
+  triggerName: string;
+  created?: boolean;
+  deleted?: boolean;
+  error?: string;
+}
+
 export interface IBackupConfig {
   backupConfigId: string; // PK
   userId: string; // GSI: userId-index
@@ -57,6 +64,7 @@ export interface IBackupConfig {
   schemaChange?: boolean;
   sizeInBytes?: number;
   spaceId?: string;
+  triggerResults?: ITriggerResult[];
   createdAt: string;
   updatedAt: string;
 }

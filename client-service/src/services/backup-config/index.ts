@@ -9,7 +9,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
-import { IBackupConfig, IObject, IScheduleConfig } from '../../models';
+import { IBackupConfig, IObject, IScheduleConfig, ITriggerResult } from '../../models';
 import { toSlug, buildSlug } from '../../utils/helper';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
 
@@ -40,6 +40,7 @@ interface UpdateBackupConfigParams {
   lastEventId?: string;
   schemaChange?: boolean;
   sizeInBytes?: number;
+  triggerResults?: ITriggerResult[];
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
