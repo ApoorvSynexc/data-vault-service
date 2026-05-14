@@ -227,6 +227,9 @@ const updateBackupConfig = async (
   if (params.destinationId !== undefined) {
     updates.destinationId = params.destinationId;
   }
+  if (params.triggerResults !== undefined) {
+    updates.triggerResults = params.triggerResults;
+  }
 
   const setExpr = Object.keys(updates)
     .map((k) => {
