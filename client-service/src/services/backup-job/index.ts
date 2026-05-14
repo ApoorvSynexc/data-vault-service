@@ -9,6 +9,7 @@ import { updateBackupConfig } from '../backup-config';
 import { getCrmById, getCrmTokens } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { incrementTableCounter } from '../counter';
+import { logger } from '../../middlewares';
 
 const getSourceObjects = (config: IBackupConfig) => {
   if (config.objects?.length) {
@@ -81,11 +82,17 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
     ...(config.spaceId && { spaceId: config.spaceId }),
   };
 
-  const result = await httpRequest({
-    url: `${BACKUP_SERVICE}/v1/backup-job`,
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+  let result;
+  try {
+    result = await httpRequest({
+      url: `${BACKUP_SERVICE}/v1/backup-job`,
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    logger.error('Error triggering backup job: ', { error });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.active });
+  }
 
   await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
   return result;
