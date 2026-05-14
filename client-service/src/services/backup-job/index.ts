@@ -234,6 +234,8 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
   let dataThisWeek = 0;
   let dataLastWeek = 0;
   let totalRecordCount = 0;
+  let recordsThisWeek = 0;
+  let recordsLastWeek = 0;
 
   let lastKey: Record<string, any> | undefined;
 
@@ -254,10 +256,11 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
 
     for (const job of jobs) {
       const jobSizeBytes = (job.object ?? []).reduce((sum, obj) => sum + (obj.sizeInBytes ?? 0), 0);
+      const jobRecordCount = job.recordCount ?? 0;
 
       if (job.status === JOB_STATUS.success) {
         completedCount++;
-        totalRecordCount += job.recordCount ?? 0;
+        totalRecordCount += jobRecordCount;
         const completedAt = job.completedAt ? dayjs(job.completedAt) : null;
         if (completedAt) {
           if (!completedAt.isBefore(today)) {
@@ -268,8 +271,10 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
 
           if (!completedAt.isBefore(startOfThisWeek)) {
             dataThisWeek += jobSizeBytes;
+            recordsThisWeek += jobRecordCount;
           } else if (!completedAt.isBefore(startOfLastWeek)) {
             dataLastWeek += jobSizeBytes;
+            recordsLastWeek += jobRecordCount;
           }
         }
       } else if (job.status === JOB_STATUS.running || job.status === JOB_STATUS.pending) {
@@ -287,12 +292,19 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
         ? 100
         : 0;
 
+  const recordsChangePercent =
+    recordsLastWeek > 0
+      ? Math.round(((recordsThisWeek - recordsLastWeek) / recordsLastWeek) * 100)
+      : recordsThisWeek > 0
+        ? 100
+        : 0;
+
   return {
     completedJobs: { count: completedCount, vsYesterday: completedToday - completedYesterday },
     runningJobs: { count: runningCount },
     failedJobs: { count: failedCount },
     dataProcessed: { bytes: dataThisWeek, weeklyChangePercent },
-    protectedRecords: { count: totalRecordCount },
+    protectedRecords: { count: totalRecordCount, weeklyChangePercent: recordsChangePercent },
   };
 };
 
