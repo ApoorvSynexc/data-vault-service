@@ -3,6 +3,6 @@ import { dashboardController } from '../../controller';
 
 const router = Router();
 
-router.get('/overview', dashboardController.getOverviewHandler);
+router.get('/overview', dashboardController.overviewHandler);
 
 export const dashboardRouter = router;
