@@ -136,6 +136,18 @@ const getBackupConfigsByUserAndCrm = async (
   return (result.Items as IBackupConfig[] | undefined) ?? [];
 };
 
+const getBackupConfigsByCrm = async (crmId: string, limit?: number): Promise<IBackupConfig[]> => {
+  const result = await docClient.send(
+    new ScanCommand({
+      TableName: BACKUP_CONFIG_TABLE,
+      FilterExpression: 'crmId = :crmId',
+      ExpressionAttributeValues: { ':crmId': crmId },
+      ...(limit && { Limit: limit }),
+    })
+  );
+  return (result.Items as IBackupConfig[] | undefined) ?? [];
+};
+
 const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> => {
   const result = await docClient.send(
     new ScanCommand({
@@ -353,6 +365,7 @@ export {
   getBackupConfigBySlug,
   getBackupConfigsByUser,
   getBackupConfigsByUserAndCrm,
+  getBackupConfigsByCrm,
   getScheduledIncrementalBackupConfigs,
   getBackupConfigsByUserWithPagination,
   getBackupConfigsBySpaceWithPagination,

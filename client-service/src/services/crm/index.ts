@@ -197,6 +197,10 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
     return null;
   }
 
+  if(existing.crmProfile?.organizationId !== crmProfile.organizationId) {
+    throw new Error(`Organization ID mismatch. Reconnection failed. Please try with this ${existing.crmProfile?.organizationId} organization or contact support.`);
+  }
+
   const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), existing.userId);
   const updatedAt = new Date().toISOString();
   const resolvedEnvironment = environment ?? 'production';

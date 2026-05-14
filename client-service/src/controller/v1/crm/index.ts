@@ -15,7 +15,7 @@ import {
   updateCrmCredentials,
   updateCrm,
   deleteCrm,
-  getBackupConfigsByUserAndCrm,
+  getBackupConfigsByCrm,
   createUser,
   getUser,
 } from '../../../services';
@@ -357,7 +357,7 @@ const crmDeleteHandler = async (req: IRequest, res: IResponse): Promise<void> =>
     return;
   }
 
-  const backupConfigs = await getBackupConfigsByUserAndCrm(crm.userId, String(crmId), 1);
+  const backupConfigs = await getBackupConfigsByCrm(String(crmId), 1);
   if (backupConfigs.length > 0) {
     makeResponse(req, res, 400, false, 'backup_configs_exist');
     return;
