@@ -90,8 +90,8 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    logger.error('Error triggering backup job: ', { error });
     await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.active });
+    throw error;
   }
 
   await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
