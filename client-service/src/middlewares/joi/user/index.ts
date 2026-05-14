@@ -65,3 +65,20 @@ export const loginValidation = (req: Request, res: Response, next: NextFunction)
   }
   next();
 };
+
+export const updateProfileValidation = (req: Request, res: Response, next: NextFunction) => {
+  const schema = Joi.object({
+    firstName: Joi.string().trim().optional(),
+    lastName: Joi.string().trim().optional(),
+    gender: Joi.string()
+      .valid(...Object.values(GENDER))
+      .optional(),
+  }).min(1);
+
+  const { error } = schema.validate(req.body);
+  if (error) {
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    return;
+  }
+  next();
+};
