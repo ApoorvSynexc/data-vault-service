@@ -164,13 +164,13 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
         sourceDetails: {
           "sourceName": crm.crmName,
           "orgId": crm.crmId,
-          "salt": crm.userId
         },
         objectOperations,
         "destinationConfigs": {
           "destinationName": destination.provider,
           ciphertext: destination.ciphertext,
-          iv: destination.iv
+          iv: destination.iv,
+          salt: destination.userId
         }
       },
     };
