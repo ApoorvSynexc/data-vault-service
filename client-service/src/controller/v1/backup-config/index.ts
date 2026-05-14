@@ -217,6 +217,7 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     crmId: crmPayload.crmId,
     crmName: crmPayload.crmName,
     slug: crmPayload.slug,
+    environment: crmPayload.environment,
     isConnected: crmPayload.isConnected,
   };
   const destinationDetail = {

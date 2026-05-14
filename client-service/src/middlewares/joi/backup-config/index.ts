@@ -4,7 +4,6 @@ import { makeResponse } from '../../../lib';
 import {
   CONDITION_TYPE,
   DURATION_TYPE,
-  ENVIRONMENT_TYPE,
   FILTER_OPERATOR,
   OBJECT_TYPE,
   SCHEDULE_MODE,
@@ -98,9 +97,6 @@ export const createBackupConfigValidation = (
     destinationId: Joi.string().required(),
     name: Joi.string().optional(),
     description: Joi.string().optional().allow(''),
-    environment: Joi.string()
-      .valid(...Object.values(ENVIRONMENT_TYPE))
-      .required(),
     objectNames: Joi.array().items(Joi.string()).min(1).required(),
     schedule: Joi.string()
       .valid(...Object.values(SCHEDULE_MODE))
@@ -129,9 +125,6 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
   const schema = Joi.object({
     name: Joi.string().optional(),
     description: Joi.string().optional(),
-    environment: Joi.string()
-      .valid(...Object.values(ENVIRONMENT_TYPE))
-      .optional(),
     objectNames: Joi.array().items(Joi.string()).min(1).optional(),
     schedule: Joi.string()
       .valid(...Object.values(SCHEDULE_MODE))
