@@ -189,7 +189,7 @@ const createTriggers = async (
     try {
       const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (existing?.Status === 'Active') {
-        results.push({ triggerName, created: false });
+        results.push({ triggerName, created: false, error: 'Trigger already exists' });
         continue;
       }
 
