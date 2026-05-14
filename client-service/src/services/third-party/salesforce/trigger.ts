@@ -1,4 +1,4 @@
-import { salesforceRequest, SalesforceTokens } from './index';
+import { createApexSecret, salesforceRequest, SalesforceTokens } from './index';
 import { SALESFORCE_WEBHOOK_URL } from '../../../constant';
 import { IBackupConfig } from '../../../models';
 import { getCrmById, getCrmTokens } from '../../crm';
@@ -198,6 +198,7 @@ const realTimeTriggerManagement = async (
   const objectApiNames = config.objectNames;
 
   if (operation === 'create') {
+    await createApexSecret(crm.crmId, { webhookSecret: config.backupConfigId });
     await createTriggers(instanceUrl, tokens, objectApiNames);
   } else {
     await deleteTriggers(instanceUrl, tokens, objectApiNames);
