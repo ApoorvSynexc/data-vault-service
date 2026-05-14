@@ -177,16 +177,20 @@ const createTriggers = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiNames: string[]
-): Promise<{ triggerName: string; created: boolean }[]> => {
+): Promise<{ triggerName: string; created: boolean; error?: string }[]> => {
   await ensureHandlerClass(instanceUrl, tokens);
 
-  const results = await Promise.all(
-    objectApiNames.map(async (objectApiName) => {
-      const triggerName = `DataVault_${objectApiName}_Trigger`;
+  const results: { triggerName: string; created: boolean; error?: string }[] = [];
 
+  for (let i = 0; i < objectApiNames.length; i++) {
+    const objectApiName = objectApiNames[i];
+    const triggerName = `DataVault_${objectApiName}_Trigger`;
+
+    try {
       const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (existing?.Status === 'Active') {
-        return { triggerName, created: false };
+        results.push({ triggerName, created: false });
+        continue;
       }
 
       await salesforceRequest(
@@ -204,9 +208,11 @@ const createTriggers = async (
         tokens
       );
 
-      return { triggerName, created: true };
-    })
-  );
+      results.push({ triggerName, created: true });
+    } catch (err) {
+      results.push({ triggerName, created: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
 
   // Run permission set setup only for triggers that were successfully created.
   const successfulTriggerNames = results
@@ -228,14 +234,18 @@ const deleteTriggers = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiNames: string[]
-): Promise<{ triggerName: string; deleted: boolean }[]> => {
-  return Promise.all(
-    objectApiNames.map(async (objectApiName) => {
-      const triggerName = `DataVault_${objectApiName}_Trigger`;
+): Promise<{ triggerName: string; deleted: boolean; error?: string }[]> => {
+  const results: { triggerName: string; deleted: boolean; error?: string }[] = [];
 
+  for (let i = 0; i < objectApiNames.length; i++) {
+    const objectApiName = objectApiNames[i];
+    const triggerName = `DataVault_${objectApiName}_Trigger`;
+
+    try {
       const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (!trigger) {
-        return { triggerName, deleted: false };
+        results.push({ triggerName, deleted: false });
+        continue;
       }
 
       await salesforceRequest(
@@ -246,9 +256,13 @@ const deleteTriggers = async (
         tokens
       );
 
-      return { triggerName, deleted: true };
-    })
-  );
+      results.push({ triggerName, deleted: true });
+    } catch (err) {
+      results.push({ triggerName, deleted: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return results;
 };
 
 // ---------------------------------------------------------------------------
@@ -260,7 +274,7 @@ type TriggerOperation = 'create' | 'delete';
 const realTimeTriggerManagement = async (
   operation: TriggerOperation,
   config: IBackupConfig
-): Promise<void> => {
+): Promise<{ triggerName: string; created: boolean; error?: string }[] | { triggerName: string; deleted: boolean; error?: string }[]> => {
   const crm = await getCrmById(config.crmId);
   if (!crm) {
     throw new Error(`crm_not_found:${config.crmId}`);
@@ -285,9 +299,11 @@ const realTimeTriggerManagement = async (
 
   if (operation === 'create') {
     await createApexSecret(crm.crmId, { webhookSecret: config.backupConfigId });
-    await createTriggers(instanceUrl, tokens, objectApiNames);
+    const triggerResults = await createTriggers(instanceUrl, tokens, objectApiNames);
+    return triggerResults;
   } else {
-    await deleteTriggers(instanceUrl, tokens, objectApiNames);
+    const deleteResults = await deleteTriggers(instanceUrl, tokens, objectApiNames);
+    return deleteResults;
   }
 };
 
