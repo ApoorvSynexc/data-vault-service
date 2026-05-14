@@ -163,7 +163,8 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
         backupType: backupConfig.schedule,
         sourceDetails: {
           "sourceName": crm.crmName,
-      "orgId": crm.crmId
+          "orgId": crm.crmId,
+          "salt": crm.userId
         },
         objectOperations,
         "destinationConfigs": {
