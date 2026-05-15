@@ -71,16 +71,20 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
 
   try {
     switch (eventType) {
-      case 'backup.completed':
-        await updateBackupConfig(
-          backupConfigId,
-          {
-            backupStatus: BACKUP_STATUS.success,
-            lastBackupAt: new Date().toISOString(),
-            lastEventId: eventId,
-          },
-          eventId
-        );
+      case 'backup.completed': {
+        const backupConfig = await getBackupConfigById(backupConfigId);
+        if (backupConfig?.backupStatus !== BACKUP_STATUS.paused) {
+          await updateBackupConfig(
+            backupConfigId,
+            {
+              backupStatus: BACKUP_STATUS.success,
+              lastBackupAt: new Date().toISOString(),
+              lastEventId: eventId,
+            },
+            eventId
+          );
+        }
+      }
         break;
       case 'backup.size.updated':
         const { objectName, sizeInBytes } = req.body;
@@ -91,7 +95,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
           if (backupConfig?.objects) {
             const updatedObjects = backupConfig.objects.map((obj) =>
               obj.name === objectName ? { ...obj, sizeInBytes } : obj
-          );
+            );
             updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
             updateParams.objects = updatedObjects;
           }
