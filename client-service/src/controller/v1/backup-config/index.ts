@@ -282,13 +282,17 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     ]);
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      const triggerResults = await realTimeTriggerManagement('delete', config);
-      console.log({ triggerResults });
+      // const triggerResults = await realTimeTriggerManagement('delete', config);
+      // console.log({ triggerResults });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
       // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
     }
 
     makeResponse(req, res, 200, true, 'delete');
+    if (config.schedule === SCHEDULE_MODE.realtime) {
+      const triggerResults = await realTimeTriggerManagement('delete', config);
+      console.log({ triggerResults });
+    }
   } catch (error) {
     throw error;
   }
