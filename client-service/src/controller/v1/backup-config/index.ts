@@ -144,7 +144,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     makeResponse(req, res, 201, true, 'create', config);
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const triggerResults = await realTimeTriggerManagement('create', config);
-      console.log({ triggerResults });
+      await updateBackupConfig(config.backupConfigId, { triggerResults });
     }
   } catch (error) {
     await deleteBackupConfig(config.backupConfigId);
