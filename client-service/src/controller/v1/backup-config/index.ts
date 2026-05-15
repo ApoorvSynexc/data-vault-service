@@ -128,7 +128,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      await triggerBackupJob(config);
+      // await triggerBackupJob(config);
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
       const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
@@ -142,6 +142,10 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     makeResponse(req, res, 201, true, 'create', config);
+    if (config.schedule === SCHEDULE_MODE.realtime) {
+      const triggerResults = await realTimeTriggerManagement('create', config);
+      console.log({ triggerResults });
+    }
   } catch (error) {
     await deleteBackupConfig(config.backupConfigId);
     throw error;
@@ -279,6 +283,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const triggerResults = await realTimeTriggerManagement('delete', config);
+      console.log({ triggerResults });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
       // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
     }

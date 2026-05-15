@@ -19,13 +19,17 @@ const fetchTrigger = async (
 ): Promise<{ Id: string; Status: string } | null> => {
   const soql = `SELECT Id, Status FROM ApexTrigger WHERE Name = '${triggerName}' LIMIT 1`;
   const url = `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`;
+  try {
+    const { data } = await salesforceRequest<{
+      totalSize: number;
+      records: { Id: string; Status: string }[];
+    }>({ url, method: 'GET' }, tokens);
 
-  const { data } = await salesforceRequest<{
-    totalSize: number;
-    records: { Id: string; Status: string }[];
-  }>({ url, method: 'GET' }, tokens);
-
-  return data.totalSize > 0 ? data.records[0] : null;
+    return data.totalSize > 0 ? data.records[0] : null;
+  } catch (err) {
+    console.log(`Error fetching trigger ${triggerName}:`, err);
+    throw err;
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -210,6 +214,7 @@ const createTriggers = async (
 
       results.push({ triggerName, created: true });
     } catch (err) {
+      console.log(`Error creating trigger ${triggerName}:`, err);
       results.push({ triggerName, created: false, error: err instanceof Error ? err.message : String(err) });
     }
   }
