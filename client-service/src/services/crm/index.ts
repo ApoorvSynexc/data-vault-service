@@ -3,7 +3,6 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
-  ScanCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
@@ -46,6 +45,7 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
   const crm: ICrm = {
     crmId: uuidv4(),
     userId,
+    organizationId: crmProfile.organizationId,
     crmName,
     slug,
     isConnected: true,
@@ -206,11 +206,12 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
   const resolvedEnvironment = environment ?? 'production';
 
   const updateExpressionParts = [
-    'SET isConnected = :isConnected, crmProfile = :crmProfile, encryptedCredentials = :enc, iv = :iv, #status = :status, environment = :environment, updatedAt = :updatedAt',
+    'SET isConnected = :isConnected, crmProfile = :crmProfile, organizationId = :organizationId, encryptedCredentials = :enc, iv = :iv, #status = :status, environment = :environment, updatedAt = :updatedAt',
   ];
   const expressionAttributeValues: Record<string, any> = {
     ':isConnected': true,
     ':crmProfile': crmProfile,
+    ':organizationId': crmProfile.organizationId,
     ':enc': ciphertext,
     ':iv': iv,
     ':status': STATUS.active,
@@ -247,6 +248,7 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
     ...existing,
     isConnected: true,
     crmProfile,
+    organizationId: crmProfile.organizationId,
     encryptedCredentials: ciphertext,
     iv,
     environment: resolvedEnvironment,
@@ -259,9 +261,10 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
 
 const getCrmByOrgId = async (orgId: string): Promise<ICrm | null> => {
   const result = await docClient.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: CRM_TABLE,
-      FilterExpression: 'crmProfile.organizationId = :orgId',
+      IndexName: 'organizationId-index',
+      KeyConditionExpression: 'organizationId = :orgId',
       ExpressionAttributeValues: { ':orgId': orgId },
       Limit: 1,
     })
