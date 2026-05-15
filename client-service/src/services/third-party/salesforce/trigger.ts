@@ -2,11 +2,20 @@ import { createApexSecret, salesforceRequest, SalesforceTokens } from './index';
 import { SALESFORCE_WEBHOOK_URL } from '../../../constant';
 import { IBackupConfig } from '../../../models';
 import { getCrmById, getCrmTokens } from '../../crm';
+import { timer } from '../../../utils/helper';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
 const NAMESPACE_PREFIX = 'SYX_DVV';
 const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
 const API_VERSION = '66.0';
+
+interface ITriggerResult {
+  triggerName: string;
+  status: "INITIALIZE" | "CREATED" | "EXIST" | "FAILED" | "DELETED" | "DELETE_FAILED" | "NOT_FOUND";
+  permissionSetStatus?: "CREATED" | "EXIST" | "FAILED";
+  permissionSetError?: string;
+  error?: string
+}
 
 
 // ---------------------------------------------------------------------------
@@ -150,25 +159,29 @@ const createPermissionSet = async (
   tokens: SalesforceTokens,
   triggerNames: string[]
 ): Promise<{ permissionSetId: string; permissionSetName: string }> => {
-  const permissionSetId = await upsertPermissionSet(instanceUrl, tokens);
+  try {
+    const permissionSetId = await upsertPermissionSet(instanceUrl, tokens);
 
-  // Grant access to the handler class
-  const handlerClassId = await fetchApexClassId(instanceUrl, tokens, HANDLER_CLASS_NAME);
-  if (handlerClassId) {
-    await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
-  }
+    // Grant access to the handler class
+    const handlerClassId = await fetchApexClassId(instanceUrl, tokens, HANDLER_CLASS_NAME);
+    if (handlerClassId) {
+      await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
+    }
 
-  // Grant access to any trigger-backing Apex classes that share the trigger name
-  await Promise.all(
-    triggerNames.map(async (triggerName) => {
+    // Grant access to any trigger-backing Apex classes that share the trigger name
+    for (let i = 0; i < triggerNames.length; i++) {
+      const triggerName = triggerNames[i];
       const classId = await fetchApexClassId(instanceUrl, tokens, triggerName);
       if (classId) {
         await grantApexClassAccess(instanceUrl, tokens, permissionSetId, classId);
       }
-    })
-  );
+    }
 
-  return { permissionSetId, permissionSetName: PERMISSION_SET_NAME };
+    return { permissionSetId, permissionSetName: PERMISSION_SET_NAME };
+  } catch (error) {
+    console.log('Error creating/upserting permission set:', error);
+    throw error;
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -181,10 +194,10 @@ const createTriggers = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiNames: string[]
-): Promise<{ triggerName: string; created: boolean; error?: string }[]> => {
+): Promise<ITriggerResult[]> => {
   await ensureHandlerClass(instanceUrl, tokens);
 
-  const results: { triggerName: string; created: boolean; error?: string }[] = [];
+  const results: ITriggerResult[] = [];
 
   for (let i = 0; i < objectApiNames.length; i++) {
     const objectApiName = objectApiNames[i];
@@ -193,7 +206,7 @@ const createTriggers = async (
     try {
       const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (existing?.Status === 'Active') {
-        results.push({ triggerName, created: false, error: 'Trigger already exists' });
+        results.push({ triggerName, status: "EXIST", error: 'Trigger already exists' });
         continue;
       }
 
@@ -212,20 +225,43 @@ const createTriggers = async (
         tokens
       );
 
-      results.push({ triggerName, created: true });
+      results.push({ triggerName, status: "CREATED", });
+      await timer(500); // brief pause to mitigate potential API contention when creating multiple triggers in quick succession
     } catch (err) {
       console.log(`Error creating trigger ${triggerName}:`, err);
-      results.push({ triggerName, created: false, error: err instanceof Error ? err.message : String(err) });
+      results.push({ triggerName, status: "FAILED", error: err instanceof Error ? err.message : String(err) });
     }
   }
 
   // Run permission set setup only for triggers that were successfully created.
-  const successfulTriggerNames = results
-    .filter((r) => r.created)
-    .map((r) => r.triggerName);
+  try {
+    const permissionSetId = await upsertPermissionSet(instanceUrl, tokens);
 
-  if (successfulTriggerNames.length > 0) {
-    await createPermissionSet(instanceUrl, tokens, successfulTriggerNames);
+    // Grant access to the handler class
+    const handlerClassId = await fetchApexClassId(instanceUrl, tokens, HANDLER_CLASS_NAME);
+    if (handlerClassId) {
+      await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
+    }
+
+    // Grant access to any trigger-backing Apex classes that share the trigger name
+    for (let i = 0; i < results.length; i++) {
+      const trigger = results[i];
+      if (trigger.status !== "CREATED") { continue; }
+
+      try {
+        const triggerName = results[i].triggerName;
+        const classId = await fetchApexClassId(instanceUrl, tokens, triggerName);
+        if (classId) {
+          await grantApexClassAccess(instanceUrl, tokens, permissionSetId, classId);
+        }
+        trigger.permissionSetStatus = "CREATED";
+      } catch (error) {
+        trigger.permissionSetStatus = "FAILED";
+        trigger.permissionSetError = error instanceof Error ? error.message : String(error);
+      }
+    }
+  } catch (error) {
+    console.log('Error during permission set setup:', error);
   }
 
   return results;
@@ -239,8 +275,8 @@ const deleteTriggers = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiNames: string[]
-): Promise<{ triggerName: string; deleted: boolean; error?: string }[]> => {
-  const results: { triggerName: string; deleted: boolean; error?: string }[] = [];
+): Promise<ITriggerResult[]> => {
+  const results: ITriggerResult[] = [];
 
   for (let i = 0; i < objectApiNames.length; i++) {
     const objectApiName = objectApiNames[i];
@@ -249,7 +285,7 @@ const deleteTriggers = async (
     try {
       const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (!trigger) {
-        results.push({ triggerName, deleted: false });
+        results.push({ triggerName, status: "NOT_FOUND" });
         continue;
       }
 
@@ -261,9 +297,9 @@ const deleteTriggers = async (
         tokens
       );
 
-      results.push({ triggerName, deleted: true });
+      results.push({ triggerName, status: "DELETED" });
     } catch (err) {
-      results.push({ triggerName, deleted: false, error: err instanceof Error ? err.message : String(err) });
+      results.push({ triggerName, status: "DELETE_FAILED", error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -279,7 +315,7 @@ type TriggerOperation = 'create' | 'delete';
 const realTimeTriggerManagement = async (
   operation: TriggerOperation,
   config: IBackupConfig
-): Promise<{ triggerName: string; created: boolean; error?: string }[] | { triggerName: string; deleted: boolean; error?: string }[]> => {
+): Promise<ITriggerResult[]> => {
   const crm = await getCrmById(config.crmId);
   if (!crm) {
     throw new Error(`crm_not_found:${config.crmId}`);

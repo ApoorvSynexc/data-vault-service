@@ -78,6 +78,10 @@ const buildSlug = (base: string, count: number): string => {
 const isOwner = (entity: { userId: string } | null | undefined, userId: string): boolean =>
   !!entity && entity.userId === userId;
 
+const timer = (ms: number): Promise<void> => {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+};
+
 export {
   randomNumber,
   generateTokens,
@@ -86,4 +90,5 @@ export {
   toSlug,
   buildSlug,
   isOwner,
+  timer,
 };
