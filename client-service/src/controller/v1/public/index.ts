@@ -24,7 +24,7 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
   const { orgId } = decryptedBody;
 
   const crm = await getCrmByOrgId(orgId);
-  console.log({crm, decryptedBody});
+  console.log({crm, orgId, decryptedBody});
   if (!crm) {
     return;
   }
