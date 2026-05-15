@@ -5,6 +5,7 @@ import {
   getBackupConfigsByUserAndCrm,
   updateBackupConfig,
   getBackupConfigById,
+  getBackupConfigsByCrm,
 } from '../../../services/backup-config';
 import {
   getDestinationById,
@@ -27,34 +28,40 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
     return;
   }
 
-  const backupConfigs = await getBackupConfigsByUserAndCrm(crm.userId, crm.crmId);
-  const config = backupConfigs.find((c) => c.schedule === SCHEDULE_MODE.realtime);
-  if (!config) {
+  const backupConfigs = await getBackupConfigsByCrm(crm.crmId);
+  const filteredBackupConfigs = backupConfigs.filter((c) => c.schedule === SCHEDULE_MODE.realtime);
+  if (!filteredBackupConfigs.length) {
     return;
   }
 
-  const destination = await getDestinationById(config.destinationId);
-  if (!destination) {
-    return;
-  }
+  logger.info(`Found ${filteredBackupConfigs.length} real-time backup config(s) for orgId: ${orgId}`);
+  for (let index = 0; index < filteredBackupConfigs.length; index++) {
+    const config = filteredBackupConfigs[index];
+    const destination = await getDestinationById(config.destinationId);
+    if (!destination) {
+      return;
+    }
 
-  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
-  await httpRequest({
-    url: `${BACKUP_SERVICE}/v1/realtime-backup`,
-    method: 'POST',
-    body: JSON.stringify({
-      userId: crm.userId,
-      backupConfigId: config.backupConfigId,
-      crmId: crm.crmId,
-      crmName: crm.crmName,
-      destination: {
-        type: destination.type,
-        config: getDecryptedDestinationConfig(destination),
-      },
-      realtimePayload: decryptedBody,
-      ...(config.spaceId && { spaceId: config.spaceId }),
-    }),
-  });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    await httpRequest({
+      url: `${BACKUP_SERVICE}/v1/realtime-backup`,
+      method: 'POST',
+      body: JSON.stringify({
+        userId: crm.userId,
+        backupConfigId: config.backupConfigId,
+        crmId: crm.crmId,
+        crmName: crm.crmName,
+        destination: {
+          type: destination.type,
+          config: getDecryptedDestinationConfig(destination),
+        },
+        realtimePayload: decryptedBody,
+        ...(config.spaceId && { spaceId: config.spaceId }),
+      }),
+    });
+    
+    logger.info(`Triggered real-time backup for backupConfigId: ${config.backupConfigId}`);
+  }
 };
 
 const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
