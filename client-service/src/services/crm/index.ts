@@ -266,7 +266,7 @@ const getCrmByOrgId = async (orgId: string): Promise<ICrm | null> => {
       IndexName: 'organizationId-index',
       KeyConditionExpression: 'organizationId = :orgId',
       ExpressionAttributeValues: { ':orgId': orgId },
-      Limit: 1,
+      Limit: 1, 
     })
   );
   return (result.Items?.[0] as ICrm) ?? null;
