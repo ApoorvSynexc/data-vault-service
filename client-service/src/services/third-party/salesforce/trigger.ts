@@ -514,7 +514,109 @@ const toggleTriggerStatus = async (
 };
 
 // ---------------------------------------------------------------------------
+// Delete the DataVaultRealTimeTriggerAccess permission set via Metadata API deploy.
+// Called after all triggers are deleted so the permission set is cleaned up too.
+// No-op if the permission set doesn't exist.
+// ---------------------------------------------------------------------------
+const deletePermissionSet = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens
+): Promise<void> => {
+  const existing = await fetchPermissionSetId(instanceUrl, tokens);
+  if (!existing) { return; }
+
+  const packageXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <types>\n` +
+    `        <members>${PERMISSION_SET_NAME}</members>\n` +
+    `        <name>PermissionSet</name>\n` +
+    `    </types>\n` +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
+
+  const destructiveXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <types>\n` +
+    `        <members>${PERMISSION_SET_NAME}</members>\n` +
+    `        <name>PermissionSet</name>\n` +
+    `    </types>\n` +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
+
+  const deployOptions = JSON.stringify({
+    deployOptions: {
+      allowMissingFiles: true,
+      checkOnly: false,
+      ignoreWarnings: true,
+      purgeOnDelete: true,
+      rollbackOnError: true,
+      runAllTests: false,
+      singlePackage: true,
+    },
+  });
+
+  const zip = new JSZip();
+  zip.file('destructiveChanges.xml', destructiveXml);
+  zip.file('package.xml', packageXml);
+  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+  const boundary = `----DataVaultBoundary${Date.now()}`;
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="json"\r\n` +
+      `Content-Type: application/json\r\n\r\n` +
+      `${deployOptions}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="deploy.zip"\r\n` +
+      `Content-Type: application/zip\r\n\r\n`
+    ),
+    zipBuffer,
+    Buffer.from(`\r\n--${boundary}--`),
+  ]);
+
+  const deployResponse = await fetch(
+    `${instanceUrl}/services/data/v${API_VERSION}/metadata/deployRequest`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${tokens.accessToken}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    }
+  );
+
+  if (!deployResponse.ok) {
+    throw new Error(`Permission set delete deploy failed: ${await deployResponse.text()}`);
+  }
+
+  const { id: jobId } = await deployResponse.json() as { id: string };
+
+  while (true) {
+    await timer(2000);
+    const { data } = await salesforceRequest<{
+      deployResult: { done: boolean; success: boolean; errorMessage?: string };
+    }>(
+      {
+        url: `${instanceUrl}/services/data/v${API_VERSION}/metadata/deployRequest/${jobId}?includeDetails=true`,
+        method: 'GET',
+      },
+      tokens
+    );
+
+    const { done, success, errorMessage } = data.deployResult;
+    if (!done) { continue; }
+    if (!success) { throw new Error(`Permission set delete failed: ${errorMessage ?? 'unknown error'}`); }
+    break;
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Delete triggers — permanently removes the trigger from the org.
+// After all triggers are deleted, the permission set is also deleted.
 // No-op for objects whose trigger doesn't exist.
 // ---------------------------------------------------------------------------
 const deleteTriggers = async (
@@ -555,7 +657,14 @@ const deleteTriggers = async (
     }
   }
 
-  return triggerResults;
+  // Delete the permission set after all triggers are removed.
+  try {
+    await deletePermissionSet(instanceUrl, tokens);
+  } catch (err) {
+    console.log('Error deleting permission set:', err);
+  }
+
+  return results;
 };
 
 // ---------------------------------------------------------------------------
@@ -601,6 +710,7 @@ export {
   createTriggers,
   toggleTriggerStatus,
   deleteTriggers,
+  deletePermissionSet,
   realTimeTriggerManagement,
   createPermissionSet,
 };
