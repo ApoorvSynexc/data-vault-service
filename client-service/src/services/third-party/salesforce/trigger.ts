@@ -355,7 +355,11 @@ const createTriggers = async (
     }
   }
 
-  await setupPermissionSet(instanceUrl, tokens, results);
+  try {
+    await setupPermissionSet(instanceUrl, tokens, results);
+  } catch (error) {
+    console.error('Error setting up permission set:', error);
+  }
   return results;
 };
 
