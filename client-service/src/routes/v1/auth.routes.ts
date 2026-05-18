@@ -17,7 +17,7 @@ router.post('/signup', authRateLimit, signupValidation, authController.signupHan
 router.post('/send-otp', otpRateLimit, sendOtpValidation, authController.sendOtpHandler);
 router.post('/verify-otp', authRateLimit, verifyOtpValidation, authController.verifyOtpHandler);
 router.post('/login', authRateLimit, loginValidation, authController.loginHandler);
-router.post('/refresh-token', authRateLimit, authController.refreshTokenHandler);
+router.post('/refresh-token', authController.refreshTokenHandler);
 router.post('/logout', authController.logoutHandler);
 router.post(
   '/reset-password',
