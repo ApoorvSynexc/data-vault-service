@@ -1,3 +1,4 @@
+import JSZip from 'jszip';
 import { createApexSecret, salesforceRequest, SalesforceTokens } from './index';
 import { SALESFORCE_WEBHOOK_URL } from '../../../constant';
 import { IBackupConfig } from '../../../models';
@@ -126,14 +127,13 @@ const setupPermissionSet = async (
       await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
     }
 
-    const externalCredPrincipalId = await fetchExternalCredentialPrincipalId(
+    await grantExternalCredentialPrincipalAccess(
       instanceUrl,
       tokens,
+      PERMISSION_SET_NAME,
+      'DataVault Real-Time Trigger Access',
       EXTERNAL_CREDENTIAL_PRINCIPAL_NAME
     );
-    if (externalCredPrincipalId) {
-      await grantApexClassAccess(instanceUrl, tokens, permissionSetId, externalCredPrincipalId);
-    }
 
     for (const trigger of results) {
       if (trigger.status !== 'CREATED') { continue; }
@@ -237,41 +237,99 @@ const upsertPermissionSet = async (
 // Fetch the Id of an ExternalCredentialPrincipal by its qualified name.
 // Used to grant Named Credential / External Credential access on the permission set.
 // ---------------------------------------------------------------------------
-const fetchExternalCredentialPrincipalId = async (
+// ---------------------------------------------------------------------------
+// Grants ExternalCredentialPrincipal access on the permission set via
+// Metadata API deploy. This is the only supported approach — ExternalCredential
+// and ExternalCredentialPrincipal are metadata types and cannot be queried
+// via SOQL (standard or Tooling API).
+//
+// Deploys a minimal PermissionSet XML with only externalCredentialPrincipalAccesses.
+// Salesforce merges this additively — existing class/field accesses are untouched.
+// ---------------------------------------------------------------------------
+const grantExternalCredentialPrincipalAccess = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  qualifiedName: string
-): Promise<string | null> => {
-  // ExternalCredentialPrincipal is not directly queryable via SOQL.
-  // Fetch via parent-child relationship from ExternalCredential instead.
-  // Qualified name format: Namespace__CredentialDeveloperName-PrincipalDeveloperName
-  const [credentialPart, principalName] = qualifiedName.split('-');
-  const credentialDeveloperName = credentialPart.replace(`${NAMESPACE_PREFIX}__`, '');
+  permissionSetName: string,
+  permissionSetLabel: string,
+  externalCredentialPrincipalName: string
+): Promise<void> => {
+  const permissionSetXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <externalCredentialPrincipalAccesses>\n` +
+    `        <externalCredentialPrincipal>${externalCredentialPrincipalName}</externalCredentialPrincipal>\n` +
+    `        <enabled>true</enabled>\n` +
+    `    </externalCredentialPrincipalAccesses>\n` +
+    `    <label>${permissionSetLabel}</label>\n` +
+    `</PermissionSet>`;
 
-  const soql =
-    `SELECT Id, (SELECT Id, DeveloperName FROM ExternalCredentialPrincipals) ` +
-    `FROM ExternalCredential ` +
-    `WHERE DeveloperName = '${credentialDeveloperName}' ` +
-    `LIMIT 1`;
+  const packageXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <types>\n` +
+    `        <members>${permissionSetName}</members>\n` +
+    `        <name>PermissionSet</name>\n` +
+    `    </types>\n` +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
 
-  const { data } = await salesforceRequest<{
-    totalSize: number;
-    records: {
-      Id: string;
-      ExternalCredentialPrincipals: { totalSize: number; records: { Id: string; DeveloperName: string }[] } | null;
-    }[];
-  }>(
-    { url: `${instanceUrl}/services/data/v${API_VERSION}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
-    tokens
+  const zip = new JSZip();
+  zip.file(`permissionsets/${permissionSetName}.permissionset-meta.xml`, permissionSetXml);
+  zip.file('package.xml', packageXml);
+  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+  // httpRequest hardcodes application/json — use native fetch for multipart upload.
+  const boundary = `----DataVaultBoundary${Date.now()}`;
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="json"\r\n` +
+      `Content-Type: application/json\r\n\r\n` +
+      `{}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="deploy.zip"\r\n` +
+      `Content-Type: application/zip\r\n\r\n`
+    ),
+    zipBuffer,
+    Buffer.from(`\r\n--${boundary}--`),
+  ]);
+
+  const deployResponse = await fetch(
+    `${instanceUrl}/services/data/v${API_VERSION}/metadata/deployRequest`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${tokens.accessToken}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    }
   );
 
-  if (data.totalSize === 0) { return null; }
+  if (!deployResponse.ok) {
+    throw new Error(`Metadata deploy request failed: ${await deployResponse.text()}`);
+  }
 
-  const principals = data.records[0].ExternalCredentialPrincipals;
-  if (!principals || principals.totalSize === 0) { return null; }
+  const { id: jobId } = await deployResponse.json() as { id: string };
 
-  const match = principals.records.find((p) => p.DeveloperName === principalName);
-  return match?.Id ?? null;
+  // Poll until the deploy job completes (Salesforce deploys are async).
+  while (true) {
+    await timer(2000);
+    const { data } = await salesforceRequest<{
+      deployResult: { done: boolean; success: boolean; errorMessage?: string };
+    }>(
+      {
+        url: `${instanceUrl}/services/data/v${API_VERSION}/metadata/deployRequest/${jobId}?includeDetails=true`,
+        method: 'GET',
+      },
+      tokens
+    );
+
+    const { done, success, errorMessage } = data.deployResult;
+    if (!done) { continue; }
+    if (!success) { throw new Error(`Metadata deploy failed: ${errorMessage ?? 'unknown error'}`); }
+    break;
+  }
 };
 
 // Grants Apex class access on the permission set (idempotent — skips if already present).
