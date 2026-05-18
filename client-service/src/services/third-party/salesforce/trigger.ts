@@ -465,7 +465,7 @@ const deleteTriggers = async (
     const triggerName = triggerResult.triggerName;
     const status = triggerResult.status;
 
-    if(!['CREATED', 'INACTIVE'].includes(status)) continue;
+    if(!['CREATED', 'INACTIVE', 'EXIST'].includes(status)) continue;
     try {
       const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (!trigger) {
