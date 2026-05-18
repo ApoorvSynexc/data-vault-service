@@ -24,13 +24,11 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
   const { orgId } = decryptedBody;
 
   const crm = await getCrmByOrgId(orgId);
-  console.log({crm, orgId, decryptedBody});
   if (!crm) {
     return;
   }
 
   const backupConfigs = await getBackupConfigsByCrm(crm.crmId);
-  console.log({backupConfigs});
   const filteredBackupConfigs = backupConfigs.filter((c) => c.schedule === SCHEDULE_MODE.realtime);
   if (!filteredBackupConfigs.length) {
     return;
