@@ -525,13 +525,12 @@ const deletePermissionSet = async (
   const existing = await fetchPermissionSetId(instanceUrl, tokens);
   if (!existing) { return; }
 
-  const packageXml =
+  // Salesforce destructive deploy rules:
+  //   - destructiveChanges.xml  → lists what to delete
+  //   - package.xml             → must be EMPTY (only version), no types/members
+  const emptyPackageXml =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
-    `    <types>\n` +
-    `        <members>${PERMISSION_SET_NAME}</members>\n` +
-    `        <name>PermissionSet</name>\n` +
-    `    </types>\n` +
     `    <version>${API_VERSION}</version>\n` +
     `</Package>`;
 
@@ -550,7 +549,6 @@ const deletePermissionSet = async (
       allowMissingFiles: true,
       checkOnly: false,
       ignoreWarnings: true,
-      purgeOnDelete: true,
       rollbackOnError: true,
       runAllTests: false,
       singlePackage: true,
@@ -559,7 +557,7 @@ const deletePermissionSet = async (
 
   const zip = new JSZip();
   zip.file('destructiveChanges.xml', destructiveXml);
-  zip.file('package.xml', packageXml);
+  zip.file('package.xml', emptyPackageXml);
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
 
   const boundary = `----DataVaultBoundary${Date.now()}`;
@@ -598,7 +596,14 @@ const deletePermissionSet = async (
   while (true) {
     await timer(2000);
     const { data } = await salesforceRequest<{
-      deployResult: { done: boolean; success: boolean; errorMessage?: string };
+      deployResult: {
+        done: boolean;
+        success: boolean;
+        errorMessage?: string;
+        details?: {
+          componentFailures?: { problem: string; componentType: string; fullName: string }[];
+        };
+      };
     }>(
       {
         url: `${instanceUrl}/services/data/v${API_VERSION}/metadata/deployRequest/${jobId}?includeDetails=true`,
@@ -607,9 +612,12 @@ const deletePermissionSet = async (
       tokens
     );
 
-    const { done, success, errorMessage } = data.deployResult;
+    const { done, success, errorMessage, details } = data.deployResult;
     if (!done) { continue; }
-    if (!success) { throw new Error(`Permission set delete failed: ${errorMessage ?? 'unknown error'}`); }
+    if (!success) {
+      const failures = details?.componentFailures?.map((f) => `${f.componentType}:${f.fullName} — ${f.problem}`).join('; ');
+      throw new Error(`Permission set delete failed: ${failures ?? errorMessage ?? 'unknown error'}`);
+    }
     break;
   }
 };
