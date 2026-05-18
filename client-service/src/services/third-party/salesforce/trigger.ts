@@ -242,7 +242,8 @@ const fetchExternalCredentialPrincipalId = async (
   tokens: SalesforceTokens,
   qualifiedName: string
 ): Promise<string | null> => {
-  // ExternalCredentialPrincipal qualified name format: Namespace__CredentialName-PrincipalName
+  // ExternalCredentialPrincipal is a Metadata entity — must use Tooling API, not data API.
+  // Qualified name format: Namespace__CredentialDeveloperName-PrincipalDeveloperName
   const [credentialPart, principalName] = qualifiedName.split('-');
   const credentialDeveloperName = credentialPart.replace(`${NAMESPACE_PREFIX}__`, '');
 
@@ -253,7 +254,7 @@ const fetchExternalCredentialPrincipalId = async (
     `LIMIT 1`;
 
   const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
-    { url: `${instanceUrl}/services/data/v${API_VERSION}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
+    { url: `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
     tokens
   );
   return data.totalSize > 0 ? data.records[0].Id : null;
