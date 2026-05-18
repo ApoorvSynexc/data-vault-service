@@ -1,7 +1,7 @@
 import { getCrmById, getCrmTokens } from '../../crm';
 import { salesforceRequest } from '../salesforce';
 
-const getApexObjects = async (crmId: string) => {
+const getApexObjects = async (crmId: string, mode?: string) => {
   const crm = await getCrmById(crmId);
   if (!crm) {
     throw new Error('CRM not found');
@@ -13,7 +13,10 @@ const getApexObjects = async (crmId: string) => {
     throw new Error('Instance URL not found');
   }
 
-  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/accessible-objects`;
+  let url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/accessible-objects`;
+  if (mode) {
+    url += `?mode=${mode}`;
+  }
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET' },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
