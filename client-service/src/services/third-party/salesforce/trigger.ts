@@ -278,13 +278,25 @@ const grantExternalCredentialPrincipalAccess = async (
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
 
   // httpRequest hardcodes application/json — use native fetch for multipart upload.
+  const deployOptions = JSON.stringify({
+    deployOptions: {
+      allowMissingFiles: false,
+      autoUpdatePackage: false,
+      checkOnly: false,
+      ignoreWarnings: true,
+      rollbackOnError: true,
+      runAllTests: false,
+      singlePackage: true,
+    },
+  });
+
   const boundary = `----DataVaultBoundary${Date.now()}`;
   const body = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="json"\r\n` +
       `Content-Type: application/json\r\n\r\n` +
-      `{}\r\n` +
+      `${deployOptions}\r\n` +
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="file"; filename="deploy.zip"\r\n` +
       `Content-Type: application/zip\r\n\r\n`
