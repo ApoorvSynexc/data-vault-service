@@ -51,13 +51,13 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { logger } from '../../../middlewares';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId } = req.query;
+  const { crmId, mode } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
   const [apexResult, backupConfigs] = await Promise.all([
-    getApexObjects(String(crmId)),
+    getApexObjects(String(crmId), String(mode)),
     getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
   ]);
 
