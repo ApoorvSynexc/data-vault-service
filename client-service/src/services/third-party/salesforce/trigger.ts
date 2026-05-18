@@ -126,25 +126,13 @@ const setupPermissionSet = async (
       await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
     }
 
-    // ExternalCredentialPrincipal is a pure Metadata type — not queryable via SOQL
-    // (standard REST or Tooling API). Must be granted via Metadata API deploy.
-    // Isolated in its own try-catch so a failure here does not abort the rest of
-    // the permission set setup. Org admins can grant this manually if needed.
-    try {
-      const externalCredPrincipalId = await fetchExternalCredentialPrincipalId(
-        instanceUrl,
-        tokens,
-        EXTERNAL_CREDENTIAL_PRINCIPAL_NAME
-      );
-      if (externalCredPrincipalId) {
-        await grantApexClassAccess(instanceUrl, tokens, permissionSetId, externalCredPrincipalId);
-      }
-    } catch (extCredError) {
-      console.log(
-        `Warning: Could not grant ExternalCredentialPrincipal access for '${EXTERNAL_CREDENTIAL_PRINCIPAL_NAME}'. ` +
-        `This must be granted manually via Metadata API or Salesforce Setup. ` +
-        `Error: ${extCredError instanceof Error ? extCredError.message : String(extCredError)}`
-      );
+    const externalCredPrincipalId = await fetchExternalCredentialPrincipalId(
+      instanceUrl,
+      tokens,
+      EXTERNAL_CREDENTIAL_PRINCIPAL_NAME
+    );
+    if (externalCredPrincipalId) {
+      await grantApexClassAccess(instanceUrl, tokens, permissionSetId, externalCredPrincipalId);
     }
 
     for (const trigger of results) {
@@ -254,22 +242,36 @@ const fetchExternalCredentialPrincipalId = async (
   tokens: SalesforceTokens,
   qualifiedName: string
 ): Promise<string | null> => {
-  // ExternalCredentialPrincipal is a Metadata entity — must use Tooling API, not data API.
+  // ExternalCredentialPrincipal is not directly queryable via SOQL.
+  // Fetch via parent-child relationship from ExternalCredential instead.
   // Qualified name format: Namespace__CredentialDeveloperName-PrincipalDeveloperName
   const [credentialPart, principalName] = qualifiedName.split('-');
   const credentialDeveloperName = credentialPart.replace(`${NAMESPACE_PREFIX}__`, '');
 
   const soql =
-    `SELECT Id FROM ExternalCredentialPrincipal ` +
-    `WHERE DeveloperName = '${principalName}' ` +
-    `AND ExternalCredential.DeveloperName = '${credentialDeveloperName}' ` +
+    `SELECT Id, (SELECT Id, DeveloperName FROM ExternalCredentialPrincipals) ` +
+    `FROM ExternalCredential ` +
+    `WHERE DeveloperName = '${credentialDeveloperName}' ` +
     `LIMIT 1`;
 
-  const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
-    { url: `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
+  const { data } = await salesforceRequest<{
+    totalSize: number;
+    records: {
+      Id: string;
+      ExternalCredentialPrincipals: { totalSize: number; records: { Id: string; DeveloperName: string }[] } | null;
+    }[];
+  }>(
+    { url: `${instanceUrl}/services/data/v${API_VERSION}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
     tokens
   );
-  return data.totalSize > 0 ? data.records[0].Id : null;
+
+  if (data.totalSize === 0) { return null; }
+
+  const principals = data.records[0].ExternalCredentialPrincipals;
+  if (!principals || principals.totalSize === 0) { return null; }
+
+  const match = principals.records.find((p) => p.DeveloperName === principalName);
+  return match?.Id ?? null;
 };
 
 // Grants Apex class access on the permission set (idempotent — skips if already present).
