@@ -21,6 +21,7 @@ import {
   realTimeTriggerManagement,
   computeJobStats,
   getApexObjectsCount,
+  getSalesforceProfile,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS } from '../../../constant';
@@ -145,6 +146,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const triggerResults = await realTimeTriggerManagement('create', config);
       await updateBackupConfig(config.backupConfigId, { triggerResults });
+      logger.info(`Real-time trigger setup results for backupConfigId ${config.backupConfigId}: ${triggerResults.length}`);
     }
   } catch (error) {
     await deleteBackupConfig(config.backupConfigId);
@@ -282,6 +284,18 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     ]);
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
+      const crm = await getCrmById(config.crmId);
+      if (crm) {
+        const tokens = getCrmTokens(crm) as any;
+        await getSalesforceProfile(
+          {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            userId: crm.userId,
+          },
+          crm.environment
+        );
+      }
       // const triggerResults = await realTimeTriggerManagement('delete', config);
       // console.log({ triggerResults });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
