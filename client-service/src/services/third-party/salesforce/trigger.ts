@@ -421,18 +421,6 @@ const toggleTriggerStatus = async (
   return results;
 };
 
-const activateTriggers = (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  objectApiNames: string[]
-): Promise<ITriggerResult[]> => toggleTriggerStatus(instanceUrl, tokens, objectApiNames, 'Active');
-
-const inactivateTriggers = (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  objectApiNames: string[]
-): Promise<ITriggerResult[]> => toggleTriggerStatus(instanceUrl, tokens, objectApiNames, 'Inactive');
-
 // ---------------------------------------------------------------------------
 // Delete triggers — permanently removes the trigger from the org.
 // No-op for objects whose trigger doesn't exist.
@@ -500,16 +488,16 @@ const realTimeTriggerManagement = async (
     await createApexSecret(crm.crmId, { webhookSecret: config.backupConfigId });
     return createTriggers(instanceUrl, tokens, objectApiNames);
   }
-  if (operation === 'activate') { return activateTriggers(instanceUrl, tokens, objectApiNames); }
-  if (operation === 'inactivate') { return inactivateTriggers(instanceUrl, tokens, objectApiNames); }
-  return deleteTriggers(instanceUrl, tokens, objectApiNames);
+  if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, objectApiNames, 'Active'); }
+  if (operation === 'inactivate') { return toggleTriggerStatus(instanceUrl, tokens, objectApiNames, 'Inactive'); }
+  if (operation === 'delete') { return deleteTriggers(instanceUrl, tokens, objectApiNames); }
+  throw new Error(`invalid_operation:${operation}`);
 };
 
 export {
   fetchTrigger,
   createTriggers,
-  activateTriggers,
-  inactivateTriggers,
+  toggleTriggerStatus,
   deleteTriggers,
   realTimeTriggerManagement,
   createPermissionSet,
