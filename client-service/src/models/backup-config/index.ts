@@ -40,8 +40,9 @@ export interface IObject {
 
 export interface ITriggerResult {
   triggerName: string;
-  created?: boolean;
-  deleted?: boolean;
+  status: "INITIALIZE" | "CREATED" | "EXIST" | "FAILED" | "DELETED" | "DELETE_FAILED" | "NOT_FOUND" | "INACTIVE" | "INACTIVATE_FAILED";
+  permissionSetStatus?: "CREATED" | "EXIST" | "FAILED";
+  permissionSetError?: string;
   error?: string;
 }
 
