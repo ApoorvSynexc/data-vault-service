@@ -125,13 +125,25 @@ const setupPermissionSet = async (
       await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
     }
 
-    const externalCredPrincipalId = await fetchExternalCredentialPrincipalId(
-      instanceUrl,
-      tokens,
-      EXTERNAL_CREDENTIAL_PRINCIPAL_NAME
-    );
-    if (externalCredPrincipalId) {
-      await grantApexClassAccess(instanceUrl, tokens, permissionSetId, externalCredPrincipalId);
+    // ExternalCredentialPrincipal is a pure Metadata type — not queryable via SOQL
+    // (standard REST or Tooling API). Must be granted via Metadata API deploy.
+    // Isolated in its own try-catch so a failure here does not abort the rest of
+    // the permission set setup. Org admins can grant this manually if needed.
+    try {
+      const externalCredPrincipalId = await fetchExternalCredentialPrincipalId(
+        instanceUrl,
+        tokens,
+        EXTERNAL_CREDENTIAL_PRINCIPAL_NAME
+      );
+      if (externalCredPrincipalId) {
+        await grantApexClassAccess(instanceUrl, tokens, permissionSetId, externalCredPrincipalId);
+      }
+    } catch (extCredError) {
+      console.log(
+        `Warning: Could not grant ExternalCredentialPrincipal access for '${EXTERNAL_CREDENTIAL_PRINCIPAL_NAME}'. ` +
+        `This must be granted manually via Metadata API or Salesforce Setup. ` +
+        `Error: ${extCredError instanceof Error ? extCredError.message : String(extCredError)}`
+      );
     }
 
     for (const trigger of triggerResults) {
