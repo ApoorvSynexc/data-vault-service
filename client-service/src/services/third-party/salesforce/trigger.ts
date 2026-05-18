@@ -11,11 +11,15 @@ const API_VERSION = '66.0';
 
 interface ITriggerResult {
   triggerName: string;
-  status: "INITIALIZE" | "CREATED" | "EXIST" | "FAILED" | "DELETED" | "DELETE_FAILED" | "NOT_FOUND";
+  status: "INITIALIZE" | "CREATED" | "EXIST" | "FAILED" | "DELETED" | "DELETE_FAILED" | "NOT_FOUND" | "INACTIVE" | "INACTIVATE_FAILED";
   permissionSetStatus?: "CREATED" | "EXIST" | "FAILED";
   permissionSetError?: string;
   error?: string
 }
+
+// Full qualified name of the External Credential Principal inside the managed package.
+// Format: {Namespace}__{ExternalCredentialDeveloperName}-{PrincipalDeveloperName}
+const EXTERNAL_CREDENTIAL_PRINCIPAL_NAME = `${NAMESPACE_PREFIX}__Middleware_Endpoint-DataVaultParam`;
 
 
 // ---------------------------------------------------------------------------
@@ -119,6 +123,32 @@ const upsertPermissionSet = async (
   );
 
   return data.id;
+};
+
+// ---------------------------------------------------------------------------
+// Fetch the Id of an ExternalCredentialPrincipal by its qualified name.
+// Used to grant Named Credential / External Credential access on the permission set.
+// ---------------------------------------------------------------------------
+const fetchExternalCredentialPrincipalId = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  qualifiedName: string
+): Promise<string | null> => {
+  // ExternalCredentialPrincipal qualified name format: Namespace__CredentialName-PrincipalName
+  const [credentialPart, principalName] = qualifiedName.split('-');
+  const credentialDeveloperName = credentialPart.replace(`${NAMESPACE_PREFIX}__`, '');
+
+  const soql =
+    `SELECT Id FROM ExternalCredentialPrincipal ` +
+    `WHERE DeveloperName = '${principalName}' ` +
+    `AND ExternalCredential.DeveloperName = '${credentialDeveloperName}' ` +
+    `LIMIT 1`;
+
+  const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
+    { url: `${instanceUrl}/services/data/v${API_VERSION}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
+    tokens
+  );
+  return data.totalSize > 0 ? data.records[0].Id : null;
 };
 
 // Grants Apex class access on the permission set (idempotent — skips if already present).
@@ -243,14 +273,23 @@ const createTriggers = async (
       await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
     }
 
+    // Grant External Credential Principal access (Named Credential callout permission)
+    const externalCredPrincipalId = await fetchExternalCredentialPrincipalId(
+      instanceUrl,
+      tokens,
+      EXTERNAL_CREDENTIAL_PRINCIPAL_NAME
+    );
+    if (externalCredPrincipalId) {
+      await grantApexClassAccess(instanceUrl, tokens, permissionSetId, externalCredPrincipalId);
+    }
+
     // Grant access to any trigger-backing Apex classes that share the trigger name
     for (let i = 0; i < results.length; i++) {
       const trigger = results[i];
       if (trigger.status !== "CREATED") { continue; }
 
       try {
-        const triggerName = results[i].triggerName;
-        const classId = await fetchApexClassId(instanceUrl, tokens, triggerName);
+        const classId = await fetchApexClassId(instanceUrl, tokens, trigger.triggerName);
         if (classId) {
           await grantApexClassAccess(instanceUrl, tokens, permissionSetId, classId);
         }
@@ -262,6 +301,51 @@ const createTriggers = async (
     }
   } catch (error) {
     console.log('Error during permission set setup:', error);
+  }
+
+  return results;
+};
+
+// ---------------------------------------------------------------------------
+// Inactivate triggers for one or more objects — sets Status to 'Inactive'
+// via a Tooling API PATCH. Does not delete the trigger body.
+// ---------------------------------------------------------------------------
+const inactivateTriggers = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiNames: string[]
+): Promise<ITriggerResult[]> => {
+  const results: ITriggerResult[] = [];
+
+  for (const objectApiName of objectApiNames) {
+    const triggerName = `DataVault_${objectApiName}_Trigger`;
+
+    try {
+      const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
+      if (!trigger) {
+        results.push({ triggerName, status: 'NOT_FOUND' });
+        continue;
+      }
+
+      if (trigger.Status === 'Inactive') {
+        results.push({ triggerName, status: 'INACTIVE' });
+        continue;
+      }
+
+      await salesforceRequest(
+        {
+          url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${trigger.Id}`,
+          method: 'PATCH',
+          body: JSON.stringify({ Status: 'Inactive' }),
+        },
+        tokens
+      );
+
+      results.push({ triggerName, status: 'INACTIVE' });
+    } catch (err) {
+      console.log(`Error inactivating trigger ${triggerName}:`, err);
+      results.push({ triggerName, status: 'INACTIVATE_FAILED', error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   return results;
@@ -310,7 +394,7 @@ const deleteTriggers = async (
 // Unified entry point — resolves CRM tokens + instanceUrl from the config,
 // then creates or deletes triggers for all objectNames in the config.
 // ---------------------------------------------------------------------------
-type TriggerOperation = 'create' | 'delete';
+type TriggerOperation = 'create' | 'delete' | 'inactivate';
 
 const realTimeTriggerManagement = async (
   operation: TriggerOperation,
@@ -340,12 +424,12 @@ const realTimeTriggerManagement = async (
 
   if (operation === 'create') {
     await createApexSecret(crm.crmId, { webhookSecret: config.backupConfigId });
-    const triggerResults = await createTriggers(instanceUrl, tokens, objectApiNames);
-    return triggerResults;
+    return createTriggers(instanceUrl, tokens, objectApiNames);
+  } else if (operation === 'inactivate') {
+    return inactivateTriggers(instanceUrl, tokens, objectApiNames);
   } else {
-    const deleteResults = await deleteTriggers(instanceUrl, tokens, objectApiNames);
-    return deleteResults;
+    return deleteTriggers(instanceUrl, tokens, objectApiNames);
   }
 };
 
-export { fetchTrigger, createTriggers, deleteTriggers, realTimeTriggerManagement, createPermissionSet };
+export { fetchTrigger, createTriggers, deleteTriggers, inactivateTriggers, realTimeTriggerManagement, createPermissionSet };
