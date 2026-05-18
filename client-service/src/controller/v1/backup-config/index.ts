@@ -330,10 +330,7 @@ const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> 
     customUrl: crm.customUrl,
   };
 
-  const dd = await deleteTriggers(crm.crmProfile?.instanceUrl ?? '', tokens, [
-    req.body.triggerName,
-  ]);
-  makeResponse(req, res, 200, false, 'fetch', { isSetup: dd });
+  makeResponse(req, res, 200, false, 'fetch');
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
