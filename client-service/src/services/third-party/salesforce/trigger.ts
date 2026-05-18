@@ -336,7 +336,8 @@ const createTriggers = async (
 
   const results: ITriggerResult[] = [];
 
-  for (const objectApiName of objectApiNames) {
+  for (let i=0; i<objectApiNames.length; i++) {
+    const objectApiName = objectApiNames[i];
     const triggerName = `DataVault_${objectApiName}_Trigger`;
     try {
       const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
@@ -358,85 +359,79 @@ const createTriggers = async (
 };
 
 // ---------------------------------------------------------------------------
-// Activate triggers — patches Inactive → Active; creates from scratch if
-// the trigger does not exist at all; skips triggers already Active.
-// Permission set is set up after for any newly created triggers.
+// Shared toggle — sets every trigger to the requested Salesforce status.
+// ACTIVE  : creates the trigger if absent, patches Inactive → Active,
+//           then runs permission set setup for any newly created triggers.
+// INACTIVE: skips (NOT_FOUND) if the trigger never existed, patches Active → Inactive.
 // ---------------------------------------------------------------------------
-const activateTriggers = async (
+const toggleTriggerStatus = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  objectApiNames: string[]
+  objectApiNames: string[],
+  targetStatus: 'Active' | 'Inactive'
 ): Promise<ITriggerResult[]> => {
-  await ensureHandlerClass(instanceUrl, tokens);
+  if (targetStatus === 'Active') {
+    await ensureHandlerClass(instanceUrl, tokens);
+  }
 
   const results: ITriggerResult[] = [];
 
-  for (const objectApiName of objectApiNames) {
+  for (let i=0; i<objectApiNames.length; i++) {
+    const objectApiName = objectApiNames[i];
     const triggerName = `DataVault_${objectApiName}_Trigger`;
     try {
       const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
 
-      if (!trigger) {
-        // Trigger was never created — create it fresh.
-        await createSingleTrigger(instanceUrl, tokens, objectApiName);
-        results.push({ triggerName, status: 'CREATED' });
-        await timer(500);
-        continue;
+      if (targetStatus === 'Active') {
+        if (!trigger) {
+          await createSingleTrigger(instanceUrl, tokens, objectApiName);
+          results.push({ triggerName, status: 'CREATED' });
+          await timer(500);
+        } else if (trigger.Status === 'Active') {
+          results.push({ triggerName, status: 'EXIST' });
+        } else {
+          await patchTriggerStatus(instanceUrl, tokens, trigger.Id, 'Active');
+          results.push({ triggerName, status: 'CREATED' });
+        }
+      } else {
+        if (!trigger) {
+          results.push({ triggerName, status: 'NOT_FOUND' });
+        } else if (trigger.Status === 'Inactive') {
+          results.push({ triggerName, status: 'INACTIVE' });
+        } else {
+          await patchTriggerStatus(instanceUrl, tokens, trigger.Id, 'Inactive');
+          results.push({ triggerName, status: 'INACTIVE' });
+        }
       }
-
-      if (trigger.Status === 'Active') {
-        results.push({ triggerName, status: 'EXIST' });
-        continue;
-      }
-
-      await patchTriggerStatus(instanceUrl, tokens, trigger.Id, 'Active');
-      results.push({ triggerName, status: 'CREATED' });
     } catch (err) {
-      console.log(`Error activating trigger ${triggerName}:`, err);
-      results.push({ triggerName, status: 'FAILED', error: err instanceof Error ? err.message : String(err) });
+      const label = targetStatus === 'Active' ? 'activating' : 'inactivating';
+      console.log(`Error ${label} trigger ${triggerName}:`, err);
+      results.push({
+        triggerName,
+        status: targetStatus === 'Active' ? 'FAILED' : 'INACTIVATE_FAILED',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
-  await setupPermissionSet(instanceUrl, tokens, results);
+  if (targetStatus === 'Active') {
+    await setupPermissionSet(instanceUrl, tokens, results);
+  }
+
   return results;
 };
 
-// ---------------------------------------------------------------------------
-// Inactivate triggers — patches Active → Inactive via Tooling API PATCH.
-// Does not delete the trigger body. Skips (NOT_FOUND) if trigger never existed.
-// ---------------------------------------------------------------------------
-const inactivateTriggers = async (
+const activateTriggers = (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiNames: string[]
-): Promise<ITriggerResult[]> => {
-  const results: ITriggerResult[] = [];
+): Promise<ITriggerResult[]> => toggleTriggerStatus(instanceUrl, tokens, objectApiNames, 'Active');
 
-  for (const objectApiName of objectApiNames) {
-    const triggerName = `DataVault_${objectApiName}_Trigger`;
-    try {
-      const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
-
-      if (!trigger) {
-        results.push({ triggerName, status: 'NOT_FOUND' });
-        continue;
-      }
-
-      if (trigger.Status === 'Inactive') {
-        results.push({ triggerName, status: 'INACTIVE' });
-        continue;
-      }
-
-      await patchTriggerStatus(instanceUrl, tokens, trigger.Id, 'Inactive');
-      results.push({ triggerName, status: 'INACTIVE' });
-    } catch (err) {
-      console.log(`Error inactivating trigger ${triggerName}:`, err);
-      results.push({ triggerName, status: 'INACTIVATE_FAILED', error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  return results;
-};
+const inactivateTriggers = (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiNames: string[]
+): Promise<ITriggerResult[]> => toggleTriggerStatus(instanceUrl, tokens, objectApiNames, 'Inactive');
 
 // ---------------------------------------------------------------------------
 // Delete triggers — permanently removes the trigger from the org.
@@ -449,7 +444,8 @@ const deleteTriggers = async (
 ): Promise<ITriggerResult[]> => {
   const results: ITriggerResult[] = [];
 
-  for (const objectApiName of objectApiNames) {
+  for (let i = 0; i < objectApiNames.length; i++) {
+    const objectApiName = objectApiNames[i];
     const triggerName = `DataVault_${objectApiName}_Trigger`;
     try {
       const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
