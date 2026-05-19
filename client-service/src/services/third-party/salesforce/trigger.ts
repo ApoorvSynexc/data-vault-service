@@ -420,7 +420,7 @@ const createTriggers = async (
 
   const results: ITriggerResult[] = [];
 
-  for (let i=0; i<objectApiNames.length; i++) {
+  for (let i = 0; i < objectApiNames.length; i++) {
     const objectApiName = objectApiNames[i];
     const triggerName = `DataVault_${objectApiName}_Trigger`;
     try {
@@ -463,14 +463,14 @@ const toggleTriggerStatus = async (
   }
 
   const results: ITriggerResult[] = [];
-  if(!config.triggerResults?.length) {
+  if (!config.triggerResults?.length) {
     results.push({ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' });
     return results;
   }
 
   const triggerResults = config.triggerResults;
 
-  for (let i=0; i<triggerResults.length; i++) {
+  for (let i = 0; i < triggerResults.length; i++) {
     const triggerResult = triggerResults[i];
     const triggerName = triggerResult.triggerName;
     const objectApiName = triggerName.replace('DataVault_', '').replace('_Trigger', '');
@@ -634,7 +634,7 @@ const deleteTriggers = async (
 ): Promise<ITriggerResult[]> => {
   const results: ITriggerResult[] = [];
 
-  if(!config.triggerResults?.length) {
+  if (!config.triggerResults?.length) {
     results.push({ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' });
     return results;
   }
@@ -645,7 +645,7 @@ const deleteTriggers = async (
     const triggerName = triggerResult.triggerName;
     const status = triggerResult.status;
 
-    if(!['CREATED', 'INACTIVE'].includes(status)) continue;
+    if (!['CREATED', 'INACTIVE'].includes(status)) continue;
     try {
       const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (!trigger) {
@@ -685,32 +685,41 @@ const realTimeTriggerManagement = async (
   operation: TriggerOperation,
   config: IBackupConfig
 ): Promise<ITriggerResult[]> => {
-  const crm = await getCrmById(config.crmId);
-  if (!crm) { throw new Error(`crm_not_found:${config.crmId}`); }
+  try {
+    const crm = await getCrmById(config.crmId);
+    if (!crm) { throw new Error(`crm_not_found:${config.crmId}`); }
 
-  const instanceUrl = crm.crmProfile?.instanceUrl;
-  if (!instanceUrl) { throw new Error(`instance_url_missing:${config.crmId}`); }
+    const instanceUrl = crm.crmProfile?.instanceUrl;
+    if (!instanceUrl) { throw new Error(`instance_url_missing:${config.crmId}`); }
 
-  const credentials = getCrmTokens(crm);
-  const tokens: SalesforceTokens = {
-    accessToken: credentials.access_token,
-    refreshToken: credentials.refresh_token,
-    crmId: crm.crmId,
-    userId: crm.userId,
-    environment: crm.environment,
-    customUrl: crm.customUrl,
-  };
+    const credentials = getCrmTokens(crm);
+    const tokens: SalesforceTokens = {
+      accessToken: credentials.access_token,
+      refreshToken: credentials.refresh_token,
+      crmId: crm.crmId,
+      userId: crm.userId,
+      environment: crm.environment,
+      customUrl: crm.customUrl,
+    };
 
-  const objectApiNames = config.objectNames;
+    const objectApiNames = config.objectNames;
 
-  if (operation === 'create') {
-    await createApexSecret(crm.crmId, { webhookSecret: config.backupConfigId });
-    return createTriggers(instanceUrl, tokens, objectApiNames);
+    if (operation === 'create') {
+      await createApexSecret(crm.crmId, { webhookSecret: config.backupConfigId });
+      return createTriggers(instanceUrl, tokens, objectApiNames);
+    }
+    if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
+    if (operation === 'inactivate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Inactive'); }
+    if (operation === 'delete') { return deleteTriggers(instanceUrl, tokens, config); }
+    throw new Error(`invalid_operation:${operation}`);
+  } catch (error) {
+    console.log(`Error during trigger ${operation}:`, error);
+    return [{
+      triggerName: 'N/A',
+      status: 'FAILED',
+      error: error instanceof Error ? error.message : String(error),
+    }];
   }
-  if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
-  if (operation === 'inactivate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Inactive'); }
-  if (operation === 'delete') { return deleteTriggers(instanceUrl, tokens, config); }
-  throw new Error(`invalid_operation:${operation}`);
 };
 
 export {

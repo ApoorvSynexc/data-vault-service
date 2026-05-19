@@ -148,6 +148,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
   } catch (error) {
     await deleteBackupConfig(config.backupConfigId);
+    logger.error('Error creating backup config, Deleting backup config: ', error);
     throw error;
   }
 };
