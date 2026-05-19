@@ -428,10 +428,10 @@ const createTriggers = async (
 
   for (let i = 0; i < objectApiNames.length; i++) {
     let objectApiName = objectApiNames[i];
-    if (objectApiName.endsWith('__c')) {
-      objectApiName = objectApiName.slice(0, -3);
+    let triggerName = `DataVault_${objectApiName}_Trigger`;
+    if(triggerName.includes("__c")) {
+      triggerName = triggerName.replace('__c', '');
     }
-    const triggerName = `DataVault_${objectApiName}_Trigger`;
     try {
       const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (existing?.Status === 'Active') {
