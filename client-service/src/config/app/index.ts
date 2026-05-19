@@ -22,7 +22,7 @@ app.set('trust proxy', 1);
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({limit: "10mb"}));
 app.use(morganMiddleware);
 
 app.use('/api', router);
