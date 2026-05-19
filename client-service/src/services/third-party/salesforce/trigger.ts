@@ -421,7 +421,10 @@ const createTriggers = async (
   const results: ITriggerResult[] = [];
 
   for (let i = 0; i < objectApiNames.length; i++) {
-    const objectApiName = objectApiNames[i];
+    let objectApiName = objectApiNames[i];
+    if (objectApiName.endsWith('__c')) {
+      objectApiName = objectApiName.slice(0, -3);
+    }
     const triggerName = `DataVault_${objectApiName}_Trigger`;
     try {
       const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
