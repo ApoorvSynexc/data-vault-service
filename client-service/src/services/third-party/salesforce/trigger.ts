@@ -50,7 +50,10 @@ const fetchTrigger = async (
 // Centralised here so createTriggers and activateTriggers both use the same body.
 // ---------------------------------------------------------------------------
 const buildTriggerBody = (objectApiName: string): string => {
-  const triggerName = `DataVault_${objectApiName}_Trigger`;
+  let triggerName = `DataVault_${objectApiName}_Trigger`;
+  if (triggerName.includes("__c")) {
+    triggerName = triggerName.replace('__c', '');
+  }
   return (
     `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n` +
     `    try {\n` +
@@ -89,7 +92,10 @@ const createSingleTrigger = async (
   tokens: SalesforceTokens,
   objectApiName: string
 ): Promise<void> => {
-  const triggerName = `DataVault_${objectApiName}_Trigger`;
+  let triggerName = `DataVault_${objectApiName}_Trigger`;
+  if (triggerName.includes("__c")) {
+    triggerName = triggerName.replace('__c', '');
+  }
   await salesforceRequest(
     {
       url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger`,
