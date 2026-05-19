@@ -632,7 +632,7 @@ const deleteTriggers = async (
   tokens: SalesforceTokens,
   config: IBackupConfig
 ): Promise<ITriggerResult[]> => {
-  if(!config.triggerResults?.length) {
+  if (!config.triggerResults?.length) {
     return [{ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
@@ -642,7 +642,7 @@ const deleteTriggers = async (
     const triggerName = triggerResult.triggerName;
     const status = triggerResult.status;
 
-    if(!['CREATED', 'INACTIVE', 'EXIST'].includes(status)) continue;
+    if (!['CREATED', 'INACTIVE', 'EXIST'].includes(status)) continue;
     try {
       const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (!trigger) {
