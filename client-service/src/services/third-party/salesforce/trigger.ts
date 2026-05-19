@@ -632,11 +632,8 @@ const deleteTriggers = async (
   tokens: SalesforceTokens,
   config: IBackupConfig
 ): Promise<ITriggerResult[]> => {
-  const results: ITriggerResult[] = [];
-
   if(!config.triggerResults?.length) {
-    results.push({ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' });
-    return results;
+    return [{ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
   const triggerResults = config.triggerResults;
@@ -672,7 +669,7 @@ const deleteTriggers = async (
     console.log('Error deleting permission set:', err);
   }
 
-  return results;
+  return triggerResults;
 };
 
 // ---------------------------------------------------------------------------
