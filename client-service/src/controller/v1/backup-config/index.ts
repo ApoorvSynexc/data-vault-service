@@ -278,11 +278,6 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   try {
-    await Promise.all([
-      deleteBackupConfig(String(backupConfigId)),
-      deleteBackupJobsByConfig(String(backupConfigId), config.userId),
-    ]);
-
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const crm = await getCrmById(config.crmId);
       if (crm) {
@@ -301,6 +296,11 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
       // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
     }
+
+    await Promise.all([
+      deleteBackupConfig(String(backupConfigId)),
+      deleteBackupJobsByConfig(String(backupConfigId), config.userId),
+    ]);
 
     makeResponse(req, res, 200, true, 'delete');
     if (config.schedule === SCHEDULE_MODE.realtime) {
