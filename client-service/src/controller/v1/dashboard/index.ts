@@ -39,7 +39,7 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   
   try {
     const stats = await computeJobStats({
-      indexName: 'userId-index',
+      indexName,
       keyName,
       keyValue
     });
