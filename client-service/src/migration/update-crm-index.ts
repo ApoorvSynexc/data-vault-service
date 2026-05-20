@@ -7,10 +7,29 @@ import {
 import {
   AWS_REGION,
   CRM_TABLE,
+  BACKUP_JOB_TABLE,
   DYNAMODB_ENDPOINT,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
 } from '../constant';
+
+interface IndexKeySchema {
+  attributeName: string;
+  keyType: 'HASH' | 'RANGE';
+  attributeType: 'S' | 'N' | 'B';
+}
+
+interface IndexConfig {
+  indexName: string;
+  keySchema: IndexKeySchema[];
+  projectionType?: 'ALL' | 'KEYS_ONLY' | 'INCLUDE';
+  projectionAttributes?: string[];
+}
+
+interface CreateIndexesParams {
+  tableName: string;
+  indexes: IndexConfig[];
+}
 
 const client = new DynamoDBClient({
   region: AWS_REGION,
@@ -21,82 +40,107 @@ const client = new DynamoDBClient({
   ...(DYNAMODB_ENDPOINT ? { endpoint: DYNAMODB_ENDPOINT } : {}),
 });
 
-export const runUpdateCrmIndex = async (): Promise<void> => {
-  console.log('Running migration: UPDATE_CRM_INDEX');
+export const createIndexes = async (params: CreateIndexesParams): Promise<void> => {
+  const { tableName, indexes } = params;
+
+  console.log(`Running migration: CREATE_INDEXES on table '${tableName}'`);
 
   try {
     // Check if table exists and get current state
     const describeResult = await client.send(
-      new DescribeTableCommand({ TableName: CRM_TABLE })
+      new DescribeTableCommand({ TableName: tableName })
     );
 
     const table = describeResult.Table;
     if (!table) {
-      throw new Error(`Table ${CRM_TABLE} not found`);
+      throw new Error(`Table ${tableName} not found`);
     }
 
-    // Check if organizationId-index already exists
-    const indexExists = table.GlobalSecondaryIndexes?.some(
-      (idx) => idx.IndexName === 'organizationId-index'
+    // Get existing indexes and attributes
+    const existingIndexNames = table.GlobalSecondaryIndexes?.map(
+      (idx) => idx.IndexName
+    ) ?? [];
+    const existingAttributes = new Set(
+      table.AttributeDefinitions?.map((attr) => attr.AttributeName) ?? []
     );
 
-    if (indexExists) {
-      console.log(`  [skip] Index 'organizationId-index' already exists on ${CRM_TABLE}`);
-      console.log('Migration UPDATE_CRM_INDEX complete.');
+    // Filter out indexes that already exist
+    const indexesToCreate = indexes.filter((idx) => {
+      if (existingIndexNames.includes(idx.indexName)) {
+        console.log(`  [skip] Index '${idx.indexName}' already exists on ${tableName}`);
+        return false;
+      }
+      return true;
+    });
+
+    if (indexesToCreate.length === 0) {
+      console.log(`Migration CREATE_INDEXES complete. No new indexes to create.`);
       return;
     }
 
-    // Check if organizationId attribute is already defined
-    const orgIdAttrExists = table.AttributeDefinitions?.some(
-      (attr) => attr.AttributeName === 'organizationId'
-    );
-
+    // Build attribute definitions for new attributes
     const attributeDefinitions = [...(table.AttributeDefinitions || [])];
+    const newAttributeNames = new Set<string>();
 
-    // Add organizationId attribute if it doesn't exist
-    if (!orgIdAttrExists) {
-      attributeDefinitions.push({
-        AttributeName: 'organizationId',
-        AttributeType: 'S',
-      });
-      console.log(`  [adding] organizationId attribute to ${CRM_TABLE}`);
+    for (const index of indexesToCreate) {
+      for (const keyAttr of index.keySchema) {
+        if (!existingAttributes.has(keyAttr.attributeName) &&
+            !newAttributeNames.has(keyAttr.attributeName)) {
+          attributeDefinitions.push({
+            AttributeName: keyAttr.attributeName,
+            AttributeType: keyAttr.attributeType,
+          });
+          newAttributeNames.add(keyAttr.attributeName);
+          console.log(`  [adding] attribute '${keyAttr.attributeName}' to ${tableName}`);
+        }
+      }
     }
 
-    console.log(`  [creating] organizationId-index on ${CRM_TABLE}...`);
+    // Build GSI updates
+    const globalSecondaryIndexUpdates = indexesToCreate.map((index) => ({
+      Create: {
+        IndexName: index.indexName,
+        KeySchema: index.keySchema.map((key) => ({
+          AttributeName: key.attributeName,
+          KeyType: key.keyType,
+        })),
+        Projection: {
+          ProjectionType: index.projectionType ?? 'ALL',
+          ...(index.projectionAttributes && index.projectionAttributes.length > 0 && {
+            NonKeyAttributes: index.projectionAttributes,
+          }),
+        },
+      },
+    }));
 
-    // Update table to add the new GSI
+    console.log(
+      `  [creating] ${indexesToCreate.length} index(es) on ${tableName}...`
+    );
+
+    // Update table to add the new GSIs
     await client.send(
       new UpdateTableCommand({
-        TableName: CRM_TABLE,
+        TableName: tableName,
         AttributeDefinitions: attributeDefinitions,
-        GlobalSecondaryIndexUpdates: [
-          {
-            Create: {
-              IndexName: 'organizationId-index',
-              KeySchema: [
-                { AttributeName: 'organizationId', KeyType: 'HASH' },
-              ],
-              Projection: {
-                ProjectionType: 'ALL',
-              },
-            },
-          },
-        ],
+        GlobalSecondaryIndexUpdates: globalSecondaryIndexUpdates,
       })
     );
 
     // Wait for table to be updated
-    console.log(`  [waiting] for index to be active...`);
-    await waitUntilTableExists({ client, maxWaitTime: 300 }, { TableName: CRM_TABLE });
+    console.log(`  [waiting] for indexes to be active...`);
+    await waitUntilTableExists({ client, maxWaitTime: 300 }, { TableName: tableName });
 
-    console.log(`  [created] organizationId-index on ${CRM_TABLE}`);
-    console.log('Migration UPDATE_CRM_INDEX complete.');
+    for (const index of indexesToCreate) {
+      console.log(`  [created] Index '${index.indexName}' on ${tableName}`);
+    }
+
+    console.log(`Migration CREATE_INDEXES complete.`);
   } catch (error: any) {
     if (error.name === 'ValidationException') {
       if (error.message?.includes('no updates are allowed')) {
-        console.log(`  [skip] Index is being created or table is updating`);
+        console.log(`  [skip] Table is being updated. Try again later.`);
       } else if (error.message?.includes('Duplicate')) {
-        console.log(`  [skip] Index 'organizationId-index' already exists`);
+        console.log(`  [skip] One or more indexes already exist`);
       } else {
         throw error;
       }
@@ -106,4 +150,23 @@ export const runUpdateCrmIndex = async (): Promise<void> => {
   }
 
   process.exit(0);
+};
+
+export const runIndexMigration = async (): Promise<void> => {
+  await createIndexes({
+    tableName: BACKUP_JOB_TABLE,
+    indexes: [
+      {
+        indexName: 'spaceId-index',
+        keySchema: [
+          {
+            attributeName: 'spaceId',
+            keyType: 'HASH',
+            attributeType: 'S',
+          },
+        ],
+        projectionType: 'ALL',
+      },
+    ],
+  });
 };

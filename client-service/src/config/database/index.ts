@@ -55,6 +55,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       { AttributeName: 'userId', AttributeType: 'S' },
       { AttributeName: 'backupConfigId', AttributeType: 'S' },
       { AttributeName: 'createdAt', AttributeType: 'S' },
+      { AttributeName: 'spaceId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'backupJobId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
@@ -71,6 +72,13 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         KeySchema: [
           { AttributeName: 'backupConfigId', KeyType: 'HASH' },
           { AttributeName: 'createdAt', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'spaceId-index',
+        KeySchema: [
+          { AttributeName: 'spaceId', KeyType: 'HASH' },
         ],
         Projection: { ProjectionType: 'ALL' },
       },

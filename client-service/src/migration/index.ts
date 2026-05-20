@@ -4,7 +4,7 @@ dotenv.config();
 import initializeDatabase from '../config/database';
 import { runCreateRole } from './create-role';
 import { runCreateAdmin } from './create-admin';
-import { runUpdateCrmIndex } from './update-crm-index';
+import { runIndexMigration } from './update-crm-index';
 import { runBackfillCrmOrganizationId } from './backfill-crm-organizationid';
 
 const [, , command] = process.argv;
@@ -27,8 +27,8 @@ const run = async (): Promise<void> => {
       await runCreateAdmin();
       break;
     }
-    case 'UPDATE_CRM_INDEX': {
-      await runUpdateCrmIndex();
+    case 'UPDATE_INDEX': {
+      await runIndexMigration();
       break;
     }
     case 'BACKFILL_CRM_ORGANIZATIONID': {
