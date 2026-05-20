@@ -350,6 +350,9 @@ const syncMeatadataHandler = async (req: IRequest, res: IResponse): Promise<void
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { slug } = req.query;
+  const spaceId = req.user!.spaceId;
+  const userId = req.user!.userId;
+
 
   if (slug) {
     const config = await getBackupConfigBySlug({
@@ -366,7 +369,17 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
     return;
   }
 
-  const stats = await computeJobStats({ indexName: 'userId-index', keyName: 'userId', keyValue: req.user!.userId });
+  let indexName = 'userId-index';
+  let keyName = 'userId';
+  let keyValue = userId;
+
+  if (spaceId) {
+    indexName = 'spaceId-index';
+    keyName = 'spaceId';
+    keyValue = spaceId;
+  }
+
+  const stats = await computeJobStats({ indexName, keyName, keyValue });
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
