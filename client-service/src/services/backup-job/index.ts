@@ -90,7 +90,7 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.active });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
     throw error;
   }
 
