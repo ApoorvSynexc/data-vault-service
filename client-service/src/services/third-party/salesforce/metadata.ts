@@ -40,30 +40,28 @@ async function addExtraObjectsToBackupConfig(
       throw new Error('Backup config not found');
     }
 
-    console.log("1111111");
-    const newObjects = extraObjects.map((obj) => ({
-      name: obj.apiName,
-      type: obj.isCustom ? 'CUSTOM' : 'STANDARD',
-      field: [],
-    }));
+    const newObjects: { name: string; type: string; field: any[] }[] = [];
+    const newObjectNames: string[] = [];
+    extraObjects.forEach((obj) => {
+      newObjects.push({
+        name: obj.apiName,
+        type: obj.isCustom ? 'CUSTOM' : 'STANDARD',
+        field: [],
+      })
+      newObjectNames.push(obj.apiName);
+    });
 
-     console.log("2222222");
-    const newObjectNames = extraObjects.map((obj) => obj.apiName);
-
-
-     console.log("3333333");
     const updatedObjects = [
       ...(backupConfig.objects || []),
       ...newObjects,
     ];
 
-     console.log("4444444");
     const updatedObjectNames = [
       ...(backupConfig.objectNames || []),
       ...newObjectNames,
     ];
 
-     console.log(JSON.stringify({updatedObjectNames, updatedObjects}));
+    console.log(JSON.stringify({ updatedObjectNames, updatedObjects }));
     await updateBackupConfig(backupConfigId, {
       objects: updatedObjects,
       objectNames: updatedObjectNames,
