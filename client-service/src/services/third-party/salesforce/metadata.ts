@@ -15,7 +15,7 @@ function compareObjects(
     (sfObj) => !backupObjectNames.has(sfObj.apiName)
   );
 
-  console.log(JSON.stringify({backupConfigObjects, salesforceObjects}));
+  console.log(JSON.stringify({backupObjectNames:backupObjectNames.entries(), salesforceObjects}));
   
 
   logger.info(
@@ -95,7 +95,7 @@ async function syncMetadataAndTriggers(
     }
 
     // Fetch Salesforce objects using existing apex service
-    const salesforceObjects = await getApexObjects(backupConfig.crmId);
+    const salesforceObjects = await getApexObjects(backupConfig.crmId, backupConfig.schedule);
 
 
     // Compare and find extra objects
