@@ -15,7 +15,7 @@ function compareObjects(
     (sfObj) => !backupObjectNames.has(sfObj.apiName)
   );
 
-  console.log(JSON.stringify({backupObjectNames, salesforceObjects}));
+  console.log(JSON.stringify({backupConfigObjects, salesforceObjects}));
   
 
   logger.info(
@@ -29,7 +29,7 @@ function compareObjects(
 async function addExtraObjectsToBackupConfig(
   backupConfigId: string,
   extraObjects: any[]
-): Promise<void> {
+) {
   try {
     if (extraObjects.length === 0) {
       logger.info('No extra objects to add');
