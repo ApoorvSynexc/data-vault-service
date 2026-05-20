@@ -124,6 +124,7 @@ async function initalizePayloadTransform(
         console.log('──────────────────────────────────────────');
         console.log('  DataVault — EMR Serverless Job Submitter');
         console.log('──────────────────────────────────────────');
+        console.log('executionRoleArn:',AWS_EMR_EXECUTION_ROLE_ARN);
         console.log('Job Type        :', payload.jobType);
         console.log('Backup Config ID:', payload.backupConfigId);
         console.log('Destination     :', payload.details.destinationConfigs.destinationName);
