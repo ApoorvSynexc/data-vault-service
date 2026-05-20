@@ -23,6 +23,7 @@ import {
   getApexObjectsCount,
   getSalesforceProfile,
   initalizePayloadTransform,
+  syncMetadataAndTriggers,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS } from '../../../constant';
@@ -330,6 +331,23 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   await initalizePayloadTransform(config.backupConfigId);
 };
 
+const syncMeatadataHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { slug } = req.query;
+
+  const config = await getBackupConfigBySlug({
+    userId: req.user!.userId,
+    slug: String(slug),
+    spaceId: req.user?.spaceId,
+  });
+  if (!config) {
+    makeResponse(req, res, 400, false, 'backup_config_not_found');
+    return;
+  }
+
+  makeResponse(req, res, 201, true, 'create');
+  await syncMetadataAndTriggers(config.backupConfigId);
+};
+
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { slug } = req.query;
 
@@ -362,5 +380,6 @@ export const backupConfigController = wrapController({
   updateBackupConfigHandler,
   deleteBackupConfigHandler,
   initalizePayloadTransformHandler,
+  syncMeatadataHandler,
   getBackupJobStatsHandler,
 });

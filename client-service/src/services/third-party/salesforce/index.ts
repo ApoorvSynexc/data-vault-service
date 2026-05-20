@@ -263,3 +263,4 @@ export type { SalesforceEnvironment };
 export type { SalesforceTokens, SalesforceRequestResult };
 export * from './apex';
 export * from './trigger';
+export * from './metadata';
