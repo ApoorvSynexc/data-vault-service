@@ -164,6 +164,11 @@ export const runIndexMigration = async (): Promise<void> => {
             keyType: 'HASH',
             attributeType: 'S',
           },
+          {
+            attributeName: 'createdAt',
+            keyType: 'RANGE',
+            attributeType: 'S',
+          },
         ],
         projectionType: 'ALL',
       },
