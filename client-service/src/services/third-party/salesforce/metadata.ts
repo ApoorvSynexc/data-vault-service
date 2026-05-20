@@ -15,9 +15,6 @@ function compareObjects(
     (sfObj) => !backupObjectNames.has(sfObj.apiName)
   );
 
-  console.log(JSON.stringify({backupObjectNames:backupObjectNames.entries(), salesforceObjects}));
-  
-
   logger.info(
     `Found ${extraObjects.length} extra objects in Salesforce not in backup config`
   );
@@ -44,8 +41,8 @@ async function addExtraObjectsToBackupConfig(
     }
 
     const newObjects = extraObjects.map((obj) => ({
-      name: obj.name,
-      type: obj.type || 'CUSTOM',
+      name: obj.apiName,
+      type: obj.isCustom ? 'CUSTOM' : 'STANDARD',
       field: [],
     }));
 
