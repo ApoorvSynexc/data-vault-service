@@ -1,0 +1,126 @@
+# Deploy backup-service Docker image to ECR and roll out on ECS (DEV).
+#
+# Required GitHub secrets:
+#   AWS_ACCESS_KEY_ID      - IAM user/role key with ECR push + ECS update permissions
+#   AWS_SECRET_ACCESS_KEY  - Matching secret key
+#   ECS_CLUSTER            - ECS cluster name (e.g. dev-360-datavault-cluster)
+#   ECS_SERVICE            - ECS service name running the backup-service task
+#   WEBHOOK_URL            - (optional) Same notification webhook as deploy-dev.yml
+#
+# IAM permissions (minimum):
+#   ecr:GetAuthorizationToken
+#   ecr:BatchCheckLayerAvailability, ecr:GetDownloadUrlForLayer, ecr:BatchGetImage
+#   ecr:PutImage, ecr:InitiateLayerUpload, ecr:UploadLayerPart, ecr:CompleteLayerUpload
+#   ecs:UpdateService, ecs:DescribeServices
+
+name: Deploy Backup Service to ECS (DEV)
+
+on:
+  push:
+    branches:
+      - DEV
+    paths:
+      - 'backup-service/**'
+      - '.github/workflows/deploy-backup-service-dev.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backup-service-dev
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-2
+  ECR_REGISTRY: 896856100813.dkr.ecr.us-east-2.amazonaws.com
+  ECR_REPOSITORY: datavault/dev-360-datavault
+  IMAGE_TAG: latest
+
+jobs:
+  deploy:
+    name: Build, push, and deploy backup-service
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+      IMAGE_URI: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && missing+=("AWS_ACCESS_KEY_ID")
+          [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && missing+=("AWS_SECRET_ACCESS_KEY")
+          [ -z "${ECS_CLUSTER}" ] && missing+=("ECS_CLUSTER")
+          [ -z "${ECS_SERVICE}" ] && missing+=("ECS_SERVICE")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required GitHub secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backup-service
+          file: ./backup-service/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_URI }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Force new ECS deployment
+        id: ecs_deploy
+        run: |
+          set -euo pipefail
+          echo "Triggering rolling deployment for ${ECS_SERVICE} on cluster ${ECS_CLUSTER}..."
+          aws ecs update-service \
+            --cluster "${ECS_CLUSTER}" \
+            --service "${ECS_SERVICE}" \
+            --force-new-deployment \
+            --region "${AWS_REGION}" \
+            --query 'service.{serviceName:serviceName,status:status,desiredCount:desiredCount,runningCount:runningCount,deployments:deployments[*].{status:status,rolloutState:rolloutState}}' \
+            --output json
+
+      - name: Wait for ECS service to stabilize
+        run: |
+          set -euo pipefail
+          echo "Waiting for service ${ECS_SERVICE} to become stable (this may take several minutes)..."
+          aws ecs wait services-stable \
+            --cluster "${ECS_CLUSTER}" \
+            --services "${ECS_SERVICE}" \
+            --region "${AWS_REGION}"
+          echo "Service ${ECS_SERVICE} is stable."
+
+      - name: Notify success
+        if: success()
+        run: |
+          curl -fsS -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"<h1>✅ backup-service deployed to ECS (DEV)</h1><p>Image: <code>${IMAGE_URI}</code></p><p>Commit: <code>${GITHUB_SHA}</code></p>\"}"
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          curl -fsS -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"<h1>❌ backup-service ECS deployment failed (DEV)</h1><p>Commit: <code>${GITHUB_SHA}</code></p><p>Workflow: <code>${GITHUB_WORKFLOW}</code></p>\"}"
