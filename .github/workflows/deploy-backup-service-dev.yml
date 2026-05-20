@@ -33,6 +33,7 @@ env:
   ECR_REGISTRY: 896856100813.dkr.ecr.us-east-2.amazonaws.com
   ECR_REPOSITORY: datavault/dev-360-datavault
   IMAGE_TAG: latest
+  IMAGE_URI: 896856100813.dkr.ecr.us-east-2.amazonaws.com/datavault/dev-360-datavault:latest
 
 jobs:
   deploy:
@@ -44,7 +45,6 @@ jobs:
       WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
       ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
       ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
-      IMAGE_URI: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
 
     steps:
       - name: Checkout repository
