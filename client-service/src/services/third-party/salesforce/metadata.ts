@@ -61,7 +61,6 @@ async function addExtraObjectsToBackupConfig(
       ...newObjectNames,
     ];
 
-    console.log(JSON.stringify({ updatedObjectNames, updatedObjects }));
     await updateBackupConfig(backupConfigId, {
       objects: updatedObjects,
       objectNames: updatedObjectNames,
@@ -107,6 +106,8 @@ async function syncMetadataAndTriggers(
 
     // Add extra objects to backup config
     await addExtraObjectsToBackupConfig(backupConfigId, extraObjects);
+
+    if(backupConfig.schedule !== 'REALTIME') return { extraObjects, triggerResults: [] };
 
     // Create triggers for extra objects using existing trigger service
     const extraObjectNames = extraObjects.map((obj) => obj.apiName);
