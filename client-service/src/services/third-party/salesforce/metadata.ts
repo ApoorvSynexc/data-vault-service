@@ -109,7 +109,7 @@ async function syncMetadataAndTriggers(
     await addExtraObjectsToBackupConfig(backupConfigId, extraObjects);
 
     // Create triggers for extra objects using existing trigger service
-    const extraObjectNames = extraObjects.map((obj) => obj.name);
+    const extraObjectNames = extraObjects.map((obj) => obj.apiName);
     const { access_token, refresh_token } = getCrmTokens(crm);
     const triggerResults = await createTriggers(
       crm.crmProfile?.instanceUrl || '',
