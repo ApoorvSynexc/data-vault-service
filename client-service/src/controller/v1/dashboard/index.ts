@@ -35,8 +35,6 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
     keyValue = spaceId;
   }
 
-  console.log({indexName, keyName, keyValue});
-  
   try {
     const stats = await computeJobStats({
       indexName,
