@@ -148,7 +148,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   );
   
   const existingCrms = await getCrmByOrgId(sfProfile.organization_id);
-  if (existingCrms && existingCrms.crmProfile?.userId === sfProfile.user_id) {
+  if (existingCrms && existingCrms.crmProfile?.userId === sfProfile.user_id && existingCrms.crmId !== oauthState.crmId ) {
     makeResponse(req, res, 409, false, 'organization_already_exist');
     return;
   }
