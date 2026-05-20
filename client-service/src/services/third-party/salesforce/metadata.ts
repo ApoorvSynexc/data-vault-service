@@ -15,9 +15,6 @@ function compareObjects(
     (sfObj) => !backupObjectNames.has(sfObj.apiName)
   );
 
-  console.log(JSON.stringify({backupObjectNames, salesforceObjects}));
-  
-
   logger.info(
     `Found ${extraObjects.length} extra objects in Salesforce not in backup config`
   );
@@ -29,7 +26,7 @@ function compareObjects(
 async function addExtraObjectsToBackupConfig(
   backupConfigId: string,
   extraObjects: any[]
-): Promise<void> {
+) {
   try {
     if (extraObjects.length === 0) {
       logger.info('No extra objects to add');
@@ -43,13 +40,16 @@ async function addExtraObjectsToBackupConfig(
       throw new Error('Backup config not found');
     }
 
-    const newObjects = extraObjects.map((obj) => ({
-      name: obj.name,
-      type: obj.type || 'CUSTOM',
-      field: [],
-    }));
-
-    const newObjectNames = extraObjects.map((obj) => obj.name);
+    const newObjects: { name: string; type: string; field: any[] }[] = [];
+    const newObjectNames: string[] = [];
+    extraObjects.forEach((obj) => {
+      newObjects.push({
+        name: obj.apiName,
+        type: obj.isCustom ? 'CUSTOM' : 'STANDARD',
+        field: [],
+      })
+      newObjectNames.push(obj.apiName);
+    });
 
     const updatedObjects = [
       ...(backupConfig.objects || []),
@@ -95,7 +95,7 @@ async function syncMetadataAndTriggers(
     }
 
     // Fetch Salesforce objects using existing apex service
-    const salesforceObjects = await getApexObjects(backupConfig.crmId);
+    const salesforceObjects = await getApexObjects(backupConfig.crmId, backupConfig.schedule);
 
 
     // Compare and find extra objects
@@ -107,10 +107,12 @@ async function syncMetadataAndTriggers(
     // Add extra objects to backup config
     await addExtraObjectsToBackupConfig(backupConfigId, extraObjects);
 
+    if(backupConfig.schedule !== 'REALTIME') return { extraObjects, triggerResults: [] };
+
     // Create triggers for extra objects using existing trigger service
-    const extraObjectNames = extraObjects.map((obj) => obj.name);
+    const extraObjectNames = extraObjects.map((obj) => obj.apiName);
     const { access_token, refresh_token } = getCrmTokens(crm);
-    const triggerResults = await createTriggers(
+    const triggerCreate = await createTriggers(
       crm.crmProfile?.instanceUrl || '',
       {
         accessToken: access_token,
@@ -122,6 +124,13 @@ async function syncMetadataAndTriggers(
       },
       extraObjectNames
     );
+
+    const triggerResults = [
+      ...(backupConfig.triggerResults || []),
+      ...triggerCreate,
+    ];
+
+    await updateBackupConfig(backupConfig.backupConfigId, { triggerResults });
 
     logger.info('Metadata sync completed');
 
