@@ -15,10 +15,15 @@ COPY . .
 # Build the application
 RUN npm run build
 
+# Writable log directory (logger uses LOG_DIR; default below)
+ENV LOG_DIR=/app/logs
+RUN mkdir -p /app/logs \
+  && chown -R node:node /app
+
 # Expose the port the app will run on
 EXPOSE 3005
 
-# Run As Non-Root User
+# Run as non-root; /app is owned by node so logs and runtime writes succeed
 USER node
 
 # Start the application
