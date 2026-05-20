@@ -22,6 +22,7 @@ import {
   computeJobStats,
   getApexObjectsCount,
   getSalesforceProfile,
+  initalizePayloadTransform,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS } from '../../../constant';
@@ -313,39 +314,20 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 };
 
-const testBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const existing = await getBackupConfigById(String(req.body.backupConfigId));
-  if (!isOwner(existing, req.user!.userId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
+const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { slug } = req.query;
+
+  const config = await getBackupConfigBySlug({
+    userId: req.user!.userId,
+    slug: String(slug),
+    spaceId: req.user?.spaceId,
+  });
+  if (!config) {
+    makeResponse(req, res, 400, false, 'backup_config_not_found');
     return;
   }
-
-  const result = await triggerBackupJob(existing!);
-  makeResponse(req, res, 200, true, 'fetch', result);
-};
-
-const testBackup2Handler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const existing = await getBackupConfigById(String(req.body.backupConfigId));
-  if (!isOwner(existing, req.user!.userId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  const crm = await getCrmById(existing!.crmId);
-  if (!crm) {
-    throw new Error(`crm_not_found:${existing!.crmId}`);
-  }
-  const credentials = getCrmTokens(crm) as any;
-  const tokens = {
-    accessToken: credentials.access_token,
-    refreshToken: credentials.refresh_token,
-    crmId: crm.crmId,
-    userId: crm.userId,
-    environment: crm.environment,
-    customUrl: crm.customUrl,
-  };
-
-  makeResponse(req, res, 200, false, 'fetch');
+  makeResponse(req, res, 201, true, 'create');
+  await initalizePayloadTransform(config.backupConfigId);
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -379,7 +361,6 @@ export const backupConfigController = wrapController({
   getBackupConfigHandler,
   updateBackupConfigHandler,
   deleteBackupConfigHandler,
-  testBackupHandler,
-  testBackup2Handler,
+  initalizePayloadTransformHandler,
   getBackupJobStatsHandler,
 });
