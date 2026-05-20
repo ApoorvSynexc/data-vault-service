@@ -1,4 +1,4 @@
-import { EMRServerlessClient, StartJobRunCommand } from '@aws-sdk/client-emr-serverless';
+import { EMRServerlessClient, StartJobRunCommand, StartJobRunCommandOutput } from '@aws-sdk/client-emr-serverless';
 import { getBackupConfigById } from '../../backup-config';
 import { getCrmById } from '../../crm';
 import { getDestinationById } from '../../destination';
@@ -115,7 +115,7 @@ async function buildPayload(backupConfigId: string) {
 
 async function initalizePayloadTransform(
     backupConfigId: string,
-): Promise<any> {
+): Promise<StartJobRunCommandOutput> {
     try {
         const payload = await buildPayload(backupConfigId);
         const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64');
@@ -124,7 +124,7 @@ async function initalizePayloadTransform(
         console.log('──────────────────────────────────────────');
         console.log('  DataVault — EMR Serverless Job Submitter');
         console.log('──────────────────────────────────────────');
-        console.log('executionRoleArn:',AWS_EMR_EXECUTION_ROLE_ARN);
+        console.log('executionRoleArn:', AWS_EMR_EXECUTION_ROLE_ARN);
         console.log('Job Type        :', payload.jobType);
         console.log('Backup Config ID:', payload.backupConfigId);
         console.log('Destination     :', payload.details.destinationConfigs.destinationName);
@@ -166,11 +166,11 @@ async function initalizePayloadTransform(
         });
 
         const response = await client.send(command);
-        console.log('Job submitted successfully! ', JSON.stringify({ response }));
         logger.info('EMR job initialized.');
         return response;
     } catch (error) {
         logger.error('Error initializing EMR job:', error);
+        throw error;
     }
 }
 
