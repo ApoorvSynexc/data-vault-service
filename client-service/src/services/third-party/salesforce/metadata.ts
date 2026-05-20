@@ -15,6 +15,9 @@ function compareObjects(
     (sfObj) => !backupObjectNames.has(sfObj.apiName)
   );
 
+  console.log(JSON.stringify({backupObjectNames, salesforceObjects}));
+  
+
   logger.info(
     `Found ${extraObjects.length} extra objects in Salesforce not in backup config`
   );
