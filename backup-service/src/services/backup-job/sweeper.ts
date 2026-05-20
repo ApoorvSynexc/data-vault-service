@@ -1,6 +1,7 @@
-import { OBJECT_STATUS, JOB_STATUS } from '../../constant';
+import { OBJECT_STATUS, JOB_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { logger } from '../../middlewares/logger';
 import { IBackupJob } from '../../models';
+import { httpRequest } from '../../utils/http-request';
 import { getStaleRunningJobs, updateBackupObject, updateJobStatus } from './index';
 
 const STALE_THRESHOLD_MINUTES = 30;
@@ -37,6 +38,19 @@ const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
       status: JOB_STATUS.failed,
       completedAt: new Date().toISOString(),
       errorMessage: 'Job became stale — server crash or restart detected',
+    });
+
+    await httpRequest({
+      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+      method: 'POST',
+      body: JSON.stringify({
+        eventType: 'backup.failed',
+        backupJobId: job.backupJobId,
+        backupConfigId: job.backupConfigId,
+      }),
+      headers: {
+        'x-internal-secret': INTERNAL_SECRET,
+      },
     });
 
     logger.warn(`Stale job sweeper: marked job ${job.backupJobId} as FAILED`);
