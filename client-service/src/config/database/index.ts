@@ -79,6 +79,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         IndexName: 'spaceId-index',
         KeySchema: [
           { AttributeName: 'spaceId', KeyType: 'HASH' },
+          { AttributeName: 'createdAt', KeyType: 'RANGE' },
         ],
         Projection: { ProjectionType: 'ALL' },
       },
