@@ -14,7 +14,7 @@ router.get('/', backupConfigController.getBackupConfigHandler);
 router.put('/', updateBackupConfigValidation, backupConfigController.updateBackupConfigHandler);
 router.delete('/', backupConfigController.deleteBackupConfigHandler);
 router.get('/stats', backupConfigController.getBackupJobStatsHandler);
-router.post('/test', backupConfigController.testBackupHandler);
-router.post('/trigger', backupConfigController.testBackup2Handler);
+router.get('/initalize-payload-transform', backupConfigController.initalizePayloadTransformHandler);
+router.get('/sync-metadata', backupConfigController.syncMeatadataHandler);
 
 export const backupRouter = router;
