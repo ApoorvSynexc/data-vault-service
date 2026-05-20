@@ -28,10 +28,10 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   let keyName = 'userId';
   let keyValue = userId;
 
-  // if (spaceId) {
-  //   keyName = 'spaceId';
-  //   keyValue = spaceId;
-  // }
+  if (spaceId) {
+    keyName = 'spaceId';
+    keyValue = spaceId;
+  }
 
   try {
     const stats = await computeJobStats({
