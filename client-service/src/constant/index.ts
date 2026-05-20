@@ -20,6 +20,11 @@ const AWS_EVENT_BUS_ARN = String(process.env.AWS_EVENT_BUS_ARN);
 const AWS_EVENT_DETAIL_TYPE = String(process.env.AWS_EVENT_DETAIL_TYPE);
 const AWS_EVENT_SOURCE = String(process.env.AWS_EVENT_SOURCE);
 
+// AWS EMR
+const AWS_EMR_APPLICATION_ID = String(process.env.AWS_EMR_APPLICATION_ID);
+const AWS_EMR_EXECUTION_ROLE_ARN = String(process.env.AWS_EMR_EXECUTION_ROLE_ARN);
+const AWS_EMR_ENCRYPTION_KEY = String(process.env.AWS_EMR_ENCRYPTION_KEY);
+
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
@@ -196,6 +201,11 @@ export {
   AWS_EVENT_BUS_ARN,
   AWS_EVENT_SOURCE,
   AWS_EVENT_DETAIL_TYPE,
+
+  // AWS EMR
+  AWS_EMR_APPLICATION_ID,
+  AWS_EMR_EXECUTION_ROLE_ARN,
+  AWS_EMR_ENCRYPTION_KEY,
 
   // JWT Config
   JWT_ACCESS_SECRET,
