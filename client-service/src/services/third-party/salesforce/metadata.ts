@@ -94,9 +94,10 @@ async function syncMetadataAndTriggers(
     // Fetch Salesforce objects using existing apex service
     const salesforceObjects = await getApexObjects(backupConfig.crmId);
 
+
     // Compare and find extra objects
     const extraObjects = compareObjects(
-      salesforceObjects,
+      salesforceObjects.objects,
       backupConfig.objects || []
     );
 
