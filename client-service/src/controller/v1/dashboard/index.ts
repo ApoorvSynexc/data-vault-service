@@ -25,15 +25,17 @@ const formatRecords = (count: number): string => {
 const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
+  let indexName = 'userId-index';
   let keyName = 'userId';
   let keyValue = userId;
 
   if (spaceId) {
+    indexName = 'spaceId-index';
     keyName = 'spaceId';
     keyValue = spaceId;
   }
 
-  console.log({keyName, keyValue});
+  console.log({indexName, keyName, keyValue});
   
   try {
     const stats = await computeJobStats({
