@@ -63,7 +63,7 @@ async function addExtraObjectsToBackupConfig(
       ...newObjectNames,
     ];
 
-     console.log("5555555");
+     console.log(JSON.stringify({updatedObjectNames, updatedObjects}));
     await updateBackupConfig(backupConfigId, {
       objects: updatedObjects,
       objectNames: updatedObjectNames,
