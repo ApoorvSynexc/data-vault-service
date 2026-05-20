@@ -48,7 +48,7 @@ async function addExtraObjectsToBackupConfig(
     }));
 
      console.log("2222222");
-    const newObjectNames = extraObjects.map((obj) => obj.name);
+    const newObjectNames = extraObjects.map((obj) => obj.apiName);
 
 
      console.log("3333333");
