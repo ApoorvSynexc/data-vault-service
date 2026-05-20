@@ -5,7 +5,8 @@ import morgan from 'morgan';
 
 function getLogFolder() {
   const today = new Date().toISOString().split('T')[0];
-  const dir = path.join(__dirname, '../../assets/logs', today);
+  const base = process.env.LOG_DIR || path.join(__dirname, '../../assets/logs');
+  const dir = path.join(base, today);
 
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
