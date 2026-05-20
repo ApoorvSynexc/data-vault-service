@@ -18,6 +18,7 @@ import {
   getBackupConfigsByCrm,
   createUser,
   getUser,
+  getCrmByOrgId,
 } from '../../../services';
 import {
   refreashSalesforceToken,
@@ -136,7 +137,6 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     throw error;
   }
 
-  const existingCrms = await getCrmsByUser(oauthState.userId);
   const { data: sfProfile } = await getSalesforceProfile(
     {
       accessToken: token.access_token,
@@ -146,15 +146,10 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     oauthState.environment,
     oauthState.customUrl
   );
-
-  const duplicate = existingCrms.find(
-    (i) =>
-      i.crmId !== oauthState.crmId &&
-      i.crmProfile?.organizationId === sfProfile.organization_id &&
-      i.crmProfile?.userId === sfProfile.user_id
-  );
-  if (duplicate) {
-    makeResponse(req, res, 409, false, 'exit');
+  
+  const existingCrms = await getCrmByOrgId(sfProfile.organization_id);
+  if (existingCrms && existingCrms.crmProfile?.userId === sfProfile.user_id) {
+    makeResponse(req, res, 409, false, 'organization_already_exist');
     return;
   }
 
@@ -190,31 +185,28 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   } else {
     // Get spaceId from authenticated user's token
     const spaceId = req.user?.spaceId;
-    console.log({spaceId});
-    
 
     // Create user account with Salesforce profile data if user doesn't exist
     const existingUser = await getUser({ 'contact.email': nextCrmProfile.email, status: STATUS.active });
-    console.log({existingUser});
-    
-    if (!existingUser) {
-      const nameParts = nextCrmProfile.name?.split(' ') ?? [];
-      const userRole = defaultRoles.find((r) => r.name === 'user')!;
-      console.log("Before user created");
-      
-      await createUser({
-        authProvider: AUTH_PROVIDER.email,
-        firstName: nameParts[0] ?? '',
-        lastName: nameParts.slice(1).join(' ') ?? '',
-        contact: {
-          email: nextCrmProfile.email,
-          isEmailVerified: true,
-        },
-        role: { name: userRole.name, roleId: userRole.roleId },
-        ...(spaceId && { spaceId }),
-      });
-      console.log("After user created");
+
+    if (existingUser) {
+      return makeResponse(req, res, 400, false, 'email_exit');
     }
+
+    const nameParts = nextCrmProfile.name?.split(' ') ?? [];
+    const userRole = defaultRoles.find((r) => r.name === 'user')!;
+
+    await createUser({
+      authProvider: AUTH_PROVIDER.email,
+      firstName: nameParts[0] ?? '',
+      lastName: nameParts.slice(1).join(' ') ?? '',
+      contact: {
+        email: nextCrmProfile.email,
+        isEmailVerified: true,
+      },
+      role: { name: userRole.name, roleId: userRole.roleId },
+      ...(spaceId && { spaceId }),
+    });
 
     await upsertCrm({
       userId: oauthState.userId,
