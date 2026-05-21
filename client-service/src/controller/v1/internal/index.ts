@@ -85,6 +85,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
           );
         }
       }
+        break;
       case 'backup.failed': {
         const backupConfig = await getBackupConfigById(backupConfigId);
         if (backupConfig?.backupStatus !== BACKUP_STATUS.paused) {
