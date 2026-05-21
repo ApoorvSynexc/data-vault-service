@@ -178,6 +178,7 @@ const socialLoginCallbackHandler = async (
       };
 
       await upsertCrm({
+        name: sfProfile?.name ?? "Admin",
         userId: user.userId,
         crmName: 'salesforce',
         crmProfile,
