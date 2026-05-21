@@ -110,7 +110,7 @@ jobs:
             --services "${ECS_SERVICE}" \
             --region "${AWS_REGION}"
           echo "Service ${ECS_SERVICE} is stable."
-            - name: Get ECS task public IP
+      - name: Get ECS task public IP
         id: get_public_ip
         run: |
           set -euo pipefail
