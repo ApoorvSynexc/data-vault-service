@@ -110,6 +110,47 @@ jobs:
             --services "${ECS_SERVICE}" \
             --region "${AWS_REGION}"
           echo "Service ${ECS_SERVICE} is stable."
+            - name: Get ECS task public IP
+        id: get_public_ip
+        run: |
+          set -euo pipefail
+
+          echo "Fetching running task ARN..."
+
+          TASK_ARN=$(aws ecs list-tasks \
+            --cluster "${ECS_CLUSTER}" \
+            --service-name "${ECS_SERVICE}" \
+            --desired-status RUNNING \
+            --region "${AWS_REGION}" \
+            --query 'taskArns[0]' \
+            --output text)
+
+          echo "TASK_ARN=$TASK_ARN"
+
+          echo "Fetching ENI ID..."
+
+          ENI_ID=$(aws ecs describe-tasks \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "$TASK_ARN" \
+            --region "${AWS_REGION}" \
+            --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
+            --output text)
+
+          echo "ENI_ID=$ENI_ID"
+
+          echo "Fetching public IP..."
+
+          PUBLIC_IP=$(aws ec2 describe-network-interfaces \
+            --network-interface-ids "$ENI_ID" \
+            --region "${AWS_REGION}" \
+            --query 'NetworkInterfaces[0].Association.PublicIp' \
+            --output text)
+
+          echo "PUBLIC_IP=$PUBLIC_IP"
+
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+          echo "Backup service public IP: $PUBLIC_IP"
 
       - name: Notify success
         if: success()
