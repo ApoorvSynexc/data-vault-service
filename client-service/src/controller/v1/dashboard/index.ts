@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { computeJobStats } from '../../../services';
+import { computeJobStats, getBackupConfigById, getBackupJobsByUser } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 
 const formatBytes = (bytes: number): string => {
@@ -84,6 +84,33 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   }
 };
 
+const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> => {
+  const userId = req.user!.userId;
+
+  const { items } = await getBackupJobsByUser(userId, { limit: 10 });
+
+  const backupConfigMapping: Record<string, object> = {};
+  for (let index = 0; index < items.length; index++) {
+    const element: any = items[index];
+    if (backupConfigMapping[element.backupConfigId]) {
+      element.backupConfig = backupConfigMapping[element.backupConfigId]
+    } else {
+      const backupConfig = await getBackupConfigById(element.backupConfigId);
+      if (backupConfig) {
+        backupConfigMapping[element.backupConfigId] = {
+          name: backupConfig.name,
+        };
+      }
+      element.backupConfig = {
+        name: backupConfig?.name
+      }
+    }
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', items);
+};
+
 export const dashboardController = wrapController({
   overviewHandler,
+  getLastBackupJob
 });
