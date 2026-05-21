@@ -151,7 +151,55 @@ jobs:
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
           echo "Backup service public IP: $PUBLIC_IP"
+      
+      - name: Update nginx backup-service upstream
+        run: |
+          set -euo pipefail
 
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+          NEW_IP="${{ steps.get_public_ip.outputs.public_ip }}"
+
+          echo "Updating /bs/ proxy_pass to ${NEW_IP}"
+
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            bash -s << EOF
+
+              set -euo pipefail
+
+              NGINX_FILE="/etc/nginx/sites-available/default"
+
+              echo "Updating nginx config..."
+
+              awk -v new_ip="${NEW_IP}" '
+              /location \/bs\/ \{/ {
+                  in_bs=1
+              }
+
+              in_bs && /proxy_pass http:\/\/.*:3000\/;/ {
+                  sub(/proxy_pass http:\/\/.*:3000\/;/,
+                      "proxy_pass http://" new_ip ":3000/;")
+                  in_bs=0
+              }
+
+              { print }
+              ' "\$NGINX_FILE" | tee "\$NGINX_FILE.tmp" > /dev/null
+
+              mv "\$NGINX_FILE.tmp" "\$NGINX_FILE"
+
+              echo "Validating nginx config..."
+              nginx -t
+
+              echo "Restarting nginx..."
+              service nginx restart
+
+              echo "✅ nginx updated successfully"
+          EOF
       - name: Notify success
         if: success()
         run: |
