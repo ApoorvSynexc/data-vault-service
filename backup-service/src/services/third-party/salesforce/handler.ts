@@ -399,7 +399,7 @@ const exportIncremental = async (
       );
     }
 
-    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.completed });
+    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.completed, errorMessage: "" });
     logger.info(`Backup job ${backupJobId}: incremental backup of ${objectName} complete`);
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);

@@ -99,10 +99,12 @@ const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> =>
       if (backupConfig) {
         backupConfigMapping[element.backupConfigId] = {
           name: backupConfig.name,
+          schedule: backupConfig.schedule,
         };
       }
       element.backupConfig = {
-        name: backupConfig?.name
+        name: backupConfig?.name,
+        schedule: backupConfig?.schedule,
       }
     }
   }
