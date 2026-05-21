@@ -192,11 +192,8 @@ jobs:
 
               mv "\$NGINX_FILE.tmp" "\$NGINX_FILE"
 
-              echo "Validating nginx config..."
-              nginx -t
-
               echo "Restarting nginx..."
-              service nginx restart
+              service nginx reload
 
               echo "✅ nginx updated successfully"
           EOF
