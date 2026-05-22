@@ -31,7 +31,7 @@ export interface IObjectCondition {
 }
 
 export interface IObject {
-  schemaChange: boolean;
+  schemaChange?: boolean;
   name: string;
   type: string; // STANDARD | CUSTOM
   sizeInBytes?: number;
