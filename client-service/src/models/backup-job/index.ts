@@ -14,6 +14,9 @@ export interface IBackupObject {
   };
   field?: IBackupField[];
   status?: string;
+  insertCount?: number;
+  updateCount?: number;
+  deleteCount?: number;
   bulkJobId?: string;
   totalRecordCount?: number;
   completedRecordCount?: number;
@@ -24,6 +27,7 @@ export interface IBackupObject {
 
 export interface IBackupJob {
   backupJobId: string; // PK
+  jobType: 'BULK' | 'REALTIME';
   userId: string; // GSI: userId-index
   backupConfigId: string; // GSI: backupConfigId-index
   source: { ciphertext: string; iv: string }; // encrypted — never expose
@@ -38,4 +42,7 @@ export interface IBackupJob {
   spaceId?: string;
   createdAt: string;
   updatedAt: string;
+
+   objectApiName?: string;
+    operation?: string;
 }

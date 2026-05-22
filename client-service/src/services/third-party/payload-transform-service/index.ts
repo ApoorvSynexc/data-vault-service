@@ -5,21 +5,47 @@ import { getDestinationById } from '../../destination';
 import { getBackupJobsByConfig } from '../../backup-job';
 import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION } from '../../../constant';
 import { logger } from '../../../middlewares';
+import { IBackupJob } from '../../../models';
 
 const client = new EMRServerlessClient({ region: AWS_REGION });
 
 // ─── Process object operations from backup jobs ────────────────────────────────
-function processObjectOperations(jobs: any[]): Record<string, string[]> {
+function processObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
     const objectOperations: Record<string, string[]> = {};
 
     for (const job of jobs) {
         const jobObjects = job.object ?? [];
-        for (const obj of jobObjects) {
-            if (!objectOperations[obj.name]) {
-                objectOperations[obj.name] = [];
+
+        if (job.jobType === "BULK") {
+            for (const obj of jobObjects) {
+                if (!objectOperations[obj.name]) {
+                    objectOperations[obj.name] = [];
+                }
+
+                const operations = objectOperations[obj.name];
+                const allOpsFound = ['inserts', 'updates', 'deletes', 'undeletes'].every((op) =>
+                    operations.includes(op)
+                );
+                if (allOpsFound) {
+                    continue;
+                }
+
+                if (obj.insertCount && obj.insertCount > 0 && !operations.includes('inserts')) {
+                    operations.push('inserts');
+                }
+                if (obj.updateCount && obj.updateCount > 0 && !operations.includes('updates')) {
+                    operations.push('updates');
+                }
+                if (obj.deleteCount && obj.deleteCount > 0 && !operations.includes('deletes')) {
+                    operations.push('deletes');
+                }
+            }
+        } else if (job.jobType === "REALTIME" && job.objectApiName) {
+            if (!objectOperations[job.objectApiName]) {
+                objectOperations[job.objectApiName] = [];
             }
 
-            const operations = objectOperations[obj.name];
+            const operations = objectOperations[job.objectApiName];
             const allOpsFound = ['inserts', 'updates', 'deletes', 'undeletes'].every((op) =>
                 operations.includes(op)
             );
@@ -27,14 +53,17 @@ function processObjectOperations(jobs: any[]): Record<string, string[]> {
                 continue;
             }
 
-            if (obj.insertCount > 0 && !operations.includes('inserts')) {
+            if (job.operation === 'INSERT' && !operations.includes('inserts')) {
                 operations.push('inserts');
             }
-            if (obj.updateCount > 0 && !operations.includes('updates')) {
+            if (job.operation === 'UPDATE' && !operations.includes('updates')) {
                 operations.push('updates');
             }
-            if (obj.deleteCount > 0 && !operations.includes('deletes')) {
+            if (job.operation === 'DELETE' && !operations.includes('deletes')) {
                 operations.push('deletes');
+            }
+            if (job.operation === 'UNDELETE' && !operations.includes('undeletes')) {
+                operations.push('undeletes');
             }
         }
     }
@@ -44,9 +73,9 @@ function processObjectOperations(jobs: any[]): Record<string, string[]> {
 
 // ─── Fetch all backup jobs with pagination ────────────────────────────────────
 
-async function fetchAllBackupJobs(backupConfigId: string): Promise<any[]> {
+async function fetchAllBackupJobs(backupConfigId: string) {
     try {
-        const allJobs: any[] = [];
+        const allJobs = [];
         let cursor: string | undefined;
 
         do {
