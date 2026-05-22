@@ -77,7 +77,7 @@ function schemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Re
     const objectOperationsKeys = Object.keys(objectOperations);
 
     for (const obj of objects) {
-        if (obj.schemaChange && !objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
+        if (obj.schemaChange && objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
             console.log("Schema chnage detect: ", {name:obj.name});
             
             objectOperations[obj.name].push("schema-change");
