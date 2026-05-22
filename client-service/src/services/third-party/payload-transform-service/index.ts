@@ -5,7 +5,7 @@ import { getDestinationById } from '../../destination';
 import { getBackupJobsByConfig } from '../../backup-job';
 import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION } from '../../../constant';
 import { logger } from '../../../middlewares';
-import { IBackupJob } from '../../../models';
+import { IBackupConfig, IBackupJob } from '../../../models';
 
 const client = new EMRServerlessClient({ region: AWS_REGION });
 
@@ -71,8 +71,21 @@ function processObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
     return objectOperations;
 }
 
-// ─── Fetch all backup jobs with pagination ────────────────────────────────────
+// Schema chnage detection 
+function schemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Record<string, string[]>): Record<string, string[]> {
+    const objects = backupConfig.objects ?? [];
+    const objectOperationsKeys = Object.keys(objectOperations);
 
+    for (const obj of objects) {
+        if (obj.schemaChange && !objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
+            objectOperations[obj.name].push("schema-change");
+        }
+    }
+
+    return objectOperations;
+}
+
+// ─── Fetch all backup jobs with pagination ────────────────────────────────────
 async function fetchAllBackupJobs(backupConfigId: string) {
     try {
         const allJobs = [];
@@ -114,7 +127,8 @@ async function buildPayload(backupConfigId: string) {
             throw new Error('No backup jobs found');
         }
 
-        const objectOperations = processObjectOperations(allBackupJobs ?? []);
+        let objectOperations = processObjectOperations(allBackupJobs ?? []);
+        objectOperations = schemaChangeDetection(backupConfig, objectOperations);
 
         return {
             jobType: 'BACKUP',
