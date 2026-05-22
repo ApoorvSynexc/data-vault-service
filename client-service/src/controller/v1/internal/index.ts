@@ -101,7 +101,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         }
       }
         break;
-      case 'backup.size.updated':
+      case 'backup.size.updated': {
         const { objectName, sizeInBytes } = req.body;
         const updateParams: any = { sizeInBytes, lastEventId: eventId };
 
@@ -117,13 +117,21 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         }
 
         await updateBackupConfig(backupConfigId, updateParams, eventId);
+      }
         break;
-      case 'schema.updated':
-        await updateBackupConfig(
-          backupConfigId,
-          { schemaChange: true, lastEventId: eventId },
-          eventId
-        );
+      case 'schema.updated': {
+        const { objectName, schemaChange } = req.body;
+
+        if (objectName) {
+          const backupConfig = await getBackupConfigById(backupConfigId);
+          if (backupConfig?.objects) {
+            const updatedObjects = backupConfig.objects.map((obj) =>
+              obj.name === objectName ? { ...obj, schemaChange } : obj
+            );
+            await updateBackupConfig(backupConfigId, { objects: updatedObjects }, eventId);
+          }
+        }
+      }
         break;
       default:
         break;
