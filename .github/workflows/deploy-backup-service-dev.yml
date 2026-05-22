@@ -110,7 +110,93 @@ jobs:
             --services "${ECS_SERVICE}" \
             --region "${AWS_REGION}"
           echo "Service ${ECS_SERVICE} is stable."
+      - name: Get ECS task public IP
+        id: get_public_ip
+        run: |
+          set -euo pipefail
 
+          echo "Fetching running task ARN..."
+
+          TASK_ARN=$(aws ecs list-tasks \
+            --cluster "${ECS_CLUSTER}" \
+            --service-name "${ECS_SERVICE}" \
+            --desired-status RUNNING \
+            --region "${AWS_REGION}" \
+            --query 'taskArns[0]' \
+            --output text)
+
+          echo "TASK_ARN=$TASK_ARN"
+
+          echo "Fetching ENI ID..."
+
+          ENI_ID=$(aws ecs describe-tasks \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "$TASK_ARN" \
+            --region "${AWS_REGION}" \
+            --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
+            --output text)
+
+          echo "ENI_ID=$ENI_ID"
+
+          echo "Fetching public IP..."
+
+          PUBLIC_IP=$(aws ec2 describe-network-interfaces \
+            --network-interface-ids "$ENI_ID" \
+            --region "${AWS_REGION}" \
+            --query 'NetworkInterfaces[0].Association.PublicIp' \
+            --output text)
+
+          echo "PUBLIC_IP=$PUBLIC_IP"
+
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+          echo "Backup service public IP: $PUBLIC_IP"
+      
+      - name: Update nginx backup-service upstream
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+          NEW_IP="${{ steps.get_public_ip.outputs.public_ip }}"
+
+          echo "Updating /bs/ proxy_pass to ${NEW_IP}"
+
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            bash -s << EOF
+
+              set -euo pipefail
+
+              NGINX_FILE="/etc/nginx/sites-available/default"
+
+              echo "Updating nginx config..."
+
+              awk -v new_ip="${NEW_IP}" '
+              /location \/bs\/ \{/ {
+                  in_bs=1
+              }
+
+              in_bs && /proxy_pass http:\/\/.*:3000\/;/ {
+                  sub(/proxy_pass http:\/\/.*:3000\/;/,
+                      "proxy_pass http://" new_ip ":3000/;")
+                  in_bs=0
+              }
+
+              { print }
+              ' "\$NGINX_FILE" | tee "\$NGINX_FILE.tmp" > /dev/null
+
+              mv "\$NGINX_FILE.tmp" "\$NGINX_FILE"
+
+              echo "Restarting nginx..."
+              service nginx reload
+
+              echo "✅ nginx updated successfully"
+          EOF
       - name: Notify success
         if: success()
         run: |
