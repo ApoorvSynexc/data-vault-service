@@ -78,10 +78,13 @@ function schemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Re
 
     for (const obj of objects) {
         if (obj.schemaChange && !objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
+            console.log("Schema chnage detect: ", {name:obj.name});
+            
             objectOperations[obj.name].push("schema-change");
         }
     }
 
+    console.log(JSON.stringify({objectOperations, objectOperationsKeys}));
     return objectOperations;
 }
 
