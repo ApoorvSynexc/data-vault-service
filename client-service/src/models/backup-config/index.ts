@@ -71,6 +71,6 @@ export interface IBackupConfig {
   updatedAt: string;
 
   // Additional
-  crm: object
-  destination: object
+  crm?: object;
+  destination?: object;
 }
