@@ -69,4 +69,8 @@ export interface IBackupConfig {
   triggerResults?: ITriggerResult[];
   createdAt: string;
   updatedAt: string;
+
+  // Additional
+  crm: object
+  destination: object
 }

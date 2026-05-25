@@ -173,6 +173,21 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
     }
 
     const { documents, nextCursor } = result;
+
+    for (let index = 0; index < documents.length; index++) {
+      const document = documents[index];
+
+      const crm = await getCrmById(document.crmId);
+      if (crm) {
+        documents[index].crm = { name: crm.name, crmName: crm.crmName };
+      }
+
+      const destination = await getDestinationById(document.destinationId);
+      if (destination) {
+        documents[index].destination = { name: destination.name, type: destination.type };
+      }
+    }
+
     const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, userId);
 
     return makeResponse(req, res, 200, true, 'fetch', documents, {
