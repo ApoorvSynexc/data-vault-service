@@ -10,7 +10,7 @@ const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<voi
     }
 
     const [apexResult] = await Promise.all([
-        getApexObjectChilds(String(crmId), { objectName }),
+        getApexObjectChilds(String(crmId), String(objectName)),
     ]);
 
     makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
