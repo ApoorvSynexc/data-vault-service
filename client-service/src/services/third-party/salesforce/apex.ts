@@ -46,7 +46,7 @@ const getApexObjectsCount = async (crmId: string, body: object) => {
   return encryptedResult.data;
 };
 
-const getApexObjectChilds = async (crmId: string, body: object) => {
+const getApexObjectChilds = async (crmId: string, objectName: string) => {
   const crm = await getCrmById(crmId);
   if (!crm) {
     throw new Error('CRM not found');
@@ -57,9 +57,9 @@ const getApexObjectChilds = async (crmId: string, body: object) => {
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-childs`;
+  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-childs?objectName${objectName}`;
   const encryptedResult = await salesforceRequest(
-    { url, method: 'POST', body: JSON.stringify(body) },
+    { url, method: 'GET'},
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
   );
   return encryptedResult.data;
