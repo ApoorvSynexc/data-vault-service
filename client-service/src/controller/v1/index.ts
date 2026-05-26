@@ -1,3 +1,4 @@
+export * from './archival-config';
 export * from './auth';
 export * from './backup-config';
 export * from './backup-job';
