@@ -9,6 +9,7 @@ import { dashboardRouter } from './dashboard.routes';
 import { destinationRouter } from './destination.route';
 import { internalRouter } from './internal.route';
 import { publicRouter } from './public.routes';
+import { archivalRouter } from './archival-config.routes';
 
 const router = Router();
 
@@ -21,6 +22,7 @@ router.use('/public', publicRouter);
 router.use('/user', authenticate, userRouter);
 router.use('/crm', authenticate, crmRouter);
 router.use('/backup-config', authenticate, backupRouter);
+router.use('/archival-config', authenticate, archivalRouter);
 router.use('/backup-job', authenticate, backupJobRouter);
 router.use('/dashboard', authenticate, dashboardRouter);
 router.use('/destination', authenticate, destinationRouter);

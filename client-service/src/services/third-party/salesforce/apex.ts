@@ -46,6 +46,25 @@ const getApexObjectsCount = async (crmId: string, body: object) => {
   return encryptedResult.data;
 };
 
+const getApexObjectChilds = async (crmId: string, body: object) => {
+  const crm = await getCrmById(crmId);
+  if (!crm) {
+    throw new Error('CRM not found');
+  }
+
+  const { access_token, refresh_token } = getCrmTokens(crm);
+  const instanceUrl = crm.crmProfile?.instanceUrl;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-childs`;
+  const encryptedResult = await salesforceRequest(
+    { url, method: 'POST', body: JSON.stringify(body) },
+    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
+  );
+  return encryptedResult.data;
+};
+
 const getApexFields = async (crmId: string, objectName: string) => {
   const crm = await getCrmById(crmId);
   if (!crm) {
@@ -89,4 +108,4 @@ const createApexSecret = async (crmId: string, body: { webhookSecret: string }) 
   return encryptedResult.data;
 };
 
-export { getApexObjects, getApexObjectsCount, getApexFields, createApexSecret };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexFields, createApexSecret };
