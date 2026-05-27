@@ -55,6 +55,7 @@ export interface IBackupConfig {
   slug: string; // unique per user, generated from name
   name?: string;
   description?: string;
+  type: string; // NORMAL | ARCHIVAL
   objectNames: string[];
   schedule: string; // REALTIME | SCHEDULE
   scheduleConfig?: IScheduleConfig;

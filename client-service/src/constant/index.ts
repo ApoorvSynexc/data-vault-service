@@ -139,6 +139,10 @@ const OBJECT_TYPE = {
   standard: 'STANDARD',
   custom: 'CUSTOM',
 };
+const BACKUP_CONFIG_TYPE = {
+  normal: 'NORMAL',
+  archival: 'ARCHIVAL',
+};
 const AUTH_PROVIDER = {
   email: 'EMAIL',
   google: 'GOOGLE',
@@ -255,5 +259,6 @@ export {
   JOB_STATUS,
   CONDITION_TYPE,
   OBJECT_TYPE,
+  BACKUP_CONFIG_TYPE,
   ENVIRONMENT_TYPE,
 };
