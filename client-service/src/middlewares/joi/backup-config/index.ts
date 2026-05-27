@@ -24,17 +24,14 @@ const objectFieldSchema = Joi.object({
   filter: fieldFilterSchema.required(),
 });
 
+const withoutSoql = Object.values(CONDITION_TYPE).filter((o) => o !== CONDITION_TYPE.soql);
+
 const conditionSchema = Joi.object({
   type: Joi.string()
-    .valid(...Object.values(CONDITION_TYPE))
+    .valid(...withoutSoql)
     .required(),
   expression: Joi.when('type', {
     is: CONDITION_TYPE.custom,
-    then: Joi.string().required(),
-    otherwise: Joi.forbidden(),
-  }),
-  soqlQuery: Joi.when('type', {
-    is: CONDITION_TYPE.soql,
     then: Joi.string().required(),
     otherwise: Joi.forbidden(),
   }),
