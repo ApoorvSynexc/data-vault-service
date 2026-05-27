@@ -10,7 +10,6 @@ import {
   SCHEDULE_TYPE,
   WEEK_DAY,
   BACKUP_STATUS,
-  BACKUP_CONFIG_TYPE,
 } from '../../../constant';
 
 const fieldFilterSchema = Joi.object({
@@ -115,10 +114,7 @@ export const createBackupConfigValidation = (
     objects: Joi.array().items(objectSchema).optional(),
     backupStatus: Joi.string()
       .valid('DRAFT', ...Object.values(BACKUP_STATUS))
-      .optional(),
-    type: Joi.string()
-      .valid(...Object.values(BACKUP_CONFIG_TYPE))
-      .optional(),
+      .optional()
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });
@@ -143,10 +139,7 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
     destinationId: Joi.string().optional(),
     backupStatus: Joi.string()
       .valid('DRAFT', ...Object.values(BACKUP_STATUS))
-      .optional(),
-    type: Joi.string()
-      .valid(...Object.values(BACKUP_CONFIG_TYPE))
-      .optional(),
+      .optional()
   }).min(1);
 
   const { error } = schema.validate(req.body, { abortEarly: false });
