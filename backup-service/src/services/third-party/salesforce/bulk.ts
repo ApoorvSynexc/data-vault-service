@@ -23,23 +23,23 @@ const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 // ---------------------------------------------------------------------------
 const makePageFetcher =
   (tokens: SalesforceTokens) =>
-  async (url: string): Promise<Response> => {
-    let response = await fetch(url, {
-      headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-    });
-    if (response.status === 401) {
-      try {
-        const refreshed = await refreshSalesforceToken(tokens.crmId);
-        tokens.accessToken = refreshed.access_token;
-      } catch {
-        throw new SalesforceAuthExpiredError();
-      }
-      response = await fetch(url, {
+    async (url: string): Promise<Response> => {
+      let response = await fetch(url, {
         headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
       });
-    }
-    return response;
-  };
+      if (response.status === 401) {
+        try {
+          const refreshed = await refreshSalesforceToken(tokens.crmId);
+          tokens.accessToken = refreshed.access_token;
+        } catch {
+          throw new SalesforceAuthExpiredError();
+        }
+        response = await fetch(url, {
+          headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
+        });
+      }
+      return response;
+    };
 
 interface ICreateBulkQueryJob {
   instanceUrl: string;
@@ -166,7 +166,7 @@ export interface IUploadBulkResultsByPage {
 // ---------------------------------------------------------------------------
 export const uploadBulkResultsByPage = async (
   payload: IUploadBulkResultsByPage
-): Promise<{ sizeInBytes: number; completedRecordCount: number; insertCount: number }> => {
+): Promise<{ sizeInBytes: number; }> => {
   const {
     instanceUrl,
     tokens,
@@ -187,6 +187,7 @@ export const uploadBulkResultsByPage = async (
   let sizeInBytes = 0;
 
   try {
+    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
     do {
       const url = locator
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
@@ -220,6 +221,7 @@ export const uploadBulkResultsByPage = async (
         backupJobId,
         objectIndex,
         completedRecordCount,
+        insertCount: completedRecordCount,
         sizeInBytes,
         ...(locator ? { currentLocator: locator } : { status: OBJECT_STATUS.completed }),
       });
@@ -240,7 +242,7 @@ export const uploadBulkResultsByPage = async (
     throw new Error(errorMessage, { cause: err });
   }
 
-  return { sizeInBytes, completedRecordCount, insertCount: completedRecordCount };
+  return { sizeInBytes };
 };
 
 // ---------------------------------------------------------------------------
@@ -349,7 +351,7 @@ export interface IClassifyAndUploadBulkResultsByPage {
 
 export const classifyAndUploadBulkResultsByPage = async (
   payload: IClassifyAndUploadBulkResultsByPage
-): Promise<{ sizeInBytes: number; insertCount: number; updateCount: number; deleteCount: number }> => {
+): Promise<{ sizeInBytes: number }> => {
   const {
     instanceUrl,
     tokens,
@@ -375,6 +377,7 @@ export const classifyAndUploadBulkResultsByPage = async (
   let deleteCount = 0;
 
   try {
+    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
     do {
       const url = locator
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
@@ -478,5 +481,5 @@ export const classifyAndUploadBulkResultsByPage = async (
     throw new Error(errorMessage, { cause: err });
   }
 
-  return { sizeInBytes, insertCount, updateCount, deleteCount };
+  return { sizeInBytes };
 };
