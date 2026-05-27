@@ -140,7 +140,7 @@ const OBJECT_TYPE = {
   standard: 'STANDARD',
   custom: 'CUSTOM',
 };
-const BACKUP_CONFIG_TYPE = {
+const BACKUP_TYPE = {
   normal: 'NORMAL',
   archival: 'ARCHIVAL',
 };
@@ -260,6 +260,6 @@ export {
   JOB_STATUS,
   CONDITION_TYPE,
   OBJECT_TYPE,
-  BACKUP_CONFIG_TYPE,
+  BACKUP_TYPE,
   ENVIRONMENT_TYPE,
 };
