@@ -134,6 +134,7 @@ const CONDITION_TYPE = {
   and: 'AND',
   or: 'OR',
   custom: 'CUSTOM',
+  soql: 'SOQL',
 };
 const OBJECT_TYPE = {
   standard: 'STANDARD',
