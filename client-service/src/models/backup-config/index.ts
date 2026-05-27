@@ -26,8 +26,9 @@ export interface IObjectField {
 }
 
 export interface IObjectCondition {
-  type: string; // AND | OR | NOT | CUSTOM
+  type: string; // AND | OR | NOT | CUSTOM | SOQL
   expression?: string; // required when type === CUSTOM, e.g. "1 AND 2 OR 3"
+  soqlQuery?: string; // required when type === SOQL
 }
 
 export interface IObject {

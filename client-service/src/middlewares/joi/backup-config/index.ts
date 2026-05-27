@@ -34,6 +34,11 @@ const conditionSchema = Joi.object({
     then: Joi.string().required(),
     otherwise: Joi.forbidden(),
   }),
+  soqlQuery: Joi.when('type', {
+    is: CONDITION_TYPE.soql,
+    then: Joi.string().required(),
+    otherwise: Joi.forbidden(),
+  }),
 });
 
 const objectSchema = Joi.object({
