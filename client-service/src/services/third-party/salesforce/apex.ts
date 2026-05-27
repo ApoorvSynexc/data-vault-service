@@ -57,7 +57,7 @@ const getApexObjectChilds = async (crmId: string, objectName: string) => {
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-childs?objectName=${objectName}`;
+  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-childs?apiName=${objectName}`;
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET'},
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
