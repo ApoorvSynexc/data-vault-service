@@ -155,9 +155,9 @@ const exportFirstTime = async (
     }
 
     const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
+    // await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
 
-    const { sizeInBytes, completedRecordCount: finalCompletedCount, insertCount } = await uploadBulkResultsByPage({
+    const { sizeInBytes } = await uploadBulkResultsByPage({
       instanceUrl,
       tokens,
       jobId,
@@ -171,12 +171,12 @@ const exportFirstTime = async (
 
     // Sync totalRecordCount to the header-derived count so it always matches
     // completedRecordCount (polling's numberRecordsProcessed can differ).
-    await updateBackupObject({
-      backupJobId,
-      objectIndex,
-      totalRecordCount: finalCompletedCount,
-      insertCount,
-    });
+    // await updateBackupObject({
+    //   backupJobId,
+    //   objectIndex,
+    //   totalRecordCount: finalCompletedCount,
+    //   insertCount,
+    // });
 
     await httpRequest({
       url: `${CORE_SERVICE}/v1/internal/backup-payload`,
@@ -306,13 +306,13 @@ const exportIncremental = async (
       const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
       const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
       const deletePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'deletes');
-      await updateBackupObject({
-        backupJobId,
-        objectIndex,
-        status: OBJECT_STATUS.transferInProgress,
-      });
+      // await updateBackupObject({
+      //   backupJobId,
+      //   objectIndex,
+      //   status: OBJECT_STATUS.transferInProgress,
+      // });
 
-      const { sizeInBytes, insertCount, updateCount, deleteCount } = await classifyAndUploadBulkResultsByPage({
+      const { sizeInBytes } = await classifyAndUploadBulkResultsByPage({
         instanceUrl,
         tokens,
         jobId: bulkJobId,
@@ -326,7 +326,7 @@ const exportIncremental = async (
         startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
 
-      await updateBackupObject({ backupJobId, objectIndex, insertCount, updateCount, deleteCount });
+      // await updateBackupObject({ backupJobId, objectIndex, insertCount, updateCount, deleteCount });
 
       await httpRequest({
         url: `${CORE_SERVICE}/v1/internal/backup-payload`,
