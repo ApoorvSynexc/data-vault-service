@@ -165,6 +165,7 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
         '#schedule': 'schedule',
         '#scheduleConfig': 'scheduleConfig',
         '#scheduleType': 'type',
+        '#configType': 'type',
         '#name': 'name',
         '#backupStatus': 'backupStatus',
       },
