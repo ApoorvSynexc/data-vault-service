@@ -552,64 +552,46 @@ export const salesforceHandler: ICrmBackupHandler = {
       }
     );
 
-    // // Sort by totalRecordCount (least first)
-    // const sortedObjects = object.sort((a, b) => {
-    //   const countA = a.totalRecordCount ?? 0;
-    //   const countB = b.totalRecordCount ?? 0;
-    //   return countA - countB;
-    // });
+    // Track original indices before sorting
+    const indexedObjects = object.map((obj, originalIndex) => ({ obj, originalIndex }));
 
-    // // Separate zero-count and non-zero-count objects
-    // const indexedObjects = sortedObjects.map((obj, i) => ({ obj, i }));
-    // const zeroCountObjects = indexedObjects.filter(({ obj }) => obj.totalRecordCount === 0);
-    // const objectsToBackup = indexedObjects.filter(({ obj }) => obj.totalRecordCount !== 0);
+    // Sort by totalRecordCount (least first)
+    indexedObjects.sort((a, b) => {
+      const countA = a.obj.totalRecordCount ?? 0;
+      const countB = b.obj.totalRecordCount ?? 0;
+      return countA - countB;
+    });
 
-    // // Mark all zero-count objects as completed in parallel
-    // if (zeroCountObjects.length > 0) {
-    //   await Promise.all(
-    //     zeroCountObjects.map(({ i }) =>
-    //       updateBackupObject({
-    //         backupJobId,
-    //         objectIndex: i,
-    //         status: OBJECT_STATUS.completed,
-    //       })
-    //     )
-    //   );
-    // }
+    // Separate zero-count and non-zero-count objects
+    const zeroCountObjects = indexedObjects.filter(({ obj }) => obj.totalRecordCount === 0);
+    const objectsToBackup = indexedObjects.filter(({ obj }) => obj.totalRecordCount !== 0);
+
+    // Mark all zero-count objects as completed in parallel
+    if (zeroCountObjects.length > 0) {
+      await Promise.all(
+        zeroCountObjects.map(({ originalIndex }) =>
+          updateBackupObject({
+            backupJobId,
+            objectIndex: originalIndex,
+            status: OBJECT_STATUS.completed,
+          })
+        )
+      );
+    }
 
     // Process remaining objects in batches
-    // for (let i = 0; i < objectsToBackup.length; i += CONCURRENCY_LIMIT) {
-    //   const batch = objectsToBackup.slice(i, i + CONCURRENCY_LIMIT);
-    //   await Promise.allSettled(
-    //     batch.map(({ obj, i: objectIndex }) =>
-    //       exportWithRetry(
-    //         backupConfigId,
-    //         backupJobId,
-    //         instanceUrl,
-    //         tokens,
-    //         crmName,
-    //         obj,
-    //         objectIndex,
-    //         destinationType,
-    //         destConfig,
-    //         lastUpdatedAt
-    //       )
-    //     )
-    //   );
-    // }
-
-    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
-      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+    for (let i = 0; i < objectsToBackup.length; i += CONCURRENCY_LIMIT) {
+      const batch = objectsToBackup.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
-        batch.map((item, batchIndex) =>
+        batch.map(({ obj, originalIndex }) =>
           exportWithRetry(
             backupConfigId,
             backupJobId,
             instanceUrl,
             tokens,
             crmName,
-            item,
-            i + batchIndex,
+            obj,
+            originalIndex,
             destinationType,
             destConfig,
             lastUpdatedAt
