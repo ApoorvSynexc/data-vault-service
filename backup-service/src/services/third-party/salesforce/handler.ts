@@ -303,7 +303,13 @@ const exportIncremental = async (
       object.status !== OBJECT_STATUS.completed
     ) {
       logger.info(
-        `Backup job ${backupJobId}: Total changes ${totalRecordCount} records to transfer for ${objectName}`
+        `Object found change`,
+        {
+          backupConfigId,
+          backupJobId,
+          objectName,
+          Changes: totalRecordCount,
+        }
       );
       const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
       const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
@@ -359,6 +365,15 @@ const exportIncremental = async (
         updateParams
       );
 
+      logger.info(
+        `Object found change completed`,
+        {
+          backupConfigId,
+          backupJobId,
+          objectName,
+          Changes: totalRecordCount,
+        }
+      );
       logger.info(`Backup Config ${backupConfigId} & Backup Job ${backupJobId}: ${objectName} with status completed. sizeInBytes: ${sizeInBytes}`);
     } else if (totalRecordCount === 0) {
       logger.info(
