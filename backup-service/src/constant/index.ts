@@ -38,6 +38,16 @@ const JOB_TYPE = {
   realtime: 'REALTIME',
 };
 
+const BACKUP_STATUS = {
+  draft: 'DRAFT',
+  pending: 'PENDING',
+  active: 'ACTIVE',
+  success: 'SUCCESS',
+  failed: 'FAILED',
+  paused: 'PAUSED',
+  resumed: 'RESUMED',
+};
+
 const OBJECT_STATUS = {
   created: 'CREATED',
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
@@ -79,6 +89,7 @@ export {
   // Enums
   LANGUAGE,
   JOB_STATUS,
+  BACKUP_STATUS,
   JOB_TYPE,
   OBJECT_STATUS,
   DESTINATION_TYPE,

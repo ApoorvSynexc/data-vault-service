@@ -1,7 +1,7 @@
-import { OBJECT_STATUS, JOB_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../constant';
+import { OBJECT_STATUS, JOB_STATUS, BACKUP_STATUS } from '../../constant';
 import { logger } from '../../middlewares/logger';
 import { IBackupJob } from '../../models';
-import { httpRequest } from '../../utils/http-request';
+import { updateBackupConfig } from '../backup-config';
 import { getStaleRunningJobs, updateBackupObject, updateJobStatus } from './index';
 
 const STALE_THRESHOLD_MINUTES = 30;
@@ -13,7 +13,7 @@ const STUCK_STATUSES = new Set([
 ]);
 
 const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
-  logger.warn(`Stale job sweeper: processing ${jobs.length} stale job(s)`);
+  logger.info(`Stale job sweeper: processing ${jobs.length} stale job(s)`);
 
   for (const job of jobs) {
     // Mark each stuck object as FAILED so resume can identify them
@@ -40,20 +40,8 @@ const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
       errorMessage: 'Job became stale — server crash or restart detected',
     });
 
-    await httpRequest({
-      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-      method: 'POST',
-      body: JSON.stringify({
-        eventType: 'backup.failed',
-        backupJobId: job.backupJobId,
-        backupConfigId: job.backupConfigId,
-      }),
-      headers: {
-        'x-internal-secret': INTERNAL_SECRET,
-      },
-    });
-
-    logger.warn(`Stale job sweeper: marked job ${job.backupJobId} as FAILED`);
+    await updateBackupConfig(job.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
+    logger.info(`Stale job sweeper: marked job ${job.backupJobId} as FAILED`);
   }
 };
 
