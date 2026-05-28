@@ -97,6 +97,7 @@ const objectChildrenSchema = Joi.object({
 
 const objectSchema = Joi.object({
     name: Joi.string().required(),
+    totalRecordCount: Joi.number().optional(),
     type: Joi.string()
         .valid(...Object.values(OBJECT_TYPE))
         .required(),
