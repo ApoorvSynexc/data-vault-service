@@ -91,10 +91,22 @@ let objectChildrenSchema = Joi.object({
         .required(),
     condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).required(),
-});
-
-objectChildrenSchema = objectChildrenSchema.keys({
-    children: Joi.array().items(objectChildrenSchema).optional(),
+    children: Joi.array().items({
+        name: Joi.string().required(),
+        type: Joi.string()
+            .valid(...Object.values(OBJECT_TYPE))
+            .required(),
+        condition: conditionSchema.optional(),
+        field: Joi.array().items(objectFieldSchema).required(),
+        children: Joi.array().items({
+            name: Joi.string().required(),
+            type: Joi.string()
+                .valid(...Object.values(OBJECT_TYPE))
+                .required(),
+            condition: conditionSchema.optional(),
+            field: Joi.array().items(objectFieldSchema).required(),
+        }).optional(),
+    }).optional(),
 });
 
 const objectSchema = Joi.object({
