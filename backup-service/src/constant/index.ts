@@ -4,6 +4,7 @@ const PORT = Number(process.env.PORT) || 3000;
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
+const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
 const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
 
@@ -62,6 +63,7 @@ export {
   // Aws Config
   AWS_REGION,
   DYNAMODB_ENDPOINT,
+  BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
   TABLE_COUNTER_TABLE,
 
