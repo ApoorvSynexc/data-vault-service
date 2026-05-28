@@ -115,6 +115,8 @@ const exportFirstTime = async (
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
+  let backupConfig;
+  let totalRecordCount: number = 0;
   let jobId: string;
 
   try {
@@ -142,7 +144,7 @@ const exportFirstTime = async (
       }
 
       try {
-        await pollBulkJob({ instanceUrl, tokens, jobId, backupJobId, objectIndex });
+        totalRecordCount = await pollBulkJob({ instanceUrl, tokens, jobId, backupJobId, objectIndex });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
@@ -154,6 +156,16 @@ const exportFirstTime = async (
         bulkJobId: jobId,
       });
     }
+
+    logger.info(
+      `Object found records`,
+      {
+        backupConfigId,
+        backupJobId,
+        objectName,
+        Changes: totalRecordCount,
+      }
+    );
 
     const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
     // await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
@@ -179,21 +191,35 @@ const exportFirstTime = async (
     //   insertCount,
     // });
 
-    await httpRequest({
-      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-      method: 'POST',
-      body: JSON.stringify({
-        eventType: 'backup.size.updated',
-        crmId,
-        objectName,
-        backupJobId,
-        backupConfigId,
-        sizeInBytes,
-      }),
-      headers: {
-        'x-internal-secret': INTERNAL_SECRET,
-      },
-    });
+    // await httpRequest({
+    //   url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+    //   method: 'POST',
+    //   body: JSON.stringify({
+    //     eventType: 'backup.size.updated',
+    //     crmId,
+    //     objectName,
+    //     backupJobId,
+    //     backupConfigId,
+    //     sizeInBytes,
+    //   }),
+    //   headers: {
+    //     'x-internal-secret': INTERNAL_SECRET,
+    //   },
+    // });
+
+    const updateParams: any = { sizeInBytes };
+    backupConfig = await getBackupConfigById(backupConfigId);
+    if (backupConfig?.objects) {
+      const updatedObjects = backupConfig.objects.map((obj) =>
+        obj.name === objectName ? { ...obj, sizeInBytes } : obj
+      );
+      updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+      updateParams.objects = updatedObjects;
+    }
+    await updateBackupConfig(
+      backupConfigId,
+      updateParams
+    );
 
     // Upload schema (fields) to schema/
     const schemaWithParquet = schema.map((field: { dataType: string }) => ({
@@ -479,7 +505,7 @@ const exportIncremental = async (
       status: OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
-    logger.info(
+    logger.error(
       `Object incremental backup failed`,
       {
         backupConfigId,
