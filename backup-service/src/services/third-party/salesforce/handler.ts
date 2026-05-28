@@ -120,7 +120,6 @@ const exportFirstTime = async (
   let jobId: string;
 
   try {
-    // One HTTP call — fieldNames used for SOQL below, schema used for upload at the end.
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
 
     if (object.bulkJobId) {
@@ -132,10 +131,8 @@ const exportFirstTime = async (
         status: OBJECT_STATUS.bulkQueryInProgress,
       });
 
-      const fieldNames = object.field?.length ? object.field.map((f) => f.name) : allFieldNames;
-
       const whereClause = buildWhereClause(object);
-      const soql = `SELECT ${fieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
 
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
@@ -168,8 +165,6 @@ const exportFirstTime = async (
     );
 
     const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-    // await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
-
     const { sizeInBytes } = await uploadBulkResultsByPage({
       instanceUrl,
       tokens,
@@ -181,31 +176,6 @@ const exportFirstTime = async (
       startLocator: object.currentLocator ?? null,
       startCompletedRecordCount: object.completedRecordCount ?? 0,
     });
-
-    // Sync totalRecordCount to the header-derived count so it always matches
-    // completedRecordCount (polling's numberRecordsProcessed can differ).
-    // await updateBackupObject({
-    //   backupJobId,
-    //   objectIndex,
-    //   totalRecordCount: finalCompletedCount,
-    //   insertCount,
-    // });
-
-    // await httpRequest({
-    //   url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-    //   method: 'POST',
-    //   body: JSON.stringify({
-    //     eventType: 'backup.size.updated',
-    //     crmId,
-    //     objectName,
-    //     backupJobId,
-    //     backupConfigId,
-    //     sizeInBytes,
-    //   }),
-    //   headers: {
-    //     'x-internal-secret': INTERNAL_SECRET,
-    //   },
-    // });
 
     const updateParams: any = { sizeInBytes };
     backupConfig = await getBackupConfigById(backupConfigId);
@@ -221,7 +191,6 @@ const exportFirstTime = async (
       updateParams
     );
 
-    // Upload schema (fields) to schema/
     const schemaWithParquet = schema.map((field: { dataType: string }) => ({
       ...field,
       parquetDataType: toParquetDataType(field.dataType),
@@ -281,7 +250,6 @@ const exportIncremental = async (
   let backupConfig;
 
   try {
-    // One HTTP call — fieldNames used for SOQL below, schema used for comparison at the end.
     const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
       crmId,
       objectName
@@ -298,11 +266,9 @@ const exportIncremental = async (
         status: OBJECT_STATUS.bulkQueryInProgress,
       });
 
-      const fieldNames = object.field?.length ? object.field.map((f) => f.name) : allFieldNames;
-
       // IsDeleted, CreatedDate, LastModifiedDate required for classify/delete split
       const fieldsWithMeta = Array.from(
-        new Set([...fieldNames, 'IsDeleted', 'CreatedDate', 'LastModifiedDate'])
+        new Set([...allFieldNames, 'IsDeleted', 'CreatedDate', 'LastModifiedDate'])
       );
 
       const userWhere = buildWhereClause(object);
@@ -355,12 +321,6 @@ const exportIncremental = async (
       const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
       const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
       const deletePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'deletes');
-      // await updateBackupObject({
-      //   backupJobId,
-      //   objectIndex,
-      //   status: OBJECT_STATUS.transferInProgress,
-      // });
-
       const { sizeInBytes } = await classifyAndUploadBulkResultsByPage({
         instanceUrl,
         tokens,
@@ -374,23 +334,6 @@ const exportIncremental = async (
         startLocator: object.currentLocator ?? null,
         startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
-
-      // await updateBackupObject({ backupJobId, objectIndex, insertCount, updateCount, deleteCount });
-      // await httpRequest({
-      //   url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-      //   method: 'POST',
-      //   body: JSON.stringify({
-      //     eventType: 'backup.size.updated',
-      //     crmId,
-      //     objectName,
-      //     backupJobId,
-      //     backupConfigId,
-      //     sizeInBytes,
-      //   }),
-      //   headers: {
-      //     'x-internal-secret': INTERNAL_SECRET,
-      //   },
-      // });
 
       const updateParams: any = { sizeInBytes };
       backupConfig = await getBackupConfigById(backupConfigId);
@@ -455,22 +398,6 @@ const exportIncremental = async (
       const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
       const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
       await uploadToS3(destConfig, versionedKey, newSchemaBuffer);
-
-      // await httpRequest({
-      //   url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-      //   method: 'POST',
-      //   body: JSON.stringify({
-      //     eventType: 'schema.updated',
-      //     crmId,
-      //     objectName,
-      //     backupJobId,
-      //     backupConfigId,
-      //     schemaChange: true,
-      //   }),
-      //   headers: {
-      //     'x-internal-secret': INTERNAL_SECRET,
-      //   },
-      // });
 
       if (backupConfig?.objects) {
         const updatedObjects = backupConfig.objects.map((obj) =>
