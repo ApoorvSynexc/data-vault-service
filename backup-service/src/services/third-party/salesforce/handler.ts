@@ -19,6 +19,7 @@ import {
   uploadBulkResultsByPage,
 } from './bulk';
 import { SalesforceTokens } from '.';
+import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -236,6 +237,7 @@ const exportIncremental = async (
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
+  let backupConfig;
 
   try {
     // One HTTP call — fieldNames used for SOQL below, schema used for comparison at the end.
@@ -327,22 +329,37 @@ const exportIncremental = async (
       });
 
       // await updateBackupObject({ backupJobId, objectIndex, insertCount, updateCount, deleteCount });
+      // await httpRequest({
+      //   url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+      //   method: 'POST',
+      //   body: JSON.stringify({
+      //     eventType: 'backup.size.updated',
+      //     crmId,
+      //     objectName,
+      //     backupJobId,
+      //     backupConfigId,
+      //     sizeInBytes,
+      //   }),
+      //   headers: {
+      //     'x-internal-secret': INTERNAL_SECRET,
+      //   },
+      // });
 
-      await httpRequest({
-        url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-        method: 'POST',
-        body: JSON.stringify({
-          eventType: 'backup.size.updated',
-          crmId,
-          objectName,
-          backupJobId,
-          backupConfigId,
-          sizeInBytes,
-        }),
-        headers: {
-          'x-internal-secret': INTERNAL_SECRET,
-        },
-      });
+      const updateParams: any = { sizeInBytes };
+      backupConfig = await getBackupConfigById(backupConfigId);
+      if (backupConfig?.objects) {
+        const updatedObjects = backupConfig.objects.map((obj) =>
+          obj.name === objectName ? { ...obj, sizeInBytes } : obj
+        );
+        updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+        updateParams.objects = updatedObjects;
+      }
+      await updateBackupConfig(
+        backupConfigId,
+        updateParams
+      );
+
+      logger.info(`Backup Config ${backupConfigId} & Backup Job ${backupJobId}: ${objectName} with status completed. sizeInBytes: ${sizeInBytes}`);
     } else if (totalRecordCount === 0) {
       logger.info(
         `Backup job ${backupJobId}: skipping data transfer for ${objectName} because no changed records were found`
@@ -379,24 +396,29 @@ const exportIncremental = async (
       const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
       await uploadToS3(destConfig, versionedKey, newSchemaBuffer);
 
-      await httpRequest({
-        url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-        method: 'POST',
-        body: JSON.stringify({
-          eventType: 'schema.updated',
-          crmId,
-          objectName,
-          backupJobId,
-          backupConfigId,
-          schemaChange: true,
-        }),
-        headers: {
-          'x-internal-secret': INTERNAL_SECRET,
-        },
-      });
-      logger.info(
-        `Backup job ${backupJobId}: schema changed for ${objectName}, core service notified`
-      );
+      // await httpRequest({
+      //   url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+      //   method: 'POST',
+      //   body: JSON.stringify({
+      //     eventType: 'schema.updated',
+      //     crmId,
+      //     objectName,
+      //     backupJobId,
+      //     backupConfigId,
+      //     schemaChange: true,
+      //   }),
+      //   headers: {
+      //     'x-internal-secret': INTERNAL_SECRET,
+      //   },
+      // });
+
+      if (backupConfig?.objects) {
+        const updatedObjects = backupConfig.objects.map((obj) =>
+          obj.name === objectName ? { ...obj, schemaChange: true } : obj
+        );
+        await updateBackupConfig(backupConfigId, { objects: updatedObjects });
+      }
+      logger.info(`Backup Config ${backupConfigId} & Backup Job ${backupJobId}: schema changed for ${objectName}`);
     }
 
     await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.completed, errorMessage: "" });
