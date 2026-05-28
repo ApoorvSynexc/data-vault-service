@@ -84,13 +84,17 @@ const scheduleConfigSchema = Joi.object({
     scheduling: schedulingSchema.optional(),
 });
 
-const objectChildrenSchema = Joi.object({
+let objectChildrenSchema = Joi.object({
     name: Joi.string().required(),
     type: Joi.string()
         .valid(...Object.values(OBJECT_TYPE))
         .required(),
     condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).required(),
+});
+
+objectChildrenSchema = objectChildrenSchema.keys({
+    children: Joi.array().items(objectChildrenSchema).optional(),
 });
 
 const objectSchema = Joi.object({
