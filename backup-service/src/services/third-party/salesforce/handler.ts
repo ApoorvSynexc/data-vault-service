@@ -552,10 +552,32 @@ export const salesforceHandler: ICrmBackupHandler = {
       }
     );
 
-    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
-      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+    // Sort by totalRecordCount (least first)
+    const sortedObjects = object.sort((a, b) => {
+      const countA = a.totalRecordCount ?? 0;
+      const countB = b.totalRecordCount ?? 0;
+      return countA - countB;
+    });
+
+    // Mark zero-count objects as completed upfront
+    const objectsToBackup: Array<[IBackupObject, number]> = [];
+    for (let i = 0; i < sortedObjects.length; i++) {
+      if ((sortedObjects[i].totalRecordCount ?? 0) === 0) {
+        await updateBackupObject({
+          backupJobId,
+          objectIndex: i,
+          status: OBJECT_STATUS.completed,
+        });
+      } else {
+        objectsToBackup.push([sortedObjects[i], i]);
+      }
+    }
+
+    // Process remaining objects in batches
+    for (let i = 0; i < objectsToBackup.length; i += CONCURRENCY_LIMIT) {
+      const batch = objectsToBackup.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
-        batch.map((item, batchIndex) =>
+        batch.map(([item, objectIndex]) =>
           exportWithRetry(
             backupConfigId,
             backupJobId,
@@ -563,7 +585,7 @@ export const salesforceHandler: ICrmBackupHandler = {
             tokens,
             crmName,
             item,
-            i + batchIndex,
+            objectIndex,
             destinationType,
             destConfig,
             lastUpdatedAt
