@@ -555,16 +555,18 @@ export const salesforceHandler: ICrmBackupHandler = {
     // Track original indices before sorting
     const indexedObjects = object.map((obj, originalIndex) => ({ obj, originalIndex }));
 
-    // Sort by totalRecordCount (least first)
-    indexedObjects.sort((a, b) => {
-      const countA = a.obj.totalRecordCount ?? 0;
-      const countB = b.obj.totalRecordCount ?? 0;
-      return countA - countB;
-    });
+    // Sort by recordCount (least first)
+    if(indexedObjects[0] && indexedObjects[0].obj.recordCount){
+      indexedObjects.sort((a, b) => {
+        const countA = a.obj.recordCount ?? 0;
+        const countB = b.obj.recordCount ?? 0;
+        return countA - countB;
+      });
+    }
 
     // Separate zero-count and non-zero-count objects
-    const zeroCountObjects = indexedObjects.filter(({ obj }) => obj.totalRecordCount === 0);
-    const objectsToBackup = indexedObjects.filter(({ obj }) => obj.totalRecordCount !== 0);
+    const zeroCountObjects = indexedObjects.filter(({ obj }) => obj.recordCount === 0);
+    const objectsToBackup = indexedObjects.filter(({ obj }) => obj.recordCount !== 0);
 
     // Mark all zero-count objects as completed in parallel
     if (zeroCountObjects.length > 0) {
