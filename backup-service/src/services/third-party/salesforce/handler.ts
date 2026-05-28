@@ -562,7 +562,7 @@ export const salesforceHandler: ICrmBackupHandler = {
     // Mark zero-count objects as completed upfront
     const objectsToBackup: Array<[IBackupObject, number]> = [];
     for (let i = 0; i < sortedObjects.length; i++) {
-      if ((sortedObjects[i].totalRecordCount ?? 0) === 0) {
+      if (sortedObjects[i].totalRecordCount && sortedObjects[i].totalRecordCount === 0) {
         await updateBackupObject({
           backupJobId,
           objectIndex: i,
