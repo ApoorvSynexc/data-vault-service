@@ -1,11 +1,11 @@
 import dayjs from 'dayjs';
-import { CORE_SERVICE, INTERNAL_SECRET, JOB_STATUS } from '../../constant';
+import { BACKUP_STATUS, JOB_STATUS } from '../../constant';
 import { logger } from '../../middlewares/logger';
 import { IBackupJob, IDestinationConfig, IRealtimePayload } from '../../models';
 import { decrypt } from '../../utils/encryption';
-import { httpRequest } from '../../utils/http-request';
 import { getRealtimeCrmHandler } from '../third-party/registry';
 import { updateRealtimeJobStatus } from './index';
+import { updateBackupConfig } from '../backup-config';
 
 export const runRealtimeBackupJob = async (
   job: IBackupJob,
@@ -44,26 +44,21 @@ export const runRealtimeBackupJob = async (
       sizeInBytes,
     });
 
-    await httpRequest({
-      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-      method: 'POST',
-      body: JSON.stringify({
-        eventType: 'backup.completed',
-        crmId,
-        backupJobId,
-        backupConfigId,
-      }),
-      headers: {
-        'x-internal-secret': INTERNAL_SECRET,
-      },
-    });
+    await updateBackupConfig(job.backupConfigId, { backupStatus: BACKUP_STATUS.success });
   } catch (err: any) {
-    logger.error(`Realtime job ${backupJobId} failed: ${err?.message}`);
+    const errorMsg = err?.message ?? String(err);
+    logger.error(
+      `Realtime job failed`,
+      {
+        backupJobId,
+        errorMessage: errorMsg,
+      }
+    );
     await updateRealtimeJobStatus({
       backupJobId,
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
   }
 };

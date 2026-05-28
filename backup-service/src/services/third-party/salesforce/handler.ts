@@ -1,4 +1,4 @@
-import { CORE_SERVICE, INTERNAL_SECRET, OBJECT_STATUS } from '../../../constant';
+import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig, ISource } from '../../../models';
 import { updateBackupObject } from '../../backup-job';
@@ -9,7 +9,6 @@ import {
   schemasAreEqual,
 } from '../../../utils/helper';
 import { ICrmBackupHandler } from '../types';
-import { httpRequest } from '../../../utils/http-request';
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../../destination/s3';
 import {
   classifyAndUploadBulkResultsByPage,
@@ -493,7 +492,6 @@ const exportObjectToDestination = async (
       );
     }
   } catch (err: any) {
-    logger.error(`Backup job ${backupJobId}: failed to export ${objectName} - ${err?.message}`);
     throw err;
   }
 };
@@ -547,7 +545,12 @@ export const salesforceHandler: ICrmBackupHandler = {
     };
 
     logger.info(
-      `Backup job ${backupJobId}: ${lastUpdatedAt ? 'incremental' : 'first-time'} backup of ${object.length} objects from ${instanceUrl}`
+      `Backup job for ${lastUpdatedAt ? 'incremental' : 'first-time'} of has been initialize`,
+      {
+        backupJobId,
+        objectCount: object.length,
+        insatnce: source.instanceUrl
+      }
     );
 
     for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
@@ -570,13 +573,7 @@ export const salesforceHandler: ICrmBackupHandler = {
       );
     }
 
-    await httpRequest({
-      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-      method: 'POST',
-      body: JSON.stringify({ eventType: 'backup.completed', crmId, backupJobId, backupConfigId }),
-      headers: {
-        'x-internal-secret': INTERNAL_SECRET,
-      },
-    });
+    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
+    logger.info(`Backup job completed`, { backupJobId });
   },
 };
