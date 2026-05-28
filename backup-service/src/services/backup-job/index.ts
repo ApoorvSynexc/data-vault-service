@@ -27,7 +27,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     status: OBJECT_STATUS.created,
     bulkJobId: '',
     recordCount: item?.totalRecordCount,
-    totalRecordCount: item?.totalRecordCount || 0,
+    totalRecordCount: 0,
   }));
 
   const item: IBackupJob = {
