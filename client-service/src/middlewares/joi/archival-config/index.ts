@@ -84,6 +84,15 @@ const scheduleConfigSchema = Joi.object({
     scheduling: schedulingSchema.optional(),
 });
 
+const objectChildrenSchema = Joi.object({
+    name: Joi.string().required(),
+    type: Joi.string()
+        .valid(...Object.values(OBJECT_TYPE))
+        .required(),
+    condition: conditionSchema.optional(),
+    field: Joi.array().items(objectFieldSchema).required(),
+});
+
 const objectSchema = Joi.object({
     name: Joi.string().required(),
     type: Joi.string()
@@ -92,6 +101,7 @@ const objectSchema = Joi.object({
     condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).required(),
     scheduleConfig: scheduleConfigSchema.optional(),
+    children: Joi.array().items(objectChildrenSchema).optional(),
 });
 
 export const createArchivalConfigValidation = (
