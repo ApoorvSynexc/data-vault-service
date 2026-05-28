@@ -108,11 +108,7 @@ export const createArchivalConfigValidation = (
         schedule: Joi.string()
             .valid(SCHEDULE_MODE.schedule)
             .required(),
-        scheduleConfig: Joi.when('schedule', {
-            is: SCHEDULE_MODE.schedule,
-            then: scheduleConfigSchema.required(),
-            otherwise: Joi.forbidden(),
-        }),
+        scheduleConfig: scheduleConfigSchema.optional(),
         objects: Joi.array().items(objectSchema).optional(),
         backupStatus: Joi.string()
             .valid('DRAFT', ...Object.values(BACKUP_STATUS))
