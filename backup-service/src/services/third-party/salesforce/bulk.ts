@@ -223,7 +223,7 @@ export const uploadBulkResultsByPage = async (
         completedRecordCount,
         insertCount: completedRecordCount,
         sizeInBytes,
-        ...(locator ? { currentLocator: locator } : { status: OBJECT_STATUS.completed }),
+        ...(locator ? { currentLocator: locator } : { status: OBJECT_STATUS.completed, errorMessage: "" }),
       });
     } while (locator !== null);
   } catch (err: any) {
@@ -463,7 +463,7 @@ export const classifyAndUploadBulkResultsByPage = async (
         updateCount,
         deleteCount,
         sizeInBytes,
-        ...(locator ? { currentLocator: locator } : { status: OBJECT_STATUS.completed }),
+        ...(locator ? { currentLocator: locator } : { status: OBJECT_STATUS.completed, errorMessage: "" }),
       });
     } while (locator !== null);
   } catch (err: any) {

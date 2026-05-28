@@ -414,7 +414,6 @@ const exportIncremental = async (
       );
     }
 
-    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.completed, errorMessage: "" });
     logger.info(
       `Object incremental backup complete`,
       {
