@@ -33,6 +33,7 @@ export interface IObjectCondition {
 
 export interface IObject {
   schemaChange?: boolean;
+  totalRecordCount?: number;
   name: string;
   type: string; // STANDARD | CUSTOM
   sizeInBytes?: number;

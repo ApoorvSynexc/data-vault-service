@@ -9,12 +9,12 @@ import { updateBackupConfig } from '../backup-config';
 import { getCrmById, getCrmTokens } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { incrementTableCounter } from '../counter';
-import { logger } from '../../middlewares';
 
 const getSourceObjects = (config: IBackupConfig) => {
   if (config.objects?.length) {
     return config.objects.map((object) => ({
       name: object.name,
+      totalRecordCount: object.totalRecordCount,
       field: object.field ?? [],
       ...(object.condition ? { condition: object.condition } : {}),
     }));

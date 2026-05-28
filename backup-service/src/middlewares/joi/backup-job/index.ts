@@ -13,6 +13,7 @@ const sourceSchema = Joi.object({
     .items(
       Joi.object({
         name: Joi.string().required(),
+        totalRecordCount: Joi.number().optional(),
         condition: Joi.object({
           type: Joi.string().valid('AND', 'OR', 'CUSTOM').required(),
           expression: Joi.string().when('type', {
