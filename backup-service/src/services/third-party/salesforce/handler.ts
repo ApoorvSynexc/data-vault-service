@@ -202,16 +202,31 @@ const exportFirstTime = async (
     }));
     const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
     await uploadToS3(destConfig, schemaKey, Buffer.from(JSON.stringify(schemaWithParquet, null, 2)));
-    logger.info(`Backup job ${backupJobId}: first-time backup of ${objectName} complete`);
+    logger.info(
+      `Object first-time backup complete`,
+      {
+        backupConfigId,
+        backupJobId,
+        objectName,
+      }
+    );
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
-    logger.error(`Backup job ${backupJobId}: failed to export ${objectName} - ${errorMsg}`);
     await updateBackupObject({
       backupJobId,
       objectIndex,
       status: OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
+    logger.error(
+      `Object first-time backup failed`,
+      {
+        backupConfigId,
+        backupJobId,
+        objectName,
+        errorMsg,
+      }
+    );
     throw err;
   }
 };
@@ -303,7 +318,7 @@ const exportIncremental = async (
       object.status !== OBJECT_STATUS.completed
     ) {
       logger.info(
-        `Object found change`,
+        `Object found changes`,
         {
           backupConfigId,
           backupJobId,
@@ -366,18 +381,22 @@ const exportIncremental = async (
       );
 
       logger.info(
-        `Object found change completed`,
+        `Object changes transfered`,
         {
           backupConfigId,
           backupJobId,
           objectName,
-          Changes: totalRecordCount,
+          sizeInBytes
         }
       );
-      logger.info(`Backup Config ${backupConfigId} & Backup Job ${backupJobId}: ${objectName} with status completed. sizeInBytes: ${sizeInBytes}`);
     } else if (totalRecordCount === 0) {
       logger.info(
-        `Backup job ${backupJobId}: skipping data transfer for ${objectName} because no changed records were found`
+        `Object changes not found`,
+        {
+          backupConfigId,
+          backupJobId,
+          objectName,
+        }
       );
     }
 
@@ -433,20 +452,42 @@ const exportIncremental = async (
         );
         await updateBackupConfig(backupConfigId, { objects: updatedObjects });
       }
-      logger.info(`Backup Config ${backupConfigId} & Backup Job ${backupJobId}: schema changed for ${objectName}`);
+      logger.info(
+        `Object schema change detected`,
+        {
+          backupConfigId,
+          backupJobId,
+          objectName,
+        }
+      );
     }
 
     await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.completed, errorMessage: "" });
-    logger.info(`Backup job ${backupJobId}: incremental backup of ${objectName} complete`);
+    logger.info(
+      `Object incremental backup complete`,
+      {
+        backupConfigId,
+        backupJobId,
+        objectName,
+      }
+    );
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
-    logger.error(`Backup job ${backupJobId}: failed to export ${objectName} - ${errorMsg}`);
     await updateBackupObject({
       backupJobId,
       objectIndex,
       status: OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
+    logger.info(
+      `Object incremental backup failed`,
+      {
+        backupConfigId,
+        backupJobId,
+        objectName,
+        errorMsg
+      }
+    );
     throw err;
   }
 };
