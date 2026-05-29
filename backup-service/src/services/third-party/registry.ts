@@ -1,6 +1,6 @@
 import { CRM_NAME } from '../../constant';
 import { ICrmBackupHandler, ICrmRealtimeHandler } from './types';
-import { salesforceHandler } from './salesforce/handler';
+import { salesforceHandler } from './salesforce';
 import { salesforceRealtimeHandler } from './salesforce/realtime';
 
 const crmRegistry: Record<string, ICrmBackupHandler> = {

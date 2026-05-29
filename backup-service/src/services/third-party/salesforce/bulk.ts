@@ -23,23 +23,23 @@ const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 // ---------------------------------------------------------------------------
 const makePageFetcher =
   (tokens: SalesforceTokens) =>
-    async (url: string): Promise<Response> => {
-      let response = await fetch(url, {
+  async (url: string): Promise<Response> => {
+    let response = await fetch(url, {
+      headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
+    });
+    if (response.status === 401) {
+      try {
+        const refreshed = await refreshSalesforceToken(tokens.crmId);
+        tokens.accessToken = refreshed.access_token;
+      } catch {
+        throw new SalesforceAuthExpiredError();
+      }
+      response = await fetch(url, {
         headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
       });
-      if (response.status === 401) {
-        try {
-          const refreshed = await refreshSalesforceToken(tokens.crmId);
-          tokens.accessToken = refreshed.access_token;
-        } catch {
-          throw new SalesforceAuthExpiredError();
-        }
-        response = await fetch(url, {
-          headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-        });
-      }
-      return response;
-    };
+    }
+    return response;
+  };
 
 interface ICreateBulkQueryJob {
   instanceUrl: string;
@@ -94,7 +94,7 @@ export const createBulkQueryJob = async (payload: ICreateBulkQueryJob): Promise<
 
 export const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
   const { instanceUrl, tokens, jobId, backupJobId, objectIndex } = payload;
-  let { salesforceApiCalls} = payload;
+  let { salesforceApiCalls } = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
   while (true) {
@@ -170,8 +170,8 @@ export interface IUploadBulkResultsByPage {
 // ---------------------------------------------------------------------------
 export const uploadBulkResultsByPage = async (
   payload: IUploadBulkResultsByPage
-): Promise<{ sizeInBytes: number; }> => {
-  let {salesforceApiCalls} = payload;
+): Promise<{ sizeInBytes: number }> => {
+  let { salesforceApiCalls } = payload;
   const {
     instanceUrl,
     tokens,
@@ -192,7 +192,11 @@ export const uploadBulkResultsByPage = async (
   let sizeInBytes = 0;
 
   try {
-    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
+    await updateBackupObject({
+      backupJobId,
+      objectIndex,
+      status: OBJECT_STATUS.transferInProgress,
+    });
     do {
       const url = locator
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
@@ -229,7 +233,9 @@ export const uploadBulkResultsByPage = async (
         completedRecordCount,
         insertCount: completedRecordCount,
         sizeInBytes,
-        ...(locator ? { currentLocator: locator } : { status: OBJECT_STATUS.completed, errorMessage: "" }),
+        ...(locator
+          ? { currentLocator: locator }
+          : { status: OBJECT_STATUS.completed, errorMessage: '' }),
       });
     } while (locator !== null);
   } catch (err: any) {
@@ -359,7 +365,7 @@ export interface IClassifyAndUploadBulkResultsByPage {
 export const classifyAndUploadBulkResultsByPage = async (
   payload: IClassifyAndUploadBulkResultsByPage
 ): Promise<{ sizeInBytes: number }> => {
-  let {salesforceApiCalls} = payload;
+  let { salesforceApiCalls } = payload;
   const {
     instanceUrl,
     tokens,
@@ -385,7 +391,11 @@ export const classifyAndUploadBulkResultsByPage = async (
   let deleteCount = 0;
 
   try {
-    await updateBackupObject({ backupJobId, objectIndex, status: OBJECT_STATUS.transferInProgress });
+    await updateBackupObject({
+      backupJobId,
+      objectIndex,
+      status: OBJECT_STATUS.transferInProgress,
+    });
     do {
       const url = locator
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
@@ -472,7 +482,9 @@ export const classifyAndUploadBulkResultsByPage = async (
         updateCount,
         deleteCount,
         sizeInBytes,
-        ...(locator ? { currentLocator: locator } : { status: OBJECT_STATUS.completed, errorMessage: "" }),
+        ...(locator
+          ? { currentLocator: locator }
+          : { status: OBJECT_STATUS.completed, errorMessage: '' }),
       });
     } while (locator !== null);
   } catch (err: any) {

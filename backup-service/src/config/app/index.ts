@@ -8,7 +8,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST: string = String(process.env.HOST || '0.0.0.0');
 const app = express();
 
-app.use(express.json({limit: "10mb"}));
+app.use(express.json({ limit: '10mb' }));
 app.use(morganMiddleware);
 
 app.use('/api', router);

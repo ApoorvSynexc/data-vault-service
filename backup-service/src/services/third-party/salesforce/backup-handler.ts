@@ -1,6 +1,6 @@
 import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
-import { IBackupObject, IDestinationConfig, ISource } from '../../../models';
+import { IBackupObject, IDestinationConfig } from '../../../models';
 import { updateBackupObject } from '../../backup-job';
 import {
   buildS3KeyPrefix,
@@ -8,7 +8,6 @@ import {
   toParquetDataType,
   schemasAreEqual,
 } from '../../../utils/helper';
-import { ICrmBackupHandler } from '../types';
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../../destination/s3';
 import {
   classifyAndUploadBulkResultsByPage,
@@ -17,15 +16,10 @@ import {
   pollBulkJob,
   uploadBulkResultsByPage,
 } from './bulk';
-import { SalesforceTokens } from '.';
+import { SalesforceTokens } from './api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 
-const CONCURRENCY_LIMIT = 6;
-const MAX_RETRIES = 3;
-
-// ---------------------------------------------------------------------------
 // SOQL injection guards.
-//
 // Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")
 // Operators:    must be one of the Joi-validated enum values
 // Values:       allow the character set needed for SOQL literals
@@ -33,7 +27,6 @@ const MAX_RETRIES = 3;
 //               while blocking SQL/SOQL meta-characters like ; ` -- /* */
 // Expression:   CUSTOM expressions must only contain index numbers,
 //               whitespace, parentheses, and the keywords AND / OR / NOT
-// ---------------------------------------------------------------------------
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
 const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
@@ -51,16 +44,12 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
   return `${name} ${operator} ${value}`;
 };
 
-// ---------------------------------------------------------------------------
 // Build a SOQL WHERE clause from an object's field filters + condition.
-//
 // Fields are 1-indexed (field[0] -> "1", field[1] -> "2", ...).
 // Only fields that have a filter contribute to the WHERE clause.
-//
 // AND/OR  -> join all filter conditions with the given logical operator.
 // CUSTOM  -> replace 1-based indexes in condition.expression with the
 //            corresponding filter condition strings.
-// ---------------------------------------------------------------------------
 const buildWhereClause = (object: IBackupObject): string => {
   const { field, condition } = object;
   if (!field?.length || !condition) {
@@ -99,10 +88,8 @@ const buildWhereClause = (object: IBackupObject): string => {
   return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
 };
 
-// ---------------------------------------------------------------------------
 // First-time backup: export all records into insert/ and schema into schema/
-// ---------------------------------------------------------------------------
-const exportFirstTime = async (
+export const exportFirstTime = async (
   backupConfigId: string,
   backupJobId: string,
   instanceUrl: string,
@@ -115,7 +102,6 @@ const exportFirstTime = async (
   const { crmId } = tokens;
   const objectName = object.name;
   let backupConfig;
-  let salesforceApiCalls: number = 0;
   let totalRecordCount: number = 0;
   let jobId: string;
 
@@ -136,13 +122,19 @@ const exportFirstTime = async (
 
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
-        salesforceApiCalls++;
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
 
       try {
-        totalRecordCount = await pollBulkJob({ instanceUrl, tokens, jobId, backupJobId, objectIndex, salesforceApiCalls });
+        totalRecordCount = await pollBulkJob({
+          instanceUrl,
+          tokens,
+          jobId,
+          backupJobId,
+          objectIndex,
+          salesforceApiCalls: 0,
+        });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
@@ -155,15 +147,12 @@ const exportFirstTime = async (
       });
     }
 
-    logger.info(
-      `Object found records`,
-      {
-        backupConfigId,
-        backupJobId,
-        objectName,
-        Changes: totalRecordCount,
-      }
-    );
+    logger.info(`Object found records`, {
+      backupConfigId,
+      backupJobId,
+      objectName,
+      Changes: totalRecordCount,
+    });
 
     const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
     const { sizeInBytes } = await uploadBulkResultsByPage({
@@ -176,7 +165,7 @@ const exportFirstTime = async (
       s3KeyPrefix: insertPrefix,
       startLocator: object.currentLocator ?? null,
       startCompletedRecordCount: object.completedRecordCount ?? 0,
-      salesforceApiCalls
+      salesforceApiCalls: 0,
     });
 
     const updateParams: any = { sizeInBytes };
@@ -188,25 +177,23 @@ const exportFirstTime = async (
       updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
       updateParams.objects = updatedObjects;
     }
-    await updateBackupConfig(
-      backupConfigId,
-      updateParams
-    );
+    await updateBackupConfig(backupConfigId, updateParams);
 
     const schemaWithParquet = schema.map((field: { dataType: string }) => ({
       ...field,
       parquetDataType: toParquetDataType(field.dataType),
     }));
     const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
-    await uploadToS3(destConfig, schemaKey, Buffer.from(JSON.stringify(schemaWithParquet, null, 2)));
-    logger.info(
-      `Object first-time backup complete`,
-      {
-        backupConfigId,
-        backupJobId,
-        objectName,
-      }
+    await uploadToS3(
+      destConfig,
+      schemaKey,
+      Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
     );
+    logger.info(`Object first-time backup complete`, {
+      backupConfigId,
+      backupJobId,
+      objectName,
+    });
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
     await updateBackupObject({
@@ -215,28 +202,23 @@ const exportFirstTime = async (
       status: OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
-    logger.error(
-      `Object first-time backup failed`,
-      {
-        backupConfigId,
-        backupJobId,
-        objectName,
-        errorMsg,
-      }
-    );
+    logger.error(`Object first-time backup failed`, {
+      backupConfigId,
+      backupJobId,
+      objectName,
+      errorMsg,
+    });
     throw err;
   }
 };
 
-// ---------------------------------------------------------------------------
 // Incremental backup:
 //  1. Query new+updated records (LastModifiedDate >= lastUpdatedAt) → classify
 //     into insert/ and update/ folders
 //  2. Query deleted records (queryAll with IsDeleted=true AND LastModifiedDate
 //     >= lastUpdatedAt) → delete/ folder
 //  3. Compare schema — if changed, overwrite schema/ and call core service
-// ---------------------------------------------------------------------------
-const exportIncremental = async (
+export const exportIncremental = async (
   backupConfigId: string,
   backupJobId: string,
   instanceUrl: string,
@@ -249,7 +231,6 @@ const exportIncremental = async (
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
-  let salesforceApiCalls: number = 0;
   let backupConfig;
 
   try {
@@ -282,7 +263,6 @@ const exportIncremental = async (
       // queryAll so Salesforce includes soft-deleted records in the result set
       try {
         bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
-        salesforceApiCalls++;
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
@@ -294,7 +274,7 @@ const exportIncremental = async (
           jobId: bulkJobId,
           backupJobId,
           objectIndex,
-          salesforceApiCalls
+          salesforceApiCalls: 0,
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -314,15 +294,12 @@ const exportIncremental = async (
       object.status !== OBJECT_STATUS.transferInProgress &&
       object.status !== OBJECT_STATUS.completed
     ) {
-      logger.info(
-        `Object found changes`,
-        {
-          backupConfigId,
-          backupJobId,
-          objectName,
-          Changes: totalRecordCount,
-        }
-      );
+      logger.info(`Object found changes`, {
+        backupConfigId,
+        backupJobId,
+        objectName,
+        Changes: totalRecordCount,
+      });
       const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
       const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
       const deletePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'deletes');
@@ -333,7 +310,7 @@ const exportIncremental = async (
         backupJobId,
         objectIndex,
         destConfig,
-        salesforceApiCalls,
+        salesforceApiCalls: 0,
         insertS3KeyPrefix: insertPrefix,
         updateS3KeyPrefix: updatePrefix,
         deleteS3KeyPrefix: deletePrefix,
@@ -350,29 +327,20 @@ const exportIncremental = async (
         updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
         updateParams.objects = updatedObjects;
       }
-      await updateBackupConfig(
-        backupConfigId,
-        updateParams
-      );
+      await updateBackupConfig(backupConfigId, updateParams);
 
-      logger.info(
-        `Object changes transfered`,
-        {
-          backupConfigId,
-          backupJobId,
-          objectName,
-          sizeInBytes
-        }
-      );
+      logger.info(`Object changes transfered`, {
+        backupConfigId,
+        backupJobId,
+        objectName,
+        sizeInBytes,
+      });
     } else if (totalRecordCount === 0) {
-      logger.info(
-        `Object changes not found`,
-        {
-          backupConfigId,
-          backupJobId,
-          objectName,
-        }
-      );
+      logger.info(`Object changes not found`, {
+        backupConfigId,
+        backupJobId,
+        objectName,
+      });
     }
 
     // ── Phase 3: schema comparison ─────────────────────────────────────────────
@@ -411,24 +379,18 @@ const exportIncremental = async (
         );
         await updateBackupConfig(backupConfigId, { objects: updatedObjects });
       }
-      logger.info(
-        `Object schema change detected`,
-        {
-          backupConfigId,
-          backupJobId,
-          objectName,
-        }
-      );
-    }
-
-    logger.info(
-      `Object incremental backup complete`,
-      {
+      logger.info(`Object schema change detected`, {
         backupConfigId,
         backupJobId,
         objectName,
-      }
-    );
+      });
+    }
+
+    logger.info(`Object incremental backup complete`, {
+      backupConfigId,
+      backupJobId,
+      objectName,
+    });
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
     await updateBackupObject({
@@ -437,148 +399,12 @@ const exportIncremental = async (
       status: OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
-    logger.error(
-      `Object incremental backup failed`,
-      {
-        backupConfigId,
-        backupJobId,
-        objectName,
-        errorMsg
-      }
-    );
+    logger.error(`Object incremental backup failed`, {
+      backupConfigId,
+      backupJobId,
+      objectName,
+      errorMsg,
+    });
     throw err;
   }
-};
-
-const exportObjectToDestination = async (
-  backupConfigId: string,
-  backupJobId: string,
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  crmName: string,
-  object: IBackupObject,
-  objectIndex: number,
-  destinationType: string,
-  destConfig: IDestinationConfig,
-  lastUpdatedAt?: string
-): Promise<void> => {
-  if (object.status === OBJECT_STATUS.completed) {
-    return;
-  }
-
-  if (destinationType !== 'S3') {
-    throw new Error(`Unsupported destination type: ${destinationType}`);
-  }
-
-  try {
-    if (!lastUpdatedAt) {
-      await exportFirstTime(
-        backupConfigId,
-        backupJobId,
-        instanceUrl,
-        tokens,
-        crmName,
-        object,
-        objectIndex,
-        destConfig
-      );
-    } else {
-      await exportIncremental(
-        backupConfigId,
-        backupJobId,
-        instanceUrl,
-        tokens,
-        crmName,
-        object,
-        objectIndex,
-        destConfig,
-        lastUpdatedAt
-      );
-    }
-  } catch (err: any) {
-    throw err;
-  }
-};
-
-const exportWithRetry = async (
-  ...args: Parameters<typeof exportObjectToDestination>
-): Promise<void> => {
-  const [, backupJobId, , , , object] = args;
-  const objectName = object.name;
-  let lastError: any;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      await exportObjectToDestination(...args);
-      return;
-    } catch (err: any) {
-      lastError = err;
-      if (attempt < MAX_RETRIES) {
-        logger.warn(
-          `Backup job ${backupJobId}: retrying ${objectName} (attempt ${attempt}/${MAX_RETRIES}) - ${err?.message}`
-        );
-      }
-    }
-  }
-
-  throw lastError;
-};
-
-export const salesforceHandler: ICrmBackupHandler = {
-  runBackup: async (
-    backupConfigId: string,
-    backupJobId: string,
-    source: ISource,
-    destinationType: string,
-    destConfig: IDestinationConfig,
-    object?: IBackupObject[],
-    lastUpdatedAt?: string
-  ): Promise<void> => {
-    const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
-
-    if (!object?.length) {
-      return;
-    }
-
-    // Single shared token holder — salesforceRequest mutates accessToken on
-    // refresh, so every subsequent call (including retries) uses the fresh token.
-    const tokens: SalesforceTokens = {
-      accessToken: access_token,
-      refreshToken: refresh_token,
-      crmId,
-    };
-
-    logger.info(
-      `Backup job for ${lastUpdatedAt ? 'incremental' : 'first-time'} of has been initialize`,
-      {
-        backupJobId,
-        objectCount: object.length,
-        insatnce: source.instanceUrl
-      }
-    );
-
-
-    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
-      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
-      await Promise.allSettled(
-        batch.map((item, batchIndex) =>
-          exportWithRetry(
-            backupConfigId,
-            backupJobId,
-            instanceUrl,
-            tokens,
-            crmName,
-            item,
-            i + batchIndex,
-            destinationType,
-            destConfig,
-            lastUpdatedAt
-          )
-        )
-      );
-    }
-
-    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
-    logger.info(`Backup job completed`, { backupJobId });
-  },
 };

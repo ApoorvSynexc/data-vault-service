@@ -1,7 +1,4 @@
-import {
-  GetCommand,
-  UpdateCommand,
-} from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE } from '../../constant';
 import { IBackupConfig, IScheduleConfig, ITriggerResult } from '../../models';

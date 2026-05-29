@@ -47,18 +47,15 @@ export const runRealtimeBackupJob = async (
     await updateBackupConfig(job.backupConfigId, { backupStatus: BACKUP_STATUS.success });
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
-    logger.error(
-      `Realtime job failed`,
-      {
-        backupJobId,
-        errorMessage: errorMsg,
-      }
-    );
+    logger.error(`Realtime job failed`, {
+      backupJobId,
+      errorMessage: errorMsg,
+    });
     await updateRealtimeJobStatus({
       backupJobId,
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => { });
+    }).catch(() => {});
   }
 };
