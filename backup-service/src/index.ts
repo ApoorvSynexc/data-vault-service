@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import initializeDatabase from './config/database';
 import { initializeApp } from './config';
-import { startStaleJobSweeper } from './services/backup-job/sweeper';
+import { startStaleJobSweeper } from './services/common/sweeper';
 
 // ---------------------------------------------------------------------------
 // Fail fast if any required environment variable is missing or malformed.

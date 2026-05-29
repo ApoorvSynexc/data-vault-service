@@ -2,7 +2,7 @@ import { OBJECT_STATUS, JOB_STATUS, BACKUP_STATUS } from '../../constant';
 import { logger } from '../../middlewares/logger';
 import { IBackupJob } from '../../models';
 import { updateBackupConfig } from '../backup-config';
-import { getStaleRunningJobs, updateBackupObject, updateJobStatus } from './index';
+import { getStaleRunningJobs, updateBackupObject, updateJobStatus } from '../backup-job';
 
 const STALE_THRESHOLD_MINUTES = 30;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes

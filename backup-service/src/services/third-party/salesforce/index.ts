@@ -138,11 +138,7 @@ const salesforceHandler: ICrmBackupHandler = {
   },
 };
 
-export {
-  salesforceHandler,
-  exportObjectToDestination,
-  exportWithRetry,
-}
+export { salesforceHandler, exportObjectToDestination, exportWithRetry };
 
 export {
   SalesforceAuthExpiredError,

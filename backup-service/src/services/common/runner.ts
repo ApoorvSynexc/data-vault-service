@@ -3,7 +3,7 @@ import { IBackupJob, IDestinationConfig, ISource } from '../../models';
 import { JOB_STATUS } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler } from '../third-party/registry';
-import { getBackupJob, updateJobStatus } from './index';
+import { getBackupJob, updateJobStatus } from '../backup-job';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
 
