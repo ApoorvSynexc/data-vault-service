@@ -46,7 +46,7 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
   return (result.Count ?? 0) > 0;
 };
 
-const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) => {
+const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string, type: 'backup' | 'archival' = 'backup') => {
   const active = await hasActiveBackupJob(config.backupConfigId);
   if (active) {
     return null;
@@ -81,10 +81,11 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string) =
     ...(config.spaceId && { spaceId: config.spaceId }),
   };
 
+  const endpoint = type === 'archival' ? '/archival' : '';
   let result;
   try {
     result = await httpRequest({
-      url: `${BACKUP_SERVICE}/v1/backup-job`,
+      url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
       method: 'POST',
       body: JSON.stringify(payload),
     });
@@ -162,11 +163,12 @@ const getBackupJobsByConfig = async (
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
-const resumeBackupJob = async (backupJobId: string, config: IBackupConfig) => {
+const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
 
+  const endpoint = type === 'archival' ? '/archival/resume' : '/resume';
   return httpRequest({
-    url: `${BACKUP_SERVICE}/v1/backup-job/resume?id=${backupJobId}`,
+    url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`,
     method: 'GET',
   });
 };
