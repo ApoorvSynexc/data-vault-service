@@ -32,6 +32,7 @@ export interface IObjectCondition {
 }
 
 export interface IBackupObject {
+  salesforceApiCalls: number;
   name: string;
   condition?: IObjectCondition;
   field?: IBackupField[];

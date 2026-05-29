@@ -52,6 +52,7 @@ interface IPollBulkJob {
   instanceUrl: string;
   tokens: SalesforceTokens;
   jobId: string;
+  salesforceApiCalls: number;
   backupJobId?: string;
   objectIndex?: number;
 }
@@ -93,6 +94,7 @@ export const createBulkQueryJob = async (payload: ICreateBulkQueryJob): Promise<
 
 export const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
   const { instanceUrl, tokens, jobId, backupJobId, objectIndex } = payload;
+  let { salesforceApiCalls} = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
   while (true) {
@@ -114,6 +116,7 @@ export const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
       },
       tokens
     );
+    salesforceApiCalls++;
 
     if (
       backupJobId &&
@@ -147,6 +150,7 @@ export interface IUploadBulkResultsByPage {
   objectIndex: number;
   destConfig: IDestinationConfig;
   s3KeyPrefix: string;
+  salesforceApiCalls: number;
   startLocator?: string | null;
   startCompletedRecordCount?: number;
   maxRecords?: number;
@@ -167,6 +171,7 @@ export interface IUploadBulkResultsByPage {
 export const uploadBulkResultsByPage = async (
   payload: IUploadBulkResultsByPage
 ): Promise<{ sizeInBytes: number; }> => {
+  let {salesforceApiCalls} = payload;
   const {
     instanceUrl,
     tokens,
@@ -195,6 +200,7 @@ export const uploadBulkResultsByPage = async (
 
       const response = await fetchPage(url);
 
+      salesforceApiCalls++;
       if (!response.ok) {
         throw new Error(`Salesforce results fetch failed with status ${response.status}`);
       }
@@ -346,12 +352,14 @@ export interface IClassifyAndUploadBulkResultsByPage {
   deleteS3KeyPrefix: string;
   startLocator?: string | null;
   startCompletedRecordCount?: number;
+  salesforceApiCalls: number;
   maxRecords?: number;
 }
 
 export const classifyAndUploadBulkResultsByPage = async (
   payload: IClassifyAndUploadBulkResultsByPage
 ): Promise<{ sizeInBytes: number }> => {
+  let {salesforceApiCalls} = payload;
   const {
     instanceUrl,
     tokens,
@@ -385,6 +393,7 @@ export const classifyAndUploadBulkResultsByPage = async (
 
       const response = await fetchPage(url);
 
+      salesforceApiCalls++;
       if (!response.ok) {
         throw new Error(`Salesforce results fetch failed with status ${response.status}`);
       }
