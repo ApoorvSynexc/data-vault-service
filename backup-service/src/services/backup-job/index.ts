@@ -118,6 +118,7 @@ interface UpdateBackupObjectParams {
   sizeInBytes?: number;
   currentLocator?: string;
   errorMessage?: string;
+  salesforceApiCount?: number;
 }
 
 const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<void> => {
@@ -134,6 +135,7 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     sizeInBytes,
     currentLocator,
     errorMessage,
+    salesforceApiCount,
   } = params;
   const now = new Date().toISOString();
   const expressionParts = ['updatedAt = :updatedAt'];
@@ -214,6 +216,12 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     expressionParts.push(`#object[${objectIndex}].#errorMessage = :errorMessage`);
     expressionNames['#errorMessage'] = 'errorMessage';
     expressionValues[':errorMessage'] = errorMessage;
+  }
+
+  if (salesforceApiCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#salesforceApiCount = :salesforceApiCount`);
+    expressionNames['#salesforceApiCount'] = 'salesforceApiCount';
+    expressionValues[':salesforceApiCount'] = salesforceApiCount;
   }
 
   await docClient.send(
