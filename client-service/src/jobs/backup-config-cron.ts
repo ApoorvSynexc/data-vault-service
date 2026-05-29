@@ -12,7 +12,7 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
     logger.info(`Running ${configs.length} scheduled incremental backups...`);
     for (const config of configs) {
       try {
-        await triggerBackupJob(config, config.lastBackupAt);
+        await triggerBackupJob(config, config.lastBackupAt, config.type === "ARCHIVAL" ? "archival" : "backup");
       } catch (error) {
         console.error(`Scheduled backup failed for ${config.backupConfigId}`, error);
       }

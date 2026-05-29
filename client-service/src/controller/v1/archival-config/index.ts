@@ -112,7 +112,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                 && !scheduleConfig?.scheduling?.startDate
                 && !scheduleConfig?.scheduling?.startTime;
             if (isOnceImmediate) {
-                await triggerBackupJob(config);
+                await triggerBackupJob(config, undefined, 'archival');
             } else {
                 // await createAwsEventScheduler(buildEventScheduleInput(config));
             }
