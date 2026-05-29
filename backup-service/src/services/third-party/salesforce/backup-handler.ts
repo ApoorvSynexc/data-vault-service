@@ -102,6 +102,7 @@ export const exportFirstTime = async (
   const { crmId } = tokens;
   const objectName = object.name;
   let backupConfig;
+  let salesforceApiCount: number = 0;
   let totalRecordCount: number = 0;
   let jobId: string;
 
@@ -122,6 +123,7 @@ export const exportFirstTime = async (
 
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
+        salesforceApiCount += 2;
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
@@ -133,7 +135,7 @@ export const exportFirstTime = async (
           jobId,
           backupJobId,
           objectIndex,
-          salesforceApiCalls: 0,
+          salesforceApiCount
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -144,6 +146,7 @@ export const exportFirstTime = async (
         objectIndex,
         status: OBJECT_STATUS.bulkQueryCompleted,
         bulkJobId: jobId,
+        salesforceApiCount
       });
     }
 
@@ -162,10 +165,10 @@ export const exportFirstTime = async (
       backupJobId,
       objectIndex,
       destConfig,
+      salesforceApiCount,
       s3KeyPrefix: insertPrefix,
       startLocator: object.currentLocator ?? null,
       startCompletedRecordCount: object.completedRecordCount ?? 0,
-      salesforceApiCalls: 0,
     });
 
     const updateParams: any = { sizeInBytes };
@@ -231,6 +234,7 @@ export const exportIncremental = async (
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
+  let salesforceApiCount = 0;
   let backupConfig;
 
   try {
@@ -263,6 +267,7 @@ export const exportIncremental = async (
       // queryAll so Salesforce includes soft-deleted records in the result set
       try {
         bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
+        salesforceApiCount += 2;
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
@@ -274,7 +279,7 @@ export const exportIncremental = async (
           jobId: bulkJobId,
           backupJobId,
           objectIndex,
-          salesforceApiCalls: 0,
+          salesforceApiCount
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -285,6 +290,7 @@ export const exportIncremental = async (
         objectIndex,
         status: OBJECT_STATUS.bulkQueryCompleted,
         bulkJobId,
+        salesforceApiCount,
       });
     }
 
@@ -310,7 +316,7 @@ export const exportIncremental = async (
         backupJobId,
         objectIndex,
         destConfig,
-        salesforceApiCalls: 0,
+        salesforceApiCount,
         insertS3KeyPrefix: insertPrefix,
         updateS3KeyPrefix: updatePrefix,
         deleteS3KeyPrefix: deletePrefix,

@@ -52,7 +52,7 @@ interface IPollBulkJob {
   instanceUrl: string;
   tokens: SalesforceTokens;
   jobId: string;
-  salesforceApiCalls: number;
+  salesforceApiCount: number;
   backupJobId?: string;
   objectIndex?: number;
 }
@@ -94,7 +94,7 @@ export const createBulkQueryJob = async (payload: ICreateBulkQueryJob): Promise<
 
 export const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
   const { instanceUrl, tokens, jobId, backupJobId, objectIndex } = payload;
-  let { salesforceApiCalls } = payload;
+  let { salesforceApiCount } = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
   while (true) {
@@ -116,7 +116,7 @@ export const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
       },
       tokens
     );
-    salesforceApiCalls++;
+    salesforceApiCount++;
 
     if (
       backupJobId &&
@@ -150,7 +150,7 @@ export interface IUploadBulkResultsByPage {
   objectIndex: number;
   destConfig: IDestinationConfig;
   s3KeyPrefix: string;
-  salesforceApiCalls: number;
+  salesforceApiCount: number;
   startLocator?: string | null;
   startCompletedRecordCount?: number;
   maxRecords?: number;
@@ -171,7 +171,7 @@ export interface IUploadBulkResultsByPage {
 export const uploadBulkResultsByPage = async (
   payload: IUploadBulkResultsByPage
 ): Promise<{ sizeInBytes: number }> => {
-  let { salesforceApiCalls } = payload;
+  let { salesforceApiCount } = payload;
   const {
     instanceUrl,
     tokens,
@@ -204,7 +204,7 @@ export const uploadBulkResultsByPage = async (
 
       const response = await fetchPage(url);
 
-      salesforceApiCalls++;
+      ++salesforceApiCount;
       if (!response.ok) {
         throw new Error(`Salesforce results fetch failed with status ${response.status}`);
       }
@@ -231,6 +231,7 @@ export const uploadBulkResultsByPage = async (
         backupJobId,
         objectIndex,
         completedRecordCount,
+        salesforceApiCount,
         insertCount: completedRecordCount,
         sizeInBytes,
         ...(locator
@@ -358,14 +359,14 @@ export interface IClassifyAndUploadBulkResultsByPage {
   deleteS3KeyPrefix: string;
   startLocator?: string | null;
   startCompletedRecordCount?: number;
-  salesforceApiCalls: number;
+  salesforceApiCount: number;
   maxRecords?: number;
 }
 
 export const classifyAndUploadBulkResultsByPage = async (
   payload: IClassifyAndUploadBulkResultsByPage
 ): Promise<{ sizeInBytes: number }> => {
-  let { salesforceApiCalls } = payload;
+  let { salesforceApiCount } = payload;
   const {
     instanceUrl,
     tokens,
@@ -403,7 +404,7 @@ export const classifyAndUploadBulkResultsByPage = async (
 
       const response = await fetchPage(url);
 
-      salesforceApiCalls++;
+      ++salesforceApiCount;
       if (!response.ok) {
         throw new Error(`Salesforce results fetch failed with status ${response.status}`);
       }
@@ -482,6 +483,7 @@ export const classifyAndUploadBulkResultsByPage = async (
         updateCount,
         deleteCount,
         sizeInBytes,
+        salesforceApiCount,
         ...(locator
           ? { currentLocator: locator }
           : { status: OBJECT_STATUS.completed, errorMessage: '' }),

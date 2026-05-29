@@ -97,6 +97,7 @@ export const archiveAndHardDelete = async (
   const { crmId } = tokens;
   const objectName = object.name;
   let backupConfig;
+  let salesforceApiCount: number = 0;
   let totalRecordCount: number = 0;
   let jobId: string;
 
@@ -117,6 +118,7 @@ export const archiveAndHardDelete = async (
 
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
+        salesforceApiCount += 2;
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
@@ -128,7 +130,7 @@ export const archiveAndHardDelete = async (
           jobId,
           backupJobId,
           objectIndex,
-          salesforceApiCalls: 0,
+          salesforceApiCount
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -137,6 +139,7 @@ export const archiveAndHardDelete = async (
       await updateBackupObject({
         backupJobId,
         objectIndex,
+        salesforceApiCount,
         status: OBJECT_STATUS.bulkQueryCompleted,
         bulkJobId: jobId,
       });
@@ -157,10 +160,10 @@ export const archiveAndHardDelete = async (
       backupJobId,
       objectIndex,
       destConfig,
+      salesforceApiCount,
       s3KeyPrefix: archivePrefix,
       startLocator: object.currentLocator ?? null,
       startCompletedRecordCount: object.completedRecordCount ?? 0,
-      salesforceApiCalls: 0,
     });
 
     const updateParams: any = { sizeInBytes };
