@@ -290,10 +290,10 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
-  filter: { userId?: string; spaceId?: string },
+  filter: { userId?: string; spaceId?: string; type?: string },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, spaceId } = filter;
+  const { userId, spaceId, type } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
@@ -305,15 +305,25 @@ const getBackupConfigsWithPagination = async (
   const indexName = isSpaceQuery ? 'spaceId-index' : 'userId-index';
   const keyValue = isSpaceQuery ? spaceId : userId;
 
+  const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
+  const expressionAttributeNames = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
+  let filterExpression: string | undefined;
+
+  if (type) {
+    expressionAttributeValues[':type'] = type;
+    filterExpression = '#type = :type';
+  }
+
   const result = await docClient.send(
     new QueryCommand({
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: indexName,
       KeyConditionExpression: isSpaceQuery ? 'spaceId = :key' : 'userId = :key',
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
-      ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' },
-      ExpressionAttributeValues: { ':key': keyValue },
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
       Limit: limit,
+      ...(filterExpression && { FilterExpression: filterExpression }),
       ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
     })
   );
