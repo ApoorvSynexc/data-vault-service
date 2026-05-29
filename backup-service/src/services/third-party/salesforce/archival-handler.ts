@@ -106,6 +106,7 @@ export const archiveAndHardDelete = async (
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
+      salesforceApiCount += object.salesforceApiCount ?? 0;
     } else {
       await updateBackupObject({
         backupJobId,

@@ -44,6 +44,7 @@ export interface IBackupObject {
   updateCount?: number;
   deleteCount?: number;
   sizeInBytes?: number;
+  salesforceApiCount?: number;
   currentLocator?: string;
   errorMessage?: string;
 }
