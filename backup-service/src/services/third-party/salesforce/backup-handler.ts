@@ -111,6 +111,7 @@ export const exportFirstTime = async (
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
+      salesforceApiCount += object.salesforceApiCount ?? 0;
     } else {
       await updateBackupObject({
         backupJobId,
@@ -246,6 +247,7 @@ export const exportIncremental = async (
     // ── Phase 1: query new + updated + deleted records in one queryAll job ────
     let bulkJobId = object.bulkJobId;
     let totalRecordCount = object.totalRecordCount ?? 0;
+    salesforceApiCount += object.salesforceApiCount ?? 0;
 
     if (!bulkJobId) {
       await updateBackupObject({
