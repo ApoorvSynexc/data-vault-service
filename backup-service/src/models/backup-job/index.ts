@@ -45,8 +45,6 @@ export interface IBackupObject {
   sizeInBytes?: number;
   currentLocator?: string;
   errorMessage?: string;
-  
-  recordCount?: number;
 }
 
 export interface ISource {

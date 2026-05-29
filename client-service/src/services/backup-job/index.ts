@@ -14,7 +14,6 @@ const getSourceObjects = (config: IBackupConfig) => {
   if (config.objects?.length) {
     return config.objects.map((object) => ({
       name: object.name,
-      totalRecordCount: object.totalRecordCount,
       field: object.field ?? [],
       ...(object.condition ? { condition: object.condition } : {}),
     }));
