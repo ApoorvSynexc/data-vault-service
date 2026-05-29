@@ -6,6 +6,7 @@ import { updateBackupConfig } from '../../backup-config';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './backup-handler';
+import { archiveAndHardDelete } from './archival-handler';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -56,6 +57,37 @@ const exportObjectToDestination = async (
   }
 };
 
+const exportObjectToDestinationArchival = async (
+  backupConfigId: string,
+  backupJobId: string,
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  crmName: string,
+  object: IBackupObject,
+  objectIndex: number,
+  destinationType: string,
+  destConfig: IDestinationConfig
+): Promise<void> => {
+  if (object.status === OBJECT_STATUS.completed) {
+    return;
+  }
+
+  if (destinationType !== 'S3') {
+    throw new Error(`Unsupported destination type: ${destinationType}`);
+  }
+
+  await archiveAndHardDelete(
+    backupConfigId,
+    backupJobId,
+    instanceUrl,
+    tokens,
+    crmName,
+    object,
+    objectIndex,
+    destConfig
+  );
+};
+
 const exportWithRetry = async (
   ...args: Parameters<typeof exportObjectToDestination>
 ): Promise<void> => {
@@ -80,6 +112,30 @@ const exportWithRetry = async (
   throw lastError;
 };
 
+const exportWithRetryArchival = async (
+  ...args: Parameters<typeof exportObjectToDestinationArchival>
+): Promise<void> => {
+  const [, backupJobId, , , , object] = args;
+  const objectName = object.name;
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await exportObjectToDestinationArchival(...args);
+      return;
+    } catch (err: any) {
+      lastError = err;
+      if (attempt < MAX_RETRIES) {
+        logger.warn(
+          `Archival job ${backupJobId}: retrying ${objectName} (attempt ${attempt}/${MAX_RETRIES}) - ${err?.message}`
+        );
+      }
+    }
+  }
+
+  throw lastError;
+};
+
 const salesforceHandler: ICrmBackupHandler = {
   runBackup: async (
     backupConfigId: string,
@@ -96,8 +152,6 @@ const salesforceHandler: ICrmBackupHandler = {
       return;
     }
 
-    // Single shared token holder — salesforceRequest mutates accessToken on
-    // refresh, so every subsequent call (including retries) uses the fresh token.
     const tokens: SalesforceTokens = {
       accessToken: access_token,
       refreshToken: refresh_token,
@@ -136,9 +190,61 @@ const salesforceHandler: ICrmBackupHandler = {
     await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
     logger.info(`Backup job completed`, { backupJobId });
   },
+  runArchival: async (
+    backupConfigId: string,
+    backupJobId: string,
+    source: ISource,
+    destinationType: string,
+    destConfig: IDestinationConfig,
+    object?: IBackupObject[],
+    lastUpdatedAt?: string
+  ): Promise<void> => {
+    const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
+
+    if (!object?.length) {
+      return;
+    }
+
+    const tokens: SalesforceTokens = {
+      accessToken: access_token,
+      refreshToken: refresh_token,
+      crmId,
+    };
+
+    logger.info(
+      `Archival job has been initialized`,
+      {
+        backupJobId,
+        objectCount: object.length,
+        instance: source.instanceUrl,
+      }
+    );
+
+    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
+      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+      await Promise.allSettled(
+        batch.map((item, batchIndex) =>
+          exportWithRetryArchival(
+            backupConfigId,
+            backupJobId,
+            instanceUrl,
+            tokens,
+            crmName,
+            item,
+            i + batchIndex,
+            destinationType,
+            destConfig
+          )
+        )
+      );
+    }
+
+    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
+    logger.info(`Archival job completed`, { backupJobId });
+  },
 };
 
-export { salesforceHandler, exportObjectToDestination, exportWithRetry };
+export { salesforceHandler, exportObjectToDestination, exportWithRetry, exportObjectToDestinationArchival, exportWithRetryArchival };
 
 export {
   SalesforceAuthExpiredError,

@@ -1,0 +1,210 @@
+import { OBJECT_STATUS } from '../../../constant';
+import { logger } from '../../../middlewares/logger';
+import { IBackupObject, IDestinationConfig } from '../../../models';
+import { updateBackupObject } from '../../backup-job';
+import {
+  buildS3KeyPrefix,
+  buildSchemaS3Key,
+  toParquetDataType,
+} from '../../../utils/helper';
+import { uploadToS3 } from '../../destination/s3';
+import {
+  createBulkQueryJob,
+  getObjectMetadata,
+  pollBulkJob,
+  uploadBulkResultsByPage,
+} from './bulk';
+import { SalesforceTokens } from './api-request';
+import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
+
+// SOQL injection guards.
+// Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")
+// Operators:    must be one of the Joi-validated enum values
+// Values:       allow the character set needed for SOQL literals
+//               (quoted strings, numbers, dates, booleans, IN lists)
+//               while blocking SQL/SOQL meta-characters like ; ` -- /* */
+// Expression:   CUSTOM expressions must only contain index numbers,
+//               whitespace, parentheses, and the keywords AND / OR / NOT
+const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
+const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
+const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
+
+const buildFilterCondition = (name: string, operator: string, value: string): string => {
+  if (!SAFE_FIELD_NAME_RE.test(name)) {
+    throw new Error(`Invalid SOQL field name: "${name}"`);
+  }
+  if (!ALLOWED_OPERATORS.has(operator)) {
+    throw new Error(`Disallowed SOQL operator: "${operator}"`);
+  }
+  if (!SAFE_VALUE_RE.test(value)) {
+    throw new Error(`Invalid SOQL filter value: "${value}"`);
+  }
+  return `${name} ${operator} ${value}`;
+};
+
+// Build a SOQL WHERE clause from an object's field filters + condition.
+// Fields are 1-indexed (field[0] -> "1", field[1] -> "2", ...).
+// Only fields that have a filter contribute to the WHERE clause.
+// AND/OR  -> join all filter conditions with the given logical operator.
+// CUSTOM  -> replace 1-based indexes in condition.expression with the
+//            corresponding filter condition strings.
+const buildWhereClause = (object: IBackupObject): string => {
+  const { field, condition } = object;
+  if (!field?.length || !condition) {
+    return '';
+  }
+
+  const filterMap = new Map<number, string>();
+  field.forEach((f, idx) => {
+    if (f.filter) {
+      filterMap.set(idx + 1, buildFilterCondition(f.name, f.filter.operator, f.filter.value));
+    }
+  });
+
+  if (filterMap.size === 0) {
+    return '';
+  }
+
+  if (condition.type === 'CUSTOM' && condition.expression) {
+    const stripped = condition.expression.replace(/\b(AND|OR|NOT)\b/gi, ' ');
+    if (!/^[\d\s()]+$/.test(stripped)) {
+      throw new Error(`Invalid SOQL custom expression: "${condition.expression}"`);
+    }
+
+    let expr = condition.expression;
+    const sorted = Array.from(filterMap.entries()).sort((a, b) => b[0] - a[0]);
+    for (const [idx, cond] of sorted) {
+      expr = expr.replace(new RegExp(`\\b${idx}\\b`, 'g'), cond);
+    }
+    return `WHERE ${expr}`;
+  }
+
+  const separator = condition.type === 'OR' ? ' OR ' : ' AND ';
+  return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
+};
+
+// Archive: export all records to storage and hard delete from Salesforce
+export const archiveAndHardDelete = async (
+  backupConfigId: string,
+  backupJobId: string,
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  crmName: string,
+  object: IBackupObject,
+  objectIndex: number,
+  destConfig: IDestinationConfig
+): Promise<void> => {
+  const { crmId } = tokens;
+  const objectName = object.name;
+  let backupConfig;
+  let totalRecordCount: number = 0;
+  let jobId: string;
+
+  try {
+    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
+
+    if (object.bulkJobId) {
+      jobId = object.bulkJobId;
+    } else {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: OBJECT_STATUS.bulkQueryInProgress,
+      });
+
+      const whereClause = buildWhereClause(object);
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
+
+      try {
+        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
+      } catch (err: any) {
+        throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      try {
+        totalRecordCount = await pollBulkJob({
+          instanceUrl,
+          tokens,
+          jobId,
+          backupJobId,
+          objectIndex,
+          salesforceApiCalls: 0,
+        });
+      } catch (err: any) {
+        throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: OBJECT_STATUS.bulkQueryCompleted,
+        bulkJobId: jobId,
+      });
+    }
+
+    logger.info(`Object found records for archival`, {
+      backupConfigId,
+      backupJobId,
+      objectName,
+      recordCount: totalRecordCount,
+    });
+
+    const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+    const { sizeInBytes } = await uploadBulkResultsByPage({
+      instanceUrl,
+      tokens,
+      jobId,
+      backupJobId,
+      objectIndex,
+      destConfig,
+      s3KeyPrefix: archivePrefix,
+      startLocator: object.currentLocator ?? null,
+      startCompletedRecordCount: object.completedRecordCount ?? 0,
+      salesforceApiCalls: 0,
+    });
+
+    const updateParams: any = { sizeInBytes };
+    backupConfig = await getBackupConfigById(backupConfigId);
+    if (backupConfig?.objects) {
+      const updatedObjects = backupConfig.objects.map((obj) =>
+        obj.name === objectName ? { ...obj, sizeInBytes } : obj
+      );
+      updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+      updateParams.objects = updatedObjects;
+    }
+    await updateBackupConfig(backupConfigId, updateParams);
+
+    const schemaWithParquet = schema.map((field: { dataType: string }) => ({
+      ...field,
+      parquetDataType: toParquetDataType(field.dataType),
+    }));
+    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    await uploadToS3(
+      destConfig,
+      schemaKey,
+      Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
+    );
+
+    logger.info(`Object archival complete`, {
+      backupConfigId,
+      backupJobId,
+      objectName,
+      recordCount: totalRecordCount,
+    });
+  } catch (err: any) {
+    const errorMsg = err?.message ?? String(err);
+    await updateBackupObject({
+      backupJobId,
+      objectIndex,
+      status: OBJECT_STATUS.failed,
+      errorMessage: errorMsg,
+    });
+    logger.error(`Object archival failed`, {
+      backupConfigId,
+      backupJobId,
+      objectName,
+      errorMsg,
+    });
+    throw err;
+  }
+};

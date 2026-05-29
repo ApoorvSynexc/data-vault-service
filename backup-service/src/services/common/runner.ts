@@ -101,3 +101,70 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
     activeJobs.delete(backupJobId);
   }
 };
+
+// ---------------------------------------------------------------------------
+// Entry point for archival jobs — call this fire-and-forget from the controller
+// ---------------------------------------------------------------------------
+export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
+  const { backupConfigId, backupJobId, source: encryptedSource, destination, object } = job;
+  const startedAt = dayjs().toISOString();
+
+  activeJobs.add(backupJobId);
+
+  try {
+    await updateJobStatus({
+      backupJobId,
+      status: JOB_STATUS.running,
+      startedAt,
+      conditionExpression: '#status <> :runningStatus',
+      conditionExpressionValues: { ':runningStatus': JOB_STATUS.running },
+    });
+  } catch (err: any) {
+    activeJobs.delete(backupJobId);
+    if (err.name === 'ConditionalCheckFailedException') {
+      throw new HttpError(409, `Archival job ${backupJobId} is already running`);
+    }
+    throw err;
+  }
+
+  try {
+    if (!encryptedSource) {
+      throw new Error(`Archival job ${backupJobId}: source credentials are missing`);
+    }
+    const source = JSON.parse(decrypt(encryptedSource)) as ISource;
+    const destConfig = JSON.parse(
+      decrypt({
+        ciphertext: destination.ciphertext,
+        iv: destination.iv,
+        authTag: destination.authTag,
+      })
+    ) as IDestinationConfig;
+
+    const handler = getCrmHandler(source.crmName);
+    await handler.runArchival(
+      backupConfigId,
+      backupJobId,
+      source,
+      destination.type,
+      destConfig,
+      object,
+      job.lastUpdatedAt
+    );
+
+    await updateJobStatus({
+      backupJobId,
+      status: JOB_STATUS.success,
+      completedAt: dayjs().toISOString(),
+    });
+  } catch (err: any) {
+    logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
+    await updateJobStatus({
+      backupJobId,
+      status: JOB_STATUS.failed,
+      completedAt: dayjs().toISOString(),
+      errorMessage: err?.message ?? 'Unknown error',
+    }).catch(() => {});
+  } finally {
+    activeJobs.delete(backupJobId);
+  }
+};
