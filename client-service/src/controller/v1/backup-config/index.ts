@@ -130,14 +130,14 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      await triggerBackupJob(config);
+      await triggerBackupJob(config, undefined, 'backup');
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
       const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
-        await triggerBackupJob(config);
+        await triggerBackupJob(config, undefined, 'backup');
       } else {
         // await createAwsEventScheduler(buildEventScheduleInput(config));
       }
