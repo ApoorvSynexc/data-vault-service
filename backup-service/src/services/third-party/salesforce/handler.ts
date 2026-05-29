@@ -115,6 +115,7 @@ const exportFirstTime = async (
   const { crmId } = tokens;
   const objectName = object.name;
   let backupConfig;
+  let salesforceApiCalls: number = 0;
   let totalRecordCount: number = 0;
   let jobId: string;
 
@@ -135,12 +136,13 @@ const exportFirstTime = async (
 
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
+        salesforceApiCalls++;
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
 
       try {
-        totalRecordCount = await pollBulkJob({ instanceUrl, tokens, jobId, backupJobId, objectIndex });
+        totalRecordCount = await pollBulkJob({ instanceUrl, tokens, jobId, backupJobId, objectIndex, salesforceApiCalls });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
@@ -174,6 +176,7 @@ const exportFirstTime = async (
       s3KeyPrefix: insertPrefix,
       startLocator: object.currentLocator ?? null,
       startCompletedRecordCount: object.completedRecordCount ?? 0,
+      salesforceApiCalls
     });
 
     const updateParams: any = { sizeInBytes };
@@ -246,6 +249,7 @@ const exportIncremental = async (
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
+  let salesforceApiCalls: number = 0;
   let backupConfig;
 
   try {
@@ -278,6 +282,7 @@ const exportIncremental = async (
       // queryAll so Salesforce includes soft-deleted records in the result set
       try {
         bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
+        salesforceApiCalls++;
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
@@ -289,6 +294,7 @@ const exportIncremental = async (
           jobId: bulkJobId,
           backupJobId,
           objectIndex,
+          salesforceApiCalls
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -327,6 +333,7 @@ const exportIncremental = async (
         backupJobId,
         objectIndex,
         destConfig,
+        salesforceApiCalls,
         insertS3KeyPrefix: insertPrefix,
         updateS3KeyPrefix: updatePrefix,
         deleteS3KeyPrefix: deletePrefix,
@@ -455,8 +462,6 @@ const exportObjectToDestination = async (
   destConfig: IDestinationConfig,
   lastUpdatedAt?: string
 ): Promise<void> => {
-  const objectName = object.name;
-
   if (object.status === OBJECT_STATUS.completed) {
     return;
   }
