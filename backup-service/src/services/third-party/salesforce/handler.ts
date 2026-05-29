@@ -552,48 +552,19 @@ export const salesforceHandler: ICrmBackupHandler = {
       }
     );
 
-    // Track original indices before sorting
-    const indexedObjects = object.map((obj, originalIndex) => ({ obj, originalIndex }));
 
-    // Sort by recordCount (least first)
-    if(indexedObjects[0] && indexedObjects[0].obj.recordCount){
-      indexedObjects.sort((a, b) => {
-        const countA = a.obj.recordCount ?? 0;
-        const countB = b.obj.recordCount ?? 0;
-        return countA - countB;
-      });
-    }
-
-    // Separate zero-count and non-zero-count objects
-    const zeroCountObjects = indexedObjects.filter(({ obj }) => obj.recordCount === 0);
-    const objectsToBackup = indexedObjects.filter(({ obj }) => obj.recordCount !== 0);
-
-    // Mark all zero-count objects as completed in parallel
-    if (zeroCountObjects.length > 0) {
-      await Promise.all(
-        zeroCountObjects.map(({ originalIndex }) =>
-          updateBackupObject({
-            backupJobId,
-            objectIndex: originalIndex,
-            status: OBJECT_STATUS.completed,
-          })
-        )
-      );
-    }
-
-    // Process remaining objects in batches
-    for (let i = 0; i < objectsToBackup.length; i += CONCURRENCY_LIMIT) {
-      const batch = objectsToBackup.slice(i, i + CONCURRENCY_LIMIT);
+    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
+      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
-        batch.map(({ obj, originalIndex }) =>
+        batch.map((item, batchIndex) =>
           exportWithRetry(
             backupConfigId,
             backupJobId,
             instanceUrl,
             tokens,
             crmName,
-            obj,
-            originalIndex,
+            item,
+            i + batchIndex,
             destinationType,
             destConfig,
             lastUpdatedAt
