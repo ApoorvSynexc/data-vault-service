@@ -289,44 +289,31 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
-const getBackupConfigsByUserWithPagination = async (
-  userId: string,
-  optional: { limit: number; cursor?: string }
+const getBackupConfigsWithPagination = async (
+  filter: { userId?: string; spaceId?: string },
+  pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const exclusiveStartKey = decodeCursor(optional.cursor);
+  const { userId, spaceId } = filter;
+  const { limit = 10, cursor } = pagination || {};
+  const exclusiveStartKey = decodeCursor(cursor);
+
+  if (!userId && !spaceId) {
+    throw new Error('Either userId or spaceId must be provided');
+  }
+
+  const isSpaceQuery = !!spaceId;
+  const indexName = isSpaceQuery ? 'spaceId-index' : 'userId-index';
+  const keyValue = isSpaceQuery ? spaceId : userId;
 
   const result = await docClient.send(
     new QueryCommand({
       TableName: BACKUP_CONFIG_TABLE,
-      IndexName: 'userId-index',
-      KeyConditionExpression: 'userId = :uid',
-      ExpressionAttributeValues: { ':uid': userId },
-      Limit: optional.limit,
-      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
-    })
-  );
-
-  return {
-    documents: (result.Items as IBackupConfig[] | undefined) ?? [],
-    nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
-  };
-};
-
-const getBackupConfigsBySpaceWithPagination = async (
-  spaceId: string,
-  optional: { limit: number; cursor?: string }
-): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const exclusiveStartKey = decodeCursor(optional.cursor);
-
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_CONFIG_TABLE,
-      IndexName: 'spaceId-index',
-      KeyConditionExpression: 'spaceId = :spaceId',
+      IndexName: indexName,
+      KeyConditionExpression: isSpaceQuery ? 'spaceId = :key' : 'userId = :key',
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' },
-      ExpressionAttributeValues: { ':spaceId': spaceId },
-      Limit: optional.limit,
+      ExpressionAttributeValues: { ':key': keyValue },
+      Limit: limit,
       ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
     })
   );
@@ -381,8 +368,7 @@ export {
   getBackupConfigsByUserAndCrm,
   getBackupConfigsByCrm,
   getScheduledIncrementalBackupConfigs,
-  getBackupConfigsByUserWithPagination,
-  getBackupConfigsBySpaceWithPagination,
+  getBackupConfigsWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
 };

@@ -7,8 +7,7 @@ import {
   getBackupConfigBySlug,
   getBackupConfigsByUser,
   getBackupConfigsByUserAndCrm,
-  getBackupConfigsByUserWithPagination,
-  getBackupConfigsBySpaceWithPagination,
+  getBackupConfigsWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
   deleteBackupJobsByConfig,
@@ -165,12 +164,10 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
-    let result;
-    if (spaceId) {
-      result = await getBackupConfigsBySpaceWithPagination(spaceId, { limit: limitNum, cursor });
-    } else {
-      result = await getBackupConfigsByUserWithPagination(userId, { limit: limitNum, cursor });
-    }
+    const result = await getBackupConfigsWithPagination(
+      spaceId ? { spaceId } : { userId },
+      { limit: limitNum, cursor }
+    );
 
     const { documents, nextCursor } = result;
 
@@ -200,7 +197,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 
   let configs;
   if (spaceId) {
-    const { documents } = await getBackupConfigsBySpaceWithPagination(spaceId, { limit: 1000 });
+    const { documents } = await getBackupConfigsWithPagination({ spaceId }, { limit: 1000 });
     configs = documents;
   } else {
     configs = await getBackupConfigsByUser(userId);
