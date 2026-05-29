@@ -11,6 +11,7 @@ import {
   getBackupConfigsWithPagination,
   getCrmById,
   getTableCounter,
+  getBackupConfigBySlug,
 } from "../../../services";
 import { wrapController } from "../../../utils/helper";
 
@@ -127,9 +128,54 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 };
 
 
+const getArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { slug } = req.query;
+  if (!slug) {
+    return makeResponse(req, res, 400, false, 'slug_required');
+  }
+
+  const config = await getBackupConfigBySlug({
+    userId: req.user!.userId,
+    slug: String(slug),
+    spaceId: req.user?.spaceId,
+  });
+  if (!config) {
+    makeResponse(req, res, 400, false, 'backup_config_not_found');
+    return;
+  }
+
+  const crmPayload = await getCrmById(config.crmId);
+  if (!crmPayload) {
+    makeResponse(req, res, 400, false, 'crm_not_found');
+    return;
+  }
+
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) {
+    makeResponse(req, res, 400, false, 'destination_not_found');
+    return;
+  }
+
+  const crmDetail = {
+    crmId: crmPayload.crmId,
+    crmName: crmPayload.crmName,
+    name: crmPayload.name,
+    slug: crmPayload.slug,
+    environment: crmPayload.environment,
+    isConnected: crmPayload.isConnected,
+  };
+  const destinationDetail = {
+    destinationId: destination.destinationId,
+    destinationName: destination.name,
+    type: destination.type,
+  };
+  makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail, destinationDetail });
+};
+
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
     getFieldsHanlder,
     listArchivalConfigsHandler,
-    createArchivalConfigHandler
+    createArchivalConfigHandler,
+    getArchivalConfigHandler
 });
