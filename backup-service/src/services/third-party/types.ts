@@ -10,6 +10,15 @@ export interface ICrmBackupHandler {
     object?: IBackupObject[],
     lastUpdatedAt?: string
   ): Promise<void>;
+  runArchival(
+    backupConfigId: string,
+    backupJobId: string,
+    source: ISource,
+    destinationType: string,
+    destConfig: IDestinationConfig,
+    object?: IBackupObject[],
+    lastUpdatedAt?: string
+  ): Promise<void>;
 }
 
 export interface ICrmRealtimeHandler {
