@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { createBackupJob } from '../../../services';
-import { resumeBackupJob, runBackupJob } from '../../../services/backup-job/runner';
+import { resumeBackupJob, runBackupJob } from '../../../services/common/runner';
 import { JOB_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 
