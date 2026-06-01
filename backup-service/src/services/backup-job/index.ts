@@ -172,18 +172,6 @@ interface UpdateBackupObjectParams {
   salesforceApiCount?: number;
 }
 
-const buildObjectPath = (objectIndex: number | number[]): string => {
-  const indices = Array.isArray(objectIndex) ? objectIndex : [objectIndex];
-  let path = '#object';
-  for (const idx of indices) {
-    path += `[${idx}]`;
-    if (indices[indices.length - 1] !== idx) {
-      path += '.#children';
-    }
-  }
-  return path;
-};
-
 const updateArchivalObject = async (params: UpdateBackupObjectParams): Promise<void> => {
   const {
     backupJobId,
@@ -201,18 +189,78 @@ const updateArchivalObject = async (params: UpdateBackupObjectParams): Promise<v
     salesforceApiCount,
   } = params;
   const now = new Date().toISOString();
-  const expressionParts = ['updatedAt = :updatedAt'];
 
   const isNested = Array.isArray(objectIndex) && objectIndex.length > 1;
+  const indices = Array.isArray(objectIndex) ? objectIndex : [objectIndex];
+
+  // Build update object with all provided fields
+  const updates: Record<string, any> = {};
+  if (status !== undefined) updates.status = status;
+  if (bulkJobId !== undefined) updates.bulkJobId = bulkJobId;
+  if (totalRecordCount !== undefined) updates.totalRecordCount = totalRecordCount;
+  if (completedRecordCount !== undefined) updates.completedRecordCount = completedRecordCount;
+  if (insertCount !== undefined) updates.insertCount = insertCount;
+  if (updateCount !== undefined) updates.updateCount = updateCount;
+  if (deleteCount !== undefined) updates.deleteCount = deleteCount;
+  if (sizeInBytes !== undefined) updates.sizeInBytes = sizeInBytes;
+  if (currentLocator !== undefined) updates.currentLocator = currentLocator;
+  if (errorMessage !== undefined) updates.errorMessage = errorMessage;
+  if (salesforceApiCount !== undefined) updates.salesforceApiCount = salesforceApiCount;
+
+  // For nested objects, use GET + modify + PUT
+  if (isNested) {
+    const job = await getBackupJob(backupJobId);
+    if (!job?.object) {
+      throw new Error(`Job or objects not found: ${backupJobId}`);
+    }
+
+    let current = job.object[indices[0]];
+    for (let i = 1; i < indices.length - 1; i++) {
+      if (!current.children?.[indices[i]]) {
+        throw new Error(`Path not found: object[${indices[0]}].children[${indices[i]}]`);
+      }
+      current = current.children[indices[i]];
+    }
+
+    // Update the target object
+    const targetIndex = indices[indices.length - 1];
+    if (indices.length === 1) {
+      Object.assign(job.object[targetIndex], updates);
+    } else {
+      if (!current.children?.[targetIndex]) {
+        throw new Error(`Path not found at final index`);
+      }
+      Object.assign(current.children[targetIndex], updates);
+    }
+
+    // Handle job-level recordCount update
+    if (insertCount !== undefined || updateCount !== undefined || deleteCount !== undefined) {
+      const currentJobRecordCount = job.recordCount ?? 0;
+      const recordCountDelta = (insertCount ?? 0) + (updateCount ?? 0) + (deleteCount ?? 0);
+      job.recordCount = currentJobRecordCount + recordCountDelta;
+    }
+
+    job.updatedAt = now;
+
+    // PUT the entire updated job back
+    await docClient.send(
+      new PutCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Item: job,
+      })
+    );
+    return;
+  }
+
+  // For root-level objects, use direct update expression
+  const objectPath = `#object[${indices[0]}]`;
+  const expressionParts = ['updatedAt = :updatedAt'];
   const expressionNames: Record<string, string> = {
     '#object': 'object',
-    ...(isNested && { '#children': 'children' }),
   };
   const expressionValues: Record<string, unknown> = {
     ':updatedAt': now,
   };
-
-  const objectPath = buildObjectPath(objectIndex);
 
   if (status !== undefined) {
     expressionParts.push(`${objectPath}.#status = :status`);
