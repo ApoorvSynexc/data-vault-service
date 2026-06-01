@@ -366,12 +366,12 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
   const spaceId = req.user!.spaceId;
   const userId = req.user!.userId;
 
-
   if (slug) {
     const config = await getBackupConfigBySlug({
       userId: req.user!.userId,
       slug: String(slug),
       spaceId: req.user?.spaceId,
+      type: 'NORMAL'
     });
     if (!config) {
       makeResponse(req, res, 400, false, 'backup_config_not_found');

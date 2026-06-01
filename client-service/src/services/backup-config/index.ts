@@ -338,8 +338,21 @@ const getBackupConfigBySlug = async (params: {
   userId: string;
   slug: string;
   spaceId?: string;
+  type?: 'ARCHICAL' | 'NORMAL';
 }): Promise<IBackupConfig | null> => {
-  const { userId, slug, spaceId } = params;
+  const { userId, slug, spaceId, type } = params;
+
+  // Build filter expression dynamically
+  const filterParts: string[] = ['slug = :slug'];
+  const expressionValues: Record<string, any> = { ':slug': slug };
+
+  if (type) {
+    filterParts.push('#type = :type');
+    expressionValues[':type'] = type;
+  }
+
+  const filterExpression = filterParts.join(' AND ');
+  const expressionNames = type ? { '#type': 'type' } : undefined;
 
   // Try to find by spaceId first if provided
   if (spaceId) {
@@ -348,8 +361,9 @@ const getBackupConfigBySlug = async (params: {
         TableName: BACKUP_CONFIG_TABLE,
         IndexName: 'spaceId-index',
         KeyConditionExpression: 'spaceId = :spaceId',
-        FilterExpression: 'slug = :slug',
-        ExpressionAttributeValues: { ':spaceId': spaceId, ':slug': slug },
+        FilterExpression: filterExpression,
+        ExpressionAttributeValues: { ':spaceId': spaceId, ...expressionValues },
+        ...(expressionNames && { ExpressionAttributeNames: expressionNames }),
       })
     );
     if (result.Items?.[0]) {
@@ -363,8 +377,9 @@ const getBackupConfigBySlug = async (params: {
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
-      FilterExpression: 'slug = :slug',
-      ExpressionAttributeValues: { ':uid': userId, ':slug': slug },
+      FilterExpression: filterExpression,
+      ExpressionAttributeValues: { ':uid': userId, ...expressionValues },
+      ...(expressionNames && { ExpressionAttributeNames: expressionNames }),
     })
   );
   return (result.Items?.[0] as IBackupConfig) ?? null;
