@@ -65,6 +65,23 @@ const CRM_NAME = {
   salesforce: 'salesforce',
 };
 
+const CONDITION_TYPE = {
+  and: 'AND',
+  or: 'OR',
+  custom: 'CUSTOM',
+  soql: 'SOQL',
+};
+const FILTER_OPERATOR = {
+  gt: '>',
+  lt: '<',
+  gte: '>=',
+  lte: '<=',
+  eq: '=',
+  neq: '!=',
+  in: 'IN',
+  like: 'LIKE',
+};
+
 export {
   HOST,
   PORT,
@@ -94,4 +111,6 @@ export {
   OBJECT_STATUS,
   DESTINATION_TYPE,
   CRM_NAME,
+  CONDITION_TYPE,
+  FILTER_OPERATOR
 };
