@@ -151,6 +151,8 @@ const processObjectsRecursively = async (
     const batch = objects.slice(i, i + CONCURRENCY_LIMIT);
     await Promise.allSettled(
       batch.map((item: IBackupObject, batchIndex: number) => {
+        console.log(`${objectIndexPath} : object name: ${item.name} ` );
+        
         const currentPath = [...objectIndexPath, i + batchIndex];
         return exportWithRetryArchival(
           backupConfigId,
