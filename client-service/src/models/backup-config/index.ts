@@ -39,6 +39,7 @@ export interface IObject {
   sizeInBytes?: number;
   field: IObjectField[];
   condition?: IObjectCondition;
+  children?: IObject[];
 }
 
 export interface ITriggerResult {
