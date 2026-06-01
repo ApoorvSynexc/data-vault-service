@@ -196,7 +196,7 @@ export const archiveAndHardDelete = async (
       Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
     );
 
-    logger.info(`Object archival complete`, {
+    logger.info(`Object archival complete ${objectName}`, {
       backupConfigId,
       backupJobId,
       objectName,
