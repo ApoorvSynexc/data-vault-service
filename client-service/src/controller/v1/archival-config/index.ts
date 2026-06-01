@@ -1,4 +1,4 @@
-import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE } from "../../../constant";
+import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -12,8 +12,14 @@ import {
   getCrmById,
   getTableCounter,
   getBackupConfigBySlug,
+  getBackupConfigById,
+  updateBackupConfig,
+  getCrmTokens,
+  getSalesforceProfile,
+  deleteBackupJobsByConfig,
+  realTimeTriggerManagement,
 } from "../../../services";
-import { wrapController } from "../../../utils/helper";
+import { isOwner, wrapController } from "../../../utils/helper";
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -172,10 +178,90 @@ const getArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail, destinationDetail });
 };
 
+const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupConfigId } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const existing = await getBackupConfigById(String(backupConfigId));
+  if (!isOwner(existing, req.user!.userId)) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  const updated = await updateBackupConfig(String(backupConfigId), req.body);
+
+  if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
+    // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+  }
+
+  makeResponse(req, res, 200, true, 'update', updated!);
+};
+
+const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupConfigId } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const existing = await getBackupConfigById(String(backupConfigId));
+  const spaceId = req.user?.spaceId;
+  const userId = req.user!.userId;
+
+  const isConfigOwner = spaceId ? existing?.spaceId === spaceId : existing?.userId === userId;
+  if (!isConfigOwner) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+  const config = existing!;
+
+  if (config.backupStatus === BACKUP_STATUS.pending) {
+    makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
+    return;
+  }
+
+  try {
+    if (config.schedule === SCHEDULE_MODE.realtime) {
+      const crm = await getCrmById(config.crmId);
+      if (crm) {
+        const tokens = getCrmTokens(crm) as any;
+        await getSalesforceProfile(
+          {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            userId: crm.userId,
+          },
+          crm.environment
+        );
+      }
+      // const triggerResults = await realTimeTriggerManagement('delete', config);
+      // console.log({ triggerResults });
+    } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
+      // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
+    }
+
+    await Promise.all([
+      deleteBackupConfig(String(backupConfigId)),
+      deleteBackupJobsByConfig(String(backupConfigId), config.userId),
+    ]);
+
+    makeResponse(req, res, 200, true, 'delete');
+    if (config.schedule === SCHEDULE_MODE.realtime) {
+      const triggerResults = await realTimeTriggerManagement('delete', config);
+      console.log({ triggerResults });
+    }
+  } catch (error) {
+    throw error;
+  }
+};
+
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
     getFieldsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,
-    getArchivalConfigHandler
+    getArchivalConfigHandler,
+    updateArchivalConfigHandler,
+    deletearchivalConfigHandler
 });
