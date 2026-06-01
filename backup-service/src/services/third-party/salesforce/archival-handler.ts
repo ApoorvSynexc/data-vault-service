@@ -39,7 +39,14 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
   if (!SAFE_VALUE_RE.test(value)) {
     throw new Error(`Invalid SOQL filter value: "${value}"`);
   }
-  return `${name} ${operator} ${value}`;
+
+  // If value is not already quoted and not a number/boolean, wrap it in single quotes
+  let formattedValue = value;
+  if (!value.startsWith("'") && !value.startsWith('(') && isNaN(Number(value)) && value !== 'true' && value !== 'false') {
+    formattedValue = `'${value}'`;
+  }
+
+  return `${name} ${operator} ${formattedValue}`;
 };
 
 // Build a SOQL WHERE clause from an object's field filters + condition.
