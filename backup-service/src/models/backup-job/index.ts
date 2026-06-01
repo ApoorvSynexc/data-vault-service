@@ -47,6 +47,7 @@ export interface IBackupObject {
   salesforceApiCount?: number;
   currentLocator?: string;
   errorMessage?: string;
+  children?: IBackupObject[];
 }
 
 export interface ISource {
