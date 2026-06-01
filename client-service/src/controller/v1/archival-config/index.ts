@@ -2,22 +2,22 @@ import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS } from "../../../cons
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
-  createBackupConfig,
-  deleteBackupConfig,
-  getApexFields,
-  getApexObjectChilds,
-  getDestinationById,
-  triggerBackupJob,
-  getBackupConfigsWithPagination,
-  getCrmById,
-  getTableCounter,
-  getBackupConfigBySlug,
-  getBackupConfigById,
-  updateBackupConfig,
-  getCrmTokens,
-  getSalesforceProfile,
-  deleteBackupJobsByConfig,
-  realTimeTriggerManagement,
+    createBackupConfig,
+    deleteBackupConfig,
+    getApexFields,
+    getApexObjectChilds,
+    getDestinationById,
+    triggerBackupJob,
+    getBackupConfigsWithPagination,
+    getCrmById,
+    getTableCounter,
+    getBackupConfigBySlug,
+    getBackupConfigById,
+    updateBackupConfig,
+    getCrmTokens,
+    getSalesforceProfile,
+    deleteBackupJobsByConfig,
+    realTimeTriggerManagement,
 } from "../../../services";
 import { isOwner, wrapController } from "../../../utils/helper";
 
@@ -135,125 +135,125 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
 
 const getArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { slug } = req.query;
-  if (!slug) {
-    return makeResponse(req, res, 400, false, 'slug_required');
-  }
+    const { slug } = req.query;
+    if (!slug) {
+        return makeResponse(req, res, 400, false, 'slug_required');
+    }
 
-  const config = await getBackupConfigBySlug({
-    userId: req.user!.userId,
-    slug: String(slug),
-    spaceId: req.user?.spaceId,
-  });
-  if (!config) {
-    makeResponse(req, res, 400, false, 'backup_config_not_found');
-    return;
-  }
+    const config = await getBackupConfigBySlug({
+        userId: req.user!.userId,
+        slug: String(slug),
+        spaceId: req.user?.spaceId,
+    });
+    if (!config) {
+        makeResponse(req, res, 400, false, 'backup_config_not_found');
+        return;
+    }
 
-  const crmPayload = await getCrmById(config.crmId);
-  if (!crmPayload) {
-    makeResponse(req, res, 400, false, 'crm_not_found');
-    return;
-  }
+    const crmPayload = await getCrmById(config.crmId);
+    if (!crmPayload) {
+        makeResponse(req, res, 400, false, 'crm_not_found');
+        return;
+    }
 
-  const destination = await getDestinationById(config.destinationId);
-  if (!destination) {
-    makeResponse(req, res, 400, false, 'destination_not_found');
-    return;
-  }
+    const destination = await getDestinationById(config.destinationId);
+    if (!destination) {
+        makeResponse(req, res, 400, false, 'destination_not_found');
+        return;
+    }
 
-  const crmDetail = {
-    crmId: crmPayload.crmId,
-    crmName: crmPayload.crmName,
-    name: crmPayload.name,
-    slug: crmPayload.slug,
-    environment: crmPayload.environment,
-    isConnected: crmPayload.isConnected,
-  };
-  const destinationDetail = {
-    destinationId: destination.destinationId,
-    destinationName: destination.name,
-    type: destination.type,
-  };
-  makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail, destinationDetail });
+    const crmDetail = {
+        crmId: crmPayload.crmId,
+        crmName: crmPayload.crmName,
+        name: crmPayload.name,
+        slug: crmPayload.slug,
+        environment: crmPayload.environment,
+        isConnected: crmPayload.isConnected,
+    };
+    const destinationDetail = {
+        destinationId: destination.destinationId,
+        destinationName: destination.name,
+        type: destination.type,
+    };
+    makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail, destinationDetail });
 };
 
 const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId } = req.query;
-  if (!backupConfigId) {
-    return makeResponse(req, res, 400, false, 'id_required');
-  }
+    const { backupConfigId } = req.query;
+    if (!backupConfigId) {
+        return makeResponse(req, res, 400, false, 'id_required');
+    }
 
-  const existing = await getBackupConfigById(String(backupConfigId));
-  if (!isOwner(existing, req.user!.userId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
+    const existing = await getBackupConfigById(String(backupConfigId));
+    if (existing && (!isOwner(existing, req.user!.userId) || existing.type !== 'ARCHIVAL')) {
+        makeResponse(req, res, 400, false, 'not_exist');
+        return;
+    }
 
-  const updated = await updateBackupConfig(String(backupConfigId), req.body);
+    const updated = await updateBackupConfig(String(backupConfigId), req.body);
 
-  if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
-    // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
-  }
+    if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
+        // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+    }
 
-  makeResponse(req, res, 200, true, 'update', updated!);
+    makeResponse(req, res, 200, true, 'update', updated!);
 };
 
 const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId } = req.query;
-  if (!backupConfigId) {
-    return makeResponse(req, res, 400, false, 'id_required');
-  }
-
-  const existing = await getBackupConfigById(String(backupConfigId));
-  const spaceId = req.user?.spaceId;
-  const userId = req.user!.userId;
-
-  const isConfigOwner = spaceId ? existing?.spaceId === spaceId : existing?.userId === userId;
-  if (!isConfigOwner) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-  const config = existing!;
-
-  if (config.backupStatus === BACKUP_STATUS.pending) {
-    makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
-    return;
-  }
-
-  try {
-    if (config.schedule === SCHEDULE_MODE.realtime) {
-      const crm = await getCrmById(config.crmId);
-      if (crm) {
-        const tokens = getCrmTokens(crm) as any;
-        await getSalesforceProfile(
-          {
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token,
-            userId: crm.userId,
-          },
-          crm.environment
-        );
-      }
-      // const triggerResults = await realTimeTriggerManagement('delete', config);
-      // console.log({ triggerResults });
-    } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
-      // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
+    const { backupConfigId } = req.query;
+    if (!backupConfigId) {
+        return makeResponse(req, res, 400, false, 'id_required');
     }
 
-    await Promise.all([
-      deleteBackupConfig(String(backupConfigId)),
-      deleteBackupJobsByConfig(String(backupConfigId), config.userId),
-    ]);
+    const existing = await getBackupConfigById(String(backupConfigId));
+    const spaceId = req.user?.spaceId;
+    const userId = req.user!.userId;
 
-    makeResponse(req, res, 200, true, 'delete');
-    if (config.schedule === SCHEDULE_MODE.realtime) {
-      const triggerResults = await realTimeTriggerManagement('delete', config);
-      console.log({ triggerResults });
+    const isConfigOwner = spaceId ? existing?.spaceId === spaceId : existing?.userId === userId;
+    if (!isConfigOwner || existing?.type !== 'ARCHIVAL') {
+        makeResponse(req, res, 400, false, 'not_exist');
+        return;
     }
-  } catch (error) {
-    throw error;
-  }
+    const config = existing!;
+
+    if (config.backupStatus === BACKUP_STATUS.pending) {
+        makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
+        return;
+    }
+
+    try {
+        if (config.schedule === SCHEDULE_MODE.realtime) {
+            const crm = await getCrmById(config.crmId);
+            if (crm) {
+                const tokens = getCrmTokens(crm) as any;
+                await getSalesforceProfile(
+                    {
+                        accessToken: tokens.access_token,
+                        refreshToken: tokens.refresh_token,
+                        userId: crm.userId,
+                    },
+                    crm.environment
+                );
+            }
+            // const triggerResults = await realTimeTriggerManagement('delete', config);
+            // console.log({ triggerResults });
+        } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
+            // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
+        }
+
+        await Promise.all([
+            deleteBackupConfig(String(backupConfigId)),
+            deleteBackupJobsByConfig(String(backupConfigId), config.userId),
+        ]);
+
+        makeResponse(req, res, 200, true, 'delete');
+        if (config.schedule === SCHEDULE_MODE.realtime) {
+            const triggerResults = await realTimeTriggerManagement('delete', config);
+            console.log({ triggerResults });
+        }
+    } catch (error) {
+        throw error;
+    }
 };
 
 export const archivalConfigController = wrapController({
