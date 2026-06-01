@@ -176,7 +176,7 @@ export const archiveAndHardDelete = async (
       updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
       updateParams.objects = updatedObjects;
     }
-    await updateBackupConfig(backupConfigId, updateParams);
+    // await updateBackupConfig(backupConfigId, updateParams);
 
     const schemaWithParquet = schema.map((field: { dataType: string }) => ({
       ...field,
