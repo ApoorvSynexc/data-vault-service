@@ -1,7 +1,7 @@
 import { OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../models';
-import { updateBackupObject } from '../../backup-job';
+import { updateArchivalObject } from '../../backup-job';
 import {
   buildS3KeyPrefix,
   buildSchemaS3Key,
@@ -11,8 +11,8 @@ import { uploadToS3 } from '../../destination/s3';
 import {
   createBulkQueryJob,
   getObjectMetadata,
-  pollBulkJob,
-  uploadBulkResultsByPage,
+  pollBulkJobArchival,
+  uploadBulkResultsByPageArchival,
 } from './bulk';
 import { SalesforceTokens } from './api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
@@ -91,7 +91,7 @@ export const archiveAndHardDelete = async (
   tokens: SalesforceTokens,
   crmName: string,
   object: IBackupObject,
-  objectIndex: number,
+  objectIndex: number | number[],
   destConfig: IDestinationConfig
 ): Promise<void> => {
   const { crmId } = tokens;
@@ -103,12 +103,12 @@ export const archiveAndHardDelete = async (
 
   try {
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
-
+    
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
       salesforceApiCount += object.salesforceApiCount ?? 0;
     } else {
-      await updateBackupObject({
+      await updateArchivalObject({
         backupJobId,
         objectIndex,
         status: OBJECT_STATUS.bulkQueryInProgress,
@@ -125,7 +125,7 @@ export const archiveAndHardDelete = async (
       }
 
       try {
-        totalRecordCount = await pollBulkJob({
+        totalRecordCount = await pollBulkJobArchival({
           instanceUrl,
           tokens,
           jobId,
@@ -137,7 +137,7 @@ export const archiveAndHardDelete = async (
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
 
-      await updateBackupObject({
+      await updateArchivalObject({
         backupJobId,
         objectIndex,
         salesforceApiCount,
@@ -154,7 +154,7 @@ export const archiveAndHardDelete = async (
     });
 
     const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-    const { sizeInBytes } = await uploadBulkResultsByPage({
+    const { sizeInBytes } = await uploadBulkResultsByPageArchival({
       instanceUrl,
       tokens,
       jobId,
@@ -197,7 +197,7 @@ export const archiveAndHardDelete = async (
     });
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
-    await updateBackupObject({
+    await updateArchivalObject({
       backupJobId,
       objectIndex,
       status: OBJECT_STATUS.failed,

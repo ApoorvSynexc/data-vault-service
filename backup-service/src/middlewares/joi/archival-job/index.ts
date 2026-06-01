@@ -31,20 +31,13 @@ const conditionSchema = Joi.object({
     }),
 });
 
-const objectChildrenSchema = Joi.object({
-    name: Joi.string().required(),
-    condition: conditionSchema.optional(),
-    field: Joi.array().items(objectFieldSchema).required(),
-    children: Joi.array().items(Joi.link("#objectChildren")).optional(),
-})
-.id("objectChildren");
-
 const objectSchema = Joi.object({
     name: Joi.string().required(),
     condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).required(),
-    children: Joi.array().items(objectChildrenSchema).optional(),
-});
+    children: Joi.array().items(Joi.link("#object")).optional(),
+})
+.id("object");
 
 const sourceSchema = Joi.object({
   access_token: Joi.string().required(),

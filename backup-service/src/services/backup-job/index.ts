@@ -52,6 +52,57 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   return item;
 };
 
+interface CreateArchivalJobParams {
+  userId: string;
+  backupConfigId: string;
+  source: ISource & { object?: IBackupObject[] };
+  destination: { type: string; config: IDestinationConfig };
+  spaceId?: string;
+}
+
+const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
+  return objects.map((item) => ({
+    ...item,
+    status: OBJECT_STATUS.created,
+    bulkJobId: '',
+    totalRecordCount: 0,
+    ...(item.children?.length && {
+      children: initializeNestedObjects(item.children),
+    }),
+  }));
+};
+
+const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBackupJob> => {
+  const { userId, backupConfigId, source, destination, spaceId } = params;
+  const { object, ...sourceCredentials } = source;
+  const now = new Date().toISOString();
+
+  const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
+  const encryptedDestConfig = encrypt(JSON.stringify(destination.config));
+  const trackedObjects = object?.length ? initializeNestedObjects(object) : undefined;
+
+  const item: IBackupJob = {
+    backupJobId: uuidv4(),
+    jobType: JOB_TYPE.bulk as 'BULK',
+    userId,
+    backupConfigId,
+    source: encryptedSource,
+    destination: { type: destination.type, ...encryptedDestConfig },
+    ...(trackedObjects?.length ? { object: trackedObjects } : {}),
+    status: JOB_STATUS.pending,
+    ...(spaceId && { spaceId }),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await Promise.all([
+    docClient.send(new PutCommand({ TableName: BACKUP_JOB_TABLE, Item: item })),
+    incrementTableCounter(BACKUP_JOB_TABLE, userId),
+    incrementTableCounter(BACKUP_JOB_TABLE, backupConfigId),
+  ]);
+  return item;
+};
+
 interface UpdateJobStatusParams {
   backupJobId: string;
   status: string;
@@ -107,7 +158,7 @@ const updateJobStatus = async (params: UpdateJobStatusParams): Promise<void> => 
 
 interface UpdateBackupObjectParams {
   backupJobId: string;
-  objectIndex: number;
+  objectIndex: number | number[];
   status?: string;
   bulkJobId?: string;
   totalRecordCount?: number;
@@ -120,6 +171,136 @@ interface UpdateBackupObjectParams {
   errorMessage?: string;
   salesforceApiCount?: number;
 }
+
+const buildObjectPath = (objectIndex: number | number[]): string => {
+  const indices = Array.isArray(objectIndex) ? objectIndex : [objectIndex];
+  let path = '#object';
+  for (const idx of indices) {
+    path += `[${idx}]`;
+    if (indices[indices.length - 1] !== idx) {
+      path += '.#children';
+    }
+  }
+  return path;
+};
+
+const updateArchivalObject = async (params: UpdateBackupObjectParams): Promise<void> => {
+  const {
+    backupJobId,
+    objectIndex,
+    status,
+    bulkJobId,
+    totalRecordCount,
+    completedRecordCount,
+    insertCount,
+    updateCount,
+    deleteCount,
+    sizeInBytes,
+    currentLocator,
+    errorMessage,
+    salesforceApiCount,
+  } = params;
+  const now = new Date().toISOString();
+  const expressionParts = ['updatedAt = :updatedAt'];
+
+  const isNested = Array.isArray(objectIndex) && objectIndex.length > 1;
+  const expressionNames: Record<string, string> = {
+    '#object': 'object',
+    ...(isNested && { '#children': 'children' }),
+  };
+  const expressionValues: Record<string, unknown> = {
+    ':updatedAt': now,
+  };
+
+  const objectPath = buildObjectPath(objectIndex);
+
+  if (status !== undefined) {
+    expressionParts.push(`${objectPath}.#status = :status`);
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = status;
+  }
+
+  if (bulkJobId !== undefined) {
+    expressionParts.push(`${objectPath}.#bulkJobId = :bulkJobId`);
+    expressionNames['#bulkJobId'] = 'bulkJobId';
+    expressionValues[':bulkJobId'] = bulkJobId;
+  }
+
+  if (totalRecordCount !== undefined) {
+    expressionParts.push(`${objectPath}.#totalRecordCount = :totalRecordCount`);
+    expressionNames['#totalRecordCount'] = 'totalRecordCount';
+    expressionValues[':totalRecordCount'] = totalRecordCount;
+  }
+
+  if (completedRecordCount !== undefined) {
+    expressionParts.push(`${objectPath}.#completedRecordCount = :completedRecordCount`);
+    expressionNames['#completedRecordCount'] = 'completedRecordCount';
+    expressionValues[':completedRecordCount'] = completedRecordCount;
+  }
+
+  if (insertCount !== undefined) {
+    expressionParts.push(`${objectPath}.#insertCount = :insertCount`);
+    expressionNames['#insertCount'] = 'insertCount';
+    expressionValues[':insertCount'] = insertCount;
+  }
+
+  if (updateCount !== undefined) {
+    expressionParts.push(`${objectPath}.#updateCount = :updateCount`);
+    expressionNames['#updateCount'] = 'updateCount';
+    expressionValues[':updateCount'] = updateCount;
+  }
+
+  if (deleteCount !== undefined) {
+    expressionParts.push(`${objectPath}.#deleteCount = :deleteCount`);
+    expressionNames['#deleteCount'] = 'deleteCount';
+    expressionValues[':deleteCount'] = deleteCount;
+  }
+
+  if (insertCount !== undefined || updateCount !== undefined || deleteCount !== undefined) {
+    const job = await getBackupJob(backupJobId);
+    if (job) {
+      const currentJobRecordCount = job.recordCount ?? 0;
+      const recordCountDelta = (insertCount ?? 0) + (updateCount ?? 0) + (deleteCount ?? 0);
+      const newJobRecordCount = currentJobRecordCount + recordCountDelta;
+      expressionParts.push('recordCount = :recordCount');
+      expressionValues[':recordCount'] = newJobRecordCount;
+    }
+  }
+
+  if (sizeInBytes !== undefined) {
+    expressionParts.push(`${objectPath}.#sizeInBytes = :sizeInBytes`);
+    expressionNames['#sizeInBytes'] = 'sizeInBytes';
+    expressionValues[':sizeInBytes'] = sizeInBytes;
+  }
+
+  if (currentLocator !== undefined) {
+    expressionParts.push(`${objectPath}.#currentLocator = :currentLocator`);
+    expressionNames['#currentLocator'] = 'currentLocator';
+    expressionValues[':currentLocator'] = currentLocator;
+  }
+
+  if (errorMessage !== undefined) {
+    expressionParts.push(`${objectPath}.#errorMessage = :errorMessage`);
+    expressionNames['#errorMessage'] = 'errorMessage';
+    expressionValues[':errorMessage'] = errorMessage;
+  }
+
+  if (salesforceApiCount !== undefined) {
+    expressionParts.push(`${objectPath}.#salesforceApiCount = :salesforceApiCount`);
+    expressionNames['#salesforceApiCount'] = 'salesforceApiCount';
+    expressionValues[':salesforceApiCount'] = salesforceApiCount;
+  }
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId },
+      UpdateExpression: `SET ${expressionParts.join(', ')}`,
+      ExpressionAttributeNames: expressionNames,
+      ExpressionAttributeValues: expressionValues,
+    })
+  );
+};
 
 const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<void> => {
   const {
@@ -267,4 +448,4 @@ const getStaleRunningJobs = async (
   } while (lastKey !== undefined);
 };
 
-export { createBackupJob, updateJobStatus, updateBackupObject, getBackupJob, getStaleRunningJobs };
+export { createBackupJob, createArchivalJob, updateJobStatus, updateBackupObject, updateArchivalObject, getBackupJob, getStaleRunningJobs };

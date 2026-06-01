@@ -1,5 +1,5 @@
 import { CORE_SERVICE, INTERNAL_SECRET, OBJECT_STATUS } from '../../../constant';
-import { updateBackupObject } from '../../backup-job';
+import { updateBackupObject, updateArchivalObject } from '../../backup-job';
 import { logger } from '../../../middlewares/logger';
 import { httpRequest } from '../../../utils/http-request';
 import { IDestinationConfig } from '../../../models';
@@ -501,6 +501,166 @@ export const classifyAndUploadBulkResultsByPage = async (
       status: OBJECT_STATUS.failed,
       errorMessage,
     });
+    throw new Error(errorMessage, { cause: err });
+  }
+
+  return { sizeInBytes };
+};
+
+// ---------------------------------------------------------------------------
+// Archival versions - same as above but support nested object paths
+// ---------------------------------------------------------------------------
+interface IPollBulkJobArchival {
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  jobId: string;
+  salesforceApiCount: number;
+  backupJobId?: string;
+  objectIndex?: number | number[];
+}
+
+export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
+  const { instanceUrl, tokens, jobId, backupJobId, objectIndex } = payload;
+  let { salesforceApiCount } = payload;
+  const deadline = Date.now() + MAX_POLL_DURATION_MS;
+
+  while (true) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Bulk job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`
+      );
+    }
+
+    const res = await salesforceRequest<{
+      state: string;
+      errorMessage?: string;
+      numberRecordsProcessed?: number;
+    }>(
+      {
+        url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}`,
+      },
+      tokens
+    );
+    salesforceApiCount++;
+
+    if (
+      backupJobId &&
+      objectIndex !== undefined &&
+      typeof res.numberRecordsProcessed === 'number'
+    ) {
+      await updateArchivalObject({
+        backupJobId,
+        objectIndex,
+        totalRecordCount: res.numberRecordsProcessed,
+      });
+    }
+
+    if (res.state === 'JobComplete') {
+      return res.numberRecordsProcessed ?? 0;
+    }
+    if (res.state === 'Failed' || res.state === 'Aborted') {
+      throw new Error(`Bulk job ${jobId} ${res.state}: ${res.errorMessage ?? 'unknown'}`);
+    }
+  }
+};
+
+export interface IUploadBulkResultsByPageArchival {
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  jobId: string;
+  backupJobId: string;
+  objectIndex: number | number[];
+  destConfig: IDestinationConfig;
+  s3KeyPrefix: string;
+  salesforceApiCount: number;
+  startLocator?: string | null;
+  startCompletedRecordCount?: number;
+  maxRecords?: number;
+}
+
+export const uploadBulkResultsByPageArchival = async (
+  payload: IUploadBulkResultsByPageArchival
+): Promise<{ sizeInBytes: number }> => {
+  let { salesforceApiCount } = payload;
+  const {
+    instanceUrl,
+    tokens,
+    jobId,
+    backupJobId,
+    objectIndex,
+    destConfig,
+    s3KeyPrefix,
+    startLocator = null,
+    startCompletedRecordCount = 0,
+    maxRecords = MAX_RECORDS_PER_PAGE,
+  } = payload;
+
+  const fetchPage = makePageFetcher(tokens);
+
+  let locator: string | null = startLocator;
+  let completedRecordCount = startCompletedRecordCount;
+  let sizeInBytes = 0;
+
+  try {
+    await updateArchivalObject({
+      backupJobId,
+      objectIndex,
+      status: OBJECT_STATUS.transferInProgress,
+    });
+    do {
+      const url = locator
+        ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
+        : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
+
+      const response = await fetchPage(url);
+
+      ++salesforceApiCount;
+      if (!response.ok) {
+        throw new Error(`Salesforce results fetch failed with status ${response.status}`);
+      }
+
+      const nextLocatorRaw = response.headers.get('sforce-locator');
+      const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
+
+      const pageKey = locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`;
+      const s3Key = `${s3KeyPrefix}/${pageKey}.csv`;
+
+      const csvBuffer = Buffer.from(await response.arrayBuffer());
+
+      const pageRowCount = parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
+      completedRecordCount += pageRowCount;
+      sizeInBytes += csvBuffer.length;
+
+      await uploadToS3(destConfig, s3Key, csvBuffer);
+      locator = nextLocator;
+
+      await updateArchivalObject({
+        backupJobId,
+        objectIndex,
+        completedRecordCount,
+        salesforceApiCount,
+        insertCount: completedRecordCount,
+        sizeInBytes,
+        ...(locator
+          ? { currentLocator: locator }
+          : { status: OBJECT_STATUS.completed, errorMessage: '' }),
+      });
+    } while (locator !== null);
+  } catch (err: any) {
+    const failedAt = locator ?? INITIAL_PAGE_KEY;
+    const errorMessage = `archival upload-results failed at locator [${failedAt}]: ${err?.message ?? err}`;
+
+    logger.error(`Archival job ${backupJobId}: object index ${objectIndex} - ${errorMessage}`);
+
+    await updateArchivalObject({
+      backupJobId,
+      objectIndex,
+      status: OBJECT_STATUS.failed,
+      errorMessage,
+    });
+
     throw new Error(errorMessage, { cause: err });
   }
 

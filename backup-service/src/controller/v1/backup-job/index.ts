@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { createBackupJob } from '../../../services';
+import { createBackupJob, createArchivalJob } from '../../../services';
 import { resumeBackupJob, runBackupJob, runArchivalJob } from '../../../services/common/runner';
 import { JOB_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
@@ -31,7 +31,7 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const createArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const job = await createBackupJob(req.body);
+  const job = await createArchivalJob(req.body);
 
   // Respond immediately — archival runs in the background
   makeResponse(req, res, 201, true, 'create', {
