@@ -32,6 +32,7 @@ const conditionSchema = Joi.object({
 });
 
 const objectSchema = Joi.object({
+    id: Joi.string().required(),
     name: Joi.string().required(),
     condition: conditionSchema.optional(),
     type: Joi.string().optional(),
