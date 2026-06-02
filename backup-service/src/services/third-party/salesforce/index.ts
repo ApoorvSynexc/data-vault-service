@@ -64,7 +64,7 @@ const exportObjectToDestinationArchival = async (
   tokens: SalesforceTokens,
   crmName: string,
   object: IBackupObject,
-  objectIndex: number | number[],
+  objectIndex: number,
   destinationType: string,
   destConfig: IDestinationConfig
 ): Promise<void> => {
@@ -136,53 +136,6 @@ const exportWithRetryArchival = async (
   throw lastError;
 };
 
-const processObjectsRecursively = async (
-  objects: IBackupObject[],
-  backupConfigId: string,
-  backupJobId: string,
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  crmName: string,
-  destinationType: string,
-  destConfig: IDestinationConfig,
-  objectIndexPath: number[] = []
-): Promise<void> => {
-  for (let i = 0; i < objects.length; i += CONCURRENCY_LIMIT) {
-    const batch = objects.slice(i, i + CONCURRENCY_LIMIT);
-    await Promise.allSettled(
-      batch.map((item: IBackupObject, batchIndex: number) => {
-        console.log(`${objectIndexPath} : object name: ${item.name} ` );
-        
-        const currentPath = [...objectIndexPath, i + batchIndex];
-        return exportWithRetryArchival(
-          backupConfigId,
-          backupJobId,
-          instanceUrl,
-          tokens,
-          crmName,
-          item,
-          currentPath,
-          destinationType,
-          destConfig
-        ).then(() => {
-          if (item.children?.length) {
-            return processObjectsRecursively(
-              item.children,
-              backupConfigId,
-              backupJobId,
-              instanceUrl,
-              tokens,
-              crmName,
-              destinationType,
-              destConfig,
-              currentPath
-            );
-          }
-        });
-      })
-    );
-  }
-};
 
 const salesforceHandler: ICrmBackupHandler = {
   runBackup: async (
@@ -263,21 +216,29 @@ const salesforceHandler: ICrmBackupHandler = {
       `Archival job has been initialized`,
       {
         backupJobId,
-        rootObjectCount: object.length,
+        objectCount: object.length,
         instance: source.instanceUrl,
       }
     );
 
-    await processObjectsRecursively(
-      object,
-      backupConfigId,
-      backupJobId,
-      instanceUrl,
-      tokens,
-      crmName,
-      destinationType,
-      destConfig
-    );
+    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
+      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+      await Promise.allSettled(
+        batch.map((item, batchIndex) =>
+          exportWithRetryArchival(
+            backupConfigId,
+            backupJobId,
+            instanceUrl,
+            tokens,
+            crmName,
+            item,
+            i + batchIndex,
+            destinationType,
+            destConfig
+          )
+        )
+      );
+    }
 
     await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
     logger.info(`Archival job completed`, { backupJobId });
