@@ -659,9 +659,9 @@ export const uploadBulkResultsByPageArchival = async (
       //     ? { currentLocator: locator }
       //     : { status: OBJECT_STATUS.completed, errorMessage: '' }),
       // });
-      latestObjects = await updateArchivalObject({
+      await updateArchivalObject({
         backupJobId,
-        objects: latestObjects,
+        // objects: latestObjects,
         object: {
           ...object,
           completedRecordCount,
