@@ -522,7 +522,7 @@ interface IPollBulkJobArchival {
 
 export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
   const { instanceUrl, tokens, jobId, backupJobId, object } = payload;
-  let { salesforceApiCount } = payload;
+  let { salesforceApiCount, latestObjects } = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
   while (true) {
@@ -551,9 +551,9 @@ export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promis
       object.id !== undefined &&
       typeof res.numberRecordsProcessed === 'number'
     ) {
-      payload.latestObjects = await updateArchivalObject({
+      latestObjects = await updateArchivalObject({
         backupJobId,
-        objects: payload.latestObjects,
+        objects: latestObjects,
         object: {
           ...object,
           totalRecordCount: res.numberRecordsProcessed,
@@ -588,7 +588,7 @@ export interface IUploadBulkResultsByPageArchival {
 export const uploadBulkResultsByPageArchival = async (
   payload: IUploadBulkResultsByPageArchival
 ): Promise<{ sizeInBytes: number }> => {
-  let { salesforceApiCount } = payload;
+  let { salesforceApiCount, latestObjects } = payload;
   const {
     instanceUrl,
     tokens,
@@ -609,9 +609,9 @@ export const uploadBulkResultsByPageArchival = async (
   let sizeInBytes = 0;
 
   try {
-    payload.latestObjects = await updateArchivalObject({
+    latestObjects = await updateArchivalObject({
       backupJobId,
-      objects: payload.latestObjects,
+      objects: latestObjects,
       object: {
         ...object,
         status: OBJECT_STATUS.transferInProgress,
@@ -662,7 +662,7 @@ export const uploadBulkResultsByPageArchival = async (
       // });
       await updateArchivalObject({
         backupJobId,
-        objects: payload.latestObjects,
+        objects: latestObjects,
         object: {
           ...object,
           completedRecordCount,
@@ -689,7 +689,7 @@ export const uploadBulkResultsByPageArchival = async (
     // });
     await updateArchivalObject({
       backupJobId,
-      objects: payload.latestObjects,
+      objects: latestObjects,
       object: {
         ...object,
         status: OBJECT_STATUS.failed,
