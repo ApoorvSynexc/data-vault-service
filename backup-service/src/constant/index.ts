@@ -53,6 +53,8 @@ const OBJECT_STATUS = {
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   transferInProgress: 'TRANSFER_IN_PROGRESS',
+  uploadCompleted: 'UPLOAD_COMPLETED',
+  deletionInProgress: 'DELETION_IN_PROGRESS',
   completed: 'COMPLETED',
   failed: 'FAILED',
 };

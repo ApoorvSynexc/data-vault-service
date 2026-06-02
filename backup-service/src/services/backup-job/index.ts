@@ -363,4 +363,4 @@ const getStaleRunningJobs = async (
   } while (lastKey !== undefined);
 };
 
-export { createBackupJob, createArchivalJob, updateJobStatus, updateBackupObject, updateArchivalObject, getBackupJob, getStaleRunningJobs };
+export { createBackupJob, createArchivalJob, updateJobStatus, recursivelyUpdateObjects, updateBackupObject, updateArchivalObject, getBackupJob, getStaleRunningJobs };

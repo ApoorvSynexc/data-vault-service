@@ -1,7 +1,7 @@
 import { OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../models';
-import { updateArchivalObject, updateBackupObject } from '../../backup-job';
+import { recursivelyUpdateObjects, updateArchivalObject, updateBackupObject } from '../../backup-job';
 import {
   buildS3KeyPrefix,
   buildSchemaS3Key,
@@ -46,9 +46,9 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
 
   // If value is not already quoted and not a number/boolean/datetime, wrap it in single quotes
   let formattedValue = value;
-   if(isDateTimeFormat(value)){
+  if (isDateTimeFormat(value)) {
     formattedValue = new Date(value).toISOString();
-  }else if (!value.startsWith("'") && !value.startsWith('(') && isNaN(Number(value)) && value !== 'true' && value !== 'false') {
+  } else if (!value.startsWith("'") && !value.startsWith('(') && isNaN(Number(value)) && value !== 'true' && value !== 'false') {
     formattedValue = `'${value}'`;
   }
 
@@ -162,41 +162,33 @@ export const archiveAndHardDelete = async (
           bulkJobId: jobId,
         }
       });
-      // await updateBackupObject({
-      //   backupJobId,
-      //   objectIndex,
-      //   salesforceApiCount,
-      //   status: OBJECT_STATUS.bulkQueryCompleted,
-      //   bulkJobId: jobId,
-      // });
     }
 
     logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
+    if (salesforceApiCount) {
+      const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+      const { sizeInBytes } = await uploadBulkResultsByPageArchival({
+        instanceUrl,
+        tokens,
+        jobId,
+        backupJobId,
+        object,
+        destConfig,
+        salesforceApiCount,
+        s3KeyPrefix: archivePrefix,
+        startLocator: object.currentLocator ?? null,
+        startCompletedRecordCount: object.completedRecordCount ?? 0,
+      });
 
-    const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-    const { sizeInBytes } = await uploadBulkResultsByPageArchival({
-      instanceUrl,
-      tokens,
-      jobId,
-      backupJobId,
-      object,
-      destConfig,
-      salesforceApiCount,
-      s3KeyPrefix: archivePrefix,
-      startLocator: object.currentLocator ?? null,
-      startCompletedRecordCount: object.completedRecordCount ?? 0,
-    });
-
-    const updateParams: any = { sizeInBytes };
-    backupConfig = await getBackupConfigById(backupConfigId);
-    if (backupConfig?.objects) {
-      const updatedObjects = backupConfig.objects.map((obj) =>
-        obj.name === objectName ? { ...obj, sizeInBytes } : obj
-      );
-      updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-      updateParams.objects = updatedObjects;
+      const updateParams: any = { sizeInBytes };
+      backupConfig = await getBackupConfigById(backupConfigId);
+      if (backupConfig?.objects) {
+        const updatedObjects = recursivelyUpdateObjects(backupConfig.objects, { id: object.id, sizeInBytes });
+        updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+        updateParams.objects = updatedObjects;
+      }
+      await updateBackupConfig(backupConfigId, updateParams);
     }
-    // await updateBackupConfig(backupConfigId, updateParams);
 
     const schemaWithParquet = schema.map((field: { dataType: string }) => ({
       ...field,
