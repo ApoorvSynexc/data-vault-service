@@ -206,7 +206,7 @@ const salesforceHandler: ICrmBackupHandler = {
       return;
     }
 
-    const flattenObjects = object.flat();
+    const flattenObjects = object.reduce((acc, obj) => [...acc, ...(obj.children ?? [])], [] as IBackupObject[]);
 
     const tokens: SalesforceTokens = {
       accessToken: access_token,
@@ -215,13 +215,7 @@ const salesforceHandler: ICrmBackupHandler = {
     };
 
     logger.info(
-      `Archival job has been initialized`,
-      {
-        backupJobId,
-        objectCount: flattenObjects.length,
-        instance: source.instanceUrl,
-      }
-    );
+      `Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenObjects.length}, instance: ${source.instanceUrl}`);
 
     for (let i = 0; i < flattenObjects.length; i += CONCURRENCY_LIMIT) {
       const batch = flattenObjects.slice(i, i + CONCURRENCY_LIMIT);
