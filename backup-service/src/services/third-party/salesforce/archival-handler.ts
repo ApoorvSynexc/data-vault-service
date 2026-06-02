@@ -140,7 +140,6 @@ export const archiveAndHardDelete = async (
           jobId,
           backupJobId,
           object,
-          latestObjects,
           salesforceApiCount
         });
       } catch (err: any) {
@@ -175,7 +174,6 @@ export const archiveAndHardDelete = async (
       jobId,
       backupJobId,
       object,
-      latestObjects,
       destConfig,
       salesforceApiCount,
       s3KeyPrefix: archivePrefix,
