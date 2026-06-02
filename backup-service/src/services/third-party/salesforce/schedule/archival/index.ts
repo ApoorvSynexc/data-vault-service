@@ -185,7 +185,7 @@ export const archiveAndHardDelete = async (
             const updateParams: any = { sizeInBytes };
             backupConfig = await getBackupConfigById(backupConfigId);
             if (backupConfig?.objects) {
-                const updatedObjects = recursivelyUpdateObjects(backupConfig.objects, { id: object.id, sizeInBytes });
+                const updatedObjects = await recursivelyUpdateObjects(backupConfig.objects, { id: object.id, sizeInBytes });
                 updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
                 updateParams.objects = updatedObjects;
             }
