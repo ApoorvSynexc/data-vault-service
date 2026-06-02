@@ -106,6 +106,7 @@ export const archiveAndHardDelete = async (
   let salesforceApiCount: number = 0;
   let totalRecordCount: number = 0;
   let jobId: string;
+  let latestObjects: IBackupObject[] = [];
 
   try {
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
@@ -114,18 +115,13 @@ export const archiveAndHardDelete = async (
       jobId = object.bulkJobId;
       salesforceApiCount += object.salesforceApiCount ?? 0;
     } else {
-      await updateArchivalObject({
+      latestObjects = await updateArchivalObject({
         backupJobId,
         object: {
           ...object,
           status: OBJECT_STATUS.bulkQueryInProgress
         }
       });
-      // await updateBackupObject({
-      //   backupJobId,
-      //   objectIndex,
-      //   status: OBJECT_STATUS.bulkQueryInProgress,
-      // });
 
       const whereClause = buildWhereClause(object);
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
@@ -144,14 +140,16 @@ export const archiveAndHardDelete = async (
           jobId,
           backupJobId,
           object,
+          latestObjects,
           salesforceApiCount
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
 
-      await updateArchivalObject({
+      latestObjects = await updateArchivalObject({
         backupJobId,
+        objects: latestObjects,
         object: {
           ...object,
           salesforceApiCount,
@@ -177,6 +175,7 @@ export const archiveAndHardDelete = async (
       jobId,
       backupJobId,
       object,
+      latestObjects,
       destConfig,
       salesforceApiCount,
       s3KeyPrefix: archivePrefix,
@@ -209,8 +208,9 @@ export const archiveAndHardDelete = async (
     logger.info(`Object archival complete, backupConfigId:${backupConfigId}, backupJobId${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
-    await updateArchivalObject({
+    latestObjects = await updateArchivalObject({
       backupJobId,
+      objects: latestObjects,
       object: {
         ...object,
         salesforceApiCount,

@@ -515,12 +515,13 @@ interface IPollBulkJobArchival {
   tokens: SalesforceTokens;
   jobId: string;
   object: IBackupObject,
+  latestObjects: IBackupObject[],
   salesforceApiCount: number;
   backupJobId?: string;
 }
 
 export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
-  const { instanceUrl, tokens, jobId, backupJobId, object } = payload;
+  const { instanceUrl, tokens, jobId, backupJobId, object, latestObjects } = payload;
   let { salesforceApiCount } = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
@@ -552,6 +553,7 @@ export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promis
     ) {
       await updateArchivalObject({
         backupJobId,
+        objects: latestObjects,
         object: {
           ...object,
           totalRecordCount: res.numberRecordsProcessed,
@@ -574,6 +576,7 @@ export interface IUploadBulkResultsByPageArchival {
   jobId: string;
   backupJobId: string;
   object: IBackupObject,
+  latestObjects: IBackupObject[],
   destConfig: IDestinationConfig;
   s3KeyPrefix: string;
   salesforceApiCount: number;
@@ -585,7 +588,7 @@ export interface IUploadBulkResultsByPageArchival {
 export const uploadBulkResultsByPageArchival = async (
   payload: IUploadBulkResultsByPageArchival
 ): Promise<{ sizeInBytes: number }> => {
-  let { salesforceApiCount } = payload;
+  let { salesforceApiCount, latestObjects } = payload;
   const {
     instanceUrl,
     tokens,
@@ -658,6 +661,7 @@ export const uploadBulkResultsByPageArchival = async (
       // });
       await updateArchivalObject({
         backupJobId,
+        objects: latestObjects,
         object: {
           ...object,
           completedRecordCount,
@@ -684,6 +688,7 @@ export const uploadBulkResultsByPageArchival = async (
     // });
     await updateArchivalObject({
       backupJobId,
+      objects: latestObjects,
       object: {
         ...object,
         status: OBJECT_STATUS.failed,
