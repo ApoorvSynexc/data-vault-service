@@ -306,8 +306,11 @@ const updateArchivalObject = async ({ backupJobId, objects, object }: { backupJo
   await docClient.send(
     new UpdateCommand({
       TableName: BACKUP_JOB_TABLE,
-      Key: { backupJobId: backupJobId },
-      UpdateExpression: "SET object = :object",
+      Key: { backupJobId },
+      UpdateExpression: "SET #object = :object",
+      ExpressionAttributeNames: {
+        "#object": "object",
+      },
       ExpressionAttributeValues: {
         ":object": payload,
       },
