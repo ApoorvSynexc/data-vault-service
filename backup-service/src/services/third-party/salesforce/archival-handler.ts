@@ -97,7 +97,6 @@ export const archiveAndHardDelete = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   crmName: string,
-  objects: IBackupObject[],
   object: IBackupObject,
   destConfig: IDestinationConfig
 ): Promise<void> => {
@@ -117,7 +116,6 @@ export const archiveAndHardDelete = async (
     } else {
       await updateArchivalObject({
         backupJobId,
-        objects,
         object: {
           ...object,
           status: OBJECT_STATUS.bulkQueryInProgress
@@ -145,7 +143,6 @@ export const archiveAndHardDelete = async (
           tokens,
           jobId,
           backupJobId,
-          objects,
           object,
           salesforceApiCount
         });
@@ -155,7 +152,6 @@ export const archiveAndHardDelete = async (
 
       await updateArchivalObject({
         backupJobId,
-        objects,
         object: {
           ...object,
           salesforceApiCount,
@@ -180,7 +176,6 @@ export const archiveAndHardDelete = async (
       tokens,
       jobId,
       backupJobId,
-      objects,
       object,
       destConfig,
       salesforceApiCount,
@@ -216,7 +211,6 @@ export const archiveAndHardDelete = async (
     const errorMsg = err?.message ?? String(err);
     await updateArchivalObject({
       backupJobId,
-      objects,
       object: {
         ...object,
         salesforceApiCount,
