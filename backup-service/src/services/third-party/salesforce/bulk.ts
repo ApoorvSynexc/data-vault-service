@@ -1,8 +1,8 @@
 import { CORE_SERVICE, INTERNAL_SECRET, OBJECT_STATUS } from '../../../constant';
-import { updateBackupObject, updateBackupObject } from '../../backup-job';
+import { updateArchivalObject, updateBackupObject } from '../../backup-job';
 import { logger } from '../../../middlewares/logger';
 import { httpRequest } from '../../../utils/http-request';
-import { IDestinationConfig } from '../../../models';
+import { IBackupObject, IDestinationConfig } from '../../../models';
 import { uploadToS3 } from '../../destination/s3';
 import {
   salesforceRequest,
@@ -23,23 +23,23 @@ const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 // ---------------------------------------------------------------------------
 const makePageFetcher =
   (tokens: SalesforceTokens) =>
-  async (url: string): Promise<Response> => {
-    let response = await fetch(url, {
-      headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-    });
-    if (response.status === 401) {
-      try {
-        const refreshed = await refreshSalesforceToken(tokens.crmId);
-        tokens.accessToken = refreshed.access_token;
-      } catch {
-        throw new SalesforceAuthExpiredError();
-      }
-      response = await fetch(url, {
+    async (url: string): Promise<Response> => {
+      let response = await fetch(url, {
         headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
       });
-    }
-    return response;
-  };
+      if (response.status === 401) {
+        try {
+          const refreshed = await refreshSalesforceToken(tokens.crmId);
+          tokens.accessToken = refreshed.access_token;
+        } catch {
+          throw new SalesforceAuthExpiredError();
+        }
+        response = await fetch(url, {
+          headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
+        });
+      }
+      return response;
+    };
 
 interface ICreateBulkQueryJob {
   instanceUrl: string;
@@ -514,13 +514,14 @@ interface IPollBulkJobArchival {
   instanceUrl: string;
   tokens: SalesforceTokens;
   jobId: string;
+  objects: IBackupObject[],
+  object: IBackupObject,
   salesforceApiCount: number;
   backupJobId?: string;
-  objectIndex?: number | number[];
 }
 
 export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
-  const { instanceUrl, tokens, jobId, backupJobId, objectIndex } = payload;
+  const { instanceUrl, tokens, jobId, backupJobId, objects, object } = payload;
   let { salesforceApiCount } = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
@@ -547,13 +548,16 @@ export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promis
 
     if (
       backupJobId &&
-      objectIndex !== undefined &&
+      object.id !== undefined &&
       typeof res.numberRecordsProcessed === 'number'
     ) {
-      await updateBackupObject({
+      await updateArchivalObject({
         backupJobId,
-        objectIndex,
-        totalRecordCount: res.numberRecordsProcessed,
+        objects,
+        object: {
+          ...object,
+          totalRecordCount: res.numberRecordsProcessed,
+        }
       });
     }
 
@@ -571,7 +575,8 @@ export interface IUploadBulkResultsByPageArchival {
   tokens: SalesforceTokens;
   jobId: string;
   backupJobId: string;
-  objectIndex: number | number[];
+  objects: IBackupObject[],
+  object: IBackupObject,
   destConfig: IDestinationConfig;
   s3KeyPrefix: string;
   salesforceApiCount: number;
@@ -589,7 +594,8 @@ export const uploadBulkResultsByPageArchival = async (
     tokens,
     jobId,
     backupJobId,
-    objectIndex,
+    objects,
+    object,
     destConfig,
     s3KeyPrefix,
     startLocator = null,
@@ -604,11 +610,19 @@ export const uploadBulkResultsByPageArchival = async (
   let sizeInBytes = 0;
 
   try {
-    await updateBackupObject({
+    await updateArchivalObject({
       backupJobId,
-      objectIndex,
-      status: OBJECT_STATUS.transferInProgress,
+      objects,
+      object: {
+        ...object,
+        status: OBJECT_STATUS.transferInProgress,
+      }
     });
+    // await updateBackupObject({
+    //   backupJobId,
+    //   objectIndex,
+    //   status: OBJECT_STATUS.transferInProgress,
+    // });
     do {
       const url = locator
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
@@ -636,31 +650,53 @@ export const uploadBulkResultsByPageArchival = async (
       await uploadToS3(destConfig, s3Key, csvBuffer);
       locator = nextLocator;
 
-      await updateBackupObject({
+      // await updateBackupObject({
+      //   backupJobId,
+      //   objectIndex,
+      //   completedRecordCount,
+      //   salesforceApiCount,
+      //   insertCount: completedRecordCount,
+      //   sizeInBytes,
+      //   ...(locator
+      //     ? { currentLocator: locator }
+      //     : { status: OBJECT_STATUS.completed, errorMessage: '' }),
+      // });
+      await updateArchivalObject({
         backupJobId,
-        objectIndex,
-        completedRecordCount,
-        salesforceApiCount,
-        insertCount: completedRecordCount,
-        sizeInBytes,
-        ...(locator
-          ? { currentLocator: locator }
-          : { status: OBJECT_STATUS.completed, errorMessage: '' }),
+        objects,
+        object: {
+          ...object,
+          completedRecordCount,
+          salesforceApiCount,
+          insertCount: completedRecordCount,
+          sizeInBytes,
+          ...(locator
+            ? { currentLocator: locator }
+            : { status: OBJECT_STATUS.completed, errorMessage: '' }),
+        }
       });
     } while (locator !== null);
   } catch (err: any) {
     const failedAt = locator ?? INITIAL_PAGE_KEY;
     const errorMessage = `archival upload-results failed at locator [${failedAt}]: ${err?.message ?? err}`;
 
-    logger.error(`Archival job ${backupJobId}: object index ${objectIndex} - ${errorMessage}`);
+    logger.error(`Archival uploading batch failed, backupJobId:${backupJobId}: objectName:${object.name} objectId${object.id} - ${errorMessage}`);
 
-    await updateBackupObject({
+    // await updateBackupObject({
+    //   backupJobId,
+    //   objectIndex,
+    //   status: OBJECT_STATUS.failed,
+    //   errorMessage,
+    // });
+    await updateArchivalObject({
       backupJobId,
-      objectIndex,
-      status: OBJECT_STATUS.failed,
-      errorMessage,
+      objects,
+      object: {
+        ...object,
+        status: OBJECT_STATUS.failed,
+        errorMessage,
+      }
     });
-
     throw new Error(errorMessage, { cause: err });
   }
 
