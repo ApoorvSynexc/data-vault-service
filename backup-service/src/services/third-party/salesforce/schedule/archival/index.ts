@@ -182,14 +182,14 @@ export const archiveAndHardDelete = async (
                 startCompletedRecordCount: object.completedRecordCount ?? 0,
             });
 
-            const updateParams: any = { sizeInBytes };
-            backupConfig = await getBackupConfigById(backupConfigId);
-            if (backupConfig?.objects) {
-                const updatedObjects = recursivelyUpdateObjects(backupConfig.objects, { id: object.id, sizeInBytes });
-                updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-                updateParams.objects = updatedObjects;
-            }
-            await updateBackupConfig(backupConfigId, updateParams);
+            // const updateParams: any = { sizeInBytes };
+            // backupConfig = await getBackupConfigById(backupConfigId);
+            // if (backupConfig?.objects) {
+            //     const updatedObjects = recursivelyUpdateObjects(backupConfig.objects, { id: object.id, sizeInBytes });
+            //     updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+            //     updateParams.objects = updatedObjects;
+            // }
+            // await updateBackupConfig(backupConfigId, updateParams);
         }
 
         const schemaWithParquet = schema.map((field: { dataType: string }) => ({
