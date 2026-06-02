@@ -609,8 +609,9 @@ export const uploadBulkResultsByPageArchival = async (
   let sizeInBytes = 0;
 
   try {
-    await updateArchivalObject({
+    latestObjects = await updateArchivalObject({
       backupJobId,
+      objects: latestObjects,
       object: {
         ...object,
         status: OBJECT_STATUS.transferInProgress,
