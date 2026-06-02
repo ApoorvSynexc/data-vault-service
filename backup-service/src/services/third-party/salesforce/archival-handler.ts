@@ -29,6 +29,10 @@ const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
 const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
 
+const isDateTimeFormat = (value: string): boolean => {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d{3})?Z?$/.test(value);
+};
+
 const buildFilterCondition = (name: string, operator: string, value: string): string => {
   if (!SAFE_FIELD_NAME_RE.test(name)) {
     throw new Error(`Invalid SOQL field name: "${name}"`);
@@ -40,9 +44,11 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
     throw new Error(`Invalid SOQL filter value: "${value}"`);
   }
 
-  // If value is not already quoted and not a number/boolean, wrap it in single quotes
+  // If value is not already quoted and not a number/boolean/datetime, wrap it in single quotes
   let formattedValue = value;
-  if (!value.startsWith("'") && !value.startsWith('(') && isNaN(Number(value)) && value !== 'true' && value !== 'false') {
+   if(isDateTimeFormat(value)){
+    formattedValue = new Date(value).toISOString();
+  }else if (!value.startsWith("'") && !value.startsWith('(') && isNaN(Number(value)) && value !== 'true' && value !== 'false') {
     formattedValue = `'${value}'`;
   }
 
