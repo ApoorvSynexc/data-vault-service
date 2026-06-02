@@ -286,6 +286,35 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
   );
 };
 
+const recursivelyUpdateObjects = async (objects: IBackupObject[], object: IBackupObject): Promise<IBackupObject[]> => {
+  return Promise.all(
+    objects.map(async (obj) => {
+      if (obj.id === object.id) {
+        return { ...obj, ...object };
+      }
+      if (obj.children?.length) {
+        return { ...obj, children: await recursivelyUpdateObjects(obj.children, object) };
+      }
+      return obj;
+    })
+  );
+};
+
+const updateArchivalObject = async ({ backupJobId, objects, object }: { backupJobId: string, objects: IBackupObject[], object: IBackupObject }): Promise<void> => {
+  const payload = await recursivelyUpdateObjects(objects, object);
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId: backupJobId },
+      UpdateExpression: "SET object = :object",
+      ExpressionAttributeValues: {
+        ":object": payload,
+      },
+    })
+  );
+}
+
 const getBackupJob = async (backupJobId: string): Promise<IBackupJob | null> => {
   const result = await docClient.send(
     new GetCommand({ TableName: BACKUP_JOB_TABLE, Key: { backupJobId } })
@@ -318,4 +347,4 @@ const getStaleRunningJobs = async (
   } while (lastKey !== undefined);
 };
 
-export { createBackupJob, createArchivalJob, updateJobStatus, updateBackupObject, getBackupJob, getStaleRunningJobs };
+export { createBackupJob, createArchivalJob, updateJobStatus, updateBackupObject, updateArchivalObject, getBackupJob, getStaleRunningJobs };

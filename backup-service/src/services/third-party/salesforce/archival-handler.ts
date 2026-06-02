@@ -1,7 +1,7 @@
 import { OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../models';
-import { updateBackupObject } from '../../backup-job';
+import { updateArchivalObject, updateBackupObject } from '../../backup-job';
 import {
   buildS3KeyPrefix,
   buildSchemaS3Key,
@@ -97,8 +97,8 @@ export const archiveAndHardDelete = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   crmName: string,
+  objects: IBackupObject[],
   object: IBackupObject,
-  objectIndex: number,
   destConfig: IDestinationConfig
 ): Promise<void> => {
   const { crmId } = tokens;
@@ -110,16 +110,24 @@ export const archiveAndHardDelete = async (
 
   try {
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
-    
+
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
       salesforceApiCount += object.salesforceApiCount ?? 0;
     } else {
-      await updateBackupObject({
+      await updateArchivalObject({
         backupJobId,
-        objectIndex,
-        status: OBJECT_STATUS.bulkQueryInProgress,
+        objects,
+        object: {
+          ...object,
+          status: OBJECT_STATUS.bulkQueryInProgress
+        }
       });
+      // await updateBackupObject({
+      //   backupJobId,
+      //   objectIndex,
+      //   status: OBJECT_STATUS.bulkQueryInProgress,
+      // });
 
       const whereClause = buildWhereClause(object);
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
@@ -137,28 +145,34 @@ export const archiveAndHardDelete = async (
           tokens,
           jobId,
           backupJobId,
-          objectIndex,
+          objects,
+          object,
           salesforceApiCount
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
 
-      await updateBackupObject({
+      await updateArchivalObject({
         backupJobId,
-        objectIndex,
-        salesforceApiCount,
-        status: OBJECT_STATUS.bulkQueryCompleted,
-        bulkJobId: jobId,
+        objects,
+        object: {
+          ...object,
+          salesforceApiCount,
+          status: OBJECT_STATUS.bulkQueryCompleted,
+          bulkJobId: jobId,
+        }
       });
+      // await updateBackupObject({
+      //   backupJobId,
+      //   objectIndex,
+      //   salesforceApiCount,
+      //   status: OBJECT_STATUS.bulkQueryCompleted,
+      //   bulkJobId: jobId,
+      // });
     }
 
-    logger.info(`Object found records for archival`, {
-      backupConfigId,
-      backupJobId,
-      objectName,
-      recordCount: totalRecordCount,
-    });
+    logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName} recordCount:${totalRecordCount}`);
 
     const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
     const { sizeInBytes } = await uploadBulkResultsByPageArchival({
@@ -166,7 +180,8 @@ export const archiveAndHardDelete = async (
       tokens,
       jobId,
       backupJobId,
-      objectIndex,
+      objects,
+      object,
       destConfig,
       salesforceApiCount,
       s3KeyPrefix: archivePrefix,
@@ -196,26 +211,26 @@ export const archiveAndHardDelete = async (
       Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
     );
 
-    logger.info(`Object archival complete ${objectName}`, {
-      backupConfigId,
-      backupJobId,
-      objectName,
-      recordCount: totalRecordCount,
-    });
+    logger.info(`Object archival complete, backupConfigId:${backupConfigId}, backupJobId${backupJobId} objectName:${objectName} recordCount:${totalRecordCount}`);
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
-    await updateBackupObject({
+    await updateArchivalObject({
       backupJobId,
-      objectIndex,
-      status: OBJECT_STATUS.failed,
-      errorMessage: errorMsg,
+      objects,
+      object: {
+        ...object,
+        salesforceApiCount,
+        status: OBJECT_STATUS.failed,
+        errorMessage: errorMsg,
+      }
     });
-    logger.error(`Object archival failed`, {
-      backupConfigId,
-      backupJobId,
-      objectName,
-      errorMsg,
-    });
+    // await updateBackupObject({
+    //   backupJobId,
+    //   objectIndex,
+    //   status: OBJECT_STATUS.failed,
+    //   errorMessage: errorMsg,
+    // });
+    logger.error(`Object archival failed, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName} - ${errorMsg}`);
     throw err;
   }
 };

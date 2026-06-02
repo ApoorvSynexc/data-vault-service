@@ -63,8 +63,8 @@ const exportObjectToDestinationArchival = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   crmName: string,
+  objects: IBackupObject[],
   object: IBackupObject,
-  objectIndex: number,
   destinationType: string,
   destConfig: IDestinationConfig
 ): Promise<void> => {
@@ -82,8 +82,8 @@ const exportObjectToDestinationArchival = async (
     instanceUrl,
     tokens,
     crmName,
+    objects,
     object,
-    objectIndex,
     destConfig
   );
 };
@@ -115,7 +115,7 @@ const exportWithRetry = async (
 const exportWithRetryArchival = async (
   ...args: Parameters<typeof exportObjectToDestinationArchival>
 ): Promise<void> => {
-  const [, backupJobId, , , , object] = args;
+  const [, backupJobId, , , , , object] = args;
   const objectName = object.name;
   let lastError: any;
 
@@ -206,6 +206,8 @@ const salesforceHandler: ICrmBackupHandler = {
       return;
     }
 
+    const flattenObjects = object.flat();
+
     const tokens: SalesforceTokens = {
       accessToken: access_token,
       refreshToken: refresh_token,
@@ -216,23 +218,23 @@ const salesforceHandler: ICrmBackupHandler = {
       `Archival job has been initialized`,
       {
         backupJobId,
-        objectCount: object.length,
+        objectCount: flattenObjects.length,
         instance: source.instanceUrl,
       }
     );
 
-    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
-      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+    for (let i = 0; i < flattenObjects.length; i += CONCURRENCY_LIMIT) {
+      const batch = flattenObjects.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
-        batch.map((item, batchIndex) =>
+        batch.map((item) =>
           exportWithRetryArchival(
             backupConfigId,
             backupJobId,
             instanceUrl,
             tokens,
             crmName,
+            object,
             item,
-            i + batchIndex,
             destinationType,
             destConfig
           )
