@@ -5,8 +5,8 @@ import { ICrmBackupHandler } from '../types';
 import { updateBackupConfig } from '../../backup-config';
 
 import { SalesforceTokens } from './api-request';
-import { exportFirstTime, exportIncremental } from './backup-handler';
-import { archiveAndHardDelete } from './archival-handler';
+import { exportFirstTime, exportIncremental } from './schedule/backup';
+import { archiveAndHardDelete } from './schedule/archival';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;

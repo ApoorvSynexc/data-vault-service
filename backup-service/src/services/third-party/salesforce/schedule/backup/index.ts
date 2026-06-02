@@ -1,23 +1,25 @@
-import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
-import { logger } from '../../../middlewares/logger';
-import { IBackupObject, IDestinationConfig } from '../../../models';
-import { updateBackupObject } from '../../backup-job';
+import { BACKUP_STATUS, OBJECT_STATUS } from '../../../../../constant';
+import { logger } from '../../../../../middlewares/logger';
+import { IBackupObject, IDestinationConfig } from '../../../../../models';
+import { updateBackupObject } from '../../../../backup-job';
 import {
   buildS3KeyPrefix,
   buildSchemaS3Key,
   toParquetDataType,
   schemasAreEqual,
-} from '../../../utils/helper';
-import { downloadFromS3, listS3Objects, uploadToS3 } from '../../destination/s3';
+} from '../../../../../utils/helper';
+import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destination/s3';
 import {
-  classifyAndUploadBulkResultsByPage,
   createBulkQueryJob,
   getObjectMetadata,
   pollBulkJob,
+} from '../../bulk';
+import {
+classifyAndUploadBulkResultsByPage,
   uploadBulkResultsByPage,
 } from './bulk';
-import { SalesforceTokens } from './api-request';
-import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
+import { SalesforceTokens } from '../../api-request';
+import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 
 // SOQL injection guards.
 // Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")

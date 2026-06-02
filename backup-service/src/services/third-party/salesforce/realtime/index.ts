@@ -1,10 +1,10 @@
-import { IDestinationConfig, IRealtimePayload } from '../../../models';
-import { logger } from '../../../middlewares/logger';
-import { httpRequest } from '../../../utils/http-request';
-import { CORE_SERVICE, INTERNAL_SECRET } from '../../../constant';
-import { buildSchemaS3Key, toParquetDataType, schemasAreEqual } from '../../../utils/helper';
-import { downloadFromS3, uploadToS3, listS3Objects } from '../../destination/s3';
-import { ICrmRealtimeHandler } from '../types';
+import { IDestinationConfig, IRealtimePayload } from '../../../../models';
+import { logger } from '../../../../middlewares/logger';
+import { httpRequest } from '../../../../utils/http-request';
+import { CORE_SERVICE, INTERNAL_SECRET } from '../../../../constant';
+import { buildSchemaS3Key, toParquetDataType, schemasAreEqual } from '../../../../utils/helper';
+import { downloadFromS3, uploadToS3, listS3Objects } from '../../../destination/s3';
+import { ICrmRealtimeHandler } from '../../types';
 
 // ---------------------------------------------------------------------------
 // Map Salesforce CDC operation to the S3 folder convention used by bulk jobs
