@@ -63,7 +63,6 @@ const exportObjectToDestinationArchival = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   crmName: string,
-  objects: IBackupObject[],
   object: IBackupObject,
   destinationType: string,
   destConfig: IDestinationConfig
@@ -114,7 +113,7 @@ const exportWithRetry = async (
 const exportWithRetryArchival = async (
   ...args: Parameters<typeof exportObjectToDestinationArchival>
 ): Promise<void> => {
-  const [, backupJobId, , , , , object] = args;
+  const [, backupJobId, , , , object] = args;
   const objectName = object.name;
   let lastError: any;
 
@@ -209,30 +208,33 @@ const salesforceHandler: ICrmBackupHandler = {
       return objects.flatMap(obj => [obj, ...(obj.children ? recursivelyFlatten(obj.children) : [])]);
     };
 
-    console.log(JSON.stringify(recursivelyFlatten));
-    const flattenObjects = recursivelyFlatten(object);
-
     const tokens: SalesforceTokens = {
       accessToken: access_token,
       refreshToken: refresh_token,
       crmId,
     };
-
-    logger.info(`Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenObjects.length}, instance: ${source.instanceUrl}`);
-
-    for (let i = 0; i < flattenObjects.length; i++) {
-      const item = flattenObjects[i];
-      await exportWithRetryArchival(
-        backupConfigId,
-        backupJobId,
-        instanceUrl,
-        tokens,
-        crmName,
-        object,
-        item,
-        destinationType,
-        destConfig
-      );
+    
+    for (let i = 0; i < object.length; i++) {
+      const item = object[i];
+      let flattenChildObjects = item.children?.length ? recursivelyFlatten(item.children) : [];
+      flattenChildObjects.reverse();
+      delete item.children;
+      flattenChildObjects.push(item);
+      
+      logger.info(`Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenChildObjects.length}, onjectName: ${item.name}, insatnce: ${source.instanceUrl}`);
+      for (let childIndex = 0; childIndex < flattenChildObjects.length; childIndex++) {
+        const childObject = flattenChildObjects[childIndex];
+        await exportWithRetryArchival(
+          backupConfigId,
+          backupJobId,
+          instanceUrl,
+          tokens,
+          crmName,
+          childObject,
+          destinationType,
+          destConfig
+        );
+      }
     }
     // for (let i = 0; i < flattenObjects.length; i += CONCURRENCY_LIMIT) {
     //   const batch = flattenObjects.slice(i, i + CONCURRENCY_LIMIT);
