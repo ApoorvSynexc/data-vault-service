@@ -222,8 +222,9 @@ const salesforceHandler: ICrmBackupHandler = {
     logger.info(
       `Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenObjects.length}, instance: ${source.instanceUrl}`);
 
-    for (let i = 0; i < flattenObjects.length; i += CONCURRENCY_LIMIT) {
-      const batch = flattenObjects.slice(i, i + CONCURRENCY_LIMIT);
+      const CONCURRENCY_LIMIT2 = 1
+    for (let i = 0; i < flattenObjects.length; i += CONCURRENCY_LIMIT2) {
+      const batch = flattenObjects.slice(i, i + CONCURRENCY_LIMIT2);
       await Promise.allSettled(
         batch.map((item) =>
           exportWithRetryArchival(
