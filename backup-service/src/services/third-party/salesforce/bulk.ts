@@ -670,7 +670,7 @@ export const uploadBulkResultsByPageArchival = async (
           sizeInBytes,
           ...(locator
             ? { currentLocator: locator }
-            : { status: OBJECT_STATUS.completed, errorMessage: '' }),
+            : { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
         }
       });
     } while (locator !== null);

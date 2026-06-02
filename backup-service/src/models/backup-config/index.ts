@@ -1,3 +1,5 @@
+import { IBackupObject } from "../backup-job";
+
 export interface IScheduling {
   frequency: string;
   interval?: number;
@@ -15,11 +17,6 @@ export interface ITriggerResult {
   [key: string]: any;
 }
 
-export interface IObject {
-  name: string;
-  [key: string]: any;
-}
-
 export interface IBackupConfig {
   backupConfigId: string;
   userId: string;
@@ -32,7 +29,7 @@ export interface IBackupConfig {
   objectNames: string[];
   schedule: string;
   scheduleConfig?: IScheduleConfig;
-  objects?: IObject[];
+  objects?: IBackupObject[];
   status: string;
   backupStatus: string;
   lastBackupAt?: string;
