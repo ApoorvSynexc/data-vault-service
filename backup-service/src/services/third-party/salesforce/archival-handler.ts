@@ -1,7 +1,7 @@
 import { OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../models';
-import { updateArchivalObject } from '../../backup-job';
+import { updateBackupObject } from '../../backup-job';
 import {
   buildS3KeyPrefix,
   buildSchemaS3Key,
@@ -115,7 +115,7 @@ export const archiveAndHardDelete = async (
       jobId = object.bulkJobId;
       salesforceApiCount += object.salesforceApiCount ?? 0;
     } else {
-      await updateArchivalObject({
+      await updateBackupObject({
         backupJobId,
         objectIndex,
         status: OBJECT_STATUS.bulkQueryInProgress,
@@ -144,7 +144,7 @@ export const archiveAndHardDelete = async (
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
 
-      await updateArchivalObject({
+      await updateBackupObject({
         backupJobId,
         objectIndex,
         salesforceApiCount,
@@ -204,7 +204,7 @@ export const archiveAndHardDelete = async (
     });
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
-    await updateArchivalObject({
+    await updateBackupObject({
       backupJobId,
       objectIndex,
       status: OBJECT_STATUS.failed,
