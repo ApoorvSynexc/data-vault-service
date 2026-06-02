@@ -206,7 +206,11 @@ const salesforceHandler: ICrmBackupHandler = {
       return;
     }
 
-    const flattenObjects = object.reduce((acc, obj) => [...acc, ...(obj.children ?? [])], [] as IBackupObject[]);
+    const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
+      return objects.flatMap(obj => [obj, ...(obj.children ? recursivelyFlatten(obj.children) : [])]);
+    };
+
+    const flattenObjects = recursivelyFlatten(object);
 
     const tokens: SalesforceTokens = {
       accessToken: access_token,
