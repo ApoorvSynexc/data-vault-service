@@ -1,5 +1,5 @@
 import { CORE_SERVICE, INTERNAL_SECRET, OBJECT_STATUS } from '../../../constant';
-import { updateBackupObject, updateArchivalObject } from '../../backup-job';
+import { updateBackupObject, updateBackupObject } from '../../backup-job';
 import { logger } from '../../../middlewares/logger';
 import { httpRequest } from '../../../utils/http-request';
 import { IDestinationConfig } from '../../../models';
@@ -550,7 +550,7 @@ export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promis
       objectIndex !== undefined &&
       typeof res.numberRecordsProcessed === 'number'
     ) {
-      await updateArchivalObject({
+      await updateBackupObject({
         backupJobId,
         objectIndex,
         totalRecordCount: res.numberRecordsProcessed,
@@ -604,7 +604,7 @@ export const uploadBulkResultsByPageArchival = async (
   let sizeInBytes = 0;
 
   try {
-    await updateArchivalObject({
+    await updateBackupObject({
       backupJobId,
       objectIndex,
       status: OBJECT_STATUS.transferInProgress,
@@ -636,7 +636,7 @@ export const uploadBulkResultsByPageArchival = async (
       await uploadToS3(destConfig, s3Key, csvBuffer);
       locator = nextLocator;
 
-      await updateArchivalObject({
+      await updateBackupObject({
         backupJobId,
         objectIndex,
         completedRecordCount,
@@ -654,7 +654,7 @@ export const uploadBulkResultsByPageArchival = async (
 
     logger.error(`Archival job ${backupJobId}: object index ${objectIndex} - ${errorMessage}`);
 
-    await updateArchivalObject({
+    await updateBackupObject({
       backupJobId,
       objectIndex,
       status: OBJECT_STATUS.failed,
