@@ -32,6 +32,7 @@ export interface IObjectCondition {
 }
 
 export interface IObject {
+  id: string;
   schemaChange?: boolean;
   totalRecordCount?: number;
   name: string;

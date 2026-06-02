@@ -17,6 +17,7 @@ const getSourceObjects = (config: IBackupConfig) => {
       field: object.field ?? [],
       ...(object.condition ? { condition: object.condition } : {}),
       ...(object.children ? { children: object.children } : {}),
+      ...(object.id ? { id: object.id } : {}),
     }));
   }
 
