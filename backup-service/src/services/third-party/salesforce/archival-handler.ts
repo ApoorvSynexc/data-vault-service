@@ -102,7 +102,6 @@ export const archiveAndHardDelete = async (
   destConfig: IDestinationConfig
 ): Promise<void> => {
   const { crmId } = tokens;
-  console.log({object});
   const objectName = object.name;
   let backupConfig;
   let salesforceApiCount: number = 0;
