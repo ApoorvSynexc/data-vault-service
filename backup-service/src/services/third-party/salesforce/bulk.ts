@@ -555,7 +555,7 @@ export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promis
         backupJobId,
         ...(latestObjects.length ? { objects: latestObjects } : {}),
         object: {
-          ...object,
+          id: object.id,
           totalRecordCount: res.numberRecordsProcessed,
         }
       });
@@ -612,7 +612,7 @@ export const uploadBulkResultsByPageArchival = async (
     latestObjects = await updateArchivalObject({
       backupJobId,
       object: {
-        ...object,
+        id: object.id,
         status: OBJECT_STATUS.transferInProgress,
       }
     });
@@ -659,11 +659,11 @@ export const uploadBulkResultsByPageArchival = async (
       //     ? { currentLocator: locator }
       //     : { status: OBJECT_STATUS.completed, errorMessage: '' }),
       // });
-      await updateArchivalObject({
+      latestObjects = await updateArchivalObject({
         backupJobId,
-        // objects: latestObjects,
+        objects: latestObjects,
         object: {
-          ...object,
+          id: object.id,
           completedRecordCount,
           salesforceApiCount,
           insertCount: completedRecordCount,
@@ -690,7 +690,7 @@ export const uploadBulkResultsByPageArchival = async (
       backupJobId,
       ...(latestObjects.length ? { objects: latestObjects } : {}),
       object: {
-        ...object,
+        id: object.id,
         status: OBJECT_STATUS.failed,
         errorMessage,
       }

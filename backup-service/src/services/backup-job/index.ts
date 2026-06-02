@@ -286,11 +286,11 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
   );
 };
 
-const recursivelyUpdateObjects = async (objects: IBackupObject[], object: IBackupObject): Promise<IBackupObject[]> => {
+const recursivelyUpdateObjects = async (objects: IBackupObject[], object:  {id: string, [key: string]: string|number}): Promise<IBackupObject[]> => {
   return Promise.all(
     objects.map(async (obj) => {
       if (obj.id === object.id) {
-        return { ...obj, ...object, ...(obj.children ? { children: obj.children} : {}) };
+        return { ...obj, ...object };
       }
       if (obj.children?.length) {
         return { ...obj, children: await recursivelyUpdateObjects(obj.children, object) };
@@ -300,7 +300,7 @@ const recursivelyUpdateObjects = async (objects: IBackupObject[], object: IBacku
   );
 };
 
-const updateArchivalObject = async ({ backupJobId, object, objects }: { backupJobId: string, object: IBackupObject, objects?: IBackupObject[] }): Promise<IBackupObject[] | []> => {
+const updateArchivalObject = async ({ backupJobId, object, objects }: { backupJobId: string, object: {id: string, [key: string]: string|number}, objects?: IBackupObject[] }): Promise<IBackupObject[] | []> => {
   let objectsPayload = [];
   if(objects && objects?.length) {
     objectsPayload = objects;

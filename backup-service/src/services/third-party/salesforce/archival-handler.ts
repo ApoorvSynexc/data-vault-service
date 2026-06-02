@@ -118,7 +118,7 @@ export const archiveAndHardDelete = async (
       latestObjects = await updateArchivalObject({
         backupJobId,
         object: {
-          ...object,
+          id: object.id,
           status: OBJECT_STATUS.bulkQueryInProgress
         }
       });
@@ -150,7 +150,7 @@ export const archiveAndHardDelete = async (
         backupJobId,
         objects: latestObjects,
         object: {
-          ...object,
+          id: object.id,
           salesforceApiCount,
           status: OBJECT_STATUS.bulkQueryCompleted,
           bulkJobId: jobId,
@@ -210,7 +210,7 @@ export const archiveAndHardDelete = async (
       backupJobId,
       objects: latestObjects,
       object: {
-        ...object,
+        id: object.id,
         salesforceApiCount,
         status: OBJECT_STATUS.failed,
         errorMessage: errorMsg,
