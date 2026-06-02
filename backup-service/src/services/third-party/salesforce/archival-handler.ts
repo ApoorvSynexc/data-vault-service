@@ -102,6 +102,7 @@ export const archiveAndHardDelete = async (
   destConfig: IDestinationConfig
 ): Promise<void> => {
   const { crmId } = tokens;
+  console.log({object});
   const objectName = object.name;
   let backupConfig;
   let salesforceApiCount: number = 0;
@@ -172,7 +173,7 @@ export const archiveAndHardDelete = async (
       // });
     }
 
-    logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName} recordCount:${totalRecordCount}`);
+    logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
 
     const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
     const { sizeInBytes } = await uploadBulkResultsByPageArchival({
@@ -211,7 +212,7 @@ export const archiveAndHardDelete = async (
       Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
     );
 
-    logger.info(`Object archival complete, backupConfigId:${backupConfigId}, backupJobId${backupJobId} objectName:${objectName} recordCount:${totalRecordCount}`);
+    logger.info(`Object archival complete, backupConfigId:${backupConfigId}, backupJobId${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
     await updateArchivalObject({
