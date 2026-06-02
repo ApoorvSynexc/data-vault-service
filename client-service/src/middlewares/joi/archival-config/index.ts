@@ -85,6 +85,7 @@ const scheduleConfigSchema = Joi.object({
 });
 
 const objectChildrenSchema = Joi.object({
+    id: Joi.string().required(),
     name: Joi.string().required(),
     type: Joi.string()
         .valid(...Object.values(OBJECT_TYPE))
@@ -96,6 +97,7 @@ const objectChildrenSchema = Joi.object({
 .id("objectChildren");
 
 const objectSchema = Joi.object({
+    id: Joi.string().required(),
     name: Joi.string().required(),
     type: Joi.string()
         .valid(...Object.values(OBJECT_TYPE))
