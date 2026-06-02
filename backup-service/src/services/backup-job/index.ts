@@ -300,15 +300,21 @@ const recursivelyUpdateObjects = async (objects: IBackupObject[], object: IBacku
   );
 };
 
-const updateArchivalObject = async ({ backupJobId, object }: { backupJobId: string, object: IBackupObject }): Promise<UpdateCommandOutput | undefined> => {
-  const job = await getBackupJob(backupJobId);
-  if (!job?.object?.length) {
-    return;
+const updateArchivalObject = async ({ backupJobId, object, objects }: { backupJobId: string, object: IBackupObject, objects?: IBackupObject[] }): Promise<IBackupObject[] | []> => {
+  let objectsPayload = [];
+  if(objects && objects?.length) {
+    objectsPayload = objects;
+  } else {
+    const job = await getBackupJob(backupJobId);
+    if (!job?.object?.length) {
+      return [];
+    }
+    objectsPayload = job.object;
   }
 
-  const payload = await recursivelyUpdateObjects(job.object, object);
+  const payload = await recursivelyUpdateObjects(objectsPayload, object);
 
-  const res =  await docClient.send(
+  await docClient.send(
     new UpdateCommand({
       TableName: BACKUP_JOB_TABLE,
       Key: { backupJobId },
@@ -322,8 +328,7 @@ const updateArchivalObject = async ({ backupJobId, object }: { backupJobId: stri
     })
   );
 
-  console.log(JSON.stringify({res}));
-  return res;
+  return payload;
 }
 
 const getBackupJob = async (backupJobId: string): Promise<IBackupJob | null> => {
