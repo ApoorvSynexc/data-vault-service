@@ -98,7 +98,7 @@ export const archiveAndHardDelete = async (
   tokens: SalesforceTokens,
   crmName: string,
   object: IBackupObject,
-  objectIndex: number | number[],
+  objectIndex: number,
   destConfig: IDestinationConfig
 ): Promise<void> => {
   const { crmId } = tokens;
