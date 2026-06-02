@@ -687,7 +687,7 @@ export const uploadBulkResultsByPageArchival = async (
     //   status: OBJECT_STATUS.failed,
     //   errorMessage,
     // });
-    await updateArchivalObject({
+    latestObjects = await updateArchivalObject({
       backupJobId,
       objects: latestObjects,
       object: {
