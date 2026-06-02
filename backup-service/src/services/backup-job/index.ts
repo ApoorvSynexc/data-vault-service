@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, ScanCommand, UpdateCommand, UpdateCommandOutput } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE, OBJECT_STATUS } from '../../constant';
@@ -300,7 +300,7 @@ const recursivelyUpdateObjects = async (objects: IBackupObject[], object: IBacku
   );
 };
 
-const updateArchivalObject = async ({ backupJobId, object }: { backupJobId: string, objects: IBackupObject[], object: IBackupObject }): Promise<void> => {
+const updateArchivalObject = async ({ backupJobId, object }: { backupJobId: string, object: IBackupObject }): Promise<UpdateCommandOutput | undefined> => {
   const job = await getBackupJob(backupJobId);
   if (!job?.object?.length) {
     return;
@@ -308,7 +308,7 @@ const updateArchivalObject = async ({ backupJobId, object }: { backupJobId: stri
 
   const payload = await recursivelyUpdateObjects(job.object, object);
 
-  await docClient.send(
+  const res =  await docClient.send(
     new UpdateCommand({
       TableName: BACKUP_JOB_TABLE,
       Key: { backupJobId },
@@ -321,6 +321,9 @@ const updateArchivalObject = async ({ backupJobId, object }: { backupJobId: stri
       },
     })
   );
+
+  console.log(JSON.stringify({res}));
+  return res;
 }
 
 const getBackupJob = async (backupJobId: string): Promise<IBackupJob | null> => {

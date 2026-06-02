@@ -82,7 +82,6 @@ const exportObjectToDestinationArchival = async (
     instanceUrl,
     tokens,
     crmName,
-    objects,
     object,
     destConfig
   );
