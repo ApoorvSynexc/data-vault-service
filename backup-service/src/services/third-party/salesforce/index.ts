@@ -217,7 +217,6 @@ const salesforceHandler: ICrmBackupHandler = {
     for (let i = 0; i < object.length; i++) {
       const item = object[i];
       let flattenChildObjects = item.children?.length ? recursivelyFlatten(item.children) : [];
-      flattenChildObjects.reverse();
       delete item.children;
       flattenChildObjects.push(item);
       
