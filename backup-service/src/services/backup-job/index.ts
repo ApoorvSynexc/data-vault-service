@@ -290,7 +290,7 @@ const recursivelyUpdateObjects = async (objects: IBackupObject[], object: IBacku
   return Promise.all(
     objects.map(async (obj) => {
       if (obj.id === object.id) {
-        return { ...obj, ...object };
+        return { ...obj, ...object, ...(obj.children ? { children: obj.children} : {}) };
       }
       if (obj.children?.length) {
         return { ...obj, children: await recursivelyUpdateObjects(obj.children, object) };
@@ -300,8 +300,13 @@ const recursivelyUpdateObjects = async (objects: IBackupObject[], object: IBacku
   );
 };
 
-const updateArchivalObject = async ({ backupJobId, objects, object }: { backupJobId: string, objects: IBackupObject[], object: IBackupObject }): Promise<void> => {
-  const payload = await recursivelyUpdateObjects(objects, object);
+const updateArchivalObject = async ({ backupJobId, object }: { backupJobId: string, objects: IBackupObject[], object: IBackupObject }): Promise<void> => {
+  const job = await getBackupJob(backupJobId);
+  if (!job?.object?.length) {
+    return;
+  }
+
+  const payload = await recursivelyUpdateObjects(job.object, object);
 
   await docClient.send(
     new UpdateCommand({
