@@ -148,6 +148,7 @@ const pollJobCompletion = async (
 
         const job = (await response.json()) as IJobStatusResponse;
 
+        salesforceApiCount += 1;
         if (job.state === 'JobComplete') {
             return {job, salesforceApiCount};
         }
@@ -157,7 +158,6 @@ const pollJobCompletion = async (
                 `Bulk delete job ${jobId} ${job.state}: ${job.errorMessage ?? 'unknown error'}`
             );
         }
-        salesforceApiCount += 1;
     }
 };
 
