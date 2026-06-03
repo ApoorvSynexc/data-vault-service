@@ -158,7 +158,7 @@ export const archiveAndHardDelete = async (
                 }
             });
         }
-
+        
         logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
         if (totalRecordCount) {
             const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
@@ -191,15 +191,6 @@ export const archiveAndHardDelete = async (
                 object,
                 destConfig,
                 s3Urls,
-            });
-
-            await updateArchivalObject({
-                backupJobId,
-                object: {
-                    id: object.id,
-                    status: OBJECT_STATUS.completed,
-                    // salesforceApiCount
-                }
             });
         }
 

@@ -1,3 +1,4 @@
+import { OBJECT_STATUS } from '../../../../../constant';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
 import { fetchCsvFromS3 } from '../../../../destination/s3';
@@ -121,7 +122,7 @@ const pollJobCompletion = async (
         tokens: SalesforceTokens,
         jobId: string
     }
-): Promise<{job: IJobStatusResponse, salesforceApiCount: number }> => {
+): Promise<{ job: IJobStatusResponse, salesforceApiCount: number }> => {
     let salesforceApiCount = 0;
     const { instanceUrl, tokens, jobId } = paylaod;
     const deadline = Date.now() + MAX_POLL_DURATION_MS;
@@ -150,7 +151,7 @@ const pollJobCompletion = async (
 
         salesforceApiCount += 1;
         if (job.state === 'JobComplete') {
-            return {job, salesforceApiCount};
+            return { job, salesforceApiCount };
         }
 
         if (job.state === 'Failed' || job.state === 'Aborted') {
@@ -197,7 +198,13 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
     const objectName = object.name;
     let totalDeletedCount = 0;
 
-    console.log(`Bulk delete initialize: ${s3Urls.length}`);
+    await updateArchivalObject({
+        backupJobId,
+        object: {
+            id: object.id,
+            status: OBJECT_STATUS.deletionInProgress,
+        }
+    });
 
     for (let i = 0; i < s3Urls.length; i++) {
         const objectKey = s3Urls[i];
@@ -219,7 +226,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
         await uploadDataToJob(instanceUrl, tokens, job.id, idOnlyCsv);
         await closeAndSubmitJob(instanceUrl, tokens, job.id);
 
-        const {job: jobResult, salesforceApiCount} = await pollJobCompletion(
+        const { job: jobResult, salesforceApiCount } = await pollJobCompletion(
             {
                 instanceUrl,
                 tokens,
@@ -230,15 +237,24 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
         const jobResults = await getJobResults(instanceUrl, tokens, job.id);
         totalDeletedCount += jobResult.numberRecordsCompleted;
 
+        console.log({ salesforceApiCount });
         await updateArchivalObject({
-                backupJobId,
-                object: {
-                    id: object.id,
-                    salesforceApiCount: salesforceApiCount + 3
-                }
-            });
+            backupJobId,
+            object: {
+                id: object.id,
+                salesforceApiCount: salesforceApiCount + 3
+            }
+        });
         console.log(JSON.stringify({ jobResults, totalDeletedCount }));
     }
+
+    await updateArchivalObject({
+        backupJobId,
+        object: {
+            id: object.id,
+            status: OBJECT_STATUS.completed,
+        }
+    });
 };
 
 export type { IJobStatusResponse };
