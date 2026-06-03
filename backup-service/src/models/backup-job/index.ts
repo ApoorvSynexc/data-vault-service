@@ -41,6 +41,8 @@ export interface IBackupObject {
   bulkJobId?: string;
   totalRecordCount?: number;
   completedRecordCount?: number;
+  deletedSuccessRecordCount?: number;
+  deletedfailedRecordCount?: number;
   insertCount?: number;
   updateCount?: number;
   deleteCount?: number;
