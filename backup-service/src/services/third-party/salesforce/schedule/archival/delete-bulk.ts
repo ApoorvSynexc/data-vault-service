@@ -210,6 +210,8 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
 
   let totalDeletedCount = 0;
 
+  console.log(`Bulk delete initialize: ${s3Urls.length}`);
+  
   for (let i = 0; i < s3Urls.length; i++) {
     const s3Url = s3Urls[i];
 

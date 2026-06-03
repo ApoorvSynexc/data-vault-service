@@ -196,6 +196,7 @@ export const archiveAndHardDelete = async (
                     status: OBJECT_STATUS.deletionInProgress,
                 }
             });
+            console.log("delete start");
             
             await bulkDeleteRecords({
                 backupConfigId,
@@ -205,6 +206,8 @@ export const archiveAndHardDelete = async (
                 objectName,
                 s3Urls
             });
+
+            console.log("delete complete");
 
             await updateArchivalObject({
                 backupJobId,
