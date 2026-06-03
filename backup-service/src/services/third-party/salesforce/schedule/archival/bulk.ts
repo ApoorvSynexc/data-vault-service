@@ -64,6 +64,7 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
                 ...(latestObjects.length ? { objects: latestObjects } : {}),
                 object: {
                     id: object.id,
+                    salesforceApiCount,
                     totalRecordCount: res.numberRecordsProcessed,
                 }
             });
