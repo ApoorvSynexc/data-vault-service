@@ -9,14 +9,10 @@ import {
 } from '../../../../../utils/helper';
 import { uploadToS3 } from '../../../../destination/s3';
 import {
-    createBulkQueryJob,
-    getObjectMetadata,
-} from '../../bulk';
-import {
     pollBulkJobArchival,
     uploadBulkResultsByPageArchival,
 } from './bulk';
-import { SalesforceTokens } from '../../api-request';
+import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 
 // SOQL injection guards.

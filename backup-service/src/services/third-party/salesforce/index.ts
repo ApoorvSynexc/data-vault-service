@@ -242,10 +242,3 @@ const salesforceHandler: ICrmBackupHandler = {
 };
 
 export { salesforceHandler, exportObjectToDestination, exportWithRetry, exportObjectToDestinationArchival, exportWithRetryArchival };
-
-export {
-  SalesforceAuthExpiredError,
-  SalesforceTokens,
-  salesforceRequest,
-  refreshSalesforceToken,
-} from './api-request';
