@@ -87,9 +87,6 @@ export const fetchCsvFromS3 = async (
     const lines = csvData.split('\n').filter((line) => line.trim());
     const recordCount = Math.max(0, lines.length - 1);
 
-    console.log('Full CSV from S3:', csvData);
-    console.log('First line:', lines[0]);
-
     if (!lines[0]?.toLowerCase().includes('id')) {
       throw new Error('CSV must contain Id column');
     }
