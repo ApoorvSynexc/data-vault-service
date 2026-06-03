@@ -207,7 +207,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
     const headers = lines[0].split(',').map((col) => col.trim().toLowerCase());
     console.log('Headers:', headers);
 
-    const headerIndex = headers.findIndex((col) => col === 'id');
+    const headerIndex = headers.findIndex((col) => (col === '"id"' || col === "'id'" || col === 'id'));
 
     if (headerIndex === -1) {
       console.error('Available columns:', headers);
