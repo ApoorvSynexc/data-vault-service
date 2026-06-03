@@ -110,7 +110,6 @@ export const archiveAndHardDelete = async (
     let backupConfig;
     let totalRecordCount: number = 0;
     let jobId: string;
-    let latestObjects: IBackupObject[] = [];
 
     try {
         const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
@@ -118,7 +117,7 @@ export const archiveAndHardDelete = async (
         if (object.bulkJobId) {
             jobId = object.bulkJobId;
         } else {
-            latestObjects = await updateArchivalObject({
+            await updateArchivalObject({
                 backupJobId,
                 object: {
                     id: object.id,
@@ -150,7 +149,6 @@ export const archiveAndHardDelete = async (
 
             await updateArchivalObject({
                 backupJobId,
-                objects: latestObjects,
                 object: {
                     id: object.id,
                     salesforceApiCount: 1,
@@ -209,9 +207,8 @@ export const archiveAndHardDelete = async (
         logger.info(`Object archival complete, backupConfigId:${backupConfigId}, backupJobId${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
     } catch (err: any) {
         const errorMsg = err?.message ?? String(err);
-        latestObjects = await updateArchivalObject({
+        await updateArchivalObject({
             backupJobId,
-            objects: latestObjects,
             object: {
                 id: object.id,
                 status: OBJECT_STATUS.failed,

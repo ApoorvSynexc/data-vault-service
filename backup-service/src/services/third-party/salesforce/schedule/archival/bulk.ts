@@ -53,7 +53,6 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
             tokens
         );
         salesforceApiCount += 1;
-        console.log("111111111 ", {salesforceApiCount});
 
         if (
             backupJobId &&
@@ -137,8 +136,6 @@ const uploadBulkResultsByPageArchival = async (
             if (!response.ok) {
                 throw new Error(`Salesforce results fetch failed with status ${response.status}`);
             }
-            console.log("2222222 ", {salesforceApiCount});
-            
 
             const nextLocatorRaw = response.headers.get('sforce-locator');
             const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
