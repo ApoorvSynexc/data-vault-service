@@ -164,7 +164,7 @@ export const archiveAndHardDelete = async (
         }
 
         logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
-        if (salesforceApiCount) {
+        if (totalRecordCount) {
             const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
             const { sizeInBytes, s3Urls } = await uploadBulkResultsByPageArchival({
                 instanceUrl,
@@ -195,7 +195,6 @@ export const archiveAndHardDelete = async (
                     status: OBJECT_STATUS.deletionInProgress,
                 }
             });
-            console.log("delete start");
 
             await bulkDeleteRecords({
                 backupConfigId,
@@ -204,16 +203,16 @@ export const archiveAndHardDelete = async (
                 tokens,
                 objectName,
                 destConfig,
-                s3Urls
+                s3Urls,
+                salesforceApiCount
             });
-
-            console.log("delete complete");
 
             await updateArchivalObject({
                 backupJobId,
                 object: {
                     id: object.id,
                     status: OBJECT_STATUS.completed,
+                    salesforceApiCount
                 }
             });
         }

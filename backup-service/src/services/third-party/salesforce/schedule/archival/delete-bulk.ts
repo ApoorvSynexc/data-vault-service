@@ -7,223 +7,233 @@ const MAX_POLL_DURATION_MS = 30 * 60 * 1000;
 const POLL_INTERVAL_MS = 5000;
 
 export interface IBulkDeleteJob {
-  id: string;
-  state: string;
-  object: string;
+    id: string;
+    state: string;
+    object: string;
 }
 
 export interface IBulkDeletePayload {
-  backupJobId: string;
-  backupConfigId: string;
-  instanceUrl: string;
-  tokens: SalesforceTokens;
-  objectName: string;
-  destConfig: IDestinationConfig;
-  s3Urls: string[];
+    backupJobId: string;
+    backupConfigId: string;
+    instanceUrl: string;
+    tokens: SalesforceTokens;
+    objectName: string;
+    destConfig: IDestinationConfig;
+    s3Urls: string[];
+    salesforceApiCount: number;
 }
 
 const createBulkDeleteJob = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  objectName: string
+    instanceUrl: string,
+    tokens: SalesforceTokens,
+    objectName: string
 ): Promise<IBulkDeleteJob> => {
-  const response = await fetch(
-    `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${tokens.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        object: objectName,
-        operation: 'delete',
-        lineEnding: 'LF',
-        columnDelimiter: 'COMMA',
-      }),
+    const response = await fetch(
+        `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`,
+        {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${tokens.accessToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                object: objectName,
+                operation: 'delete',
+                lineEnding: 'LF',
+                columnDelimiter: 'COMMA',
+            }),
+        }
+    );
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to create bulk delete job: ${errorText}`);
     }
-  );
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to create bulk delete job: ${errorText}`);
-  }
-
-  const job = (await response.json()) as IBulkDeleteJob;
-  return job;
+    const job = (await response.json()) as IBulkDeleteJob;
+    return job;
 };
 
 const uploadDataToJob = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  jobId: string,
-  csvData: string
+    instanceUrl: string,
+    tokens: SalesforceTokens,
+    jobId: string,
+    csvData: string
 ): Promise<void> => {
-  try {
-    const response = await fetch(
-      `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/batches`,
-      {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${tokens.accessToken}`,
-          'Content-Type': 'text/csv',
-        },
-        body: csvData,
-      }
-    );
+    try {
+        const response = await fetch(
+            `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/batches`,
+            {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Bearer ${tokens.accessToken}`,
+                    'Content-Type': 'text/csv',
+                },
+                body: csvData,
+            }
+        );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to upload data to bulk delete job: ${errorText}`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to upload data to bulk delete job: ${errorText}`);
+        }
+    } catch (err: any) {
+        throw new Error(`Failed to upload data: ${err.message}`);
     }
-  } catch (err: any) {
-    throw new Error(`Failed to upload data: ${err.message}`);
-  }
 };
 
 const closeAndSubmitJob = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  jobId: string
+    instanceUrl: string,
+    tokens: SalesforceTokens,
+    jobId: string
 ): Promise<void> => {
-  const response = await fetch(
-    `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
-    {
-      method: 'PATCH',
-      headers: {
-        'Authorization': `Bearer ${tokens.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ state: 'UploadComplete' }),
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to close bulk delete job: ${errorText}`);
-  }
-};
-
-interface IJobStatusResponse {
-  id: string;
-  state: string;
-  numberRecordsProcessed: number;
-  numberRecordsFailed: number;
-  numberRetries: number;
-  numberRecordsCompleted: number;
-  errorMessage?: string;
-}
-
-const pollJobCompletion = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  jobId: string
-): Promise<IJobStatusResponse> => {
-  const deadline = Date.now() + MAX_POLL_DURATION_MS;
-
-  while (true) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-
-    if (Date.now() >= deadline) {
-      throw new Error(`Bulk delete job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`);
-    }
-
     const response = await fetch(
-      `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${tokens.accessToken}`,
-        },
-      }
+        `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
+        {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${tokens.accessToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ state: 'UploadComplete' }),
+        }
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to check job status: ${response.statusText}`);
+        const errorText = await response.text();
+        throw new Error(`Failed to close bulk delete job: ${errorText}`);
     }
+};
 
-    const job = (await response.json()) as IJobStatusResponse;
+interface IJobStatusResponse {
+    id: string;
+    state: string;
+    numberRecordsProcessed: number;
+    numberRecordsFailed: number;
+    numberRetries: number;
+    numberRecordsCompleted: number;
+    errorMessage?: string;
+}
 
-    if (job.state === 'JobComplete') {
-      return job;
+const pollJobCompletion = async (
+    paylaod: {
+        instanceUrl: string,
+        tokens: SalesforceTokens,
+        jobId: string
+        salesforceApiCount: number
     }
+): Promise<IJobStatusResponse> => {
+    const { instanceUrl, tokens, jobId } = paylaod;
+    const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
-    if (job.state === 'Failed' || job.state === 'Aborted') {
-      throw new Error(
-        `Bulk delete job ${jobId} ${job.state}: ${job.errorMessage ?? 'unknown error'}`
-      );
+    while (true) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+        if (Date.now() >= deadline) {
+            throw new Error(`Bulk delete job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`);
+        }
+
+        const response = await fetch(
+            `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${tokens.accessToken}`,
+                },
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(`Failed to check job status: ${response.statusText}`);
+        }
+
+        const job = (await response.json()) as IJobStatusResponse;
+
+        if (job.state === 'JobComplete') {
+            return job;
+        }
+
+        if (job.state === 'Failed' || job.state === 'Aborted') {
+            throw new Error(
+                `Bulk delete job ${jobId} ${job.state}: ${job.errorMessage ?? 'unknown error'}`
+            );
+        }
+        paylaod.salesforceApiCount++;
     }
-  }
 };
 
 const getJobResults = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  jobId: string
+    instanceUrl: string,
+    tokens: SalesforceTokens,
+    jobId: string
 ): Promise<{ successCount: number; failedCount: number }> => {
-  const response = await fetch(
-    `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/successfulResults`,
-    {
-      headers: {
-        'Authorization': `Bearer ${tokens.accessToken}`,
-      },
+    const response = await fetch(
+        `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/successfulResults`,
+        {
+            headers: {
+                'Authorization': `Bearer ${tokens.accessToken}`,
+            },
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(`Failed to fetch job results: ${response.statusText}`);
     }
-  );
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch job results: ${response.statusText}`);
-  }
+    const text = await response.text();
+    const successCount = text.split('\n').length - 2;
 
-  const text = await response.text();
-  const successCount = text.split('\n').length - 2;
-
-  return { successCount, failedCount: 0 };
+    return { successCount, failedCount: 0 };
 };
 
 export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<void> => {
-  const {
-    instanceUrl,
-    tokens,
-    objectName,
-    destConfig,
-    s3Urls,
-  } = payload;
+    const {
+        instanceUrl,
+        tokens,
+        objectName,
+        destConfig,
+        s3Urls,
+    } = payload;
 
-  let totalDeletedCount = 0;
+    let totalDeletedCount = 0;
 
-  console.log(`Bulk delete initialize: ${s3Urls.length}`);
-  
-  for (let i = 0; i < s3Urls.length; i++) {
-    const objectKey = s3Urls[i];
+    console.log(`Bulk delete initialize: ${s3Urls.length}`);
 
-    const { csvData } = await fetchCsvFromS3(destConfig, objectKey);
-    const lines = csvData.split('\n').filter((line) => line.trim());
-    const headers = lines[0].split(',').map((col) => col.trim().toLowerCase());
-    const headerIndex = headers.findIndex((col) => (col === '"id"' || col === "'id'" || col === 'id'));
+    for (let i = 0; i < s3Urls.length; i++) {
+        const objectKey = s3Urls[i];
 
-    if (headerIndex === -1) {
-      throw new Error('CSV does not contain Id column');
+        const { csvData } = await fetchCsvFromS3(destConfig, objectKey);
+        const lines = csvData.split('\n').filter((line) => line.trim());
+        const headers = lines[0].split(',').map((col) => col.trim().toLowerCase());
+        const headerIndex = headers.findIndex((col) => (col === '"id"' || col === "'id'" || col === 'id'));
+
+        if (headerIndex === -1) {
+            throw new Error('CSV does not contain Id column');
+        }
+
+        const idOnlyCsv = lines
+            .map((line) => line.split(',')[headerIndex])
+            .join('\n');
+
+        const job = await createBulkDeleteJob(instanceUrl, tokens, objectName);
+
+        await uploadDataToJob(instanceUrl, tokens, job.id, idOnlyCsv);
+
+        await closeAndSubmitJob(instanceUrl, tokens, job.id);
+
+        payload.salesforceApiCount = payload.salesforceApiCount + 3;
+        const jobResult = await pollJobCompletion(
+            {
+                instanceUrl,
+                tokens,
+                jobId: job.id,
+                salesforceApiCount: payload.salesforceApiCount
+            }
+        );
+
+        const jobResults = await getJobResults(instanceUrl, tokens, job.id);
+        totalDeletedCount += jobResult.numberRecordsCompleted;
+        console.log(JSON.stringify({ jobResults, totalDeletedCount }));
     }
-
-    const idOnlyCsv = lines
-      .map((line) => line.split(',')[headerIndex])
-      .join('\n');
-
-    const job = await createBulkDeleteJob(instanceUrl, tokens, objectName);
-
-    await uploadDataToJob(instanceUrl, tokens, job.id, idOnlyCsv);
-
-    await closeAndSubmitJob(instanceUrl, tokens, job.id);
-
-    const jobResult = await pollJobCompletion(
-      instanceUrl,
-      tokens,
-      job.id
-    );
-
-    const jobResults = await getJobResults(instanceUrl, tokens, job.id);
-    totalDeletedCount += jobResult.numberRecordsCompleted;
-    console.log(JSON.stringify({jobResults, totalDeletedCount}));
-  }
 };
 
 export type { IJobStatusResponse };
