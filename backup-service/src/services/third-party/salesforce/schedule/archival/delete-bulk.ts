@@ -1,4 +1,5 @@
 import { IDestinationConfig } from '../../../../../models';
+import { fetchCsvFromS3 } from '../../../../destination/s3';
 import { SalesforceTokens } from '../../api-request';
 
 const SF_API_VERSION = 'v65.0';
@@ -50,30 +51,6 @@ const createBulkDeleteJob = async (
 
   const job = (await response.json()) as IBulkDeleteJob;
   return job;
-};
-
-const fetchS3File = async (
-  s3Url: string
-): Promise<{ csvData: string; recordCount: number }> => {
-  try {
-    const response = await fetch(s3Url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch S3 file: ${response.statusText}`);
-    }
-
-    const csvData = await response.text();
-    const lines = csvData.split('\n').filter((line) => line.trim());
-    const recordCount = Math.max(0, lines.length - 1); // Exclude header
-
-    // Ensure proper CSV format with Id header
-    if (!lines[0]?.toLowerCase().includes('id')) {
-      throw new Error('CSV must contain Id column');
-    }
-
-    return { csvData, recordCount };
-  } catch (err: any) {
-    throw new Error(`Failed to fetch S3 file: ${err.message}`);
-  }
 };
 
 const uploadDataToJob = async (
@@ -216,12 +193,11 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
   console.log(`Bulk delete initialize: ${s3Urls.length}`);
   
   for (let i = 0; i < s3Urls.length; i++) {
-    const baseUrl = `https://${destConfig.bucketName}.s3.${destConfig.region}.amazonaws.com/`;
-    const s3Url = baseUrl + s3Urls[i];
-    console.log({s3Url});
-    
+    const objectKey = s3Urls[i];
 
-    const { csvData } = await fetchS3File(s3Url);
+    const { csvData, recordCount } = await fetchCsvFromS3(destConfig, objectKey);
+    console.log({fetchCotun: recordCount});
+    
 
     const job = await createBulkDeleteJob(instanceUrl, tokens, objectName);
 
