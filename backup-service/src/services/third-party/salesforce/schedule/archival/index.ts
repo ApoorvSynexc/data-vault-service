@@ -108,7 +108,6 @@ export const archiveAndHardDelete = async (
     const { crmId } = tokens;
     const objectName = object.name;
     let backupConfig;
-    let salesforceApiCount: number = 0;
     let totalRecordCount: number = 0;
     let jobId: string;
     let latestObjects: IBackupObject[] = [];
@@ -118,7 +117,6 @@ export const archiveAndHardDelete = async (
 
         if (object.bulkJobId) {
             jobId = object.bulkJobId;
-            salesforceApiCount += object.salesforceApiCount ?? 0;
         } else {
             latestObjects = await updateArchivalObject({
                 backupJobId,
@@ -133,7 +131,6 @@ export const archiveAndHardDelete = async (
 
             try {
                 jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
-                salesforceApiCount += 2;
             } catch (err: any) {
                 throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
             }
@@ -145,7 +142,6 @@ export const archiveAndHardDelete = async (
                     jobId,
                     backupJobId,
                     object,
-                    salesforceApiCount
                 });
             } catch (err: any) {
                 throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -156,7 +152,7 @@ export const archiveAndHardDelete = async (
                 objects: latestObjects,
                 object: {
                     id: object.id,
-                    salesforceApiCount,
+                    salesforceApiCount: 2,
                     status: OBJECT_STATUS.bulkQueryCompleted,
                     bulkJobId: jobId,
                 }
@@ -173,7 +169,6 @@ export const archiveAndHardDelete = async (
                 backupJobId,
                 object,
                 destConfig,
-                salesforceApiCount,
                 s3KeyPrefix: archivePrefix,
                 startLocator: object.currentLocator ?? null,
                 startCompletedRecordCount: object.completedRecordCount ?? 0,
@@ -188,23 +183,14 @@ export const archiveAndHardDelete = async (
             }
             await updateBackupConfig(backupConfigId, updateParams);
 
-            await updateArchivalObject({
-                backupJobId,
-                object: {
-                    id: object.id,
-                    status: OBJECT_STATUS.deletionInProgress,
-                }
-            });
-
             await bulkDeleteRecords({
                 backupConfigId,
                 backupJobId,
                 instanceUrl,
                 tokens,
-                objectName,
+                object,
                 destConfig,
                 s3Urls,
-                salesforceApiCount
             });
 
             await updateArchivalObject({
@@ -212,7 +198,7 @@ export const archiveAndHardDelete = async (
                 object: {
                     id: object.id,
                     status: OBJECT_STATUS.completed,
-                    salesforceApiCount
+                    // salesforceApiCount
                 }
             });
         }
@@ -236,7 +222,6 @@ export const archiveAndHardDelete = async (
             objects: latestObjects,
             object: {
                 id: object.id,
-                salesforceApiCount,
                 status: OBJECT_STATUS.failed,
                 errorMessage: errorMsg,
             }

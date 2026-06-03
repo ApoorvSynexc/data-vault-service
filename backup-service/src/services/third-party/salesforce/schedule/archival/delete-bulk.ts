@@ -1,4 +1,5 @@
-import { IDestinationConfig } from '../../../../../models';
+import { IBackupObject, IDestinationConfig } from '../../../../../models';
+import { updateArchivalObject } from '../../../../backup-job';
 import { fetchCsvFromS3 } from '../../../../destination/s3';
 import { SalesforceTokens } from '../../api-request';
 
@@ -17,10 +18,9 @@ export interface IBulkDeletePayload {
     backupConfigId: string;
     instanceUrl: string;
     tokens: SalesforceTokens;
-    objectName: string;
+    object: IBackupObject,
     destConfig: IDestinationConfig;
     s3Urls: string[];
-    salesforceApiCount: number;
 }
 
 const createBulkDeleteJob = async (
@@ -120,9 +120,9 @@ const pollJobCompletion = async (
         instanceUrl: string,
         tokens: SalesforceTokens,
         jobId: string
-        salesforceApiCount: number
     }
-): Promise<IJobStatusResponse> => {
+): Promise<{job: IJobStatusResponse, salesforceApiCount: number }> => {
+    let salesforceApiCount = 0;
     const { instanceUrl, tokens, jobId } = paylaod;
     const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
@@ -149,7 +149,7 @@ const pollJobCompletion = async (
         const job = (await response.json()) as IJobStatusResponse;
 
         if (job.state === 'JobComplete') {
-            return job;
+            return {job, salesforceApiCount};
         }
 
         if (job.state === 'Failed' || job.state === 'Aborted') {
@@ -157,7 +157,7 @@ const pollJobCompletion = async (
                 `Bulk delete job ${jobId} ${job.state}: ${job.errorMessage ?? 'unknown error'}`
             );
         }
-        paylaod.salesforceApiCount++;
+        salesforceApiCount += 1;
     }
 };
 
@@ -187,13 +187,14 @@ const getJobResults = async (
 
 export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<void> => {
     const {
+        backupJobId,
         instanceUrl,
         tokens,
-        objectName,
+        object,
         destConfig,
         s3Urls,
     } = payload;
-
+    const objectName = object.name;
     let totalDeletedCount = 0;
 
     console.log(`Bulk delete initialize: ${s3Urls.length}`);
@@ -215,23 +216,27 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
             .join('\n');
 
         const job = await createBulkDeleteJob(instanceUrl, tokens, objectName);
-
         await uploadDataToJob(instanceUrl, tokens, job.id, idOnlyCsv);
-
         await closeAndSubmitJob(instanceUrl, tokens, job.id);
 
-        payload.salesforceApiCount = payload.salesforceApiCount + 3;
-        const jobResult = await pollJobCompletion(
+        const {job: jobResult, salesforceApiCount} = await pollJobCompletion(
             {
                 instanceUrl,
                 tokens,
                 jobId: job.id,
-                salesforceApiCount: payload.salesforceApiCount
             }
         );
 
         const jobResults = await getJobResults(instanceUrl, tokens, job.id);
         totalDeletedCount += jobResult.numberRecordsCompleted;
+
+        await updateArchivalObject({
+                backupJobId,
+                object: {
+                    id: object.id,
+                    salesforceApiCount: salesforceApiCount + 3
+                }
+            });
         console.log(JSON.stringify({ jobResults, totalDeletedCount }));
     }
 };
