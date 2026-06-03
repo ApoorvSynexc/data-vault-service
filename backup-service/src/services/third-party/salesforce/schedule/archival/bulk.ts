@@ -52,7 +52,7 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
             },
             tokens
         );
-        salesforceApiCount++;
+        ++salesforceApiCount;
 
         if (
             backupJobId &&
