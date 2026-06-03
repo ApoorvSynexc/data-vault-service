@@ -1,11 +1,33 @@
 import { httpRequest } from '../../../utils/http-request';
 import { CORE_SERVICE, INTERNAL_SECRET } from '../../../constant';
 
-export class SalesforceAuthExpiredError extends Error {
+class SalesforceAuthExpiredError extends Error {
   constructor() {
     super('Salesforce session expired. User must re-authenticate.');
     this.name = 'SalesforceAuthExpiredError';
   }
+}
+
+const refreshSalesforceToken = async (crmId: string): Promise<any> => {
+  return httpRequest({
+    url: `${CORE_SERVICE}/v1/internal/refresh-token?crmId=${crmId}`,
+    method: 'GET',
+    headers: {
+      'x-internal-secret': INTERNAL_SECRET,
+    },
+  });
+};
+
+// Wraps every Salesforce API call with automatic token refresh on 401.
+// IMPORTANT: `tokens` is mutated in-place when a refresh occurs so all
+// callers sharing the same object automatically use the new access token —
+// including subsequent pages in the upload loop and any retry attempts in
+// exportWithRetry.
+interface SalesforceRequestOptions {
+  url: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  body?: any;
+  query?: Record<string, string | number | boolean>;
 }
 
 export interface SalesforceTokens {
@@ -14,18 +36,6 @@ export interface SalesforceTokens {
   crmId: string;
 }
 
-interface SalesforceRequestOptions {
-  url: string;
-  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  body?: any;
-  query?: Record<string, string | number | boolean>;
-}
-
-// Wraps every Salesforce API call with automatic token refresh on 401.
-// IMPORTANT: `tokens` is mutated in-place when a refresh occurs so all
-// callers sharing the same object automatically use the new access token —
-// including subsequent pages in the upload loop and any retry attempts in
-// exportWithRetry.
 const salesforceRequest = async <T = any>(
   options: SalesforceRequestOptions,
   tokens: SalesforceTokens
@@ -55,14 +65,33 @@ const salesforceRequest = async <T = any>(
   }
 };
 
-export const refreshSalesforceToken = async (crmId: string): Promise<any> => {
-  return httpRequest({
-    url: `${CORE_SERVICE}/v1/internal/refresh-token?crmId=${crmId}`,
-    method: 'GET',
-    headers: {
-      'x-internal-secret': INTERNAL_SECRET,
-    },
-  });
-};
+// ---------------------------------------------------------------------------
+// Returns a page-fetcher bound to the given token holder.
+// Handles 401 → token refresh → single retry transparently.
+// Mutates tokens.accessToken in-place so all callers sharing the same object
+// automatically use the refreshed token on subsequent calls.
+// ---------------------------------------------------------------------------
+const makePageFetcher =
+  (tokens: SalesforceTokens) =>
+    async (url: string): Promise<Response> => {
+      let response = await fetch(url, {
+        headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
+      });
+      if (response.status === 401) {
+        try {
+          const refreshed = await refreshSalesforceToken(tokens.crmId);
+          tokens.accessToken = refreshed.access_token;
+        } catch {
+          throw new SalesforceAuthExpiredError();
+        }
+        response = await fetch(url, {
+          headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
+        });
+      }
+      return response;
+    };
 
-export { salesforceRequest };
+export { 
+  salesforceRequest,
+  makePageFetcher,
+ };

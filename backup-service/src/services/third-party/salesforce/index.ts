@@ -235,24 +235,6 @@ const salesforceHandler: ICrmBackupHandler = {
         );
       }
     }
-    // for (let i = 0; i < flattenObjects.length; i += CONCURRENCY_LIMIT) {
-    //   const batch = flattenObjects.slice(i, i + CONCURRENCY_LIMIT);
-    //   await Promise.allSettled(
-    //     batch.map((item) =>
-    //       exportWithRetryArchival(
-    //         backupConfigId,
-    //         backupJobId,
-    //         instanceUrl,
-    //         tokens,
-    //         crmName,
-    //         object,
-    //         item,
-    //         destinationType,
-    //         destConfig
-    //       )
-    //     )
-    //   );
-    // }
 
     await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
     logger.info(`Archival job completed`, { backupJobId });

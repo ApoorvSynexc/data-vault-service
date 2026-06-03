@@ -5,45 +5,13 @@ import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { uploadToS3 } from '../../../../destination/s3';
 import {
     salesforceRequest,
-    refreshSalesforceToken,
-    SalesforceAuthExpiredError,
     SalesforceTokens,
+    makePageFetcher,
 } from '../../api-request';
 
 const SF_API_VERSION = 'v65.0';
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
-
-// ---------------------------------------------------------------------------
-// Returns a page-fetcher bound to the given token holder.
-// Handles 401 → token refresh → single retry transparently.
-// Mutates tokens.accessToken in-place so all callers sharing the same object
-// automatically use the refreshed token on subsequent calls.
-// ---------------------------------------------------------------------------
-const makePageFetcher =
-    (tokens: SalesforceTokens) =>
-        async (url: string): Promise<Response> => {
-            let response = await fetch(url, {
-                headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-            });
-            if (response.status === 401) {
-                try {
-                    const refreshed = await refreshSalesforceToken(tokens.crmId);
-                    tokens.accessToken = refreshed.access_token;
-                } catch {
-                    throw new SalesforceAuthExpiredError();
-                }
-                response = await fetch(url, {
-                    headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-                });
-            }
-            return response;
-        };
-
-
-
-
-
 const INITIAL_PAGE_KEY = `initial`;
 const MAX_RECORDS_PER_PAGE = 50000; // Capped well below SF
 
@@ -59,7 +27,8 @@ interface IPollBulkJobArchival {
     backupJobId?: string;
 }
 
-export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
+
+const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
     const { instanceUrl, tokens, jobId, backupJobId, object } = payload;
     let { salesforceApiCount } = payload;
     const deadline = Date.now() + MAX_POLL_DURATION_MS;
@@ -110,7 +79,7 @@ export const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promis
     }
 };
 
-export interface IUploadBulkResultsByPageArchival {
+interface IUploadBulkResultsByPageArchival {
     instanceUrl: string;
     tokens: SalesforceTokens;
     jobId: string;
@@ -124,7 +93,7 @@ export interface IUploadBulkResultsByPageArchival {
     maxRecords?: number;
 }
 
-export const uploadBulkResultsByPageArchival = async (
+const uploadBulkResultsByPageArchival = async (
     payload: IUploadBulkResultsByPageArchival
 ): Promise<{ sizeInBytes: number }> => {
     let latestObjects: IBackupObject[] = [];
@@ -156,11 +125,7 @@ export const uploadBulkResultsByPageArchival = async (
                 status: OBJECT_STATUS.transferInProgress,
             }
         });
-        // await updateBackupObject({
-        //   backupJobId,
-        //   objectIndex,
-        //   status: OBJECT_STATUS.transferInProgress,
-        // });
+
         do {
             const url = locator
                 ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
@@ -188,17 +153,6 @@ export const uploadBulkResultsByPageArchival = async (
             await uploadToS3(destConfig, s3Key, csvBuffer);
             locator = nextLocator;
 
-            // await updateBackupObject({
-            //   backupJobId,
-            //   objectIndex,
-            //   completedRecordCount,
-            //   salesforceApiCount,
-            //   insertCount: completedRecordCount,
-            //   sizeInBytes,
-            //   ...(locator
-            //     ? { currentLocator: locator }
-            //     : { status: OBJECT_STATUS.completed, errorMessage: '' }),
-            // });
             latestObjects = await updateArchivalObject({
                 backupJobId,
                 objects: latestObjects,
@@ -217,15 +171,7 @@ export const uploadBulkResultsByPageArchival = async (
     } catch (err: any) {
         const failedAt = locator ?? INITIAL_PAGE_KEY;
         const errorMessage = `archival upload-results failed at locator [${failedAt}]: ${err?.message ?? err}`;
-
         logger.error(`Archival uploading batch failed, backupJobId:${backupJobId}: objectName:${object.name} objectId${object.id} - ${errorMessage}`);
-
-        // await updateBackupObject({
-        //   backupJobId,
-        //   objectIndex,
-        //   status: OBJECT_STATUS.failed,
-        //   errorMessage,
-        // });
         latestObjects = await updateArchivalObject({
             backupJobId,
             ...(latestObjects.length ? { objects: latestObjects } : {}),
@@ -240,3 +186,8 @@ export const uploadBulkResultsByPageArchival = async (
 
     return { sizeInBytes };
 };
+
+export {
+    pollBulkJobArchival,
+    uploadBulkResultsByPageArchival
+}

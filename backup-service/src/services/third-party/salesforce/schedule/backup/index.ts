@@ -12,10 +12,10 @@ import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destinati
 import {
   createBulkQueryJob,
   getObjectMetadata,
-  pollBulkJob,
 } from '../../bulk';
 import {
-classifyAndUploadBulkResultsByPage,
+  pollBulkJob,
+  classifyAndUploadBulkResultsByPage,
   uploadBulkResultsByPage,
 } from './bulk';
 import { SalesforceTokens } from '../../api-request';
