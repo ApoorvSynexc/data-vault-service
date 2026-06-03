@@ -286,11 +286,11 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
   );
 };
 
-const recursivelyUpdateObjects = async (objects: IBackupObject[], object:  {id: string, [key: string]: string|number}): Promise<IBackupObject[]> => {
+const recursivelyUpdateObjects = async (objects: IBackupObject[], object: { id: string, [key: string]: string | number }): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
       if (obj.id === object.id) {
-        return { ...obj, ...object };
+        return { ...obj, ...object, ...((object as any)?.salesforceApiCount ? { salesforceApiCount: (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount } : {}) };
       }
       if (obj.children?.length) {
         return { ...obj, children: await recursivelyUpdateObjects(obj.children, object) };
@@ -301,9 +301,9 @@ const recursivelyUpdateObjects = async (objects: IBackupObject[], object:  {id: 
   return results;
 };
 
-const updateArchivalObject = async ({ backupJobId, object, objects }: { backupJobId: string, object: {id: string, [key: string]: string|number}, objects?: IBackupObject[] }): Promise<IBackupObject[] | []> => {
+const updateArchivalObject = async ({ backupJobId, object, objects }: { backupJobId: string, object: { id: string, [key: string]: string | number }, objects?: IBackupObject[] }): Promise<IBackupObject[] | []> => {
   let objectsPayload = [];
-  if(objects && objects?.length) {
+  if (objects && objects?.length) {
     objectsPayload = objects;
   } else {
     const job = await getBackupJob(backupJobId);

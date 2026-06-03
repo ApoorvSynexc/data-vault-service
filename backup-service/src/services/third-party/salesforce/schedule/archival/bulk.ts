@@ -23,14 +23,13 @@ interface IPollBulkJobArchival {
     tokens: SalesforceTokens;
     jobId: string;
     object: IBackupObject,
-    salesforceApiCount: number;
     backupJobId?: string;
 }
 
 
 const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
     const { instanceUrl, tokens, jobId, backupJobId, object } = payload;
-    let { salesforceApiCount } = payload;
+    let salesforceApiCount = 0;
     const deadline = Date.now() + MAX_POLL_DURATION_MS;
     let latestObjects: IBackupObject[] = [];
 
@@ -87,7 +86,6 @@ interface IUploadBulkResultsByPageArchival {
     object: IBackupObject,
     destConfig: IDestinationConfig;
     s3KeyPrefix: string;
-    salesforceApiCount: number;
     startLocator?: string | null;
     startCompletedRecordCount?: number;
     maxRecords?: number;
@@ -110,6 +108,7 @@ const uploadBulkResultsByPageArchival = async (
         maxRecords = MAX_RECORDS_PER_PAGE,
     } = payload;
     let s3Urls = [];
+    let salesforceApiCount = 0;
     const fetchPage = makePageFetcher(tokens);
 
     let locator: string | null = startLocator;
@@ -132,7 +131,7 @@ const uploadBulkResultsByPageArchival = async (
 
             const response = await fetchPage(url);
 
-            payload.salesforceApiCount += payload.salesforceApiCount;
+           salesforceApiCount += 1;
             if (!response.ok) {
                 throw new Error(`Salesforce results fetch failed with status ${response.status}`);
             }
@@ -159,7 +158,7 @@ const uploadBulkResultsByPageArchival = async (
                 object: {
                     id: object.id,
                     completedRecordCount,
-                    salesforceApiCount: payload.salesforceApiCount,
+                    salesforceApiCount,
                     insertCount: completedRecordCount,
                     sizeInBytes,
                     ...(locator
