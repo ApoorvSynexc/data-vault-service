@@ -197,10 +197,20 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
 
     const { csvData } = await fetchCsvFromS3(destConfig, objectKey);
 
+    console.log('Raw CSV data:', csvData.substring(0, 1000));
+    console.log('CSV length:', csvData.length);
+
     const lines = csvData.split('\n').filter((line) => line.trim());
-    const headerIndex = lines[0].split(',').findIndex((col) => col.trim().toLowerCase() === 'id');
+    console.log('Lines count:', lines.length);
+    console.log('First line (header):', lines[0]);
+
+    const headers = lines[0].split(',').map((col) => col.trim().toLowerCase());
+    console.log('Headers:', headers);
+
+    const headerIndex = headers.findIndex((col) => col === 'id');
 
     if (headerIndex === -1) {
+      console.error('Available columns:', headers);
       throw new Error('CSV does not contain Id column');
     }
 
