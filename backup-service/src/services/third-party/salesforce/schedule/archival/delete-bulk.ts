@@ -237,7 +237,6 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
         const jobResults = await getJobResults(instanceUrl, tokens, job.id);
         totalDeletedCount += jobResult.numberRecordsCompleted;
 
-        console.log("3333333 ", { salesforceApiCount });
         await updateArchivalObject({
             backupJobId,
             object: {
