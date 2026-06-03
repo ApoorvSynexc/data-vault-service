@@ -196,29 +196,17 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
     const objectKey = s3Urls[i];
 
     const { csvData } = await fetchCsvFromS3(destConfig, objectKey);
-
-    console.log('Raw CSV data:', csvData.substring(0, 1000));
-    console.log('CSV length:', csvData.length);
-
     const lines = csvData.split('\n').filter((line) => line.trim());
-    console.log('Lines count:', lines.length);
-    console.log('First line (header):', lines[0]);
-
     const headers = lines[0].split(',').map((col) => col.trim().toLowerCase());
-    console.log('Headers:', headers);
-
     const headerIndex = headers.findIndex((col) => (col === '"id"' || col === "'id'" || col === 'id'));
 
     if (headerIndex === -1) {
-      console.error('Available columns:', headers);
       throw new Error('CSV does not contain Id column');
     }
 
     const idOnlyCsv = lines
       .map((line) => line.split(',')[headerIndex])
       .join('\n');
-
-    console.log('CSV to delete:', idOnlyCsv.substring(0, 500));
 
     const job = await createBulkDeleteJob(instanceUrl, tokens, objectName);
 
@@ -233,7 +221,6 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
     );
 
     const jobResults = await getJobResults(instanceUrl, tokens, job.id);
-    
     totalDeletedCount += jobResult.numberRecordsCompleted;
     console.log(JSON.stringify({jobResults, totalDeletedCount}));
   }

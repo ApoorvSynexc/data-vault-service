@@ -190,7 +190,6 @@ export const archiveAndHardDelete = async (
 
             await updateArchivalObject({
                 backupJobId,
-                objects: latestObjects,
                 object: {
                     id: object.id,
                     status: OBJECT_STATUS.deletionInProgress,
@@ -212,7 +211,6 @@ export const archiveAndHardDelete = async (
 
             await updateArchivalObject({
                 backupJobId,
-                objects: latestObjects,
                 object: {
                     id: object.id,
                     status: OBJECT_STATUS.completed,
