@@ -97,7 +97,6 @@ const uploadBulkResultsByPageArchival = async (
     payload: IUploadBulkResultsByPageArchival
 ): Promise<{ sizeInBytes: number, s3Urls: string[] }> => {
     let latestObjects: IBackupObject[] = [];
-    let { salesforceApiCount } = payload;
     const {
         instanceUrl,
         tokens,
@@ -133,7 +132,7 @@ const uploadBulkResultsByPageArchival = async (
 
             const response = await fetchPage(url);
 
-            ++salesforceApiCount;
+            payload.salesforceApiCount += payload.salesforceApiCount;
             if (!response.ok) {
                 throw new Error(`Salesforce results fetch failed with status ${response.status}`);
             }
@@ -160,7 +159,7 @@ const uploadBulkResultsByPageArchival = async (
                 object: {
                     id: object.id,
                     completedRecordCount,
-                    salesforceApiCount,
+                    salesforceApiCount: payload.salesforceApiCount,
                     insertCount: completedRecordCount,
                     sizeInBytes,
                     ...(locator
