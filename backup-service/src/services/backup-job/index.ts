@@ -290,7 +290,13 @@ const recursivelyUpdateObjects = async (objects: IBackupObject[], object: { id: 
   const results = await Promise.all(
     objects.map(async (obj) => {
       if (obj.id === object.id) {
-        return { ...obj, ...object, ...((object as any)?.salesforceApiCount ? { salesforceApiCount: (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount } : {}) };
+        return {
+          ...obj,
+          ...object,
+          ...((object as any)?.salesforceApiCount ? { salesforceApiCount: (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount } : {}),
+          ...((object as any)?.deletedSuccessRecordCount ? { deletedSuccessRecordCount: (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount } : {}),
+          ...((object as any)?.deletedfailedRecordCount ? { deletedfailedRecordCount: (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount } : {})
+        };
       }
       if (obj.children?.length) {
         return { ...obj, children: await recursivelyUpdateObjects(obj.children, object) };

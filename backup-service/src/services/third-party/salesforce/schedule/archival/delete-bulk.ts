@@ -241,6 +241,8 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
             backupJobId,
             object: {
                 id: object.id,
+                deletedSuccessRecordCount:jobResults.successCount ,
+                deletedfailedRecordCount: jobResults.failedCount,
                 salesforceApiCount: salesforceApiCount + 3
             }
         });
