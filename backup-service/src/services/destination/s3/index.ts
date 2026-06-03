@@ -69,6 +69,37 @@ export const downloadFromS3 = async (
   }
 };
 
+export const fetchCsvFromS3 = async (
+  config: IDestinationConfig,
+  key: string
+): Promise<{ csvData: string; recordCount: number }> => {
+  const client = new S3Client({
+    region: config.region,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+
+  try {
+    const result = await client.send(new GetObjectCommand({ Bucket: config.bucketName, Key: key }));
+    const csvData = await result.Body?.transformToString() || '';
+    const lines = csvData.split('\n').filter((line) => line.trim());
+    const recordCount = Math.max(0, lines.length - 1);
+
+    if (!lines[0]?.toLowerCase().includes('id')) {
+      throw new Error('CSV must contain Id column');
+    }
+
+    return { csvData, recordCount };
+  } catch (err: any) {
+    if (err.name === 'NoSuchKey') {
+      throw new Error(`S3 file not found: ${key}`);
+    }
+    throw new Error(`Failed to fetch S3 file: ${err.message}`);
+  }
+};
+
 // Returns all S3 object keys under a given prefix, sorted alphabetically.
 // Paginates through all pages (each page capped at 1,000 keys by the S3 API).
 export const listS3Objects = async (
