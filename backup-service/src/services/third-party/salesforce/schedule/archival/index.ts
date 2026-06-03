@@ -14,6 +14,7 @@ import {
 } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
+import { bulkDeleteRecords } from './delete-bulk';
 
 // SOQL injection guards.
 // Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")
@@ -150,7 +151,7 @@ export const archiveAndHardDelete = async (
                 throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
             }
 
-            latestObjects = await updateArchivalObject({
+            await updateArchivalObject({
                 backupJobId,
                 objects: latestObjects,
                 object: {
@@ -165,7 +166,7 @@ export const archiveAndHardDelete = async (
         logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
         if (salesforceApiCount) {
             const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-            const { sizeInBytes } = await uploadBulkResultsByPageArchival({
+            const { sizeInBytes, s3Urls } = await uploadBulkResultsByPageArchival({
                 instanceUrl,
                 tokens,
                 jobId,
@@ -186,6 +187,33 @@ export const archiveAndHardDelete = async (
                 updateParams.objects = updatedObjects;
             }
             await updateBackupConfig(backupConfigId, updateParams);
+
+            await updateArchivalObject({
+                backupJobId,
+                objects: latestObjects,
+                object: {
+                    id: object.id,
+                    status: OBJECT_STATUS.deletionInProgress,
+                }
+            });
+            
+            await bulkDeleteRecords({
+                backupConfigId,
+                backupJobId,
+                instanceUrl,
+                tokens,
+                objectName,
+                s3Urls
+            });
+
+            await updateArchivalObject({
+                backupJobId,
+                objects: latestObjects,
+                object: {
+                    id: object.id,
+                    status: OBJECT_STATUS.completed,
+                }
+            });
         }
 
         const schemaWithParquet = schema.map((field: { dataType: string }) => ({

@@ -95,7 +95,7 @@ interface IUploadBulkResultsByPageArchival {
 
 const uploadBulkResultsByPageArchival = async (
     payload: IUploadBulkResultsByPageArchival
-): Promise<{ sizeInBytes: number }> => {
+): Promise<{ sizeInBytes: number, s3Urls: string[] }> => {
     let latestObjects: IBackupObject[] = [];
     let { salesforceApiCount } = payload;
     const {
@@ -110,7 +110,7 @@ const uploadBulkResultsByPageArchival = async (
         startCompletedRecordCount = 0,
         maxRecords = MAX_RECORDS_PER_PAGE,
     } = payload;
-
+    let s3Urls = [];
     const fetchPage = makePageFetcher(tokens);
 
     let locator: string | null = startLocator;
@@ -151,6 +151,7 @@ const uploadBulkResultsByPageArchival = async (
             sizeInBytes += csvBuffer.length;
 
             await uploadToS3(destConfig, s3Key, csvBuffer);
+            s3Urls.push(s3Key);
             locator = nextLocator;
 
             latestObjects = await updateArchivalObject({
@@ -184,7 +185,7 @@ const uploadBulkResultsByPageArchival = async (
         throw new Error(errorMessage, { cause: err });
     }
 
-    return { sizeInBytes };
+    return { sizeInBytes, s3Urls };
 };
 
 export {
