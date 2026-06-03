@@ -197,13 +197,14 @@ export const archiveAndHardDelete = async (
                 }
             });
             console.log("delete start");
-            
+
             await bulkDeleteRecords({
                 backupConfigId,
                 backupJobId,
                 instanceUrl,
                 tokens,
                 objectName,
+                destConfig,
                 s3Urls
             });
 

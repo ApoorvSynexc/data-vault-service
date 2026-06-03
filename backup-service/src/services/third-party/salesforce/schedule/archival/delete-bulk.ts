@@ -1,3 +1,4 @@
+import { IDestinationConfig } from '../../../../../models';
 import { SalesforceTokens } from '../../api-request';
 
 const SF_API_VERSION = 'v65.0';
@@ -16,6 +17,7 @@ export interface IBulkDeletePayload {
   instanceUrl: string;
   tokens: SalesforceTokens;
   objectName: string;
+  destConfig: IDestinationConfig;
   s3Urls: string[];
 }
 
@@ -205,6 +207,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
     instanceUrl,
     tokens,
     objectName,
+    destConfig,
     s3Urls,
   } = payload;
 
@@ -213,7 +216,8 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
   console.log(`Bulk delete initialize: ${s3Urls.length}`);
   
   for (let i = 0; i < s3Urls.length; i++) {
-    const s3Url = s3Urls[i];
+    const baseUrl = `https://${destConfig.bucketName}.s3.${destConfig.region}.amazonaws.com/`;
+    const s3Url = baseUrl + s3Urls[i];
 
     const { csvData } = await fetchS3File(s3Url);
 
