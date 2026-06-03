@@ -122,6 +122,7 @@ export const archiveAndHardDelete = async (
                 backupJobId,
                 object: {
                     id: object.id,
+                    salesforceApiCount: 1,
                     status: OBJECT_STATUS.bulkQueryInProgress
                 }
             });
@@ -152,7 +153,7 @@ export const archiveAndHardDelete = async (
                 objects: latestObjects,
                 object: {
                     id: object.id,
-                    salesforceApiCount: 2,
+                    salesforceApiCount: 1,
                     status: OBJECT_STATUS.bulkQueryCompleted,
                     bulkJobId: jobId,
                 }
