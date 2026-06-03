@@ -218,6 +218,8 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
   for (let i = 0; i < s3Urls.length; i++) {
     const baseUrl = `https://${destConfig.bucketName}.s3.${destConfig.region}.amazonaws.com/`;
     const s3Url = baseUrl + s3Urls[i];
+    console.log({s3Url});
+    
 
     const { csvData } = await fetchS3File(s3Url);
 
