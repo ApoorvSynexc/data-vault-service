@@ -1,7 +1,7 @@
 import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
-import { recursivelyUpdateObjects, updateArchivalObject, updateBackupObject } from '../../../../backup-job';
+import { recursivelyUpdateObjects, updateArchivalObject } from '../../../../backup-job';
 import {
     buildS3KeyPrefix,
     buildSchemaS3Key,
@@ -216,12 +216,6 @@ export const archiveAndHardDelete = async (
                 errorMessage: errorMsg,
             }
         });
-        // await updateBackupObject({
-        //   backupJobId,
-        //   objectIndex,
-        //   status: OBJECT_STATUS.failed,
-        //   errorMessage: errorMsg,
-        // });
         logger.error(`Object archival failed, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName} - ${errorMsg}`);
         throw err;
     }
