@@ -18,6 +18,7 @@ import {
     getSalesforceProfile,
     deleteBackupJobsByConfig,
     realTimeTriggerManagement,
+    computeJobStats,
 } from "../../../services";
 import { isOwner, wrapController } from "../../../utils/helper";
 
@@ -256,6 +257,41 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 };
 
+const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const { slug } = req.query;
+    const spaceId = req.user!.spaceId;
+    const userId = req.user!.userId;
+
+    if (slug) {
+        const config = await getBackupConfigBySlug({
+            userId: req.user!.userId,
+            slug: String(slug),
+            spaceId: req.user?.spaceId,
+            type: 'NORMAL'
+        });
+        if (!config) {
+            makeResponse(req, res, 400, false, 'backup_config_not_found');
+            return;
+        }
+        const stats = await computeJobStats({ indexName: 'backupConfigId-index', keyName: 'backupConfigId', keyValue: config.backupConfigId, type: 'ARCHIVAL' });
+        makeResponse(req, res, 200, true, 'fetch', stats);
+        return;
+    }
+
+    let indexName = 'userId-index';
+    let keyName = 'userId';
+    let keyValue = userId;
+
+    if (spaceId) {
+        indexName = 'spaceId-index';
+        keyName = 'spaceId';
+        keyValue = spaceId;
+    }
+
+    const stats = await computeJobStats({ indexName, keyName, keyValue, type: 'ARCHIVAL' });
+    makeResponse(req, res, 200, true, 'fetch', stats);
+};
+
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
     getFieldsHanlder,
@@ -263,5 +299,6 @@ export const archivalConfigController = wrapController({
     createArchivalConfigHandler,
     getArchivalConfigHandler,
     updateArchivalConfigHandler,
-    deletearchivalConfigHandler
+    deletearchivalConfigHandler,
+    getArchivalJobStatsHandler
 });

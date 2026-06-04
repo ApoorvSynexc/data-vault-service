@@ -79,6 +79,7 @@ export interface IBackupJobDestination {
 export interface IBackupJob {
   backupJobId: string; // PK
   jobType: 'BULK' | 'REALTIME'; // discriminator
+  type?: 'NORMAL' | 'ARCHIVAL'; // NORMAL for backup, ARCHIVAL for archival
   userId: string; // GSI: userId-index
   backupConfigId: string; // GSI: backupConfigId-index
   destination: IBackupJobDestination; // encrypted IDestinationConfig + type
