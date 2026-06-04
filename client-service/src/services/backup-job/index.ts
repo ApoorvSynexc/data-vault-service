@@ -9,6 +9,7 @@ import { updateBackupConfig } from '../backup-config';
 import { getCrmById, getCrmTokens } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { incrementTableCounter } from '../counter';
+import { flattenBackupObjects } from '../../utils/helper';
 
 const getSourceObjects = (config: IBackupConfig) => {
   if (config.objects?.length) {
@@ -317,6 +318,55 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
   };
 };
 
+const computeArchivalJobStats = async (query: { indexName: string; keyName: string; keyValue: string }) => {
+  let totalArchival = 0;
+  let completedArchival = 0;
+  let totalSize = 0;
+  let totalRecords = 0;
+
+  let lastKey: Record<string, any> | undefined;
+
+  do {
+    const queryParams: any = {
+      TableName: BACKUP_JOB_TABLE,
+      IndexName: query.indexName,
+      KeyConditionExpression: `${query.keyName} = :keyValue`,
+      ExpressionAttributeValues: { ':keyValue': query.keyValue },
+      FilterExpression: '#type = :type',
+      ExpressionAttributeNames: { '#type': 'type' },
+      Limit: 100,
+      ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+    };
+
+    queryParams.ExpressionAttributeValues[':type'] = 'ARCHIVAL';
+
+    const result = await docClient.send(new QueryCommand(queryParams));
+
+    const jobs = (result.Items ?? []) as IBackupJob[];
+    lastKey = result.LastEvaluatedKey;
+
+    for (const job of jobs) {
+      const flattenObjects = flattenBackupObjects(job.object ?? []);
+      (flattenObjects ?? []).forEach((obj) => {
+        totalSize += obj.sizeInBytes ?? 0;
+        totalRecords += obj.completedRecordCount ?? 0;
+      });
+
+      totalArchival++;
+      if (job.status === JOB_STATUS.success) {
+        completedArchival++;
+      }
+    }
+  } while (lastKey);
+
+  return {
+    totalArchival,
+    completedArchival,
+    totalSize,
+    totalRecords,
+  };
+};
+
 
 export {
   triggerBackupJob,
@@ -327,4 +377,5 @@ export {
   getBackupJobsByConfig,
   deleteBackupJobsByConfig,
   computeJobStats,
+  computeArchivalJobStats,
 };
