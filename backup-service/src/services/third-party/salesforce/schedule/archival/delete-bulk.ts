@@ -6,7 +6,7 @@ import { parseCSVLine } from '../../../../../utils/helper';
 import { SalesforceTokens } from '../../api-request';
 
 const SF_API_VERSION = 'v65.0';
-const MAX_POLL_DURATION_MS = 30 * 60 * 1000;
+const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000;
 const POLL_INTERVAL_MS = 5000;
 
 export interface IBulkDeleteJob {
@@ -121,11 +121,13 @@ const pollJobCompletion = async (
     paylaod: {
         instanceUrl: string,
         tokens: SalesforceTokens,
-        jobId: string
+        jobId: string,
+        backupJobId: string,
+        object: IBackupObject
     }
-): Promise<{ job: IJobStatusResponse, salesforceApiCount: number }> => {
+): Promise<{ job: IJobStatusResponse }> => {
     let salesforceApiCount = 0;
-    const { instanceUrl, tokens, jobId } = paylaod;
+    const { backupJobId, object, instanceUrl, tokens, jobId } = paylaod;
     const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
     while (true) {
@@ -151,8 +153,16 @@ const pollJobCompletion = async (
         const job = (await response.json()) as IJobStatusResponse;
 
         salesforceApiCount += 1;
+        await updateArchivalObject({
+            backupJobId,
+            object: {
+                id: object.id,
+                deletedSuccessRecordCount: job.numberRecordsProcessed,
+                salesforceApiCount
+            }
+        });
         if (job.state === 'JobComplete') {
-            return { job, salesforceApiCount };
+            return { job };
         }
 
         if (job.state === 'Failed' || job.state === 'Aborted') {
@@ -197,8 +207,6 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
         s3Urls,
     } = payload;
     const objectName = object.name;
-    let totalDeletedCount = 0;
-
     await updateArchivalObject({
         backupJobId,
         object: {
@@ -228,27 +236,32 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
         await uploadDataToJob(instanceUrl, tokens, job.id, idOnlyCsv);
         await closeAndSubmitJob(instanceUrl, tokens, job.id);
 
-        const { job: jobResult, salesforceApiCount } = await pollJobCompletion(
+        const { job: jobResult } = await pollJobCompletion(
             {
                 instanceUrl,
                 tokens,
                 jobId: job.id,
+                backupJobId,
+                object
             }
         );
 
         const jobResults = await getJobResults(instanceUrl, tokens, job.id);
-        totalDeletedCount += jobResult.numberRecordsCompleted;
 
         await updateArchivalObject({
             backupJobId,
             object: {
                 id: object.id,
-                deletedSuccessRecordCount:jobResults.successCount ,
+                // deletedSuccessRecordCount: jobResults.successCount,
                 deletedfailedRecordCount: jobResults.failedCount,
-                salesforceApiCount: salesforceApiCount + 3
+                salesforceApiCount: 3
             }
         });
-        console.log(JSON.stringify({ jobResults, totalDeletedCount }));
+        console.log(JSON.stringify({
+            jobResults,
+            numberRecordsCompleted: jobResult.numberRecordsCompleted,
+            successCount: jobResults.successCount,
+        }));
     }
 
     await updateArchivalObject({
