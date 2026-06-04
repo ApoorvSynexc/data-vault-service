@@ -253,7 +253,8 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
     };
 
     if (query.type) {
-      queryParams.FilterExpression = 'type = :type';
+      queryParams.FilterExpression = '#type = :type';
+      queryParams.ExpressionAttributeNames = { '#type': 'type' };
       queryParams.ExpressionAttributeValues[':type'] = query.type;
     }
 
