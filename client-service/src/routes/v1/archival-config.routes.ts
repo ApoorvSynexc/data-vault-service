@@ -8,6 +8,7 @@ router.get('/object-childs', archivalConfigController.getObjectChildHanlder);
 router.get('/fields', archivalConfigController.getFieldsHanlder);
 router.get('/list', archivalConfigController.listArchivalConfigsHandler);
 router.get('/', archivalConfigController.getArchivalConfigHandler);
+router.get('/stats', archivalConfigController.getArchivalJobStatsHandler);
 router.put('/', archivalConfigController.updateArchivalConfigHandler);
 router.delete('/', archivalConfigController.deletearchivalConfigHandler);
 router.post('/', createArchivalConfigValidation, archivalConfigController.createArchivalConfigHandler);

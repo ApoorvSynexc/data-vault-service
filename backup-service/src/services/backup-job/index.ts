@@ -32,6 +32,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   const item: IBackupJob = {
     backupJobId: uuidv4(),
     jobType: JOB_TYPE.bulk as 'BULK',
+    type: 'NORMAL',
     userId,
     backupConfigId,
     source: encryptedSource,
@@ -84,6 +85,7 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
   const item: IBackupJob = {
     backupJobId: uuidv4(),
     jobType: JOB_TYPE.bulk as 'BULK',
+    type: 'ARCHIVAL',
     userId,
     backupConfigId,
     source: encryptedSource,

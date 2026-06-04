@@ -223,7 +223,7 @@ const deleteBackupJobsByConfig = async (backupConfigId: string, userId: string):
   }
 };
 
-const computeJobStats = async (query: { indexName: string; keyName: string; keyValue: string }) => {
+const computeJobStats = async (query: { indexName: string; keyName: string; keyValue: string; type?: string }) => {
   const today = dayjs().startOf('day');
   const yesterday = today.subtract(1, 'day');
   const startOfThisWeek = today.subtract(7, 'day');
@@ -243,16 +243,21 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
   let lastKey: Record<string, any> | undefined;
 
   do {
-    const result = await docClient.send(
-      new QueryCommand({
-        TableName: BACKUP_JOB_TABLE,
-        IndexName: query.indexName,
-        KeyConditionExpression: `${query.keyName} = :keyValue`,
-        ExpressionAttributeValues: { ':keyValue': query.keyValue },
-        Limit: 100,
-        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
-      })
-    );
+    const queryParams: any = {
+      TableName: BACKUP_JOB_TABLE,
+      IndexName: query.indexName,
+      KeyConditionExpression: `${query.keyName} = :keyValue`,
+      ExpressionAttributeValues: { ':keyValue': query.keyValue },
+      Limit: 100,
+      ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+    };
+
+    if (query.type) {
+      queryParams.FilterExpression = 'type = :type';
+      queryParams.ExpressionAttributeValues[':type'] = query.type;
+    }
+
+    const result = await docClient.send(new QueryCommand(queryParams));
 
     const jobs = (result.Items ?? []) as IBackupJob[];
     lastKey = result.LastEvaluatedKey;

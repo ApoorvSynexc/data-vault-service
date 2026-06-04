@@ -377,7 +377,7 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
       makeResponse(req, res, 400, false, 'backup_config_not_found');
       return;
     }
-    const stats = await computeJobStats({ indexName: 'backupConfigId-index', keyName: 'backupConfigId', keyValue: config.backupConfigId });
+    const stats = await computeJobStats({ indexName: 'backupConfigId-index', keyName: 'backupConfigId', keyValue: config.backupConfigId, type: 'NORMAL' });
     makeResponse(req, res, 200, true, 'fetch', stats);
     return;
   }
@@ -392,7 +392,7 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
     keyValue = spaceId;
   }
 
-  const stats = await computeJobStats({ indexName, keyName, keyValue });
+  const stats = await computeJobStats({ indexName, keyName, keyValue, type: 'NORMAL' });
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
