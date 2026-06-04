@@ -4,7 +4,7 @@ import { IBackupJob } from '../../models';
 import { updateBackupConfig } from '../backup-config';
 import { getStaleRunningJobs, updateBackupObject, updateJobStatus } from '../backup-job';
 
-const STALE_THRESHOLD_MINUTES = 30;
+const STALE_THRESHOLD_MINUTES = 60;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 const STUCK_STATUSES = new Set([
