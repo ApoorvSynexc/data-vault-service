@@ -19,6 +19,7 @@ import {
     deleteBackupJobsByConfig,
     realTimeTriggerManagement,
     computeJobStats,
+    computeArchivalJobStats,
 } from "../../../services";
 import { isOwner, wrapController } from "../../../utils/helper";
 
@@ -273,7 +274,7 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
             makeResponse(req, res, 400, false, 'backup_config_not_found');
             return;
         }
-        const stats = await computeJobStats({ indexName: 'backupConfigId-index', keyName: 'backupConfigId', keyValue: config.backupConfigId, type: 'ARCHIVAL' });
+        const stats = await computeArchivalJobStats({ indexName: 'backupConfigId-index', keyName: 'backupConfigId', keyValue: config.backupConfigId });
         makeResponse(req, res, 200, true, 'fetch', stats);
         return;
     }
@@ -288,7 +289,7 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
         keyValue = spaceId;
     }
 
-    const stats = await computeJobStats({ indexName, keyName, keyValue, type: 'ARCHIVAL' });
+    const stats = await computeArchivalJobStats({ indexName, keyName, keyValue });
     makeResponse(req, res, 200, true, 'fetch', stats);
 };
 

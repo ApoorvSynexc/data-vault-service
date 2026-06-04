@@ -7,6 +7,7 @@ import {
 } from '../constant';
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
+import { IBackupObject } from '../models';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -82,6 +83,11 @@ const timer = (ms: number): Promise<void> => {
   return new Promise((resolve) => setTimeout(resolve, ms));
 };
 
+// Flatten all nested objects (children at any depth) into a single array
+const flattenBackupObjects = (objects: IBackupObject[]): IBackupObject[] => {
+  return objects.flatMap((obj) => [obj, ...(obj.children ? flattenBackupObjects(obj.children) : [])]);
+};
+
 export {
   randomNumber,
   generateTokens,
@@ -91,4 +97,5 @@ export {
   buildSlug,
   isOwner,
   timer,
+  flattenBackupObjects
 };
