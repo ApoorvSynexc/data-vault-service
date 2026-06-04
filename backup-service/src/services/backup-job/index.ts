@@ -45,6 +45,8 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     updatedAt: now,
   };
 
+  console.log({item});
+
   await Promise.all([
     docClient.send(new PutCommand({ TableName: BACKUP_JOB_TABLE, Item: item })),
     incrementTableCounter(BACKUP_JOB_TABLE, userId),
