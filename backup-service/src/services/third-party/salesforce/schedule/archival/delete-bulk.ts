@@ -2,6 +2,7 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
 import { fetchCsvFromS3 } from '../../../../destination/s3';
+import { parseCSVLine } from '../../../../../utils/helper';
 import { SalesforceTokens } from '../../api-request';
 
 const SF_API_VERSION = 'v65.0';
@@ -211,15 +212,16 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
 
         const { csvData } = await fetchCsvFromS3(destConfig, objectKey);
         const lines = csvData.split('\n').filter((line) => line.trim());
-        const headers = lines[0].split(',').map((col) => col.trim().toLowerCase());
-        const headerIndex = headers.findIndex((col) => (col === '"id"' || col === "'id'" || col === 'id'));
+        const headerLine = parseCSVLine(lines[0]);
+        const headers = headerLine.map((col) => col.toLowerCase());
+        const headerIndex = headers.findIndex((col) => col === 'id');
 
         if (headerIndex === -1) {
             throw new Error('CSV does not contain Id column');
         }
 
         const idOnlyCsv = lines
-            .map((line) => line.split(',')[headerIndex])
+            .map((line) => parseCSVLine(line)[headerIndex])
             .join('\n');
 
         const job = await createBulkDeleteJob(instanceUrl, tokens, objectName);
