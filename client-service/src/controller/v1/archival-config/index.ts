@@ -135,6 +135,15 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 };
 
+const dryRunArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    try {
+        makeResponse(req, res, 201, true, 'create');
+    } catch (error) {
+        logger.error('Error creating backup config, Deleting backup config: ', error);
+        throw error;
+    }
+};
+
 
 const getArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const { slug } = req.query;
@@ -301,5 +310,6 @@ export const archivalConfigController = wrapController({
     getArchivalConfigHandler,
     updateArchivalConfigHandler,
     deletearchivalConfigHandler,
-    getArchivalJobStatsHandler
+    getArchivalJobStatsHandler,
+    dryRunArchivalHandler
 });
