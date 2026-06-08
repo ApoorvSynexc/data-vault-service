@@ -1,5 +1,5 @@
 import { parseQuery } from '@jetstreamapp/soql-parser-js';
-import type { ISalesforceObject, IOccurrence } from './types';
+import type { ISalesforceObject } from './types';
 
 // ── Internal AST node shape ───────────────────────────────────────────────────
 // Mirrors the soql-parser-js AST structure we traverse; cast from the
@@ -69,7 +69,7 @@ function buildFieldCondition(f: { name: string; filter: { value: string; operato
 // Returns the WHERE clause body (no leading "WHERE") for a single object node.
 // Returns null when the object has no filter conditions.
 
-export function buildOwnWhereBody(obj: ISalesforceObject): string | null {
+export function buildOwnWhereBody(obj: Pick<ISalesforceObject, 'condition' | 'field'>): string | null {
   const { condition, field } = obj;
   if (!condition) return null;
 
@@ -111,33 +111,11 @@ function toRelationshipName(fieldApiName: string): string {
 }
 
 /**
- * Builds the field path used in an IN-list clause for ancestor `i`.
- * e.g. for a direct parent → returns `fieldApiName`
- *      for a grandparent  → returns `RelName.fieldApiName`
+ * Returns the dot-notation relationship path from the current object up to
+ * ancestor at index `i` in `ancestorChain` (root=0, direct parent=last).
  */
-export function buildFieldPath(
-  currentObj: Pick<IOccurrence, 'fieldApiName'>,
-  ancestorChain: Pick<ISalesforceObject, 'fieldApiName'>[],
-  i: number
-): string {
-  const D = ancestorChain.length;
-  if (i === D - 1) return currentObj.fieldApiName!;
-
-  const parts = [toRelationshipName(currentObj.fieldApiName!)];
-  for (let j = D - 1; j > i + 1; j--) {
-    parts.push(toRelationshipName(ancestorChain[j].fieldApiName!));
-  }
-  parts.push(ancestorChain[i + 1].fieldApiName!);
-  return parts.join('.');
-}
-
-/**
- * Builds the dot-notation relationship traversal path from the current object
- * up to ancestor `i` (all segments expressed as relationship names).
- * Used by `transformWhere` to prefix ancestor field references.
- */
-export function getRelPathToAncestor(
-  currentObj: Pick<IOccurrence, 'fieldApiName'>,
+function getRelPathToAncestor(
+  currentObj: Pick<ISalesforceObject, 'fieldApiName'>,
   ancestorChain: Pick<ISalesforceObject, 'fieldApiName'>[],
   i: number
 ): string {
@@ -192,4 +170,34 @@ export function transformWhere(whereClause: string, relPath: string): string {
   const ast = parseQuery(`SELECT Id FROM X WHERE ${normalized}`);
   if (!ast.where) return normalized;
   return rebuildWhere(ast.where as unknown as WhereNode, relPath);
+}
+
+// ── Dot-notation WHERE builder ────────────────────────────────────────────────
+// Combines a node's own WHERE conditions with each ancestor's conditions,
+// prefixing ancestor fields with the relationship traversal path so the
+// result is a single flat WHERE clause for the current object's SObject.
+//
+// Example (Case with parent Contact and grandparent Account):
+//   own:        Status = 'Open'
+//   Contact:    Contact.Email LIKE '%acme%'
+//   Account:    Contact.Account.Name = 'Acme'
+//   → "(Status = 'Open') AND (Contact.Email LIKE '%acme%') AND (Contact.Account.Name = 'Acme')"
+
+export function buildDotNotationWhere(
+  node: Pick<ISalesforceObject, 'condition' | 'field' | 'fieldApiName'>,
+  ancestors: Pick<ISalesforceObject, 'condition' | 'field' | 'fieldApiName'>[]
+): string | null {
+  const parts: string[] = [];
+
+  const ownWhere = buildOwnWhereBody(node);
+  if (ownWhere) { parts.push(`(${ownWhere})`); }
+
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const ancestorWhere = buildOwnWhereBody(ancestors[i]);
+    if (!ancestorWhere) { continue; }
+    const relPath = getRelPathToAncestor(node, ancestors, i);
+    parts.push(`(${transformWhere(ancestorWhere, relPath)})`);
+  }
+
+  return parts.length > 0 ? parts.join(' AND ') : null;
 }
