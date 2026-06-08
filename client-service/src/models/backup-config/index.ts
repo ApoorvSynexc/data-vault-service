@@ -65,7 +65,7 @@ export interface IBackupConfig {
   scheduleConfig?: IScheduleConfig;
   objects?: IObject[];
   status: string;
-  backupStatus: string; // PENDING | SUCCESS | FAILED
+  backupStatus?: string; // PENDING | SUCCESS | FAILED
   lastBackupAt?: string; // when the last backup job ran
   lastEventId?: string; // idempotency key — last processed backup-service event ID
   schemaChange?: boolean;
