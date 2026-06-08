@@ -42,6 +42,7 @@ interface UpdateBackupConfigParams {
   sizeInBytes?: number;
   triggerResults?: ITriggerResult[];
   type?: string;
+  status?: string;
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
@@ -155,7 +156,7 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
     new ScanCommand({
       TableName: BACKUP_CONFIG_TABLE,
       FilterExpression:
-        '#status = IN (:active, :backupResume,) AND #schedule = :schedule AND #scheduleConfig.#scheduleType = :scheduleType AND #backupStatus IN (:backupSuccess, :backupFailed)',
+        '(#status = :active OR #status = :backupResume) AND #schedule = :schedule AND #scheduleConfig.#scheduleType = :scheduleType AND (#backupStatus = :backupSuccess OR #backupStatus = :backupFailed)',
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #configType, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: {
         '#status': 'status',
@@ -235,6 +236,9 @@ const updateBackupConfig = async (
   }
   if (params.type !== undefined) {
     updates.type = params.type;
+  }
+  if (params.status !== undefined) {
+    updates.status = params.status;
   }
 
   const setExpr = Object.keys(updates)
