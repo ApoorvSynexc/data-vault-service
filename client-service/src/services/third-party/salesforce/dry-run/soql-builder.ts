@@ -1,5 +1,5 @@
 import { parseQuery } from '@jetstreamapp/soql-parser-js';
-import type { ISalesforceObject } from './types';
+import type { ISalesforceObject, IOccurrence } from './types';
 
 // ── Internal AST node shape ───────────────────────────────────────────────────
 // Mirrors the soql-parser-js AST structure we traverse; cast from the
@@ -111,11 +111,32 @@ function toRelationshipName(fieldApiName: string): string {
 }
 
 /**
+ * Builds the field path used in an IN-list clause for ancestor `i`.
+ * e.g. for a direct parent → returns `fieldApiName`
+ *      for a grandparent  → returns `RelName.fieldApiName`
+ */
+export function buildFieldPath(
+  currentObj: Pick<IOccurrence, 'fieldApiName'>,
+  ancestorChain: Pick<ISalesforceObject, 'fieldApiName'>[],
+  i: number
+): string {
+  const D = ancestorChain.length;
+  if (i === D - 1) { return currentObj.fieldApiName!; }
+
+  const parts = [toRelationshipName(currentObj.fieldApiName!)];
+  for (let j = D - 1; j > i + 1; j--) {
+    parts.push(toRelationshipName(ancestorChain[j].fieldApiName!));
+  }
+  parts.push(ancestorChain[i + 1].fieldApiName!);
+  return parts.join('.');
+}
+
+/**
  * Returns the dot-notation relationship path from the current object up to
  * ancestor at index `i` in `ancestorChain` (root=0, direct parent=last).
  */
-function getRelPathToAncestor(
-  currentObj: Pick<ISalesforceObject, 'fieldApiName'>,
+export function getRelPathToAncestor(
+  currentObj: Pick<IOccurrence, 'fieldApiName'>,
   ancestorChain: Pick<ISalesforceObject, 'fieldApiName'>[],
   i: number
 ): string {

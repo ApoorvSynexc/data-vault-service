@@ -1,5 +1,6 @@
 import { getCrmById, getCrmTokens } from '../../crm';
 import { salesforceRequest } from '../salesforce';
+import type { ICountItem, ICountResult } from './dry-run/types';
 
 const getApexObjects = async (crmId: string, mode?: string) => {
   const crm = await getCrmById(crmId);
@@ -108,4 +109,95 @@ const createApexSecret = async (crmId: string, body: { webhookSecret: string }) 
   return encryptedResult.data;
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexFields, createApexSecret };
+const APEX_BASE = (instanceUrl: string) =>
+  `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault`;
+
+const apexCountBatch = async (crmId: string, items: ICountItem[]): Promise<ICountResult[]> => {
+  const crm = await getCrmById(crmId);
+  if (!crm) { throw new Error('CRM not found'); }
+
+  const { access_token, refresh_token } = getCrmTokens(crm);
+  const instanceUrl = crm.crmProfile?.instanceUrl;
+  if (!instanceUrl) { throw new Error('Instance URL not found'); }
+
+  const result = await salesforceRequest(
+    {
+      url:    `${APEX_BASE(instanceUrl)}/query-count`,
+      method: 'POST',
+      body:   JSON.stringify({ items }),
+    },
+    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
+  );
+
+  if (!result.data.success) {
+    throw new Error(`[query-count] request failed: ${JSON.stringify(result.data)}`);
+  }
+  return result.data.results as ICountResult[];
+};
+
+const apexValidateSoql = async (
+  crmId: string,
+  apiName: string,
+  whereClause: string
+): Promise<{ isValid: boolean; message?: string; objectName?: string | null; errorCode?: string }> => {
+  const crm = await getCrmById(crmId);
+  if (!crm) { throw new Error('CRM not found'); }
+
+  const { access_token, refresh_token } = getCrmTokens(crm);
+  const instanceUrl = crm.crmProfile?.instanceUrl;
+  if (!instanceUrl) { throw new Error('Instance URL not found'); }
+
+  const result = await salesforceRequest(
+    {
+      url:    `${APEX_BASE(instanceUrl)}/validate-soql`,
+      method: 'POST',
+      body:   JSON.stringify({ apiName, whereClause: whereClause || null }),
+    },
+    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
+  );
+
+  return result.data;
+};
+
+const HARVEST_PAGE_SIZE = 2000;
+
+const apexHarvestIds = async (
+  crmId: string,
+  apiName: string,
+  whereClause: string
+): Promise<string[]> => {
+  const crm = await getCrmById(crmId);
+  if (!crm) { throw new Error('CRM not found'); }
+
+  const { access_token, refresh_token } = getCrmTokens(crm);
+  const instanceUrl = crm.crmProfile?.instanceUrl;
+  if (!instanceUrl) { throw new Error('Instance URL not found'); }
+
+  const tokens = { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl };
+  const allIds: string[] = [];
+  let cursor = '';
+
+  for (;;) {
+    const result = await salesforceRequest(
+      {
+        url:    `${APEX_BASE(instanceUrl)}/harvest-ids`,
+        method: 'POST',
+        body:   JSON.stringify({ apiName, whereClause: whereClause || null, cursor, pageSize: HARVEST_PAGE_SIZE }),
+      },
+      tokens
+    );
+
+    const data = result.data;
+    if (!data.success) {
+      throw new Error(`[harvest-ids] failed for ${apiName}: ${JSON.stringify(data)}`);
+    }
+
+    allIds.push(...(data.ids ?? []));
+    if (data.done) { break; }
+    cursor = data.nextCursor;
+  }
+
+  return allIds;
+};
+
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexFields, createApexSecret, apexCountBatch, apexValidateSoql, apexHarvestIds };
