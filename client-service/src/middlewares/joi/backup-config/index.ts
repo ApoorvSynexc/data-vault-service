@@ -109,8 +109,8 @@ export const createBackupConfigValidation = (
       otherwise: Joi.forbidden(),
     }),
     objects: Joi.array().items(objectSchema).optional(),
-    backupStatus: Joi.string()
-      .valid('DRAFT', ...Object.values(BACKUP_STATUS))
+    status: Joi.string()
+      .valid(...Object.values(BACKUP_STATUS))
       .optional()
   });
 
@@ -134,8 +134,8 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
     scheduleConfig: scheduleConfigSchema.optional(),
     objects: Joi.array().items(objectSchema).optional(),
     destinationId: Joi.string().optional(),
-    backupStatus: Joi.string()
-      .valid('DRAFT', ...Object.values(BACKUP_STATUS))
+    status: Joi.string()
+      .valid(...Object.values(BACKUP_STATUS))
       .optional()
   }).min(1);
 
