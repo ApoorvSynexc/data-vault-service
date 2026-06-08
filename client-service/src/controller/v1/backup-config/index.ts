@@ -25,7 +25,7 @@ import {
   syncMetadataAndTriggers,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, STATUS } from '../../../constant';
 import { IBackupConfig, IScheduleConfig } from '../../../models';
 
 const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
@@ -288,7 +288,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
   const config = existing!;
 
-  if (config.backupStatus === BACKUP_STATUS.pending) {
+  if (config.backupStatus === BACKUP_STATUS.pending && config.status !== STATUS.paused) {
     makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
     return;
   }
