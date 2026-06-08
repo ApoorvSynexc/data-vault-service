@@ -9,7 +9,7 @@ import {
   SCHEDULE_MODE,
   SCHEDULE_TYPE,
   WEEK_DAY,
-  BACKUP_STATUS,
+  STATUS,
 } from '../../../constant';
 
 const fieldFilterSchema = Joi.object({
@@ -110,7 +110,7 @@ export const createBackupConfigValidation = (
     }),
     objects: Joi.array().items(objectSchema).optional(),
     status: Joi.string()
-      .valid(...Object.values(BACKUP_STATUS))
+      .valid(...Object.values(STATUS))
       .optional()
   });
 
@@ -135,7 +135,7 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
     objects: Joi.array().items(objectSchema).optional(),
     destinationId: Joi.string().optional(),
     status: Joi.string()
-      .valid(...Object.values(BACKUP_STATUS))
+      .valid(...Object.values(STATUS))
       .optional()
   }).min(1);
 
