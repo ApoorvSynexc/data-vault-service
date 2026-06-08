@@ -122,7 +122,7 @@ export class SalesforceClient {
       {
         url:    `${this.apexBase}/validate-soql`,
         method: 'POST',
-        body:   JSON.stringify({ apiName, whereClause, checkExecution }),
+        body:   JSON.stringify({ apiName, soql: whereClause, checkExecution }),
       },
       this.tokens
     );

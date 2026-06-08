@@ -116,6 +116,7 @@ const crmObjectsSchema = Joi.object({
 
 const validateWithSchema = (schema: Joi.ObjectSchema) =>
     (req: Request, res: Response, next: NextFunction) => {
+        console.log(`Validating request body: ${JSON.stringify(req.body)}`);
         const { error } = schema.validate(req.body, { abortEarly: false });
         if (error) {
             makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
