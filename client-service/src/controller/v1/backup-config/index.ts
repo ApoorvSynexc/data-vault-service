@@ -59,7 +59,7 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
   }
 
   const [apexResult, backupConfigs] = await Promise.all([
-    getApexObjects(String(crmId), String(mode)),
+    getApexObjects(String(crmId), mode ? String(mode) : undefined),
     getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
   ]);
 
