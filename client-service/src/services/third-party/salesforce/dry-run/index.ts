@@ -4,7 +4,7 @@ import { SalesforceClient } from './sf-client';
 import { executeDryRun } from './executor';
 import type { IDryRunPayload, IDryRunResult } from './types';
 
-export type { IDryRunPayload, IDryRunResult, IValidateSoqlResult, IValidateSoqlItem } from './types';
+export type { IDryRunPayload, IDryRunResult, IDryRunObjectResult, IValidateSoqlPayload, IValidateSoqlItem } from './types';
 
 /**
  * Entry point for a dry-run record count.

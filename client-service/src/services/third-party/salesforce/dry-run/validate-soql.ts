@@ -1,40 +1,99 @@
+import { parseQuery } from '@jetstreamapp/soql-parser-js';
 import { getCrmById, getCrmTokens } from '../../../crm';
 import type { SalesforceTokens } from '../index';
 import { SalesforceClient } from './sf-client';
 import { buildOwnWhereBody } from './soql-builder';
-import type {
-  IDryRunPayload,
-  ISalesforceObject,
-  IValidateSoqlItem,
-  IValidateSoqlResult,
-} from './types';
+import type { IValidateSoqlPayload, IValidateSoqlItem } from './types';
 
-// ── Tree traversal ────────────────────────────────────────────────────────────
-// Collect the first occurrence of each unique object name from the payload tree.
+// ── Internal AST node shape ───────────────────────────────────────────────────
 
-function collectUniqueObjects(
-  objects: ISalesforceObject[],
-  seen = new Map<string, ISalesforceObject>()
-): Map<string, ISalesforceObject> {
-  for (const obj of objects) {
-    if (!seen.has(obj.name)) seen.set(obj.name, obj);
-    if (obj.children?.length) collectUniqueObjects(obj.children, seen);
+interface WhereNode {
+  field?: string;
+  operator?: string;
+  value?: string | string[];
+  literalType?: string;
+  openParen?: number;
+  closeParen?: number;
+  left?: WhereNode;
+  right?: WhereNode;
+}
+
+// ── AST analysis ──────────────────────────────────────────────────────────────
+
+interface IAnalysis {
+  dotNotationFound: boolean;
+  inCount: number;
+}
+
+function _walkWhere(node: WhereNode, ctx: IAnalysis): void {
+  if (node.field) {
+    if (node.field.includes('.')) ctx.dotNotationFound = true;
+    const op = (node.operator ?? '').toUpperCase();
+    if (op === 'IN' || op === 'NOT IN') ctx.inCount++;
+    return;
   }
-  return seen;
+  if (node.left) _walkWhere(node.left, ctx);
+  if (node.right) _walkWhere(node.right, ctx);
+}
+
+function _analyzeWhere(whereBody: string): IAnalysis {
+  const ctx: IAnalysis = { dotNotationFound: false, inCount: 0 };
+  const ast = parseQuery(`SELECT Id FROM X WHERE ${whereBody}`);
+  if (ast.where) _walkWhere(ast.where as unknown as WhereNode, ctx);
+  return ctx;
 }
 
 // ── Core service ──────────────────────────────────────────────────────────────
 
-/**
- * Validates the SOQL WHERE clause for every unique object in the payload by
- * calling the Apex `/validate-soql` endpoint.
- *
- * Objects with no conditions are returned as `{ isValid: true, whereClause: null }`.
- *
- * @returns A flat map of `{ [objectName]: IValidateSoqlItem }`.
- */
-export async function validateSoql(payload: IDryRunPayload): Promise<IValidateSoqlResult> {
-  const { crmId } = payload;
+export async function validateSoql(payload: IValidateSoqlPayload): Promise<IValidateSoqlItem> {
+  const { crmId, object, isParent } = payload;
+  const whereClause = buildOwnWhereBody(object);
+
+  if (!whereClause) {
+    return { whereClause: null, isValid: true };
+  }
+
+  // ── Syntax check ──────────────────────────────────────────────────────────
+
+  try {
+    parseQuery(`SELECT Id FROM X WHERE ${whereClause}`);
+  } catch (e: any) {
+    return {
+      whereClause,
+      isValid: false,
+      error: `Invalid SOQL syntax: ${e?.message ?? 'parse error'}`,
+    };
+  }
+
+  // ── Structural safety checks ──────────────────────────────────────────────
+
+  const { dotNotationFound, inCount } = _analyzeWhere(whereClause);
+
+  if (dotNotationFound) {
+    return {
+      whereClause,
+      isValid: false,
+      error: 'Cross-object dot notation (e.g. Account.Name) is not allowed in filter conditions.',
+    };
+  }
+
+  if (!isParent && inCount > 0) {
+    return {
+      whereClause,
+      isValid: false,
+      error: 'IN / NOT IN operators are not allowed on child objects.',
+    };
+  }
+
+  if (isParent && inCount > 2) {
+    return {
+      whereClause,
+      isValid: false,
+      error: `Too many IN / NOT IN operators: found ${inCount}, maximum allowed is 2.`,
+    };
+  }
+
+  // ── Apex validation ───────────────────────────────────────────────────────
 
   const crm = await getCrmById(crmId);
   if (!crm) throw new Error('CRM not found');
@@ -53,31 +112,8 @@ export async function validateSoql(payload: IDryRunPayload): Promise<IValidateSo
     customUrl:   crm.customUrl,
   };
 
-  const sfClient      = new SalesforceClient(instanceUrl, tokens);
-  const uniqueObjects = collectUniqueObjects(payload.objects);
-  const result: IValidateSoqlResult = {};
-
-  for (const [objectName, obj] of uniqueObjects) {
-    result[objectName] = await _validateObject(objectName, obj, sfClient);
-  }
-
-  return result;
-}
-
-// ── Per-object validation ─────────────────────────────────────────────────────
-
-async function _validateObject(
-  objectName: string,
-  obj: ISalesforceObject,
-  sfClient: SalesforceClient
-): Promise<IValidateSoqlItem> {
-  const whereClause = buildOwnWhereBody(obj);
-
-  if (!whereClause) {
-    return { whereClause: null, isValid: true };
-  }
-
-  const response = await sfClient.validateSoqlQuery(objectName, whereClause);
+  const sfClient  = new SalesforceClient(instanceUrl, tokens);
+  const response  = await sfClient.validateSoqlQuery(object.name, whereClause);
 
   if (response.isValid) {
     return { whereClause, isValid: true };

@@ -126,7 +126,19 @@ const validateWithSchema = (schema: Joi.ObjectSchema) =>
 
 export const dryRunArchivalValidation = validateWithSchema(crmObjectsSchema);
 
-export const validateSoqlArchivalValidation = validateWithSchema(crmObjectsSchema);
+const validateSoqlObjectSchema = Joi.object({
+    name: Joi.string().required(),
+    condition: conditionSchema.optional(),
+    field: Joi.array().items(objectFieldSchema).optional(),
+});
+
+const validateSoqlSchema = Joi.object({
+    crmId: Joi.string().required(),
+    object: validateSoqlObjectSchema.required(),
+    isParent: Joi.boolean().required(),
+});
+
+export const validateSoqlArchivalValidation = validateWithSchema(validateSoqlSchema);
 
 export const createArchivalConfigValidation = (
     req: Request,
