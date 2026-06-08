@@ -157,8 +157,8 @@ export const createArchivalConfigValidation = (
             .required(),
         scheduleConfig: scheduleConfigSchema.optional(),
         objects: Joi.array().items(objectSchema).optional(),
-        backupStatus: Joi.string()
-            .valid('DRAFT', ...Object.values(BACKUP_STATUS))
+        status: Joi.string()
+            .valid(...Object.values(BACKUP_STATUS))
             .optional()
     });
 
