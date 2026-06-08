@@ -7,7 +7,7 @@ import {
   updateBackupConfig,
   getBackupConfigById,
 } from '../../../services';
-import { BACKUP_STATUS } from '../../../constant';
+import { BACKUP_STATUS, STATUS } from '../../../constant';
 import {
   refreashSalesforceToken,
   SalesforceAuthExpiredError,
@@ -73,7 +73,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
     switch (eventType) {
       case 'backup.completed': {
         const backupConfig = await getBackupConfigById(backupConfigId);
-        if (backupConfig?.backupStatus !== BACKUP_STATUS.paused) {
+        if (backupConfig?.status !== STATUS.paused) {
           await updateBackupConfig(
             backupConfigId,
             {
@@ -88,7 +88,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         break;
       case 'backup.failed': {
         const backupConfig = await getBackupConfigById(backupConfigId);
-        if (backupConfig?.backupStatus !== BACKUP_STATUS.paused) {
+        if (backupConfig?.status !== STATUS.paused) {
           await updateBackupConfig(
             backupConfigId,
             {

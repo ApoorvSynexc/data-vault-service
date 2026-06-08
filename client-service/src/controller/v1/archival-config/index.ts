@@ -104,14 +104,14 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     const config = await createBackupConfig({
         userId: req.user!.userId,
         ...req.body,
-        backupStatus: req.body.backupStatus || 'ACTIVE',
+        status: req.body.status || 'ACTIVE',
         ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
         type: 'ARCHIVAL',
     });
 
     try {
-        // Skip schedule/trigger setup if backupStatus is DRAFT
-        if (config.backupStatus === 'DRAFT') {
+        // Skip schedule/trigger setup if status is DRAFT
+        if (config.status === 'DRAFT') {
             makeResponse(req, res, 201, true, 'create', config);
             return;
         }

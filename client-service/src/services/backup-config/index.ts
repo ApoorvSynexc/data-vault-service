@@ -21,7 +21,6 @@ interface CreateBackupConfigParams {
   description?: string;
   objectNames: string[];
   schedule: string;
-  backupStatus: string;
   scheduleConfig?: IScheduleConfig;
   objects?: IObject[];
   spaceId?: string;
@@ -43,6 +42,7 @@ interface UpdateBackupConfigParams {
   sizeInBytes?: number;
   triggerResults?: ITriggerResult[];
   type?: string;
+  status?: string;
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
@@ -56,7 +56,6 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     schedule,
     scheduleConfig,
     objects,
-    backupStatus,
     spaceId,
     type = 'NORMAL',
   } = params;
@@ -83,7 +82,6 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     scheduleConfig,
     objects,
     status: STATUS.active,
-    backupStatus,
     schemaChange: false,
     ...(spaceId && { spaceId }),
     createdAt: now,
@@ -158,7 +156,7 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
     new ScanCommand({
       TableName: BACKUP_CONFIG_TABLE,
       FilterExpression:
-        '#status = :active AND #schedule = :schedule AND #scheduleConfig.#scheduleType = :scheduleType AND #backupStatus IN (:backupActive, :backupSuccess, :backupResume, :backupFailed)',
+        '(#status = :active OR #status = :backupResume) AND #schedule = :schedule AND #scheduleConfig.#scheduleType = :scheduleType AND (#backupStatus = :backupSuccess OR #backupStatus = :backupFailed OR attribute_not_exists(#backupStatus))',
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #configType, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: {
         '#status': 'status',
@@ -171,11 +169,10 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
       },
       ExpressionAttributeValues: {
         ':active': STATUS.active,
+        ':backupResume': STATUS.resumed,
         ':schedule': 'SCHEDULE',
         ':scheduleType': 'INCREMENTAL',
-        ':backupActive': BACKUP_STATUS.active,
         ':backupSuccess': BACKUP_STATUS.success,
-        ':backupResume': BACKUP_STATUS.resumed,
         ':backupFailed': BACKUP_STATUS.failed,
       },
     })
@@ -239,6 +236,9 @@ const updateBackupConfig = async (
   }
   if (params.type !== undefined) {
     updates.type = params.type;
+  }
+  if (params.status !== undefined) {
+    updates.status = params.status;
   }
 
   const setExpr = Object.keys(updates)
