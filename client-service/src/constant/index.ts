@@ -107,18 +107,21 @@ const FILTER_OPERATOR = {
 };
 
 const STATUS = {
+   draft: 'DRAFT',
+  paused: 'PAUSED',
+  resumed: 'RESUMED',
   active: 'ACTIVE',
   inactive: 'INACTIVE',
   deleted: 'DELETED',
 };
 const BACKUP_STATUS = {
-  draft: 'DRAFT',
-  pending: 'PENDING',
-  active: 'ACTIVE',
+  // draft: 'DRAFT',
+  // active: 'ACTIVE',
+  // paused: 'PAUSED',
+  // resumed: 'RESUMED',
   success: 'SUCCESS',
   failed: 'FAILED',
-  paused: 'PAUSED',
-  resumed: 'RESUMED',
+  pending: 'PENDING',
 };
 const JOB_STATUS = {
   pending: 'PENDING',

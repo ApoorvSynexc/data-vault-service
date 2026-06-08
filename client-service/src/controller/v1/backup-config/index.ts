@@ -25,7 +25,7 @@ import {
   syncMetadataAndTriggers,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, STATUS } from '../../../constant';
 import { IBackupConfig, IScheduleConfig } from '../../../models';
 
 const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
@@ -118,13 +118,13 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   const config = await createBackupConfig({
     userId: req.user!.userId,
     ...req.body,
-    backupStatus: req.body.backupStatus || 'ACTIVE',
+    status: req.body.status || 'ACTIVE',
     ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
   });
 
   try {
-    // Skip schedule/trigger setup if backupStatus is DRAFT
-    if (config.backupStatus === 'DRAFT') {
+    // Skip schedule/trigger setup if status is DRAFT
+    if (config.status === 'DRAFT') {
       makeResponse(req, res, 201, true, 'create', config);
       return;
     }
@@ -288,7 +288,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
   const config = existing!;
 
-  if (config.backupStatus === BACKUP_STATUS.pending) {
+  if (config.backupStatus === BACKUP_STATUS.pending && config.status !== STATUS.paused) {
     makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
     return;
   }
