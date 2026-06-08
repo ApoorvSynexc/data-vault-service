@@ -18,6 +18,7 @@ import {
   upsertCrm,
   createSpace,
   updateUser,
+  SalesforceEnvironment,
 } from '../../../services';
 import {
   generateTokens,
@@ -35,7 +36,7 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { authProvider } = req.query;
+  const { authProvider, environment }  = req.query as {authProvider: string,environment: SalesforceEnvironment };
 
   if (!authProvider) {
     makeResponse(req, res, 400, false, 'auth_provider_required');
@@ -48,7 +49,7 @@ const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> 
 
   switch (authProviderStr) {
     case 'salesforce': {
-      const { url, codeVerifier, state } = getSalesforceLoginUrl(undefined, SALESFORCE_LOGIN_REDIRECT_URI);
+      const { url, codeVerifier, state } = getSalesforceLoginUrl(undefined, SALESFORCE_LOGIN_REDIRECT_URI, environment);
       await createOAuthState(state, codeVerifier, '', authProviderStr);
       authorizationUrl = url;
       break;
