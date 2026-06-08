@@ -22,6 +22,7 @@ import {
     computeArchivalJobStats,
 } from "../../../services";
 import { isOwner, wrapController } from "../../../utils/helper";
+import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -137,11 +138,17 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
 const dryRunArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     try {
-        makeResponse(req, res, 201, true, 'create');
+        const result = await dryRun(req.body);
+        makeResponse(req, res, 201, true, 'create', result);
     } catch (error) {
         logger.error('Error creating backup config, Deleting backup config: ', error);
         throw error;
     }
+};
+
+const validateSoqlArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const result = await validateSoql(req.body);
+    makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 
@@ -311,5 +318,6 @@ export const archivalConfigController = wrapController({
     updateArchivalConfigHandler,
     deletearchivalConfigHandler,
     getArchivalJobStatsHandler,
-    dryRunArchivalHandler
+    dryRunArchivalHandler,
+    validateSoqlArchivalHandler,
 });
