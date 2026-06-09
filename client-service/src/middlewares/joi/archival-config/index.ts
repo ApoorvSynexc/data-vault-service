@@ -9,7 +9,7 @@ import {
     SCHEDULE_MODE,
     SCHEDULE_TYPE,
     WEEK_DAY,
-    BACKUP_STATUS,
+    STATUS,
 } from '../../../constant';
 
 const fieldFilterSchema = Joi.object({
@@ -158,7 +158,7 @@ export const createArchivalConfigValidation = (
         scheduleConfig: scheduleConfigSchema.optional(),
         objects: Joi.array().items(objectSchema).optional(),
         status: Joi.string()
-            .valid(...Object.values(BACKUP_STATUS))
+            .valid(...Object.values(STATUS))
             .optional()
     });
 
