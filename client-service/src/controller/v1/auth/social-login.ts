@@ -19,6 +19,7 @@ import {
   createSpace,
   updateUser,
   SalesforceEnvironment,
+  getCrmByOrgId,
 } from '../../../services';
 import {
   generateTokens,
@@ -36,7 +37,7 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { authProvider, environment, customUrl }  = req.query as {authProvider: string,environment: SalesforceEnvironment, customUrl: string };
+  const { authProvider, environment, customUrl } = req.query as { authProvider: string, environment: SalesforceEnvironment, customUrl: string };
 
   if (!authProvider) {
     makeResponse(req, res, 400, false, 'auth_provider_required');
@@ -190,6 +191,34 @@ const socialLoginCallbackHandler = async (
         crmProfile,
         crmCredentials,
         spaceId: space.spaceId,
+      });
+    }
+  } else {
+    const crmExist = await getCrmByOrgId(sfProfile.organization_id);
+    if (!crmExist && authProviderStr === 'salesforce') {
+      const crmProfile = {
+        instanceUrl: token.instance_url,
+        organizationId: sfProfile.organization_id,
+        userId: sfProfile.user_id,
+        name: sfProfile.name,
+        email: sfProfile.email,
+        username: sfProfile.preferred_username,
+        photoUrl: sfProfile.photos?.thumbnail,
+      };
+
+      const crmCredentials = {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+      };
+
+      await upsertCrm({
+        environment: oauthState.environment,
+        name: sfProfile?.name ?? "Admin",
+        userId: user.userId,
+        crmName: 'salesforce',
+        crmProfile,
+        crmCredentials,
+        spaceId: user.spaceId,
       });
     }
   }
