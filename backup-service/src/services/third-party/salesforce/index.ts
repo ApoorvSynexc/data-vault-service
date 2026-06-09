@@ -6,7 +6,7 @@ import { updateBackupConfig } from '../../backup-config';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
-import { archiveAndHardDelete } from './schedule/archival';
+import { archiveAndHardDelete } from './schedule/archival-v2';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -215,25 +215,27 @@ const salesforceHandler: ICrmBackupHandler = {
     };
     
     for (let i = 0; i < object.length; i++) {
-      const item = object[i];
-      let flattenChildObjects = item.children?.length ? recursivelyFlatten(item.children) : [];
-      delete item.children;
-      flattenChildObjects.push(item);
       
-      logger.info(`Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenChildObjects.length}, onjectName: ${item.name}, insatnce: ${source.instanceUrl}`);
-      for (let childIndex = 0; childIndex < flattenChildObjects.length; childIndex++) {
-        const childObject = flattenChildObjects[childIndex];
-        await exportWithRetryArchival(
-          backupConfigId,
-          backupJobId,
-          instanceUrl,
-          tokens,
-          crmName,
-          childObject,
-          destinationType,
-          destConfig
-        );
-      }
+
+      // const item = object[i];
+      // let flattenChildObjects = item.children?.length ? recursivelyFlatten(item.children) : [];
+      // delete item.children;
+      // flattenChildObjects.push(item);
+      
+      // logger.info(`Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenChildObjects.length}, onjectName: ${item.name}, insatnce: ${source.instanceUrl}`);
+      // for (let childIndex = 0; childIndex < flattenChildObjects.length; childIndex++) {
+      //   const childObject = flattenChildObjects[childIndex];
+      //   await exportWithRetryArchival(
+      //     backupConfigId,
+      //     backupJobId,
+      //     instanceUrl,
+      //     tokens,
+      //     crmName,
+      //     childObject,
+      //     destinationType,
+      //     destConfig
+      //   );
+      // }
     }
 
     await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
