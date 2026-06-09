@@ -162,6 +162,7 @@ export const archiveAndHardDelete = async (
         logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
         if (totalRecordCount) {
             const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+            console.log('TANISHAK CODE WORKING');
             const { sizeInBytes, s3Urls } = await uploadBulkResultsByPageArchival({
                 instanceUrl,
                 tokens,
@@ -183,15 +184,15 @@ export const archiveAndHardDelete = async (
             }
             await updateBackupConfig(backupConfigId, updateParams);
 
-            await bulkDeleteRecords({
-                backupConfigId,
-                backupJobId,
-                instanceUrl,
-                tokens,
-                object,
-                destConfig,
-                s3Urls,
-            });
+            // await bulkDeleteRecords({
+            //     backupConfigId,
+            //     backupJobId,
+            //     instanceUrl,
+            //     tokens,
+            //     object,
+            //     destConfig,
+            //     s3Urls,
+            // });
         }
 
         const schemaWithParquet = schema.map((field: { dataType: string }) => ({
