@@ -1,4 +1,4 @@
-import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { COUNTER_TABLE, TABLE_COUNTER_TABLE } from '../../constant';
 import { ITableCounter } from '../../models';
@@ -19,11 +19,37 @@ const incrementAndGetCounter = async (namespace: string, key: string): Promise<n
 };
 
 // Increment record count for a table/entity — used for pagination totals
+// If count becomes 0, delete the item instead of keeping it
 const incrementTableCounter = async (
   tableName: string,
   entityId: string,
   amount = 1
 ): Promise<void> => {
+  // If decrementing and might reach 0, check first
+  if (amount < 0) {
+    const result = await docClient.send(
+      new GetCommand({
+        TableName: TABLE_COUNTER_TABLE,
+        Key: { tableName, entityId },
+      })
+    );
+
+    const currentCount = (result.Item?.count as number) ?? 0;
+    const newCount = currentCount + amount;
+
+    // If count becomes 0 or negative, delete the item
+    if (newCount <= 0) {
+      await docClient.send(
+        new DeleteCommand({
+          TableName: TABLE_COUNTER_TABLE,
+          Key: { tableName, entityId },
+        })
+      );
+      return;
+    }
+  }
+
+  // Otherwise, update the count
   await docClient.send(
     new UpdateCommand({
       TableName: TABLE_COUNTER_TABLE,
