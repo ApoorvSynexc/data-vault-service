@@ -9,6 +9,7 @@ import {
     getObjectMetadata,
 } from '../../api-request';
 import { uploadToS3 } from '../../../../destination';
+import { buildS3KeyPrefix } from '../../../../../utils/helper';
 
 const SF_API_VERSION = 'v65.0';
 const POLL_INTERVAL_MS = 5000;
@@ -37,6 +38,9 @@ interface IUploadBulkResultsByPageArchival {
     object: IBackupObject;
     destConfig: IDestinationConfig;
     s3KeyPrefix: string;
+    crmId: string;
+    crmName: string;
+    backupConfigId: string;
     startLocator?: string | null;
     startCompletedRecordCount?: number;
     maxRecords?: number;
@@ -47,6 +51,10 @@ interface IFetchContext {
     tokens: SalesforceTokens;
     destConfig: IDestinationConfig;
     s3KeyPrefix: string;
+    crmId: string;
+    crmName: string;
+    backupConfigId: string;
+    uploadCounter: { value: number };
 }
 
 interface ISalesforceQueryResponse {
@@ -153,25 +161,24 @@ async function fetchObjectAndDescend(
     parentIds: string[],
     object: IBackupObject,
     ctx: IFetchContext
-): Promise<void> {
+): Promise<Map<string, string[]>> {
+    const s3UrlsMap = new Map<string, string[]>();
     console.log(`[fetchObjectAndDescend] object=${object.name} parentIdCount=${parentIds.length}`);
 
     const fieldApiName = (object as any).fieldApiName as string | undefined;
     if (!fieldApiName) {
         console.log(`[fetchObjectAndDescend] object=${object.name} missing fieldApiName — skipping`);
         logger.error(`Object ${object.name} is missing fieldApiName — skipping`);
-        return;
+        return s3UrlsMap;
     }
     if (!parentIds.length) {
         console.log(`[fetchObjectAndDescend] object=${object.name} no parent IDs — skipping`);
         logger.info(`No parent IDs to fetch for object ${object.name} — skipping`);
-        return;
+        return s3UrlsMap;
     }
 
     const { fieldNames } = await getObjectMetadata(ctx.tokens.crmId, object.name);
     console.log(`[fetchObjectAndDescend] object=${object.name} fieldCount=${fieldNames.length}`);
-
-    //const childIds: string[] = [];
 
     const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE ${fieldApiName} IN (${parentIds.map(id => `'${id}'`).join(', ')}) ORDER BY Id ASC`;
     console.log(`[fetchObjectAndDescend] object=${object.name} soql="${soql.slice(0, 120)}..."`);
@@ -190,22 +197,27 @@ async function fetchObjectAndDescend(
         console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} recordCount=${res.records.length} done=${res.done}`);
 
         if (res.records.length) {
-            const s3Key = `${ctx.s3KeyPrefix}/${object.name}_${Date.now()}_${page}.csv`;
+            const s3Key = `${buildS3KeyPrefix(ctx.crmId, ctx.crmName, ctx.backupConfigId, object.name, 'inserts')}_${ctx.uploadCounter.value++}`;
             console.log(`[fetchObjectAndDescend] object=${object.name} uploading page=${page} to s3Key=${s3Key}`);
             await uploadToS3(ctx.destConfig, s3Key, jsonToCsv(res.records, fieldNames));
             console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} uploaded successfully`);
 
+            const existingKeys = s3UrlsMap.get(object.name) ?? [];
+            existingKeys.push(s3Key);
+            s3UrlsMap.set(object.name, existingKeys);
+
             const pageIds = res.records.map(r => r['Id']).filter(Boolean) as string[];
-            //childIds.push(...pageIds);
             console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} extracted ${pageIds.length} child IDs`);
             console.log(`[fetchObjectAndDescend] children count for object=${object.name} is ${object.children?.length ?? 0}`);
             console.log(`[fetchObjectAndDescend] children details for object=${object.name} children=${JSON.stringify(object.children ?? [])}`);
-            if (object.children?.length !== 0) {
-                console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} spawning child traversal for ${pageIds.length} IDs`);
+            if (object.children?.length) {
+                console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} awaiting child traversal for ${pageIds.length} IDs`);
                 for (const child of object.children) {
-                    fetchObjectAndDescend(pageIds, child, ctx).catch(err => {
-                        logger.error(`Error fetching child object ${object.name}: ${err instanceof Error ? err.stack : String(err)}`);
-                    });
+                    const childMap = await fetchObjectAndDescend(pageIds, child, ctx);
+                    for (const [name, keys] of childMap) {
+                        const existing = s3UrlsMap.get(name) ?? [];
+                        s3UrlsMap.set(name, [...new Set([...existing, ...keys])]);
+                    }
                 }
             }
         } else {
@@ -216,9 +228,7 @@ async function fetchObjectAndDescend(
         page++;
     }
 
-    //console.log(`[fetchObjectAndDescend] object=${object.name} done — totalChildIds=${childIds.length} pages=${page}`);
-
-    if (!object.children?.length) { return; }
+    return s3UrlsMap;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,10 +237,10 @@ async function fetchObjectAndDescend(
 
 const uploadBulkResultsByPageArchival = async (
     payload: IUploadBulkResultsByPageArchival
-): Promise<{ ids: string[] }> => {
+): Promise<{ ids: string[], s3UrlsPerObject: Map<string, string[]> }> => {
     const {
         instanceUrl, tokens, jobId, backupJobId, object,
-        destConfig, s3KeyPrefix,
+        destConfig, s3KeyPrefix, crmId, crmName, backupConfigId,
         startLocator = null,
         startCompletedRecordCount = 0,
         maxRecords = MAX_RECORDS_PER_PAGE,
@@ -238,8 +248,9 @@ const uploadBulkResultsByPageArchival = async (
 
     console.log(`[uploadBulkResultsByPageArchival] Starting — jobId=${jobId} object=${object.name} backupJobId=${backupJobId}`);
 
-    const ctx: IFetchContext = { instanceUrl, tokens, destConfig, s3KeyPrefix };
+    const ctx: IFetchContext = { instanceUrl, tokens, destConfig, s3KeyPrefix, crmId, crmName, backupConfigId, uploadCounter: { value: 0 } };
     const ids: string[] = [];
+    const s3UrlsPerObject = new Map<string, string[]>();
     let latestObjects: IBackupObject[] = [];
     let salesforceApiCount = 0;
     let completedRecordCount = startCompletedRecordCount;
@@ -271,7 +282,14 @@ const uploadBulkResultsByPageArchival = async (
             const nextLocatorRaw = response.headers.get('sforce-locator');
             const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
 
-            const pageIds = extractIdsFromCsv(await response.text());
+            const csvText = await response.text();
+            const parentS3Key = `${s3KeyPrefix}_${ctx.uploadCounter.value++}`;
+            await uploadToS3(destConfig, parentS3Key, Buffer.from(csvText, 'utf-8'));
+            const parentKeys = s3UrlsPerObject.get(object.name) ?? [];
+            parentKeys.push(parentS3Key);
+            s3UrlsPerObject.set(object.name, parentKeys);
+
+            const pageIds = extractIdsFromCsv(csvText);
             ids.push(...pageIds);
 
             console.log(`[uploadBulkResultsByPageArchival] Bulk page done — pageIdCount=${pageIds.length} totalIds=${ids.length} nextLocator=${nextLocator ?? 'none'}`);
@@ -281,7 +299,11 @@ const uploadBulkResultsByPageArchival = async (
                 for (const child of object.children) {
                     for (const chunk of chunkIds(pageIds, CHILD_ID_CHUNK_SIZE)) {
                         console.log(`[uploadBulkResultsByPageArchival] Processing chunk of ${chunk.length} IDs for child=${child.name}`);
-                        await fetchObjectAndDescend(chunk, child, ctx);
+                        const childResult = await fetchObjectAndDescend(chunk, child, ctx);
+                        for (const [name, keys] of childResult) {
+                            const existing = s3UrlsPerObject.get(name) ?? [];
+                            s3UrlsPerObject.set(name, [...new Set([...existing, ...keys])]);
+                        }
                     }
                 }
             }
@@ -320,7 +342,7 @@ const uploadBulkResultsByPageArchival = async (
         throw new Error(errorMessage, { cause: err });
     }
 
-    return { ids };
+    return { ids, s3UrlsPerObject };
 };
 
 export { pollBulkJobArchival, uploadBulkResultsByPageArchival };
