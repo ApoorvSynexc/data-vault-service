@@ -148,16 +148,30 @@ const updateJobStatus = async (params: UpdateJobStatusParams): Promise<void> => 
     expressionValues[':errorMessage'] = errorMessage;
   }
 
-  await docClient.send(
-    new UpdateCommand({
-      TableName: BACKUP_JOB_TABLE,
-      Key: { backupJobId },
-      UpdateExpression: `SET ${expressionParts.join(', ')}`,
-      ExpressionAttributeNames: expressionNames,
-      ExpressionAttributeValues: { ...expressionValues, ...conditionExpressionValues },
-      ...(conditionExpression ? { ConditionExpression: conditionExpression } : {}),
-    })
-  );
+  // Check if record exists, merge with any additional condition
+  let finalCondition = 'attribute_exists(backupJobId)';
+  if (conditionExpression) {
+    finalCondition = `${finalCondition} AND ${conditionExpression}`;
+  }
+
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Key: { backupJobId },
+        UpdateExpression: `SET ${expressionParts.join(', ')}`,
+        ExpressionAttributeNames: expressionNames,
+        ExpressionAttributeValues: { ...expressionValues, ...conditionExpressionValues },
+        ConditionExpression: finalCondition,
+      })
+    );
+  } catch (error: any) {
+    // If record doesn't exist, silently return instead of throwing
+    if (error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
+  }
 };
 
 interface UpdateBackupObjectParams {
@@ -279,15 +293,24 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     expressionValues[':salesforceApiCount'] = salesforceApiCount;
   }
 
-  await docClient.send(
-    new UpdateCommand({
-      TableName: BACKUP_JOB_TABLE,
-      Key: { backupJobId },
-      UpdateExpression: `SET ${expressionParts.join(', ')}`,
-      ExpressionAttributeNames: expressionNames,
-      ExpressionAttributeValues: expressionValues,
-    })
-  );
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Key: { backupJobId },
+        UpdateExpression: `SET ${expressionParts.join(', ')}`,
+        ExpressionAttributeNames: expressionNames,
+        ExpressionAttributeValues: expressionValues,
+        ConditionExpression: 'attribute_exists(backupJobId)',
+      })
+    );
+  } catch (error: any) {
+    // If record doesn't exist, silently return instead of throwing
+    if (error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
+  }
 };
 
 const recursivelyUpdateObjects = async (objects: IBackupObject[], object: { id: string, [key: string]: string | number }): Promise<IBackupObject[]> => {
