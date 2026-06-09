@@ -248,10 +248,10 @@ const getSalesforceProfile = async (
   tokens: SalesforceTokens,
   environment?: SalesforceEnvironment,
   customUrl?: string,
-  idUrl?: string,
 ) => {
   const { profileUrl } = getSalesforceUrls(environment, customUrl);
-  const url = idUrl ?? profileUrl;
+  const url = profileUrl;
+  console.log({url})
   return salesforceRequest({ url, method: 'GET' }, tokens);
 };
 

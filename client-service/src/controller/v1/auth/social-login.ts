@@ -109,7 +109,6 @@ const socialLoginCallbackHandler = async (
           },
           oauthState.environment,
           oauthState.customUrl,
-          token.id,
         );
         sfProfile = data;
         break;
@@ -184,6 +183,7 @@ const socialLoginCallbackHandler = async (
       };
 
       await upsertCrm({
+        environment: oauthState.environment,
         name: sfProfile?.name ?? "Admin",
         userId: user.userId,
         crmName: 'salesforce',
