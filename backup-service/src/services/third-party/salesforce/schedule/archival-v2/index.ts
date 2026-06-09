@@ -95,6 +95,15 @@ const buildWhereClause = (object: IBackupObject): string => {
     return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
 };
 
+const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
+    if (root.name === name) { return root; }
+    for (const child of root.children ?? []) {
+        const found = findObjectInTree(child, name);
+        if (found) { return found; }
+    }
+    return undefined;
+};
+
 // Archive: export all records to storage and hard delete from Salesforce
 export const archiveAndHardDelete = async (
     backupConfigId: string,
@@ -163,7 +172,7 @@ export const archiveAndHardDelete = async (
         if (totalRecordCount) {
             const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
             console.log('TANISHAK CODE WORKING');
-            const { sizeInBytes, s3Urls } = await uploadBulkResultsByPageArchival({
+            const { s3UrlsPerObject } = await uploadBulkResultsByPageArchival({
                 instanceUrl,
                 tokens,
                 jobId,
@@ -171,9 +180,13 @@ export const archiveAndHardDelete = async (
                 object,
                 destConfig,
                 s3KeyPrefix: archivePrefix,
+                crmId,
+                crmName,
+                backupConfigId,
                 startLocator: object.currentLocator ?? null,
                 startCompletedRecordCount: object.completedRecordCount ?? 0,
             });
+            const sizeInBytes = 0;
 
             const updateParams: any = { sizeInBytes };
             backupConfig = await getBackupConfigById(backupConfigId);
@@ -184,15 +197,20 @@ export const archiveAndHardDelete = async (
             }
             await updateBackupConfig(backupConfigId, updateParams);
 
-            // await bulkDeleteRecords({
-            //     backupConfigId,
-            //     backupJobId,
-            //     instanceUrl,
-            //     tokens,
-            //     object,
-            //     destConfig,
-            //     s3Urls,
-            // });
+            // for (const [objName, s3Urls] of [...s3UrlsPerObject.entries()].reverse()) {
+            //     const targetObject = findObjectInTree(object, objName);
+            //     if (targetObject && s3Urls.length > 0) {
+            //         await bulkDeleteRecords({
+            //             backupConfigId,
+            //             backupJobId,
+            //             instanceUrl,
+            //             tokens,
+            //             object: targetObject,
+            //             destConfig,
+            //             s3Urls,
+            //         });
+            //     }
+            // }
         }
 
         const schemaWithParquet = schema.map((field: { dataType: string }) => ({
