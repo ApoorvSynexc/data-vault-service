@@ -171,7 +171,7 @@ async function fetchObjectAndDescend(
     const { fieldNames } = await getObjectMetadata(ctx.tokens.crmId, object.name);
     console.log(`[fetchObjectAndDescend] object=${object.name} fieldCount=${fieldNames.length}`);
 
-    const childIds: string[] = [];
+    //const childIds: string[] = [];
 
     const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE ${fieldApiName} IN (${parentIds.map(id => `'${id}'`).join(', ')}) ORDER BY Id ASC`;
     console.log(`[fetchObjectAndDescend] object=${object.name} soql="${soql.slice(0, 120)}..."`);
@@ -196,13 +196,17 @@ async function fetchObjectAndDescend(
             console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} uploaded successfully`);
 
             const pageIds = res.records.map(r => r['Id']).filter(Boolean) as string[];
-            childIds.push(...pageIds);
-
+            //childIds.push(...pageIds);
+            console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} extracted ${pageIds.length} child IDs`);
+            console.log(`[fetchObjectAndDescend] children count for object=${object.name} is ${object.children?.length ?? 0}`);
+            console.log(`[fetchObjectAndDescend] children details for object=${object.name} children=${JSON.stringify(object.children ?? [])}`);
             if (object.children?.length !== 0) {
                 console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} spawning child traversal for ${pageIds.length} IDs`);
-                fetchObjectAndDescend(pageIds, object, ctx).catch(err => {
-                    logger.error(`Error fetching child object ${object.name}: ${err instanceof Error ? err.stack : String(err)}`);
-                });
+                for (const child of object.children) {
+                    fetchObjectAndDescend(pageIds, child, ctx).catch(err => {
+                        logger.error(`Error fetching child object ${object.name}: ${err instanceof Error ? err.stack : String(err)}`);
+                    });
+                }
             }
         } else {
             console.log(`[fetchObjectAndDescend] object=${object.name} page=${page} no records — stopping pagination`);
@@ -212,9 +216,9 @@ async function fetchObjectAndDescend(
         page++;
     }
 
-    console.log(`[fetchObjectAndDescend] object=${object.name} done — totalChildIds=${childIds.length} pages=${page}`);
+    //console.log(`[fetchObjectAndDescend] object=${object.name} done — totalChildIds=${childIds.length} pages=${page}`);
 
-    if (!childIds.length || !object.children?.length) { return; }
+    if (!object.children?.length) { return; }
 }
 
 // ---------------------------------------------------------------------------

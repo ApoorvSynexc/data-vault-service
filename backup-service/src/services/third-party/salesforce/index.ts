@@ -67,6 +67,7 @@ const exportObjectToDestinationArchival = async (
   destinationType: string,
   destConfig: IDestinationConfig
 ): Promise<void> => {
+  console.log('TANISHAK CODE WORKING exportObjectToDestinationArchival');
   if (object.status === OBJECT_STATUS.completed) {
     return;
   }
@@ -225,16 +226,16 @@ const salesforceHandler: ICrmBackupHandler = {
       // logger.info(`Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenChildObjects.length}, onjectName: ${item.name}, insatnce: ${source.instanceUrl}`);
       // for (let childIndex = 0; childIndex < flattenChildObjects.length; childIndex++) {
       //   const childObject = flattenChildObjects[childIndex];
-      //   await exportWithRetryArchival(
-      //     backupConfigId,
-      //     backupJobId,
-      //     instanceUrl,
-      //     tokens,
-      //     crmName,
-      //     childObject,
-      //     destinationType,
-      //     destConfig
-      //   );
+        await exportWithRetryArchival(
+          backupConfigId,
+          backupJobId,
+          instanceUrl,
+          tokens,
+          crmName,
+          object[i],
+          destinationType,
+          destConfig
+        );
       // }
     }
 
