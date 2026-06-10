@@ -333,10 +333,13 @@ function jsonToCsv(records: Record<string, any>[], fieldNames: string[]): Buffer
  *   collision-free key with no shared mutable state required.
  */
 async function fetchObjectAndDescend(
+    backupJobId: string,
     parentIds: string[],
     object: IBackupObject,
     ctx: IFetchContext
 ): Promise<Map<string, string[]>> {
+    let pageCount = 1;
+    let completedRecordCount = 0;
     const s3UrlsMap = new Map<string, string[]>();
 
     // fieldApiName is the lookup / master-detail field on this child object that
@@ -344,12 +347,12 @@ async function fetchObjectAndDescend(
     // cannot build the WHERE clause to filter child records by parent IDs.
     const fieldApiName = (object as any).fieldApiName as string | undefined;
     if (!fieldApiName) {
-        logger.error(`Object ${object.name} is missing fieldApiName — skipping`);
+        logger.error(`Child Object fieldApiName is missing, ObjectName: ${object.name}`);
         return s3UrlsMap;
     }
     if (!parentIds.length) {
         // Nothing to query — the parent page had no records for this chunk.
-        logger.info(`No parent IDs to fetch for object ${object.name} — skipping`);
+        logger.error(`Child Object has no parent IDs to fetch for object, ObjectName: ${object.name}`);
         return s3UrlsMap;
     }
 
@@ -365,10 +368,33 @@ async function fetchObjectAndDescend(
     let nextUrl: string | null =
         `${ctx.instanceUrl}/services/data/${SF_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
 
+    logger.info(`Child Object fetch started, ObjectName: ${object.name}`);
+    await updateArchivalObject({
+        backupJobId,
+        object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
+    });
+
     while (nextUrl !== null) {
-        const currentUrl = nextUrl;
-        const res: ISalesforceQueryResponse =
-            await salesforceRequest<ISalesforceQueryResponse>({ url: currentUrl }, ctx.tokens);
+        let res: ISalesforceQueryResponse = {
+            totalSize: 0,
+            done: false,
+            records: [],
+        };
+        try {
+            const currentUrl = nextUrl;
+            res = await salesforceRequest<ISalesforceQueryResponse>({ url: currentUrl }, ctx.tokens);
+        } catch (error: any) {
+            const errorMsg = error?.message ?? String(error);
+            logger.info(`Child Object failed, ObjectName: ${object.name} Error: ${errorMsg}`);
+            await updateArchivalObject({
+                backupJobId,
+                object: {
+                    id: object.id,
+                    status: OBJECT_STATUS.failed,
+                    errorMessage: errorMsg,
+                }
+            });
+        }
 
         if (res.records.length) {
             // Each page gets a UUID suffix — globally unique regardless of object
@@ -392,7 +418,7 @@ async function fetchObjectAndDescend(
                 // the next page of the current object. This guarantees the
                 // complete sub-tree for these IDs is in S3 before we advance.
                 for (const child of object.children) {
-                    const childMap = await fetchObjectAndDescend(pageIds, child, ctx);
+                    const childMap = await fetchObjectAndDescend(backupJobId, pageIds, child, ctx);
 
                     // Merge the grandchild's S3 key map into our own so the
                     // complete descendant tree bubbles all the way up to
@@ -403,15 +429,28 @@ async function fetchObjectAndDescend(
                     }
                 }
             }
-        } else {
-            // No records on this page — pagination will stop after this iteration.
         }
 
         // Advance to the next page if Salesforce provided a continuation URL.
         // res.done === true OR missing nextRecordsUrl both signal the last page.
+        completedRecordCount += res.records.length;
         nextUrl = res.done || !res.nextRecordsUrl ? null : `${ctx.instanceUrl}${res.nextRecordsUrl}`;
+        logger.info(`Child object ${pageCount} page fetched, ObjectName: ${object.name} completed: ${res.done}`);
+
+        await updateArchivalObject({
+            backupJobId,
+            object: {
+                id: object.id,
+                completedRecordCount,
+                salesforceApiCount: pageCount,
+                ...(res.done ? { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' } : {}),
+            },
+        });
+
+        ++pageCount;
     }
 
+    logger.info(`Child Object completed, ObjectName: ${object.name} recordCount: ${completedRecordCount} pageCount: ${pageCount}`);
     // Return the complete map for this object and all its descendants.
     // Insertion order: this object first, then children as they were visited.
     return s3UrlsMap;
@@ -550,7 +589,7 @@ const uploadBulkResultsByPageArchival = async (
                     for (const chunk of chunkIds(pageIds, CHILD_ID_CHUNK_SIZE)) {
                         // fetchObjectAndDescend uploads all pages of this child and
                         // every descendant, returning the S3 keys it wrote.
-                        const childResult = await fetchObjectAndDescend(chunk, child, ctx);
+                        const childResult = await fetchObjectAndDescend(backupJobId, chunk, child, ctx);
 
                         // Merge child keys into s3UrlsPerObject. Use Set to deduplicate
                         // in case the same object was visited from multiple chunks.
