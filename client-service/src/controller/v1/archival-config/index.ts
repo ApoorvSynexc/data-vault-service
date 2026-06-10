@@ -323,6 +323,7 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
     getFieldsHanlder,
+    getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,
     getArchivalConfigHandler,
