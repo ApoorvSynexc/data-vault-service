@@ -83,7 +83,7 @@ export const fetchCsvFromS3 = async (
 
   try {
     const result = await client.send(new GetObjectCommand({ Bucket: config.bucketName, Key: key }));
-    const csvData = await result.Body?.transformToString() || '';
+    const csvData = (await result.Body?.transformToString()) || '';
     const lines = csvData.split('\n').filter((line) => line.trim());
     const recordCount = Math.max(0, lines.length - 1);
 

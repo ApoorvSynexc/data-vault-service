@@ -4,43 +4,42 @@ import { makeResponse } from '../../../lib';
 import { CONDITION_TYPE, DESTINATION_TYPE, FILTER_OPERATOR } from '../../../constant';
 
 const fieldFilterSchema = Joi.object({
-    operator: Joi.string()
-        .valid(...Object.values(FILTER_OPERATOR))
-        .required(),
-    value: Joi.any().required(),
+  operator: Joi.string()
+    .valid(...Object.values(FILTER_OPERATOR))
+    .required(),
+  value: Joi.any().required(),
 });
 
 const objectFieldSchema = Joi.object({
-    name: Joi.string().required(),
-    filter: fieldFilterSchema.required(),
+  name: Joi.string().required(),
+  filter: fieldFilterSchema.required(),
 });
 
 const conditionSchema = Joi.object({
-    type: Joi.string()
-        .valid(...Object.values(CONDITION_TYPE))
-        .required(),
-    expression: Joi.when('type', {
-        is: CONDITION_TYPE.custom,
-        then: Joi.string().required(),
-        otherwise: Joi.forbidden(),
-    }),
-    soqlQuery: Joi.when('type', {
-        is: CONDITION_TYPE.soql,
-        then: Joi.string().required(),
-        otherwise: Joi.forbidden(),
-    }),
+  type: Joi.string()
+    .valid(...Object.values(CONDITION_TYPE))
+    .required(),
+  expression: Joi.when('type', {
+    is: CONDITION_TYPE.custom,
+    then: Joi.string().required(),
+    otherwise: Joi.forbidden(),
+  }),
+  soqlQuery: Joi.when('type', {
+    is: CONDITION_TYPE.soql,
+    then: Joi.string().required(),
+    otherwise: Joi.forbidden(),
+  }),
 });
 
 const objectSchema = Joi.object({
-    id: Joi.string().required(),
-    name: Joi.string().required(),
-    fieldApiName: Joi.string().optional(),
-    condition: conditionSchema.optional(),
-    type: Joi.string().optional(),
-    field: Joi.array().items(objectFieldSchema).required(),
-    children: Joi.array().items(Joi.link("#object")).optional(),
-})
-.id("object");
+  id: Joi.string().required(),
+  name: Joi.string().required(),
+  fieldApiName: Joi.string().optional(),
+  condition: conditionSchema.optional(),
+  type: Joi.string().optional(),
+  field: Joi.array().items(objectFieldSchema).required(),
+  children: Joi.array().items(Joi.link('#object')).optional(),
+}).id('object');
 
 const sourceSchema = Joi.object({
   access_token: Joi.string().required(),
