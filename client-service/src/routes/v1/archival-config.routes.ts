@@ -5,7 +5,7 @@ import { createArchivalConfigValidation, dryRunArchivalValidation, validateSoqlA
 const router = Router();
 
 router.get('/object-childs', archivalConfigController.getObjectChildHanlder);
-router.get('/object-records', archivalConfigController.getObjectRecordsHanlder);
+router.post('/object-records', archivalConfigController.getObjectRecordsHanlder);
 router.get('/fields', archivalConfigController.getFieldsHanlder);
 
 router.get('/list', archivalConfigController.listArchivalConfigsHandler);
