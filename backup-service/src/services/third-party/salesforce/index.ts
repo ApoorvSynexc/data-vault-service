@@ -6,7 +6,7 @@ import { updateBackupConfig } from '../../backup-config';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
-import { archiveAndHardDelete } from './schedule/archival-v2';
+import { archiveAndHardDelete } from './schedule/archival';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
