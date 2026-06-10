@@ -67,7 +67,6 @@ const exportObjectToDestinationArchival = async (
   destinationType: string,
   destConfig: IDestinationConfig
 ): Promise<void> => {
-  console.log('TANISHAK CODE WORKING exportObjectToDestinationArchival');
   if (object.status === OBJECT_STATUS.completed) {
     return;
   }
