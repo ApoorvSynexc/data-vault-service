@@ -94,9 +94,9 @@ export const fetchCsvFromS3 = async (
     return { csvData, recordCount };
   } catch (err: any) {
     if (err.name === 'NoSuchKey') {
-      throw new Error(`S3 file not found: ${key}`);
+      throw new Error(`S3 file not found: ${key}`, { cause: err });
     }
-    throw new Error(`Failed to fetch S3 file: ${err.message}`);
+    throw new Error(`Failed to fetch S3 file: ${err.message}`, { cause: err });
   }
 };
 

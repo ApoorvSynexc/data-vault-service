@@ -361,7 +361,7 @@ const updateArchivalObject = async ({
   object: { id: string; [key: string]: string | number };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
-  let objectsPayload = [];
+  let objectsPayload: IBackupObject[];
   if (objects && objects?.length) {
     objectsPayload = objects;
   } else {
