@@ -354,6 +354,7 @@ async function fetchObjectAndDescend(
 ): Promise<Map<string, string[]>> {
   let pageCount = 1;
   let completedRecordCount = 0;
+  let totalSizeInBytes = 0;
   const s3UrlsMap = new Map<string, string[]>();
 
   // fieldApiName is the lookup / master-detail field on this child object that
@@ -365,7 +366,6 @@ async function fetchObjectAndDescend(
     return s3UrlsMap;
   }
   if (!parentIds.length) {
-
     if (object.children?.length) {
       // Depth-first: fully process each grandchild before moving to
       // the next page of the current object. This guarantees the
@@ -389,6 +389,7 @@ async function fetchObjectAndDescend(
         id: object.id,
         completedRecordCount,
         salesforceApiCount: 0,
+        sizeInBytes: totalSizeInBytes,
         status: OBJECT_STATUS.uploadCompleted,
         errorMessage: '',
       },
@@ -412,7 +413,7 @@ async function fetchObjectAndDescend(
     `${ctx.instanceUrl}/services/data/${SF_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
 
   logger.info(`Child Object fetch started, ObjectName: ${object.name}`);
-  let lastestUpdate = await updateArchivalObject({
+  await updateArchivalObject({
     backupJobId,
     object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
   });
@@ -443,7 +444,9 @@ async function fetchObjectAndDescend(
       // name, recursion depth, or how many times the same object is visited
       // from different parent chunks. No shared state needed.
       const s3Key = `${buildS3KeyPrefix(ctx.crmId, ctx.crmName, ctx.backupConfigId, object.name, 'inserts')}_${randomUUID()}`;
-      await uploadToS3(ctx.destConfig, s3Key, jsonToCsv(res.records, fieldNames));
+      const csvBuffer = jsonToCsv(res.records, fieldNames);
+      await uploadToS3(ctx.destConfig, s3Key, csvBuffer);
+      totalSizeInBytes += csvBuffer.byteLength;
 
       // Register this S3 key so it bubbles up to s3UrlsPerObject in the
       // top-level function, enabling the delete phase to read it later.
@@ -505,6 +508,7 @@ async function fetchObjectAndDescend(
         id: object.id,
         completedRecordCount,
         salesforceApiCount: pageCount,
+        sizeInBytes: totalSizeInBytes,
         ...(res.done ? { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' } : {}),
       },
     });
@@ -615,6 +619,7 @@ const uploadBulkResultsByPageArchival = async (
   let latestObjects: IBackupObject[] = [];
   let salesforceApiCount = 0;
   let completedRecordCount = startCompletedRecordCount;
+  let totalSizeInBytes = 0;
 
   // null = fetch the first page; a string = resume from a specific locator.
   let locator: string | null = startLocator;
@@ -653,7 +658,9 @@ const uploadBulkResultsByPageArchival = async (
       // Upload this parent CSV page to S3. UUID suffix guarantees uniqueness
       // across multiple bulk pages, retries, and concurrent runs.
       const parentS3Key = `${s3KeyPrefix}_${randomUUID()}`;
-      await uploadToS3(destConfig, parentS3Key, Buffer.from(csvText, 'utf-8'));
+      const csvBuffer = Buffer.from(csvText, 'utf-8');
+      await uploadToS3(destConfig, parentS3Key, csvBuffer);
+      totalSizeInBytes += csvBuffer.byteLength;
       const parentKeys = s3UrlsPerObject.get(object.name) ?? [];
       parentKeys.push(parentS3Key);
       s3UrlsPerObject.set(object.name, parentKeys);
@@ -695,6 +702,7 @@ const uploadBulkResultsByPageArchival = async (
           id: object.id,
           completedRecordCount,
           salesforceApiCount,
+          sizeInBytes: totalSizeInBytes,
           ...(locator
             ? { currentLocator: locator } // more pages remain
             : { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' }), // all pages done
