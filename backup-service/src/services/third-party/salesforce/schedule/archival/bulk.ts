@@ -383,7 +383,7 @@ async function fetchObjectAndDescend(
     `${ctx.instanceUrl}/services/data/${SF_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
 
   logger.info(`Child Object fetch started, ObjectName: ${object.name}`);
-  await updateArchivalObject({
+  let lastestUpdate = await updateArchivalObject({
     backupJobId,
     object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
   });
@@ -398,6 +398,7 @@ async function fetchObjectAndDescend(
       logger.info(`Child Object failed, ObjectName: ${object.name} Error: ${errorMsg}`);
       await updateArchivalObject({
         backupJobId,
+        // objects: lastestUpdate,
         object: {
           id: object.id,
           status: OBJECT_STATUS.failed,
@@ -453,6 +454,7 @@ async function fetchObjectAndDescend(
 
     await updateArchivalObject({
       backupJobId,
+      // objects: lastestUpdate,
       object: {
         id: object.id,
         completedRecordCount,
@@ -642,7 +644,7 @@ const uploadBulkResultsByPageArchival = async (
       // the last saved locator instead of reprocessing everything from scratch.
       latestObjects = await updateArchivalObject({
         backupJobId,
-        objects: latestObjects,
+        // objects: latestObjects,
         object: {
           id: object.id,
           completedRecordCount,

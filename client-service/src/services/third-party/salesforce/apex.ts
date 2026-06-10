@@ -18,11 +18,17 @@ const getApexObjects = async (crmId: string, mode?: string) => {
   if (mode) {
     url += `?mode=${mode}`;
   }
+  try{
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET' },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
   );
   return encryptedResult.data;
+}
+catch(error: any) {
+  console.log('Error in getApexObjects:', error);
+  throw error
+}
   // return JSON.parse(
   //   decrypt({ ciphertext: encryptedResult.data.cipherText, iv: encryptedResult.data.iv })
   // );
