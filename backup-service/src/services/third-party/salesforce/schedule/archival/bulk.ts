@@ -394,6 +394,8 @@ async function fetchObjectAndDescend(
                     errorMessage: errorMsg,
                 }
             });
+            
+            break;
         }
 
         if (res.records.length) {
