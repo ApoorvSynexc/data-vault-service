@@ -428,7 +428,6 @@ async function fetchObjectAndDescend(
       logger.info(`Child Object failed, ObjectName: ${object.name} Error: ${errorMsg}`);
       await updateArchivalObject({
         backupJobId,
-        // objects: lastestUpdate,
         object: {
           id: object.id,
           status: OBJECT_STATUS.failed,
@@ -503,7 +502,6 @@ async function fetchObjectAndDescend(
 
     await updateArchivalObject({
       backupJobId,
-      // objects: lastestUpdate,
       object: {
         id: object.id,
         completedRecordCount,
@@ -616,7 +614,6 @@ const uploadBulkResultsByPageArchival = async (
   // order for the delete phase.
   const s3UrlsPerObject = new Map<string, string[]>();
 
-  let latestObjects: IBackupObject[] = [];
   let salesforceApiCount = 0;
   let completedRecordCount = startCompletedRecordCount;
   let totalSizeInBytes = 0;
@@ -627,7 +624,7 @@ const uploadBulkResultsByPageArchival = async (
 
   try {
     // Signal to the UI that data transfer has started for this object.
-    latestObjects = await updateArchivalObject({
+     await updateArchivalObject({
       backupJobId,
       object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
     });
@@ -695,9 +692,8 @@ const uploadBulkResultsByPageArchival = async (
       // Persist the locator and counts after every page.
       // If the process crashes mid-run, the next attempt can resume from
       // the last saved locator instead of reprocessing everything from scratch.
-      latestObjects = await updateArchivalObject({
+     await updateArchivalObject({
         backupJobId,
-        // objects: latestObjects,
         object: {
           id: object.id,
           completedRecordCount,
@@ -716,7 +712,6 @@ const uploadBulkResultsByPageArchival = async (
     logger.error(`backupJobId:${backupJobId} objectName:${object.name} — ${errorMessage}`);
     await updateArchivalObject({
       backupJobId,
-      ...(latestObjects.length ? { objects: latestObjects } : {}),
       object: { id: object.id, status: OBJECT_STATUS.failed, errorMessage },
     });
     throw new Error(errorMessage, { cause: err });
