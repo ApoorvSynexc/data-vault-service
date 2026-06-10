@@ -25,7 +25,7 @@ import {
   syncMetadataAndTriggers,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, STATUS } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from '../../../constant';
 import { IBackupConfig, IScheduleConfig } from '../../../models';
 
 const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
@@ -264,7 +264,15 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
   const updated = await updateBackupConfig(String(backupConfigId), req.body);
 
-  if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
+  if (updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig && updated.scheduleConfig.type === SCHEDULE_TYPE.oneTime && !updated.lastBackupAt) {
+    const scheduleConfig = updated.scheduleConfig;
+    const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
+      && !scheduleConfig?.scheduling?.startDate
+      && !scheduleConfig?.scheduling?.startTime;
+    if (isOnceImmediate) {
+      await triggerBackupJob(updated, undefined, 'backup');
+    }
+  } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
   }
 
