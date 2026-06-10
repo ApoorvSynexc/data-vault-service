@@ -442,7 +442,14 @@ async function fetchObjectAndDescend(
       // Each page gets a UUID suffix — globally unique regardless of object
       // name, recursion depth, or how many times the same object is visited
       // from different parent chunks. No shared state needed.
-      const s3Key = `${buildS3KeyPrefix(ctx.crmId, ctx.crmName, ctx.backupConfigId, object.name, 'inserts')}_${randomUUID()}`;
+      const s3Key = `${buildS3KeyPrefix({
+        crmId: ctx.crmId,
+        crmName: ctx.crmName,
+        backupConfigId: ctx.backupConfigId,
+        objectName: object.name,
+        operation: 'inserts',
+        type: 'archival',
+      })}_${randomUUID()}`;
       const csvBuffer = jsonToCsv(res.records, fieldNames);
       await uploadToS3(ctx.destConfig, s3Key, csvBuffer);
       totalSizeInBytes += csvBuffer.byteLength;
