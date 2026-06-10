@@ -34,6 +34,25 @@ catch(error: any) {
   // );
 };
 
+const getApexObjectRecords = async (crmId: string, body: object) => {
+  const crm = await getCrmById(crmId);
+  if (!crm) {
+    throw new Error('CRM not found');
+  }
+
+  const { access_token, refresh_token } = getCrmTokens(crm);
+  const instanceUrl = crm.crmProfile?.instanceUrl;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/preview-records`;
+  const encryptedResult = await salesforceRequest(
+    { url, method: 'POST', body: JSON.stringify(body) },
+    { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
+  );
+  return encryptedResult.data;
+};
+
 const getApexObjectsCount = async (crmId: string, body: object) => {
   const crm = await getCrmById(crmId);
   if (!crm) {
@@ -206,4 +225,4 @@ const apexHarvestIds = async (
   return allIds;
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexFields, createApexSecret, apexCountBatch, apexValidateSoql, apexHarvestIds };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexCountBatch, apexValidateSoql, apexHarvestIds };
