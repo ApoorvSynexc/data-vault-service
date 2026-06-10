@@ -257,11 +257,6 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
                 salesforceApiCount: 3
             }
         });
-        console.log(JSON.stringify({
-            jobResults,
-            numberRecordsCompleted: jobResult.numberRecordsCompleted,
-            successCount: jobResults.successCount,
-        }));
     }
 
     await updateArchivalObject({
