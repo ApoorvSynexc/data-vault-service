@@ -224,7 +224,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
     await uploadDataToJob(instanceUrl, tokens, job.id, idOnlyCsv);
     await closeAndSubmitJob(instanceUrl, tokens, job.id);
 
-    const { job: jobResult } = await pollJobCompletion({
+    await pollJobCompletion({
       instanceUrl,
       tokens,
       jobId: job.id,

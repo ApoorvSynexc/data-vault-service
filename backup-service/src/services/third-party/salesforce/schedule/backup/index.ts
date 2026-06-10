@@ -1,4 +1,4 @@
-import { BACKUP_STATUS, OBJECT_STATUS } from '../../../../../constant';
+import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';

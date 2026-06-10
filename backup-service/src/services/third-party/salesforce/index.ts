@@ -194,20 +194,13 @@ const salesforceHandler: ICrmBackupHandler = {
     source: ISource,
     destinationType: string,
     destConfig: IDestinationConfig,
-    object?: IBackupObject[],
+    object?: IBackupObject[]
   ): Promise<void> => {
     const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
 
     if (!object?.length) {
       return;
     }
-
-    const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
-      return objects.flatMap((obj) => [
-        obj,
-        ...(obj.children ? recursivelyFlatten(obj.children) : []),
-      ]);
-    };
 
     const tokens: SalesforceTokens = {
       accessToken: access_token,
@@ -216,14 +209,6 @@ const salesforceHandler: ICrmBackupHandler = {
     };
 
     for (let i = 0; i < object.length; i++) {
-      // const item = object[i];
-      // let flattenChildObjects = item.children?.length ? recursivelyFlatten(item.children) : [];
-      // delete item.children;
-      // flattenChildObjects.push(item);
-
-      // logger.info(`Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenChildObjects.length}, onjectName: ${item.name}, insatnce: ${source.instanceUrl}`);
-      // for (let childIndex = 0; childIndex < flattenChildObjects.length; childIndex++) {
-      //   const childObject = flattenChildObjects[childIndex];
       await exportWithRetryArchival(
         backupConfigId,
         backupJobId,

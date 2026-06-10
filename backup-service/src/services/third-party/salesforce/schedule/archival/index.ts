@@ -32,7 +32,7 @@ import { uploadToS3 } from '../../../../destination/s3';
 import { pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
-import { bulkDeleteRecords } from './delete-bulk';
+// import { bulkDeleteRecords } from './delete-bulk';
 
 // ---------------------------------------------------------------------------
 // SOQL injection guards
@@ -207,18 +207,18 @@ const buildWhereClause = (object: IBackupObject): string => {
  *
  * RETURNS: The matching IBackupObject, or undefined if not found.
  */
-const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
-  if (root.name === name) {
-    return root;
-  }
-  for (const child of root.children ?? []) {
-    const found = findObjectInTree(child, name);
-    if (found) {
-      return found;
-    }
-  }
-  return undefined;
-};
+// const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
+//   if (root.name === name) {
+//     return root;
+//   }
+//   for (const child of root.children ?? []) {
+//     const found = findObjectInTree(child, name);
+//     if (found) {
+//       return found;
+//     }
+//   }
+//   return undefined;
+// };
 
 // ---------------------------------------------------------------------------
 // Main entry point
@@ -341,6 +341,7 @@ export const archiveAndHardDelete = async (
           salesforceApiCount: 1,
           status: OBJECT_STATUS.bulkQueryCompleted,
           bulkJobId: jobId,
+          totalRecordCount,
         },
       });
     }
@@ -361,7 +362,7 @@ export const archiveAndHardDelete = async (
       // Stream all pages of the bulk job to S3 and walk the full child tree.
       // Returns s3UrlsPerObject: Map<objectName, s3Keys[]> in insertion order
       // (parent first, deepest child last).
-      const { s3UrlsPerObject } = await uploadBulkResultsByPageArchival({
+      await uploadBulkResultsByPageArchival({
         instanceUrl,
         tokens,
         jobId,
