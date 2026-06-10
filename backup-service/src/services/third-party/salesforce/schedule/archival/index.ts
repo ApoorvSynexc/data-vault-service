@@ -276,7 +276,7 @@ export const archiveAndHardDelete = async (
   const { crmId } = tokens;
   const objectName = object.name;
   let backupConfig;
-  let totalRecordCount: number = 0;
+  let totalRecordCount: number;
   let jobId: string;
 
   try {

@@ -77,7 +77,7 @@ const uploadDataToJob = async (
       throw new Error(`Failed to upload data to bulk delete job: ${errorText}`);
     }
   } catch (err: any) {
-    throw new Error(`Failed to upload data: ${err.message}`);
+    throw new Error(`Failed to upload data: ${err.message}`, { cause: err });
   }
 };
 

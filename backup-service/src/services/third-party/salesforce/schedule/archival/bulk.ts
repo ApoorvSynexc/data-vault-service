@@ -389,11 +389,7 @@ async function fetchObjectAndDescend(
   });
 
   while (nextUrl !== null) {
-    let res: ISalesforceQueryResponse = {
-      totalSize: 0,
-      done: false,
-      records: [],
-    };
+    let res: ISalesforceQueryResponse;
     try {
       const currentUrl = nextUrl;
       res = await salesforceRequest<ISalesforceQueryResponse>({ url: currentUrl }, ctx.tokens);
