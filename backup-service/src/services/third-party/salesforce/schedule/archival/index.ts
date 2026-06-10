@@ -357,7 +357,14 @@ export const archiveAndHardDelete = async (
     if (totalRecordCount) {
       // Base S3 key path for this parent object's uploaded pages.
       // Child objects build their own paths inside uploadBulkResultsByPageArchival.
-      const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+      const archivePrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        operation: 'inserts',
+        type: 'archival',
+      });
 
       // Stream all pages of the bulk job to S3 and walk the full child tree.
       // Returns s3UrlsPerObject: Map<objectName, s3Keys[]> in insertion order

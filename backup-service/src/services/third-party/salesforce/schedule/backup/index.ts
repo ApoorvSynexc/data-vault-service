@@ -165,7 +165,14 @@ export const exportFirstTime = async (
       Changes: totalRecordCount,
     });
 
-    const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+    const insertPrefix = buildS3KeyPrefix({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      operation: 'inserts',
+      type: 'backup',
+    });
     const { sizeInBytes } = await uploadBulkResultsByPage({
       instanceUrl,
       tokens,
@@ -315,9 +322,30 @@ export const exportIncremental = async (
         objectName,
         Changes: totalRecordCount,
       });
-      const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-      const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
-      const deletePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'deletes');
+      const insertPrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        operation: 'inserts',
+        type: 'backup',
+      });
+      const updatePrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        operation: 'updates',
+        type: 'backup',
+      });
+      const deletePrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        operation: 'deletes',
+        type: 'backup',
+      });
       const { sizeInBytes } = await classifyAndUploadBulkResultsByPage({
         instanceUrl,
         tokens,
