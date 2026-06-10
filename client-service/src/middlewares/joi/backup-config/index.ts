@@ -129,7 +129,7 @@ export const createBackupConfigValidation = (
 
 export const updateBackupConfigValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    crmId: Joi.string().required(),
+    crmId: Joi.string().optional(),
     name: Joi.string().optional(),
     description: Joi.string().optional().allow(""),
     objectNames: Joi.array().items(Joi.string()).min(1).optional(),
