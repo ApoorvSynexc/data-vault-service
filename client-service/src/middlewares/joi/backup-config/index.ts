@@ -10,6 +10,7 @@ import {
   SCHEDULE_TYPE,
   WEEK_DAY,
   STATUS,
+  DATASET,
 } from '../../../constant';
 
 const fieldFilterSchema = Joi.object({
@@ -109,6 +110,9 @@ export const createBackupConfigValidation = (
       otherwise: Joi.forbidden(),
     }),
     objects: Joi.array().items(objectSchema).optional(),
+    dataset: Joi.string()
+      .valid(...Object.values(DATASET))
+      .optional(),
     status: Joi.string()
       .valid(...Object.values(STATUS))
       .optional()
@@ -135,6 +139,9 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
     scheduleConfig: scheduleConfigSchema.optional(),
     objects: Joi.array().items(objectSchema).optional(),
     destinationId: Joi.string().optional(),
+    dataset: Joi.string()
+      .valid(...Object.values(DATASET))
+      .optional(),
     status: Joi.string()
       .valid(...Object.values(STATUS))
       .optional()
