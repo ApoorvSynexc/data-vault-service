@@ -313,7 +313,7 @@ export const archiveAndHardDelete = async (
       // Submit the async Bulk Query job to Salesforce. This returns a job ID
       // immediately; Salesforce processes the query in the background.
       try {
-        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
+        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: "query" });
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
