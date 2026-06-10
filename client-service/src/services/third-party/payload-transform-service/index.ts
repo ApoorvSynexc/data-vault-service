@@ -132,7 +132,7 @@ async function buildPayload(backupConfigId: string) {
         objectOperations = schemaChangeDetection(backupConfig, objectOperations);
 
         return {
-            jobType: 'BACKUP',
+            jobType: backupConfig.type === 'NORMAL' ? 'BACKUP' : 'ARCHIVAL',
             backupConfigId: backupConfigId,
             details: {
                 clientId: backupConfig.userId,
