@@ -365,6 +365,27 @@ async function fetchObjectAndDescend(
     return s3UrlsMap;
   }
   if (!parentIds.length) {
+
+    if (object.children?.length) {
+      let emptyChildS3UrlsMap = new Map<string, string[]>();
+      // Depth-first: fully process each grandchild before moving to
+      // the next page of the current object. This guarantees the
+      // complete sub-tree for these IDs is in S3 before we advance.
+      for (const child of object.children) {
+        const childMap = await fetchObjectAndDescend(backupJobId, [], child, ctx);
+
+        // Merge the grandchild's S3 key map into our own so the
+        // complete descendant tree bubbles all the way up to
+        // uploadBulkResultsByPageArchival's s3UrlsPerObject.
+        for (const [name, keys] of childMap) {
+          const existing = s3UrlsMap.get(name) ?? [];
+          s3UrlsMap.set(name, [...new Set([...existing, ...keys])]);
+        }
+      }
+
+      return emptyChildS3UrlsMap;
+    }
+
     // Nothing to query — the parent page had no records for this chunk.
     logger.error(`Child Object has no parent IDs to fetch for object, ObjectName: ${object.name}`);
     return s3UrlsMap;
