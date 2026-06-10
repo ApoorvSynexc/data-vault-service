@@ -136,6 +136,7 @@ const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
       await updateBackupObject({
         backupJobId,
         objectIndex,
+        salesforceApiCount,
         totalRecordCount: res.numberRecordsProcessed,
       });
     }
