@@ -25,10 +25,10 @@ import { updateArchivalObject } from '../../../../backup-job';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import {
-    salesforceRequest,
-    SalesforceTokens,
-    makePageFetcher,
-    getObjectMetadata,
+  salesforceRequest,
+  SalesforceTokens,
+  makePageFetcher,
+  getObjectMetadata,
 } from '../../api-request';
 import { uploadToS3 } from '../../../../destination';
 import { buildS3KeyPrefix } from '../../../../../utils/helper';
@@ -67,11 +67,11 @@ const CHILD_ID_CHUNK_SIZE = 200;
  * Everything needed to check the status of one specific Bulk Query job.
  */
 interface IPollBulkJobArchival {
-    instanceUrl: string;       // Salesforce org URL, e.g. "https://myorg.salesforce.com"
-    tokens: SalesforceTokens;  // OAuth access token + org/CRM identifiers
-    jobId: string;             // The Bulk API v2 Query job ID to poll
-    object: IBackupObject;     // Parent object config — used to persist live progress
-    backupJobId?: string;      // DB job record ID — if present, status is saved each poll
+  instanceUrl: string; // Salesforce org URL, e.g. "https://myorg.salesforce.com"
+  tokens: SalesforceTokens; // OAuth access token + org/CRM identifiers
+  jobId: string; // The Bulk API v2 Query job ID to poll
+  object: IBackupObject; // Parent object config — used to persist live progress
+  backupJobId?: string; // DB job record ID — if present, status is saved each poll
 }
 
 /**
@@ -79,19 +79,19 @@ interface IPollBulkJobArchival {
  * Everything needed to stream a completed bulk job and walk the child tree.
  */
 interface IUploadBulkResultsByPageArchival {
-    instanceUrl: string;
-    tokens: SalesforceTokens;
-    jobId: string;                      // A JobComplete Bulk Query job to stream results from
-    backupJobId: string;
-    object: IBackupObject;              // Parent object config, including its children array
-    destConfig: IDestinationConfig;     // S3 destination bucket + credentials
-    s3KeyPrefix: string;                // Base S3 key path for parent record uploads
-    crmId: string;
-    crmName: string;
-    backupConfigId: string;
-    startLocator?: string | null;       // Resume from this page locator (for retries)
-    startCompletedRecordCount?: number; // Already-counted records (for retries)
-    maxRecords?: number;                // Override page size (defaults to MAX_RECORDS_PER_PAGE)
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  jobId: string; // A JobComplete Bulk Query job to stream results from
+  backupJobId: string;
+  object: IBackupObject; // Parent object config, including its children array
+  destConfig: IDestinationConfig; // S3 destination bucket + credentials
+  s3KeyPrefix: string; // Base S3 key path for parent record uploads
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  startLocator?: string | null; // Resume from this page locator (for retries)
+  startCompletedRecordCount?: number; // Already-counted records (for retries)
+  maxRecords?: number; // Override page size (defaults to MAX_RECORDS_PER_PAGE)
 }
 
 /**
@@ -105,13 +105,13 @@ interface IUploadBulkResultsByPageArchival {
  * so no shared mutable state is needed here.
  */
 interface IFetchContext {
-    instanceUrl: string;
-    tokens: SalesforceTokens;
-    destConfig: IDestinationConfig;
-    s3KeyPrefix: string;
-    crmId: string;
-    crmName: string;
-    backupConfigId: string;
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  destConfig: IDestinationConfig;
+  s3KeyPrefix: string;
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
 }
 
 /**
@@ -119,10 +119,10 @@ interface IFetchContext {
  * Used when fetching child records via the Query endpoint (/query?q=...).
  */
 interface ISalesforceQueryResponse {
-    totalSize: number;
-    done: boolean;
-    nextRecordsUrl?: string;      // Present when there are more pages; append to instanceUrl
-    records: Record<string, any>[];
+  totalSize: number;
+  done: boolean;
+  nextRecordsUrl?: string; // Present when there are more pages; append to instanceUrl
+  records: Record<string, any>[];
 }
 
 // ---------------------------------------------------------------------------
@@ -157,54 +157,53 @@ interface ISalesforceQueryResponse {
  *   - If Salesforce reports the job as Failed or Aborted
  */
 const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
-    const { instanceUrl, tokens, jobId, backupJobId, object } = payload;
-    let salesforceApiCount = 0;
+  const { instanceUrl, tokens, jobId, backupJobId, object } = payload;
+  let salesforceApiCount = 0;
 
-    // Absolute deadline prevents an infinite loop if Salesforce gets stuck.
-    const deadline = Date.now() + MAX_POLL_DURATION_MS;
-    let latestObjects: IBackupObject[] = [];
+  // Absolute deadline prevents an infinite loop if Salesforce gets stuck.
+  const deadline = Date.now() + MAX_POLL_DURATION_MS;
+  let latestObjects: IBackupObject[] = [];
 
-    while (true) {
-        // Always wait first — the job was just submitted or we just polled.
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  while (true) {
+    // Always wait first — the job was just submitted or we just polled.
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 
-        if (Date.now() >= deadline) {
-            throw new Error(`Bulk job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`);
-        }
-
-        // Hit the job status endpoint to get the current state and record count.
-        const res = await salesforceRequest<{
-            state: string;
-            errorMessage?: string;
-            numberRecordsProcessed?: number;
-        }>(
-            { url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}` },
-            tokens
-        );
-        salesforceApiCount += 1;
-
-        // Persist the live record count so the dashboard can show progress
-        // while Salesforce is still processing the query in the background.
-        if (backupJobId && object.id !== undefined && typeof res.numberRecordsProcessed === 'number') {
-            latestObjects = await updateArchivalObject({
-                backupJobId,
-                ...(latestObjects.length ? { objects: latestObjects } : {}),
-                object: { id: object.id, salesforceApiCount, totalRecordCount: res.numberRecordsProcessed },
-            });
-        }
-
-        if (res.state === 'JobComplete') {
-            // All records are ready to stream from the result endpoint.
-            return res.numberRecordsProcessed ?? 0;
-        }
-
-        if (res.state === 'Failed' || res.state === 'Aborted') {
-            // Unrecoverable — surface the error immediately so the job is marked failed.
-            throw new Error(`Bulk job ${jobId} ${res.state}: ${res.errorMessage ?? 'unknown'}`);
-        }
-
-        // Any other state (InProgress, UploadComplete, etc.) — keep polling.
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Bulk job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`
+      );
     }
+
+    // Hit the job status endpoint to get the current state and record count.
+    const res = await salesforceRequest<{
+      state: string;
+      errorMessage?: string;
+      numberRecordsProcessed?: number;
+    }>({ url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}` }, tokens);
+    salesforceApiCount += 1;
+
+    // Persist the live record count so the dashboard can show progress
+    // while Salesforce is still processing the query in the background.
+    if (backupJobId && object.id !== undefined && typeof res.numberRecordsProcessed === 'number') {
+      latestObjects = await updateArchivalObject({
+        backupJobId,
+        ...(latestObjects.length ? { objects: latestObjects } : {}),
+        object: { id: object.id, salesforceApiCount, totalRecordCount: res.numberRecordsProcessed },
+      });
+    }
+
+    if (res.state === 'JobComplete') {
+      // All records are ready to stream from the result endpoint.
+      return res.numberRecordsProcessed ?? 0;
+    }
+
+    if (res.state === 'Failed' || res.state === 'Aborted') {
+      // Unrecoverable — surface the error immediately so the job is marked failed.
+      throw new Error(`Bulk job ${jobId} ${res.state}: ${res.errorMessage ?? 'unknown'}`);
+    }
+
+    // Any other state (InProgress, UploadComplete, etc.) — keep polling.
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -224,9 +223,11 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
  *          The last chunk may be smaller if the input length is not divisible.
  */
 function chunkIds<T>(arr: T[], size: number): T[][] {
-    const chunks: T[][] = [];
-    for (let i = 0; i < arr.length; i += size) { chunks.push(arr.slice(i, i + size)); }
-    return chunks;
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
 }
 
 /**
@@ -244,15 +245,25 @@ function chunkIds<T>(arr: T[], size: number): T[][] {
  *          CSV has fewer than 2 lines or no "Id" column.
  */
 function extractIdsFromCsv(csvText: string): string[] {
-    const lines = csvText.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length < 2) { return []; }
-    const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
-    const idIndex = headers.indexOf('id');
-    if (idIndex === -1) { return []; }
-    return lines.slice(1).map(line => {
-        const cols = line.split(',');
-        return cols[idIndex]?.replace(/"/g, '').trim() ?? '';
-    }).filter(Boolean);
+  const lines = csvText
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2) {
+    return [];
+  }
+  const headers = lines[0].split(',').map((h) => h.replace(/"/g, '').trim().toLowerCase());
+  const idIndex = headers.indexOf('id');
+  if (idIndex === -1) {
+    return [];
+  }
+  return lines
+    .slice(1)
+    .map((line) => {
+      const cols = line.split(',');
+      return cols[idIndex]?.replace(/"/g, '').trim() ?? '';
+    })
+    .filter(Boolean);
 }
 
 /**
@@ -272,17 +283,20 @@ function extractIdsFromCsv(csvText: string): string[] {
  *          Values containing commas, double-quotes, or newlines are RFC-4180 escaped.
  */
 function jsonToCsv(records: Record<string, any>[], fieldNames: string[]): Buffer {
-    const escape = (val: unknown): string => {
-        if (val === null || val === undefined) { return ''; }
-        const s = typeof val === 'object' ? JSON.stringify(val) : String(val);
-        return s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')
-            ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const lines = [
-        fieldNames.join(','),
-        ...records.map(r => fieldNames.map(f => escape(r[f])).join(',')),
-    ];
-    return Buffer.from(lines.join('\n'), 'utf-8');
+  const escape = (val: unknown): string => {
+    if (val === null || val === undefined) {
+      return '';
+    }
+    const s = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    return s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')
+      ? `"${s.replace(/"/g, '""')}"`
+      : s;
+  };
+  const lines = [
+    fieldNames.join(','),
+    ...records.map((r) => fieldNames.map((f) => escape(r[f])).join(',')),
+  ];
+  return Buffer.from(lines.join('\n'), 'utf-8');
 }
 
 // ---------------------------------------------------------------------------
@@ -333,129 +347,133 @@ function jsonToCsv(records: Record<string, any>[], fieldNames: string[]): Buffer
  *   collision-free key with no shared mutable state required.
  */
 async function fetchObjectAndDescend(
-    backupJobId: string,
-    parentIds: string[],
-    object: IBackupObject,
-    ctx: IFetchContext
+  backupJobId: string,
+  parentIds: string[],
+  object: IBackupObject,
+  ctx: IFetchContext
 ): Promise<Map<string, string[]>> {
-    let pageCount = 1;
-    let completedRecordCount = 0;
-    const s3UrlsMap = new Map<string, string[]>();
+  let pageCount = 1;
+  let completedRecordCount = 0;
+  const s3UrlsMap = new Map<string, string[]>();
 
-    // fieldApiName is the lookup / master-detail field on this child object that
-    // points back to the parent (e.g. "AccountId" on Contact). Without it we
-    // cannot build the WHERE clause to filter child records by parent IDs.
-    const fieldApiName = (object as any).fieldApiName as string | undefined;
-    if (!fieldApiName) {
-        logger.error(`Child Object fieldApiName is missing, ObjectName: ${object.name}`);
-        return s3UrlsMap;
-    }
-    if (!parentIds.length) {
-        // Nothing to query — the parent page had no records for this chunk.
-        logger.error(`Child Object has no parent IDs to fetch for object, ObjectName: ${object.name}`);
-        return s3UrlsMap;
-    }
+  // fieldApiName is the lookup / master-detail field on this child object that
+  // points back to the parent (e.g. "AccountId" on Contact). Without it we
+  // cannot build the WHERE clause to filter child records by parent IDs.
+  const fieldApiName = (object as any).fieldApiName as string | undefined;
+  if (!fieldApiName) {
+    logger.error(`Child Object fieldApiName is missing, ObjectName: ${object.name}`);
+    return s3UrlsMap;
+  }
+  if (!parentIds.length) {
+    // Nothing to query — the parent page had no records for this chunk.
+    logger.error(`Child Object has no parent IDs to fetch for object, ObjectName: ${object.name}`);
+    return s3UrlsMap;
+  }
 
-    // Retrieve all field API names for this object so the SOQL selects every column.
-    const { fieldNames } = await getObjectMetadata(ctx.tokens.crmId, object.name);
+  // Retrieve all field API names for this object so the SOQL selects every column.
+  const { fieldNames } = await getObjectMetadata(ctx.tokens.crmId, object.name);
 
-    // parentIds is already chunked to ≤200 by the caller, so this IN() clause
-    // is safe from URL-length errors.
-    const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE ${fieldApiName} IN (${parentIds.map(id => `'${id}'`).join(', ')}) ORDER BY Id ASC`;
+  // parentIds is already chunked to ≤200 by the caller, so this IN() clause
+  // is safe from URL-length errors.
+  const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE ${fieldApiName} IN (${parentIds.map((id) => `'${id}'`).join(', ')}) ORDER BY Id ASC`;
 
-    // Start with the first page URL; Salesforce provides nextRecordsUrl when
-    // more pages exist, which we use to continue pagination.
-    let nextUrl: string | null =
-        `${ctx.instanceUrl}/services/data/${SF_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
+  // Start with the first page URL; Salesforce provides nextRecordsUrl when
+  // more pages exist, which we use to continue pagination.
+  let nextUrl: string | null =
+    `${ctx.instanceUrl}/services/data/${SF_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
 
-    logger.info(`Child Object fetch started, ObjectName: ${object.name}`);
-    await updateArchivalObject({
+  logger.info(`Child Object fetch started, ObjectName: ${object.name}`);
+  await updateArchivalObject({
+    backupJobId,
+    object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
+  });
+
+  while (nextUrl !== null) {
+    let res: ISalesforceQueryResponse = {
+      totalSize: 0,
+      done: false,
+      records: [],
+    };
+    try {
+      const currentUrl = nextUrl;
+      res = await salesforceRequest<ISalesforceQueryResponse>({ url: currentUrl }, ctx.tokens);
+    } catch (error: any) {
+      const errorMsg = error?.message ?? String(error);
+      logger.info(`Child Object failed, ObjectName: ${object.name} Error: ${errorMsg}`);
+      await updateArchivalObject({
         backupJobId,
-        object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
+        object: {
+          id: object.id,
+          status: OBJECT_STATUS.failed,
+          errorMessage: errorMsg,
+        },
+      });
+
+      break;
+    }
+
+    if (res.records.length) {
+      // Each page gets a UUID suffix — globally unique regardless of object
+      // name, recursion depth, or how many times the same object is visited
+      // from different parent chunks. No shared state needed.
+      const s3Key = `${buildS3KeyPrefix(ctx.crmId, ctx.crmName, ctx.backupConfigId, object.name, 'inserts')}_${randomUUID()}`;
+      await uploadToS3(ctx.destConfig, s3Key, jsonToCsv(res.records, fieldNames));
+
+      // Register this S3 key so it bubbles up to s3UrlsPerObject in the
+      // top-level function, enabling the delete phase to read it later.
+      const existingKeys = s3UrlsMap.get(object.name) ?? [];
+      existingKeys.push(s3Key);
+      s3UrlsMap.set(object.name, existingKeys);
+
+      // Extract the Id values from this page to use as parent IDs for
+      // any grandchild objects configured under this child.
+      const pageIds = res.records.map((r) => r['Id']).filter(Boolean) as string[];
+
+      if (object.children?.length) {
+        // Depth-first: fully process each grandchild before moving to
+        // the next page of the current object. This guarantees the
+        // complete sub-tree for these IDs is in S3 before we advance.
+        for (const child of object.children) {
+          const childMap = await fetchObjectAndDescend(backupJobId, pageIds, child, ctx);
+
+          // Merge the grandchild's S3 key map into our own so the
+          // complete descendant tree bubbles all the way up to
+          // uploadBulkResultsByPageArchival's s3UrlsPerObject.
+          for (const [name, keys] of childMap) {
+            const existing = s3UrlsMap.get(name) ?? [];
+            s3UrlsMap.set(name, [...new Set([...existing, ...keys])]);
+          }
+        }
+      }
+    }
+
+    // Advance to the next page if Salesforce provided a continuation URL.
+    // res.done === true OR missing nextRecordsUrl both signal the last page.
+    completedRecordCount += res.records.length;
+    nextUrl = res.done || !res.nextRecordsUrl ? null : `${ctx.instanceUrl}${res.nextRecordsUrl}`;
+    logger.info(
+      `Child object ${pageCount} page fetched, ObjectName: ${object.name} completed: ${res.done}`
+    );
+
+    await updateArchivalObject({
+      backupJobId,
+      object: {
+        id: object.id,
+        completedRecordCount,
+        salesforceApiCount: pageCount,
+        ...(res.done ? { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' } : {}),
+      },
     });
 
-    while (nextUrl !== null) {
-        let res: ISalesforceQueryResponse = {
-            totalSize: 0,
-            done: false,
-            records: [],
-        };
-        try {
-            const currentUrl = nextUrl;
-            res = await salesforceRequest<ISalesforceQueryResponse>({ url: currentUrl }, ctx.tokens);
-        } catch (error: any) {
-            const errorMsg = error?.message ?? String(error);
-            logger.info(`Child Object failed, ObjectName: ${object.name} Error: ${errorMsg}`);
-            await updateArchivalObject({
-                backupJobId,
-                object: {
-                    id: object.id,
-                    status: OBJECT_STATUS.failed,
-                    errorMessage: errorMsg,
-                }
-            });
-            
-            break;
-        }
+    ++pageCount;
+  }
 
-        if (res.records.length) {
-            // Each page gets a UUID suffix — globally unique regardless of object
-            // name, recursion depth, or how many times the same object is visited
-            // from different parent chunks. No shared state needed.
-            const s3Key = `${buildS3KeyPrefix(ctx.crmId, ctx.crmName, ctx.backupConfigId, object.name, 'inserts')}_${randomUUID()}`;
-            await uploadToS3(ctx.destConfig, s3Key, jsonToCsv(res.records, fieldNames));
-
-            // Register this S3 key so it bubbles up to s3UrlsPerObject in the
-            // top-level function, enabling the delete phase to read it later.
-            const existingKeys = s3UrlsMap.get(object.name) ?? [];
-            existingKeys.push(s3Key);
-            s3UrlsMap.set(object.name, existingKeys);
-
-            // Extract the Id values from this page to use as parent IDs for
-            // any grandchild objects configured under this child.
-            const pageIds = res.records.map(r => r['Id']).filter(Boolean) as string[];
-
-            if (object.children?.length) {
-                // Depth-first: fully process each grandchild before moving to
-                // the next page of the current object. This guarantees the
-                // complete sub-tree for these IDs is in S3 before we advance.
-                for (const child of object.children) {
-                    const childMap = await fetchObjectAndDescend(backupJobId, pageIds, child, ctx);
-
-                    // Merge the grandchild's S3 key map into our own so the
-                    // complete descendant tree bubbles all the way up to
-                    // uploadBulkResultsByPageArchival's s3UrlsPerObject.
-                    for (const [name, keys] of childMap) {
-                        const existing = s3UrlsMap.get(name) ?? [];
-                        s3UrlsMap.set(name, [...new Set([...existing, ...keys])]);
-                    }
-                }
-            }
-        }
-
-        // Advance to the next page if Salesforce provided a continuation URL.
-        // res.done === true OR missing nextRecordsUrl both signal the last page.
-        completedRecordCount += res.records.length;
-        nextUrl = res.done || !res.nextRecordsUrl ? null : `${ctx.instanceUrl}${res.nextRecordsUrl}`;
-        logger.info(`Child object ${pageCount} page fetched, ObjectName: ${object.name} completed: ${res.done}`);
-
-        await updateArchivalObject({
-            backupJobId,
-            object: {
-                id: object.id,
-                completedRecordCount,
-                salesforceApiCount: pageCount,
-                ...(res.done ? { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' } : {}),
-            },
-        });
-
-        ++pageCount;
-    }
-
-    logger.info(`Child Object completed, ObjectName: ${object.name} recordCount: ${completedRecordCount} pageCount: ${pageCount}`);
-    // Return the complete map for this object and all its descendants.
-    // Insertion order: this object first, then children as they were visited.
-    return s3UrlsMap;
+  logger.info(
+    `Child Object completed, ObjectName: ${object.name} recordCount: ${completedRecordCount} pageCount: ${pageCount}`
+  );
+  // Return the complete map for this object and all its descendants.
+  // Insertion order: this object first, then children as they were visited.
+  return s3UrlsMap;
 }
 
 // ---------------------------------------------------------------------------
@@ -512,132 +530,147 @@ async function fetchObjectAndDescend(
  *   persisted to DB before re-throwing so the job is marked failed.
  */
 const uploadBulkResultsByPageArchival = async (
-    payload: IUploadBulkResultsByPageArchival
-): Promise<{ ids: string[], s3UrlsPerObject: Map<string, string[]> }> => {
-    const {
-        instanceUrl, tokens, jobId, backupJobId, object,
-        destConfig, s3KeyPrefix, crmId, crmName, backupConfigId,
-        startLocator = null,
-        startCompletedRecordCount = 0,
-        maxRecords = MAX_RECORDS_PER_PAGE,
-    } = payload;
+  payload: IUploadBulkResultsByPageArchival
+): Promise<{ ids: string[]; s3UrlsPerObject: Map<string, string[]> }> => {
+  const {
+    instanceUrl,
+    tokens,
+    jobId,
+    backupJobId,
+    object,
+    destConfig,
+    s3KeyPrefix,
+    crmId,
+    crmName,
+    backupConfigId,
+    startLocator = null,
+    startCompletedRecordCount = 0,
+    maxRecords = MAX_RECORDS_PER_PAGE,
+  } = payload;
 
-    // ctx is a plain read-only bag of config. S3 key uniqueness is handled at
-    // each upload site via randomUUID(), so no shared mutable state is needed.
-    const ctx: IFetchContext = { instanceUrl, tokens, destConfig, s3KeyPrefix, crmId, crmName, backupConfigId };
+  // ctx is a plain read-only bag of config. S3 key uniqueness is handled at
+  // each upload site via randomUUID(), so no shared mutable state is needed.
+  const ctx: IFetchContext = {
+    instanceUrl,
+    tokens,
+    destConfig,
+    s3KeyPrefix,
+    crmId,
+    crmName,
+    backupConfigId,
+  };
 
-    const ids: string[] = [];
+  const ids: string[] = [];
 
-    // s3UrlsPerObject accumulates every S3 key written during this run,
-    // keyed by object name. Map insertion order is preserved — parent is
-    // inserted first, so reversing the entries gives deepest-child-first
-    // order for the delete phase.
-    const s3UrlsPerObject = new Map<string, string[]>();
+  // s3UrlsPerObject accumulates every S3 key written during this run,
+  // keyed by object name. Map insertion order is preserved — parent is
+  // inserted first, so reversing the entries gives deepest-child-first
+  // order for the delete phase.
+  const s3UrlsPerObject = new Map<string, string[]>();
 
-    let latestObjects: IBackupObject[] = [];
-    let salesforceApiCount = 0;
-    let completedRecordCount = startCompletedRecordCount;
+  let latestObjects: IBackupObject[] = [];
+  let salesforceApiCount = 0;
+  let completedRecordCount = startCompletedRecordCount;
 
-    // null = fetch the first page; a string = resume from a specific locator.
-    let locator: string | null = startLocator;
-    const fetchPage = makePageFetcher(tokens);
+  // null = fetch the first page; a string = resume from a specific locator.
+  let locator: string | null = startLocator;
+  const fetchPage = makePageFetcher(tokens);
 
-    try {
-        // Signal to the UI that data transfer has started for this object.
-        latestObjects = await updateArchivalObject({
-            backupJobId,
-            object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
-        });
+  try {
+    // Signal to the UI that data transfer has started for this object.
+    latestObjects = await updateArchivalObject({
+      backupJobId,
+      object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
+    });
 
-        do {
-            // Build the result-fetch URL. For the first page there is no locator.
-            // Subsequent pages use the sforce-locator token returned in the headers.
-            const url = locator
-                ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
-                : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
+    do {
+      // Build the result-fetch URL. For the first page there is no locator.
+      // Subsequent pages use the sforce-locator token returned in the headers.
+      const url = locator
+        ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
+        : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
 
-            const response = await fetchPage(url);
-            salesforceApiCount += 1;
+      const response = await fetchPage(url);
+      salesforceApiCount += 1;
 
-            if (!response.ok) {
-                throw new Error(`Salesforce results fetch failed with status ${response.status}`);
+      if (!response.ok) {
+        throw new Error(`Salesforce results fetch failed with status ${response.status}`);
+      }
+
+      // Read the next-page locator from headers BEFORE consuming the body.
+      // sforce-locator is the string "null" (not JS null) on the last page.
+      const nextLocatorRaw = response.headers.get('sforce-locator');
+      const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
+
+      // Read the full response body as text. We use this string for both the
+      // S3 upload (raw CSV) and ID extraction — consuming it only once.
+      const csvText = await response.text();
+
+      // Upload this parent CSV page to S3. UUID suffix guarantees uniqueness
+      // across multiple bulk pages, retries, and concurrent runs.
+      const parentS3Key = `${s3KeyPrefix}_${randomUUID()}`;
+      await uploadToS3(destConfig, parentS3Key, Buffer.from(csvText, 'utf-8'));
+      const parentKeys = s3UrlsPerObject.get(object.name) ?? [];
+      parentKeys.push(parentS3Key);
+      s3UrlsPerObject.set(object.name, parentKeys);
+
+      // Extract only the Id column — used to query child records in the next step.
+      const pageIds = extractIdsFromCsv(csvText);
+      ids.push(...pageIds);
+
+      if (object.children?.length) {
+        for (const child of object.children) {
+          // Chunk the page's IDs into groups of 200 to respect the
+          // SOQL IN() clause URL-length limit on child queries.
+          for (const chunk of chunkIds(pageIds, CHILD_ID_CHUNK_SIZE)) {
+            // fetchObjectAndDescend uploads all pages of this child and
+            // every descendant, returning the S3 keys it wrote.
+            const childResult = await fetchObjectAndDescend(backupJobId, chunk, child, ctx);
+
+            // Merge child keys into s3UrlsPerObject. Use Set to deduplicate
+            // in case the same object was visited from multiple chunks.
+            for (const [name, keys] of childResult) {
+              const existing = s3UrlsPerObject.get(name) ?? [];
+              s3UrlsPerObject.set(name, [...new Set([...existing, ...keys])]);
             }
+          }
+        }
+      }
 
-            // Read the next-page locator from headers BEFORE consuming the body.
-            // sforce-locator is the string "null" (not JS null) on the last page.
-            const nextLocatorRaw = response.headers.get('sforce-locator');
-            const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
+      // sforce-numberOfrecords header gives the exact record count for this page.
+      completedRecordCount += parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
+      locator = nextLocator;
 
-            // Read the full response body as text. We use this string for both the
-            // S3 upload (raw CSV) and ID extraction — consuming it only once.
-            const csvText = await response.text();
+      // Persist the locator and counts after every page.
+      // If the process crashes mid-run, the next attempt can resume from
+      // the last saved locator instead of reprocessing everything from scratch.
+      latestObjects = await updateArchivalObject({
+        backupJobId,
+        objects: latestObjects,
+        object: {
+          id: object.id,
+          completedRecordCount,
+          salesforceApiCount,
+          ...(locator
+            ? { currentLocator: locator } // more pages remain
+            : { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' }), // all pages done
+        },
+      });
+    } while (locator !== null);
+  } catch (err: any) {
+    // Capture the locator so the error message names exactly where we stopped.
+    const failedAt = locator ?? INITIAL_PAGE_KEY;
+    const errorMessage = `archival failed at locator [${failedAt}]: ${err?.message ?? err}`;
+    logger.error(`backupJobId:${backupJobId} objectName:${object.name} — ${errorMessage}`);
+    await updateArchivalObject({
+      backupJobId,
+      ...(latestObjects.length ? { objects: latestObjects } : {}),
+      object: { id: object.id, status: OBJECT_STATUS.failed, errorMessage },
+    });
+    throw new Error(errorMessage, { cause: err });
+  }
 
-            // Upload this parent CSV page to S3. UUID suffix guarantees uniqueness
-            // across multiple bulk pages, retries, and concurrent runs.
-            const parentS3Key = `${s3KeyPrefix}_${randomUUID()}`;
-            await uploadToS3(destConfig, parentS3Key, Buffer.from(csvText, 'utf-8'));
-            const parentKeys = s3UrlsPerObject.get(object.name) ?? [];
-            parentKeys.push(parentS3Key);
-            s3UrlsPerObject.set(object.name, parentKeys);
-
-            // Extract only the Id column — used to query child records in the next step.
-            const pageIds = extractIdsFromCsv(csvText);
-            ids.push(...pageIds);
-
-            if (object.children?.length) {
-                for (const child of object.children) {
-                    // Chunk the page's IDs into groups of 200 to respect the
-                    // SOQL IN() clause URL-length limit on child queries.
-                    for (const chunk of chunkIds(pageIds, CHILD_ID_CHUNK_SIZE)) {
-                        // fetchObjectAndDescend uploads all pages of this child and
-                        // every descendant, returning the S3 keys it wrote.
-                        const childResult = await fetchObjectAndDescend(backupJobId, chunk, child, ctx);
-
-                        // Merge child keys into s3UrlsPerObject. Use Set to deduplicate
-                        // in case the same object was visited from multiple chunks.
-                        for (const [name, keys] of childResult) {
-                            const existing = s3UrlsPerObject.get(name) ?? [];
-                            s3UrlsPerObject.set(name, [...new Set([...existing, ...keys])]);
-                        }
-                    }
-                }
-            }
-
-            // sforce-numberOfrecords header gives the exact record count for this page.
-            completedRecordCount += parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
-            locator = nextLocator;
-
-            // Persist the locator and counts after every page.
-            // If the process crashes mid-run, the next attempt can resume from
-            // the last saved locator instead of reprocessing everything from scratch.
-            latestObjects = await updateArchivalObject({
-                backupJobId,
-                objects: latestObjects,
-                object: {
-                    id: object.id,
-                    completedRecordCount,
-                    salesforceApiCount,
-                    ...(locator
-                        ? { currentLocator: locator }                                    // more pages remain
-                        : { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' }), // all pages done
-                },
-            });
-        } while (locator !== null);
-
-    } catch (err: any) {
-        // Capture the locator so the error message names exactly where we stopped.
-        const failedAt = locator ?? INITIAL_PAGE_KEY;
-        const errorMessage = `archival failed at locator [${failedAt}]: ${err?.message ?? err}`;
-        logger.error(`backupJobId:${backupJobId} objectName:${object.name} — ${errorMessage}`);
-        await updateArchivalObject({
-            backupJobId,
-            ...(latestObjects.length ? { objects: latestObjects } : {}),
-            object: { id: object.id, status: OBJECT_STATUS.failed, errorMessage },
-        });
-        throw new Error(errorMessage, { cause: err });
-    }
-
-    return { ids, s3UrlsPerObject };
+  return { ids, s3UrlsPerObject };
 };
 
 export { pollBulkJobArchival, uploadBulkResultsByPageArchival };

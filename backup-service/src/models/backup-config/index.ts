@@ -1,4 +1,4 @@
-import { IBackupObject } from "../backup-job";
+import { IBackupObject } from '../backup-job';
 
 export interface IScheduling {
   frequency: string;

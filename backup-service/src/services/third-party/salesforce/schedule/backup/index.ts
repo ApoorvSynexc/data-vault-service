@@ -9,11 +9,7 @@ import {
   schemasAreEqual,
 } from '../../../../../utils/helper';
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destination/s3';
-import {
-  pollBulkJob,
-  classifyAndUploadBulkResultsByPage,
-  uploadBulkResultsByPage,
-} from './bulk';
+import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 
@@ -42,7 +38,13 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
 
   // If value is not already quoted and not a number/boolean, wrap it in single quotes
   let formattedValue = value;
-  if (!value.startsWith("'") && !value.startsWith('(') && isNaN(Number(value)) && value !== 'true' && value !== 'false') {
+  if (
+    !value.startsWith("'") &&
+    !value.startsWith('(') &&
+    isNaN(Number(value)) &&
+    value !== 'true' &&
+    value !== 'false'
+  ) {
     formattedValue = `'${value}'`;
   }
 
@@ -141,7 +143,7 @@ export const exportFirstTime = async (
           jobId,
           backupJobId,
           objectIndex,
-          salesforceApiCount
+          salesforceApiCount,
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -152,7 +154,7 @@ export const exportFirstTime = async (
         objectIndex,
         status: OBJECT_STATUS.bulkQueryCompleted,
         bulkJobId: jobId,
-        salesforceApiCount
+        salesforceApiCount,
       });
     }
 
@@ -286,7 +288,7 @@ export const exportIncremental = async (
           jobId: bulkJobId,
           backupJobId,
           objectIndex,
-          salesforceApiCount
+          salesforceApiCount,
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
