@@ -85,6 +85,7 @@ const timer = (ms: number): Promise<void> => {
 
 // Flatten all nested objects (children at any depth) into a single array
 const flattenBackupObjects = (objects: IBackupObject[]): IBackupObject[] => {
+  if(!objects.length) return [];
   return objects.flatMap((obj) => [obj, ...(obj.children ? flattenBackupObjects(obj.children) : [])]);
 };
 
