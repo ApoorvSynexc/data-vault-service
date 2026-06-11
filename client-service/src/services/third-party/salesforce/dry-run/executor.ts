@@ -1,5 +1,6 @@
 import { apexCountOne } from '../apex';
 import { buildOwnWhereBody, buildChildWhereBody } from './soql-builder';
+import { logger } from '../../../../middlewares';
 import type { IDryRunPayload, IDryRunResult, IDryRunObjectResult, ISalesforceObject } from './types';
 
 type Counter = { apiCallCount: number };
@@ -54,9 +55,13 @@ async function processNode(
 
   const effectiveWhere = getEffectiveWhereBody(obj, parentEffectiveWhere);
 
+  logger.info(`[dry-run] processNode — object: "${obj.name}" | fieldApiName: "${obj.fieldApiName ?? 'none'}" | parentEffectiveWhere: ${parentEffectiveWhere ?? 'null'} | effectiveWhere: ${effectiveWhere ?? 'null'}`);
+
   try {
     const r = await apexCountOne(crmId, obj.name, { whereClause: effectiveWhere ?? undefined });
     counter.apiCallCount += 1;
+
+    logger.info(`[dry-run] apexCountOne response — object: "${obj.name}" | success: ${r.success} | count: ${r.count ?? 'null'} | errorCode: ${r.errorCode ?? 'none'} | errorMessage: ${r.errorMessage ?? 'none'}`);
 
     const result: IDryRunObjectResult = {
       id: obj.id, name: obj.name,
@@ -82,6 +87,7 @@ async function processNode(
 
     return result;
   } catch (err: any) {
+    logger.error(`[dry-run] processNode threw — object: "${obj.name}" | effectiveWhere: ${effectiveWhere ?? 'null'} | error: ${err?.message ?? String(err)}`);
     return { id: obj.id, name: obj.name, count: null, success: false, error: err?.message ?? String(err) };
   }
 }

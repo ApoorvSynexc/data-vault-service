@@ -262,6 +262,8 @@ export const apexCountOne = async (
     ? { apiName, parentFieldName: filter.parentFieldName, ids: filter.ids }
     : { apiName, whereClause: (filter as ApexWhereFilter).whereClause ?? null };
 
+  console.log('[apexCountOne] request payload:', JSON.stringify({ items: [item] }, null, 2));
+
   const result = await salesforceRequest(
     {
       url:    `${APEX_BASE(instanceUrl)}/object-record-count`,
@@ -270,6 +272,8 @@ export const apexCountOne = async (
     },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
   );
+
+  console.log('[apexCountOne] raw response for', apiName, ':', JSON.stringify(result.data, null, 2));
 
   if (!result.data.success) {
     throw new Error(`[object-record-count] request failed: ${JSON.stringify(result.data)}`);
