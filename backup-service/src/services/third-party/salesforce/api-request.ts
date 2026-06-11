@@ -75,23 +75,23 @@ const salesforceRequest = async <T = any>(
 // ---------------------------------------------------------------------------
 const makePageFetcher =
   (tokens: SalesforceTokens) =>
-    async (url: string): Promise<Response> => {
-      let response = await fetch(url, {
+  async (url: string): Promise<Response> => {
+    let response = await fetch(url, {
+      headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
+    });
+    if (response.status === 401) {
+      try {
+        const refreshed = await refreshSalesforceToken(tokens.crmId);
+        tokens.accessToken = refreshed.access_token;
+      } catch {
+        throw new SalesforceAuthExpiredError();
+      }
+      response = await fetch(url, {
         headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
       });
-      if (response.status === 401) {
-        try {
-          const refreshed = await refreshSalesforceToken(tokens.crmId);
-          tokens.accessToken = refreshed.access_token;
-        } catch {
-          throw new SalesforceAuthExpiredError();
-        }
-        response = await fetch(url, {
-          headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-        });
-      }
-      return response;
-    };
+    }
+    return response;
+  };
 
 // Single call returning both field names (for SOQL) and full schema (for
 // schema comparison / upload). Replaces the former getObjectFields +
@@ -135,9 +135,4 @@ const createBulkQueryJob = async (payload: ICreateBulkQueryJob): Promise<string>
   return res.id;
 };
 
-export {
-  salesforceRequest,
-  makePageFetcher,
-  getObjectMetadata,
-  createBulkQueryJob
-};
+export { salesforceRequest, makePageFetcher, getObjectMetadata, createBulkQueryJob };

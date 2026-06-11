@@ -67,7 +67,6 @@ const exportObjectToDestinationArchival = async (
   destinationType: string,
   destConfig: IDestinationConfig
 ): Promise<void> => {
-  console.log('TANISHAK CODE WORKING exportObjectToDestinationArchival');
   if (object.status === OBJECT_STATUS.completed) {
     return;
   }
@@ -135,7 +134,6 @@ const exportWithRetryArchival = async (
   throw lastError;
 };
 
-
 const salesforceHandler: ICrmBackupHandler = {
   runBackup: async (
     backupConfigId: string,
@@ -196,8 +194,7 @@ const salesforceHandler: ICrmBackupHandler = {
     source: ISource,
     destinationType: string,
     destConfig: IDestinationConfig,
-    object?: IBackupObject[],
-    lastUpdatedAt?: string
+    object?: IBackupObject[]
   ): Promise<void> => {
     const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
 
@@ -205,37 +202,23 @@ const salesforceHandler: ICrmBackupHandler = {
       return;
     }
 
-    const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
-      return objects.flatMap(obj => [obj, ...(obj.children ? recursivelyFlatten(obj.children) : [])]);
-    };
-
     const tokens: SalesforceTokens = {
       accessToken: access_token,
       refreshToken: refresh_token,
       crmId,
     };
-    
-    for (let i = 0; i < object.length; i++) {
-      
 
-      // const item = object[i];
-      // let flattenChildObjects = item.children?.length ? recursivelyFlatten(item.children) : [];
-      // delete item.children;
-      // flattenChildObjects.push(item);
-      
-      // logger.info(`Archival job has been initialized, backupJobId: ${backupJobId}, objectCount: ${flattenChildObjects.length}, onjectName: ${item.name}, insatnce: ${source.instanceUrl}`);
-      // for (let childIndex = 0; childIndex < flattenChildObjects.length; childIndex++) {
-      //   const childObject = flattenChildObjects[childIndex];
-        await exportWithRetryArchival(
-          backupConfigId,
-          backupJobId,
-          instanceUrl,
-          tokens,
-          crmName,
-          object[i],
-          destinationType,
-          destConfig
-        );
+    for (let i = 0; i < object.length; i++) {
+      await exportWithRetryArchival(
+        backupConfigId,
+        backupJobId,
+        instanceUrl,
+        tokens,
+        crmName,
+        object[i],
+        destinationType,
+        destConfig
+      );
       // }
     }
 
@@ -244,4 +227,10 @@ const salesforceHandler: ICrmBackupHandler = {
   },
 };
 
-export { salesforceHandler, exportObjectToDestination, exportWithRetry, exportObjectToDestinationArchival, exportWithRetryArchival };
+export {
+  salesforceHandler,
+  exportObjectToDestination,
+  exportWithRetry,
+  exportObjectToDestinationArchival,
+  exportWithRetryArchival,
+};

@@ -60,6 +60,7 @@ export interface IBackupConfig {
   name?: string;
   description?: string;
   type: string; // NORMAL | ARCHIVAL
+  dataset?: "ENTIRE" | "PARTIAL";
   objectNames: string[];
   schedule: string; // REALTIME | SCHEDULE
   scheduleConfig?: IScheduleConfig;
