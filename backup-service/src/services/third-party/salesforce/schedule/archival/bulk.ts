@@ -185,7 +185,6 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
       errorMessage?: string;
       numberRecordsProcessed?: number;
     }>({ url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}` }, tokens);
-    salesforceApiCount += 1;
 
     // Persist the live record count so the dashboard can show progress
     // while Salesforce is still processing the query in the background.
@@ -193,7 +192,7 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
       latestObjects = await updateArchivalObject({
         backupJobId,
         ...(latestObjects.length ? { objects: latestObjects } : {}),
-        object: { id: object.id, salesforceApiCount, totalRecordCount: res.numberRecordsProcessed },
+        object: { id: object.id, salesforceApiCount: 1, totalRecordCount: res.numberRecordsProcessed },
       });
     }
 
@@ -440,6 +439,13 @@ async function fetchObjectAndDescend(
         },
       });
 
+      break;
+    }
+
+    if (!res.records.length && !res.done) {
+      logger.error(
+        `fetchObjectAndDescend: empty page with done=false, breaking to avoid infinite loop. ObjectName: ${object.name}`
+      );
       break;
     }
 
