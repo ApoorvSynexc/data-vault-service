@@ -147,17 +147,18 @@ const apexCountBatch = async (crmId: string, items: ICountItem[]): Promise<ICoun
 
   const result = await salesforceRequest(
     {
-      url:    `${APEX_BASE(instanceUrl)}/query-count`,
+      url:    `${APEX_BASE(instanceUrl)}/object-record-count`,
       method: 'POST',
-      body:   JSON.stringify({ items }),
+      body:   JSON.stringify({ items: items.map(({ apiName, whereClause }) => ({ apiName, whereClause })) }),
     },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
   );
 
   if (!result.data.success) {
-    throw new Error(`[query-count] request failed: ${JSON.stringify(result.data)}`);
+    throw new Error(`[object-record-count] request failed: ${JSON.stringify(result.data)}`);
   }
-  return result.data.results as ICountResult[];
+  // Apex returns results in the same order as input items; re-attach the key used for map lookups.
+  return (result.data.results as Array<Omit<ICountResult, 'key'>>).map((r, i) => ({ ...r, key: items[i].key }));
 };
 
 const apexValidateSoql = async (
