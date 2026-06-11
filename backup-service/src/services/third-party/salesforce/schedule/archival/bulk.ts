@@ -521,6 +521,8 @@ async function fetchObjectAndDescend(
     ++pageCount;
   }
 
+  // compare Schema
+
   logger.info(
     `Child Object completed, ObjectName: ${object.name} recordCount: ${completedRecordCount} pageCount: ${pageCount}`
   );

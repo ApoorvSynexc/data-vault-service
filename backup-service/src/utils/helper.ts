@@ -97,12 +97,21 @@ const buildS3KeyPrefix = ({
   type,
 }: IS3KeyPrefixParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/raw_data/${objectName}/${operation}`;
 
-const buildSchemaS3Key = (
-  crmId: string,
-  crmName: string,
-  backupConfigId: string,
-  objectName: string
-): string => `${crmName}/${crmId}/backup/${backupConfigId}/schema/${objectName}/fields.json`;
+interface ISchemaS3KeyParams {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  objectName: string;
+  type: S3KeyType;
+}
+
+const buildSchemaS3Key = ({
+  crmId,
+  crmName,
+  backupConfigId,
+  objectName,
+  type,
+}: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
 
 // ---------------------------------------------------------------------------
 // Order-independent schema equality check.
@@ -161,5 +170,6 @@ export {
   schemasAreEqual,
   parseCSVLine,
   type IS3KeyPrefixParams,
+  type ISchemaS3KeyParams,
   type S3KeyType,
 };
