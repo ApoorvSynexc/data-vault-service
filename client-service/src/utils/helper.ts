@@ -88,6 +88,85 @@ const flattenBackupObjects = (objects: IBackupObject[]): IBackupObject[] => {
   return objects.flatMap((obj) => [obj, ...(obj.children ? flattenBackupObjects(obj.children) : [])]);
 };
 
+const formatFieldValuesForSOQL = (fields: any[]): any[] => {
+  return fields.map(field => {
+    if (!field.filter) {
+      return field;
+    }
+
+    const formattedValue = formatSalesforceValueByDataType(field.filter.value, field.dataType);
+
+    return {
+      ...field,
+      filter: {
+        ...field.filter,
+        value: formattedValue
+      }
+    };
+  });
+};
+
+const formatSalesforceValueByDataType = (value: string, dataType: string): string => {
+  if (!value && value !== '0' && value !== 'false') return value;
+
+  const lowerDataType = dataType.toLowerCase();
+
+  switch (lowerDataType) {
+    case 'string':
+    case 'text':
+    case 'textarea':
+    case 'email':
+    case 'phone':
+    case 'url':
+    case 'picklist':
+    case 'multipicklist':
+      return `'${escapeSOQLString(value)}'`;
+
+    case 'date':
+      return `'${formatDate(value)}'`;
+
+    case 'datetime':
+      return `'${formatDateTime(value)}'`;
+
+    case 'integer':
+    case 'double':
+    case 'decimal':
+    case 'currency':
+    case 'percent':
+    case 'number':
+      return value;
+
+    case 'boolean':
+      return isTruthy(value) ? 'true' : 'false';
+
+    default:
+      return `'${escapeSOQLString(value)}'`;
+  }
+};
+
+const isTruthy = (value: string | boolean): boolean => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = String(value).toLowerCase().trim();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+  return Boolean(value);
+};
+
+const escapeSOQLString = (str: string): string => {
+  return str.replace(/'/g, "''");
+};
+
+const formatDate = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+};
+
+const formatDateTime = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toISOString();
+};
+
 export {
   randomNumber,
   generateTokens,
@@ -97,5 +176,6 @@ export {
   buildSlug,
   isOwner,
   timer,
+  formatSalesforceValueByDataType,
   flattenBackupObjects
 };
