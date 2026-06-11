@@ -160,6 +160,85 @@ const parseCSVLine = (line: string): string[] => {
   return result;
 };
 
+const formatFieldValuesForSOQL = (fields: any[]): any[] => {
+  return fields.map(field => {
+    if (!field.filter) {
+      return field;
+    }
+
+    const formattedValue = formatValueByDataType(field.filter.value, field.dataType);
+
+    return {
+      ...field,
+      filter: {
+        ...field.filter,
+        value: formattedValue
+      }
+    };
+  });
+};
+
+const formatValueByDataType = (value: string, dataType: string): string => {
+  if (!value && value !== '0' && value !== 'false') return value;
+
+  const lowerDataType = dataType.toLowerCase();
+
+  switch (lowerDataType) {
+    case 'string':
+    case 'text':
+    case 'textarea':
+    case 'email':
+    case 'phone':
+    case 'url':
+    case 'picklist':
+    case 'multipicklist':
+      return `'${escapeSOQLString(value)}'`;
+
+    case 'date':
+      return `'${formatDate(value)}'`;
+
+    case 'datetime':
+      return `'${formatDateTime(value)}'`;
+
+    case 'integer':
+    case 'double':
+    case 'decimal':
+    case 'currency':
+    case 'percent':
+    case 'number':
+      return value;
+
+    case 'boolean':
+      return isTruthy(value) ? 'true' : 'false';
+
+    default:
+      return `'${escapeSOQLString(value)}'`;
+  }
+};
+
+const isTruthy = (value: string | boolean): boolean => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = String(value).toLowerCase().trim();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+  return Boolean(value);
+};
+
+const escapeSOQLString = (str: string): string => {
+  return str.replace(/'/g, "''");
+};
+
+const formatDate = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+};
+
+const formatDateTime = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toISOString();
+};
+
 export {
   randomNumber,
   parseExpiryToSeconds,
@@ -169,6 +248,7 @@ export {
   toParquetDataType,
   schemasAreEqual,
   parseCSVLine,
+  formatFieldValuesForSOQL,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
   type S3KeyType,
