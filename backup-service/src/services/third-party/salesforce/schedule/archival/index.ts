@@ -429,7 +429,13 @@ export const archiveAndHardDelete = async (
       ...field,
       parquetDataType: toParquetDataType(field.dataType),
     }));
-    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    const schemaKey = buildSchemaS3Key({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'archival',
+    });
     await uploadToS3(
       destConfig,
       schemaKey,

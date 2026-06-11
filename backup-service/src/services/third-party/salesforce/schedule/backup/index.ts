@@ -201,7 +201,13 @@ export const exportFirstTime = async (
       ...field,
       parquetDataType: toParquetDataType(field.dataType),
     }));
-    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    const schemaKey = buildSchemaS3Key({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
     await uploadToS3(
       destConfig,
       schemaKey,
@@ -392,7 +398,13 @@ export const exportIncremental = async (
     // versioned files exist yet. fields.json is never overwritten — every new
     // schema version is written as a new fields_<timestamp>.json so no version
     // is ever lost.
-    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    const schemaKey = buildSchemaS3Key({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
     const schemaFolder = schemaKey.replace('/fields.json', '/');
     const allSchemaKeys = await listS3Objects(destConfig, schemaFolder);
     const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
