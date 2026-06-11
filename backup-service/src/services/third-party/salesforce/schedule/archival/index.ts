@@ -365,8 +365,6 @@ export const archiveAndHardDelete = async (
     // Skip the upload + delete phases entirely if there are no records.
     // This avoids unnecessary API calls and S3 operations for empty objects.
     if (totalRecordCount) {
-
-
       // Stream all pages of the bulk job to S3 and walk the full child tree.
       // Returns s3UrlsPerObject: Map<objectName, s3Keys[]> in insertion order
       // (parent first, deepest child last).
@@ -455,6 +453,14 @@ export const archiveAndHardDelete = async (
         const child = object.children[index];
         await fetchObjectAndDescend(backupJobId, [], child, ctx)
       }
+
+      await updateArchivalObject({
+        backupJobId,
+        object: {
+          id: object.id,
+          status: OBJECT_STATUS.completed,
+        },
+      });
     }
 
     logger.info(
