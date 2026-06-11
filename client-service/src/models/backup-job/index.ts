@@ -23,6 +23,7 @@ export interface IBackupObject {
   sizeInBytes?: number;
   currentLocator?: string;
   errorMessage?: string;
+  schemaChange?: boolean;
   children?: IBackupObject[];
 }
 
