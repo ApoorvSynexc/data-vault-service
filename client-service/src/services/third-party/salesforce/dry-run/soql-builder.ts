@@ -1,5 +1,6 @@
 import { parseQuery } from '@jetstreamapp/soql-parser-js';
-import type { ISalesforceObject, IOccurrence } from './types';
+import { formatSalesforceValueByDataType } from '../../../../utils/helper';
+import type { ISalesforceObject, IOccurrence, IFieldFilter } from './types';
 
 // ── Internal AST node shape ───────────────────────────────────────────────────
 // Mirrors the soql-parser-js AST structure we traverse; cast from the
@@ -41,28 +42,27 @@ function isDateLiteral(value: string): boolean {
   );
 }
 
-function quoteValue(value: string | number | boolean | null): string | number {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  if (value === null || value === 'null') return 'null';
-  if (typeof value === 'string' && isDateLiteral(value)) return value;
-  return `'${String(value).replace(/'/g, "\\'")}'`;
-}
-
-function buildFieldCondition(f: { name: string; filter: { value: string; operator: string } }): string {
+function buildFieldCondition(f: IFieldFilter): string {
   const { value, operator } = f.filter;
+  const { name, dataType } = f;
 
   if (operator === 'LIKE') {
-    const wrapped = String(value).includes('%') ? value : `%${value}%`;
-    return `${f.name} LIKE '${String(wrapped).replace(/'/g, "\\'")}'`;
+    const escaped = String(value).replace(/'/g, "''");
+    const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
+    return `${name} LIKE '${wrapped}'`;
   }
 
   if (operator === 'IN') {
-    const values = Array.isArray(value) ? value : [value];
-    return `${f.name} IN (${values.map(v => quoteValue(v)).join(', ')})`;
+    const values = String(value).split(',').map(v => v.trim()).filter(Boolean);
+    return `${name} IN (${values.map(v => formatSalesforceValueByDataType(v, dataType)).join(', ')})`;
   }
 
-  return `${f.name} ${operator} ${quoteValue(value)}`;
+  const ldt = dataType.toLowerCase();
+  if ((ldt === 'date' || ldt === 'datetime') && isDateLiteral(value)) {
+    return `${name} ${operator} ${value}`;
+  }
+
+  return `${name} ${operator} ${formatSalesforceValueByDataType(value, dataType)}`;
 }
 
 // ── Own WHERE body ────────────────────────────────────────────────────────────

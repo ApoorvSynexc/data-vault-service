@@ -6,6 +6,7 @@ export type FilterOperator = '=' | '!=' | 'LIKE' | 'IN';
 
 export interface IFieldFilter {
   name: string;
+  dataType: string;
   filter: {
     value: string;
     operator: FilterOperator;
@@ -81,6 +82,7 @@ export interface IDryRunObjectResult {
 
 export interface IDryRunResult {
   objects: IDryRunObjectResult[];
+  apiCallCount: number;
 }
 
 // ── validate-soql types ───────────────────────────────────────────────────────
