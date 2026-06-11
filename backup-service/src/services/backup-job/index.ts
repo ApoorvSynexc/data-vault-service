@@ -315,7 +315,7 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
 
 const recursivelyUpdateObjects = async (
   objects: IBackupObject[],
-  object: { id: string; [key: string]: string | number }
+  object: { id: string; [key: string]: string | number | boolean }
 ): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
@@ -358,7 +358,7 @@ const updateArchivalObject = async ({
   objects,
 }: {
   backupJobId: string;
-  object: { id: string; [key: string]: string | number };
+  object: { id: string; [key: string]: string | number | boolean };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
   let objectsPayload: IBackupObject[];

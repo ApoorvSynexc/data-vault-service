@@ -100,6 +100,6 @@ export interface IBackupJob {
   operation?: string;
   recordCount?: number;
   s3Path?: string;
-  schemaChanged?: boolean;
+  schemaChange?: boolean;
   sizeInBytes?: number;
 }
