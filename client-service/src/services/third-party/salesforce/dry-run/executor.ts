@@ -1,181 +1,165 @@
-import { apexCountBatch } from '../apex';
-import { buildDotNotationWhere, buildOwnWhereBody } from './soql-builder';
-import { analyzeOccurrence } from './pivot-analyzer';
-import { buildHybridWhere } from './hybrid-where-builder';
-import { harvestIds } from './id-harvester';
-import type {
-  IDryRunPayload,
-  IDryRunResult,
-  IDryRunObjectResult,
-  ICountItem,
-  ISalesforceObject,
-  IOccurrence,
-} from './types';
+import { apexCountOne, apexHarvestIds } from '../apex';
+import { buildOwnWhereBody } from './soql-builder';
+import type { IDryRunPayload, IDryRunResult, IDryRunObjectResult, ISalesforceObject } from './types';
 
-const BATCH_SIZE = 20;
+// Apex enforces a 10 000-ID ceiling per request; IDs beyond this are chunked.
+const MAX_IDS_PER_REQUEST = 10_000;
 
-// ── Tree flattening ───────────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
-function _flattenTree(
-  objects: ISalesforceObject[],
-  ancestors: ISalesforceObject[],
-  out: IOccurrence[]
-): void {
-  for (const obj of objects) {
-    out.push({
-      ...obj,
-      parentObjectName: ancestors.length ? ancestors[ancestors.length - 1].name : null,
-      depth: ancestors.length,
-      ancestorChain: ancestors,
-    });
-    if (obj.children?.length) {
-      _flattenTree(obj.children, [...ancestors, obj], out);
-    }
-  }
+type Counter = { apiCallCount: number };
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }
 
-// ── Batch counting ────────────────────────────────────────────────────────────
-
-interface ICountEntry {
-  count: number | null;
-  success: boolean;
-  error?: string;
-}
-
-async function _runCountBatches(
-  crmId: string,
-  items: ICountItem[]
-): Promise<Map<string, ICountEntry>> {
-  const resultMap = new Map<string, ICountEntry>();
-
-  for (let i = 0; i < items.length; i += BATCH_SIZE) {
-    const batch = items.slice(i, i + BATCH_SIZE);
-    const results = await apexCountBatch(crmId, batch);
-    for (const r of results) {
-      resultMap.set(r.key, {
-        count: r.recordCount,
-        success: r.success,
-        error: r.errorMessage ?? (r.errorCode ? `Error code: ${r.errorCode}` : undefined),
-      });
-    }
-  }
-
-  return resultMap;
-}
-
-// ── Result reconstruction ─────────────────────────────────────────────────────
-
-function _buildObjectResult(
-  obj: ISalesforceObject,
-  ancestors: ISalesforceObject[],
-  countMap: Map<string, ICountEntry>
-): IDryRunObjectResult {
-  const entry = countMap.get(obj.id);
-  const result: IDryRunObjectResult = {
-    id: obj.id,
-    name: obj.name,
-    count: entry?.count ?? null,
-    success: entry?.success ?? false,
-  };
-
-  if (entry?.error) { result.error = entry.error; }
-
-  if (obj.children?.length) {
-    result.children = obj.children.map(child =>
-      _buildObjectResult(child, [...ancestors, obj], countMap)
-    );
-  }
-
+// Recursively builds a zero-count result tree without any API calls.
+// Used to short-circuit entire subtrees when a parent has 0 matching records.
+function buildZeroResult(obj: ISalesforceObject): IDryRunObjectResult {
+  const result: IDryRunObjectResult = { id: obj.id, name: obj.name, count: 0, success: true };
+  if (obj.children?.length) result.children = obj.children.map(buildZeroResult);
   return result;
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Apex helpers (chunking is transparent to callers) ─────────────────────────
+
+// Harvest all child IDs across potentially chunked parent ID batches.
+async function harvestByParentIds(
+  crmId: string,
+  apiName: string,
+  parentFieldName: string,
+  parentIds: string[],
+  counter: Counter
+): Promise<string[]> {
+  const pages = await Promise.all(
+    chunkArray(parentIds, MAX_IDS_PER_REQUEST).map(chunk =>
+      apexHarvestIds(crmId, apiName, { parentFieldName, ids: chunk })
+    )
+  );
+  const allIds: string[] = [];
+  for (const page of pages) {
+    allIds.push(...page.ids);
+    counter.apiCallCount += page.callCount;
+  }
+  return allIds;
+}
+
+// Count leaf records across potentially chunked parent ID batches, summing results.
+async function countByParentIds(
+  crmId: string,
+  apiName: string,
+  parentFieldName: string,
+  parentIds: string[],
+  counter: Counter
+): Promise<{ count: number; success: boolean; errorCode?: string; errorMessage?: string }> {
+  const results = await Promise.all(
+    chunkArray(parentIds, MAX_IDS_PER_REQUEST).map(chunk =>
+      apexCountOne(crmId, apiName, { parentFieldName, ids: chunk })
+    )
+  );
+  counter.apiCallCount += results.length;
+
+  let total = 0;
+  for (const r of results) {
+    if (!r.success) return { count: 0, success: false, errorCode: r.errorCode, errorMessage: r.errorMessage };
+    total += r.count ?? 0;
+  }
+  return { count: total, success: true };
+}
+
+// ── Tree traversal ────────────────────────────────────────────────────────────
 
 export async function executeDryRun(payload: IDryRunPayload): Promise<IDryRunResult> {
-  const occurrences: IOccurrence[] = [];
-  _flattenTree(payload.objects, [], occurrences);
+  const counter: Counter = { apiCallCount: 0 };
+  const objects = await Promise.all(
+    payload.objects.map(obj => processNode(payload.crmId, obj, null, null, counter))
+  );
+  return { objects, apiCallCount: counter.apiCallCount };
+}
 
-  // Classify ancestors for each node: dot-notation (≤5 hops, no semi-join) vs ID harvest
-  const pivotResults = occurrences.map(occ => analyzeOccurrence(occ));
-
-  // Collect unique ancestor objects that need ID harvesting
-  const toHarvest = new Map<string, string>(); // objectName → whereClause
-  for (let idx = 0; idx < occurrences.length; idx++) {
-    const occ = occurrences[idx];
-    for (const i of pivotResults[idx].idHarvestAncestors) {
-      const ancestor = occ.ancestorChain[i];
-      if (!toHarvest.has(ancestor.name)) {
-        const ancOcc = occurrences.find(o => o.id === ancestor.id);
-        const where = ancOcc
-          ? buildDotNotationWhere(ancOcc, ancOcc.ancestorChain) ?? ''
-          : buildOwnWhereBody(ancestor) ?? '';
-        toHarvest.set(ancestor.name, where);
-      }
-    }
+async function processNode(
+  crmId: string,
+  obj: ISalesforceObject,
+  parentIds: string[] | null,
+  parentFieldName: string | null,
+  counter: Counter
+): Promise<IDryRunObjectResult> {
+  // A child node must declare the lookup field that connects it to its parent.
+  if (parentIds !== null && !parentFieldName) {
+    return {
+      id: obj.id, name: obj.name, count: null, success: false,
+      error: `Object "${obj.name}" is missing fieldApiName — cannot filter by parent IDs`,
+    };
   }
 
-  // Harvest IDs in parallel for all worst-case ancestors
-  const harvestedIds = new Map<string, string[]>();
-  if (toHarvest.size > 0) {
-    const entries = [...toHarvest.entries()];
-    const results = await Promise.all(
-      entries.map(([name, where]) =>
-        harvestIds(payload.crmId, name, where).then(ids => ({ name, ids }))
-      )
-    );
-    for (const { name, ids } of results) {
-      harvestedIds.set(name, ids);
-    }
+  try {
+    return obj.children?.length
+      ? await processParent(crmId, obj, parentIds, parentFieldName, counter)
+      : await processLeaf(crmId, obj, parentIds, parentFieldName, counter);
+  } catch (err: any) {
+    return { id: obj.id, name: obj.name, count: null, success: false, error: err?.message ?? String(err) };
+  }
+}
+
+// Non-leaf: harvest this object's IDs (count = ids.length), then recurse into children.
+async function processParent(
+  crmId: string,
+  obj: ISalesforceObject,
+  parentIds: string[] | null,
+  parentFieldName: string | null,
+  counter: Counter
+): Promise<IDryRunObjectResult> {
+  let ids: string[];
+
+  if (parentFieldName) {
+    if (!parentIds!.length) return buildZeroResult(obj);
+    ids = await harvestByParentIds(crmId, obj.name, parentFieldName, parentIds!, counter);
+  } else {
+    // Root node: harvest using the object's own configured WHERE clause.
+    const harvested = await apexHarvestIds(crmId, obj.name, { whereClause: buildOwnWhereBody(obj) ?? undefined });
+    counter.apiCallCount += harvested.callCount;
+    ids = harvested.ids;
   }
 
-  // Build count items — hybrid path may produce multiple items per node (chunked IN-lists)
-  const countItems: ICountItem[] = [];
-  const chunkKeyToNodeId = new Map<string, string>(); // synthetic key → node id
+  // Children are independent once this level's IDs are known — process in parallel.
+  const children = await Promise.all(
+    obj.children!.map(child =>
+      processNode(crmId, child, ids, child.fieldApiName ?? null, counter)
+    )
+  );
 
-  for (let idx = 0; idx < occurrences.length; idx++) {
-    const occ = occurrences[idx];
-    const pivot = pivotResults[idx];
+  return { id: obj.id, name: obj.name, count: ids.length, success: true, children };
+}
 
-    if (pivot.idHarvestAncestors.length === 0) {
-      countItems.push({
-        key:         occ.id,
-        apiName:     occ.name,
-        whereClause: buildDotNotationWhere(occ, occ.ancestorChain) ?? '',
-      });
-      chunkKeyToNodeId.set(occ.id, occ.id);
-    } else {
-      const whereClauses = buildHybridWhere(occ, pivot, harvestedIds);
-      whereClauses.forEach((where, ci) => {
-        const key = ci === 0 ? occ.id : `${occ.id}::chunk${ci}`;
-        countItems.push({
-          key,
-          apiName:     occ.name,
-          whereClause: where.replace(/^WHERE\s+/i, '').trim(),
-        });
-        chunkKeyToNodeId.set(key, occ.id);
-      });
-    }
+// Leaf: count only — no IDs need to be stored or passed further.
+async function processLeaf(
+  crmId: string,
+  obj: ISalesforceObject,
+  parentIds: string[] | null,
+  parentFieldName: string | null,
+  counter: Counter
+): Promise<IDryRunObjectResult> {
+  if (parentFieldName) {
+    if (!parentIds!.length) return { id: obj.id, name: obj.name, count: 0, success: true };
+
+    const r = await countByParentIds(crmId, obj.name, parentFieldName, parentIds!, counter);
+    return {
+      id: obj.id, name: obj.name,
+      count: r.success ? r.count : null,
+      success: r.success,
+      ...(r.errorMessage && { error: r.errorMessage }),
+    };
   }
 
-  const rawMap = await _runCountBatches(payload.crmId, countItems);
-
-  // Aggregate chunked counts back to node IDs
-  const countMap = new Map<string, ICountEntry>();
-  for (const [key, entry] of rawMap) {
-    const nodeId = chunkKeyToNodeId.get(key) ?? key;
-    const existing = countMap.get(nodeId);
-    if (!existing) {
-      countMap.set(nodeId, { ...entry });
-    } else {
-      existing.count = (existing.count ?? 0) + (entry.count ?? 0);
-      if (!entry.success) {
-        existing.success = false;
-        if (entry.error) { existing.error = entry.error; }
-      }
-    }
-  }
-
+  // Root leaf: count using the object's own configured WHERE clause.
+  const r = await apexCountOne(crmId, obj.name, { whereClause: buildOwnWhereBody(obj) ?? undefined });
+  counter.apiCallCount += 1;
   return {
-    objects: payload.objects.map(obj => _buildObjectResult(obj, [], countMap)),
+    id: obj.id, name: obj.name,
+    count: r.success ? r.count : null,
+    success: r.success,
+    ...(r.errorMessage && { error: r.errorMessage }),
   };
 }
