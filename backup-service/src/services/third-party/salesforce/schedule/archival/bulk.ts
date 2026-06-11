@@ -540,6 +540,7 @@ async function fetchObjectAndDescend(
     const schemaFolder = schemaKey.replace('/fields.json', '/');
     const allSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
     const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
+    const schemaExists = allSchemaKeys.length > 0;
     const currentSchemaKey =
       versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
 
@@ -548,29 +549,34 @@ async function fetchObjectAndDescend(
       parquetDataType: toParquetDataType(field.dataType),
     }));
 
-    let schemaChanged = false;
-    try {
-      const existingSchemaBuffer = await downloadFromS3(ctx.destConfig, currentSchemaKey);
-      schemaChanged =
-        !existingSchemaBuffer ||
-        !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchemaWithParquet);
-    } catch {
-      schemaChanged = true;
-    }
-
-    if (schemaChanged) {
+    if (!schemaExists) {
       const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
-      const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
-      await uploadToS3(ctx.destConfig, versionedKey, newSchemaBuffer);
-      logger.info(`Child Object schema change detected, backupConfigId:${ctx.backupConfigId} backupJobId:${backupJobId} objectName:${object.name}`);
+      await uploadToS3(ctx.destConfig, schemaKey, newSchemaBuffer);
+    } else {
+      let schemaChanged = false;
+      try {
+        const existingSchemaBuffer = await downloadFromS3(ctx.destConfig, currentSchemaKey);
+        schemaChanged =
+          !existingSchemaBuffer ||
+          !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchemaWithParquet);
+      } catch {
+        schemaChanged = true;
+      }
 
-      await updateArchivalObject({
-        backupJobId,
-        object: {
-          id: object.id,
-          schemaChange: true,
-        },
-      });
+      if (schemaChanged) {
+        const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
+        const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
+        await uploadToS3(ctx.destConfig, versionedKey, newSchemaBuffer);
+        logger.info(`Child Object schema change detected, backupConfigId:${ctx.backupConfigId} backupJobId:${backupJobId} objectName:${object.name}`);
+
+        await updateArchivalObject({
+          backupJobId,
+          object: {
+            id: object.id,
+            schemaChange: true,
+          },
+        });
+      }
     }
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
