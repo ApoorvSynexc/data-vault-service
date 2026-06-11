@@ -101,6 +101,72 @@ export function hasSubquery(whereBody: string): boolean {
   );
 }
 
+// ── Child WHERE builder ───────────────────────────────────────────────────────
+// Transforms a parent's WHERE body into a child's WHERE body using dot-notation.
+// Each field reference is prefixed with parentFieldApiName.
+// Special case: 'Id' field → parentFieldApiName alone (FK itself, not FK.Id).
+//
+// e.g. "Owner.Email != null AND Status = 'Active'", "AccountId"
+//    → "AccountId.Owner.Email != null AND AccountId.Status = 'Active'"
+//
+// e.g. "Id != null AND Owner.Email != null", "AccountId"
+//    → "AccountId != null AND AccountId.Owner.Email != null"
+
+function renderChildLeaf(node: WhereNode, prefix: string): string {
+  const open  = '('.repeat(node.openParen  || 0);
+  const close = ')'.repeat(node.closeParen || 0);
+  const field = node.field === 'Id' ? prefix : `${prefix}.${node.field}`;
+
+  if (node.literalType === 'SUBQUERY') {
+    return `${open}${field} ${node.operator} (${rebuildSubquery(node.valueQuery!)})${close}`;
+  }
+  if (Array.isArray(node.value)) {
+    return `${open}${field} ${node.operator} (${node.value.join(', ')})${close}`;
+  }
+  return `${open}${field} ${node.operator} ${node.value}${close}`;
+}
+
+function rebuildChildWhere(node: WhereNode | null | undefined, prefix: string): string {
+  if (!node) { return ''; }
+  if (node.field) { return renderChildLeaf(node, prefix); }
+  const left  = rebuildChildWhere(node.left,  prefix);
+  const right = node.right ? rebuildChildWhere(node.right, prefix) : '';
+  if (!right) { return left; }
+  return `${left} ${node.operator} ${right}`;
+}
+
+export function buildChildWhereBody(parentWhereBody: string, parentFieldApiName: string): string {
+  const normalized = parentWhereBody.trim().replace(/^WHERE\s+/i, '');
+  try {
+    const ast = parseQuery(`SELECT Id FROM X WHERE ${normalized}`);
+    if (!ast.where) { return `${parentFieldApiName} != null`; }
+    return rebuildChildWhere(ast.where as unknown as WhereNode, parentFieldApiName);
+  } catch {
+    return `${parentFieldApiName} != null`;
+  }
+}
+
+// ── Relationship depth analysis ───────────────────────────────────────────────
+// Returns the maximum number of relationship traversals (dots) across all
+// field references in a WHERE clause body.
+// e.g. "Owner.Profile.Name = 'Admin'"              → 2
+//      "Contact.Account.Owner.Profile.Name = 'X'"  → 4
+
+function walkMaxDepth(node: WhereNode | null | undefined): number {
+  if (!node) { return 0; }
+  if (node.field) { return (node.field.match(/\./g) ?? []).length; }
+  return Math.max(walkMaxDepth(node.left), walkMaxDepth(node.right));
+}
+
+export function getMaxRelationshipDepth(whereBody: string): number {
+  try {
+    const ast = parseQuery(`SELECT Id FROM X WHERE ${whereBody}`);
+    return walkMaxDepth(ast.where as unknown as WhereNode);
+  } catch {
+    return 0;
+  }
+}
+
 // ── Relationship path helpers ─────────────────────────────────────────────────
 
 function toRelationshipName(fieldApiName: string): string {

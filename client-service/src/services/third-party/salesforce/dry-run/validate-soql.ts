@@ -1,6 +1,6 @@
 import { parseQuery } from '@jetstreamapp/soql-parser-js';
 import { apexValidateSoql } from '../apex';
-import { buildOwnWhereBody } from './soql-builder';
+import { buildOwnWhereBody, getMaxRelationshipDepth } from './soql-builder';
 import type { IValidateSoqlPayload, IValidateSoqlItem } from './types';
 
 export async function validateSoql(payload: IValidateSoqlPayload): Promise<IValidateSoqlItem> {
@@ -40,7 +40,7 @@ export async function validateSoql(payload: IValidateSoqlPayload): Promise<IVali
   const response = await apexValidateSoql(crmId, object.name, whereClause);
 
   if (response.isValid) {
-    return { whereClause, isValid: true };
+    return { whereClause, isValid: true, relationshipDepth: getMaxRelationshipDepth(whereClause) };
   }
 
   return {

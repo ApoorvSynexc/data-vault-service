@@ -278,6 +278,7 @@ export const archiveAndHardDelete = async (
   let backupConfig;
   let totalRecordCount: number;
   let jobId: string;
+  const whereClause = buildWhereClause(object);
 
   try {
     // Fetch the object's full field list and schema upfront.
@@ -307,7 +308,6 @@ export const archiveAndHardDelete = async (
       // Build the SOQL query. buildWhereClause returns a validated WHERE
       // clause based on the user's configured field filters, or an empty
       // string if no filters are set (meaning: export all records).
-      const whereClause = buildWhereClause(object);
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
 
       // Submit the async Bulk Query job to Salesforce. This returns a job ID
@@ -379,6 +379,7 @@ export const archiveAndHardDelete = async (
         crmId,
         crmName,
         backupConfigId,
+        parentWhereBody: whereClause.replace(/^WHERE\s+/i, '').trim(),
         // Allow resuming from the last saved locator if this is a retry.
         startLocator: object.currentLocator ?? null,
         startCompletedRecordCount: object.completedRecordCount ?? 0,
@@ -451,7 +452,7 @@ export const archiveAndHardDelete = async (
       };
       for (let index = 0; index < object.children.length; index++) {
         const child = object.children[index];
-        await fetchObjectAndDescend(backupJobId, [], child, ctx)
+        await fetchObjectAndDescend(backupJobId, '', child, ctx)
       }
 
       await updateArchivalObject({
