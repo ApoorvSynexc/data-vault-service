@@ -30,8 +30,13 @@ import {
   makePageFetcher,
   getObjectMetadata,
 } from '../../api-request';
-import { uploadToS3 } from '../../../../destination';
-import { buildS3KeyPrefix } from '../../../../../utils/helper';
+import { uploadToS3, downloadFromS3, listS3Objects } from '../../../../destination';
+import {
+  buildS3KeyPrefix,
+  buildSchemaS3Key,
+  toParquetDataType,
+  schemasAreEqual,
+} from '../../../../../utils/helper';
 import { randomUUID } from 'crypto';
 
 // Salesforce API version used for all REST and Bulk API calls in this module.
@@ -521,7 +526,56 @@ async function fetchObjectAndDescend(
     ++pageCount;
   }
 
-  // compare Schema
+  // Schema comparison: check if schema exists in S3, compare if found, and update if changed
+  try {
+    const { schema } = await getObjectMetadata(ctx.tokens.crmId, object.name);
+    const schemaKey = buildSchemaS3Key({
+      crmId: ctx.crmId,
+      crmName: ctx.crmName,
+      backupConfigId: ctx.backupConfigId,
+      objectName: object.name,
+      type: 'archival',
+    });
+
+    const schemaFolder = schemaKey.replace('/fields.json', '/');
+    const allSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
+    const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
+    const currentSchemaKey =
+      versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
+
+    const latestSchemaWithParquet = schema.map((field: { dataType: string }) => ({
+      ...field,
+      parquetDataType: toParquetDataType(field.dataType),
+    }));
+
+    let schemaChanged = false;
+    try {
+      const existingSchemaBuffer = await downloadFromS3(ctx.destConfig, currentSchemaKey);
+      schemaChanged =
+        !existingSchemaBuffer ||
+        !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchemaWithParquet);
+    } catch {
+      schemaChanged = true;
+    }
+
+    if (schemaChanged) {
+      const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
+      const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
+      await uploadToS3(ctx.destConfig, versionedKey, newSchemaBuffer);
+      logger.info(`Child Object schema change detected, backupConfigId:${ctx.backupConfigId} backupJobId:${backupJobId} objectName:${object.name}`);
+
+      await updateArchivalObject({
+        backupJobId,
+        object: {
+          id: object.id,
+          schemaChange: true,
+        },
+      });
+    }
+  } catch (err: any) {
+    const errorMsg = err?.message ?? String(err);
+    logger.error(`Child Object schema comparison failed, backupConfigId:${ctx.backupConfigId} backupJobId:${backupJobId} objectName:${object.name} error:${errorMsg}`);
+  }
 
   logger.info(
     `Child Object completed, ObjectName: ${object.name} recordCount: ${completedRecordCount} pageCount: ${pageCount}`
