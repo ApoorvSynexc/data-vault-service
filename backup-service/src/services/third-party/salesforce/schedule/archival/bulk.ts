@@ -395,7 +395,7 @@ async function fetchObjectAndDescend(
         completedRecordCount,
         salesforceApiCount: 0,
         sizeInBytes: totalSizeInBytes,
-        status: OBJECT_STATUS.uploadCompleted,
+        status: OBJECT_STATUS.completed,
         errorMessage: '',
       },
     });
