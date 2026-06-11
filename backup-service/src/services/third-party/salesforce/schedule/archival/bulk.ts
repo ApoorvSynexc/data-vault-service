@@ -526,62 +526,65 @@ async function fetchObjectAndDescend(
     ++pageCount;
   }
 
-  // Schema comparison: check if schema exists in S3, compare if found, and update if changed
-  try {
-    const { schema } = await getObjectMetadata(ctx.tokens.crmId, object.name);
-    const schemaKey = buildSchemaS3Key({
-      crmId: ctx.crmId,
-      crmName: ctx.crmName,
-      backupConfigId: ctx.backupConfigId,
-      objectName: object.name,
-      type: 'archival',
-    });
+  if (completedRecordCount) {
+    // Schema comparison: check if schema exists in S3, compare if found, and update if changed
+    try {
+      const { schema } = await getObjectMetadata(ctx.tokens.crmId, object.name);
+      const schemaKey = buildSchemaS3Key({
+        crmId: ctx.crmId,
+        crmName: ctx.crmName,
+        backupConfigId: ctx.backupConfigId,
+        objectName: object.name,
+        type: 'archival',
+      });
 
-    const schemaFolder = schemaKey.replace('/fields.json', '/');
-    const allSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
-    const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
-    const schemaExists = allSchemaKeys.length > 0;
-    const currentSchemaKey =
-      versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
+      const schemaFolder = schemaKey.replace('/fields.json', '/');
+      const allSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
+      const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
+      const schemaExists = allSchemaKeys.length > 0;
+      const currentSchemaKey =
+        versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
 
-    const latestSchemaWithParquet = schema.map((field: { dataType: string }) => ({
-      ...field,
-      parquetDataType: toParquetDataType(field.dataType),
-    }));
+      const latestSchemaWithParquet = schema.map((field: { dataType: string }) => ({
+        ...field,
+        parquetDataType: toParquetDataType(field.dataType),
+      }));
 
-    if (!schemaExists) {
-      const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
-      await uploadToS3(ctx.destConfig, schemaKey, newSchemaBuffer);
-    } else {
-      let schemaChanged = false;
-      try {
-        const existingSchemaBuffer = await downloadFromS3(ctx.destConfig, currentSchemaKey);
-        schemaChanged =
-          !existingSchemaBuffer ||
-          !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchemaWithParquet);
-      } catch {
-        schemaChanged = true;
-      }
-
-      if (schemaChanged) {
+      if (!schemaExists) {
         const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
-        const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
-        await uploadToS3(ctx.destConfig, versionedKey, newSchemaBuffer);
-        logger.info(`Child Object schema change detected, backupConfigId:${ctx.backupConfigId} backupJobId:${backupJobId} objectName:${object.name}`);
+        await uploadToS3(ctx.destConfig, schemaKey, newSchemaBuffer);
+      } else {
+        let schemaChanged = false;
+        try {
+          const existingSchemaBuffer = await downloadFromS3(ctx.destConfig, currentSchemaKey);
+          schemaChanged =
+            !existingSchemaBuffer ||
+            !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchemaWithParquet);
+        } catch {
+          schemaChanged = true;
+        }
 
-        await updateArchivalObject({
-          backupJobId,
-          object: {
-            id: object.id,
-            schemaChange: true,
-          },
-        });
+        if (schemaChanged) {
+          const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
+          const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
+          await uploadToS3(ctx.destConfig, versionedKey, newSchemaBuffer);
+          logger.info(`Child Object schema change detected, backupConfigId:${ctx.backupConfigId} backupJobId:${backupJobId} objectName:${object.name}`);
+
+          await updateArchivalObject({
+            backupJobId,
+            object: {
+              id: object.id,
+              schemaChange: true,
+            },
+          });
+        }
       }
+    } catch (err: any) {
+      const errorMsg = err?.message ?? String(err);
+      logger.error(`Child Object schema comparison failed, backupConfigId:${ctx.backupConfigId} backupJobId:${backupJobId} objectName:${object.name} error:${errorMsg}`);
     }
-  } catch (err: any) {
-    const errorMsg = err?.message ?? String(err);
-    logger.error(`Child Object schema comparison failed, backupConfigId:${ctx.backupConfigId} backupJobId:${backupJobId} objectName:${object.name} error:${errorMsg}`);
   }
+
 
   logger.info(
     `Child Object completed, ObjectName: ${object.name} recordCount: ${completedRecordCount} pageCount: ${pageCount}`
@@ -693,7 +696,7 @@ const uploadBulkResultsByPageArchival = async (
 
   try {
     // Signal to the UI that data transfer has started for this object.
-     await updateArchivalObject({
+    await updateArchivalObject({
       backupJobId,
       object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
     });
@@ -736,7 +739,7 @@ const uploadBulkResultsByPageArchival = async (
       ids.push(...pageIds);
 
       if (object.children?.length) {
-        for (const child of object.children) {
+        for await (const child of object.children) {
           // Chunk the page's IDs into groups of 200 to respect the
           // SOQL IN() clause URL-length limit on child queries.
           for (const chunk of chunkIds(pageIds, CHILD_ID_CHUNK_SIZE)) {
@@ -761,7 +764,7 @@ const uploadBulkResultsByPageArchival = async (
       // Persist the locator and counts after every page.
       // If the process crashes mid-run, the next attempt can resume from
       // the last saved locator instead of reprocessing everything from scratch.
-     await updateArchivalObject({
+      await updateArchivalObject({
         backupJobId,
         object: {
           id: object.id,
@@ -789,4 +792,4 @@ const uploadBulkResultsByPageArchival = async (
   return { ids, s3UrlsPerObject };
 };
 
-export { pollBulkJobArchival, uploadBulkResultsByPageArchival };
+export { pollBulkJobArchival, uploadBulkResultsByPageArchival, fetchObjectAndDescend };

@@ -29,7 +29,7 @@ import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { recursivelyUpdateObjects, updateArchivalObject } from '../../../../backup-job';
 import { buildS3KeyPrefix, buildSchemaS3Key, toParquetDataType } from '../../../../../utils/helper';
 import { uploadToS3 } from '../../../../destination/s3';
-import { pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
+import { fetchObjectAndDescend, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 // import { bulkDeleteRecords } from './delete-bulk';
@@ -349,22 +349,23 @@ export const archiveAndHardDelete = async (
     logger.info(
       `Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`
     );
+    // Base S3 key path for this parent object's uploaded pages.
+    // Child objects build their own paths inside uploadBulkResultsByPageArchival.
+    const archivePrefix = buildS3KeyPrefix({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      operation: 'inserts',
+      type: 'archival',
+    });
 
     // --- Phase 2: Upload records to S3 ---
 
     // Skip the upload + delete phases entirely if there are no records.
     // This avoids unnecessary API calls and S3 operations for empty objects.
     if (totalRecordCount) {
-      // Base S3 key path for this parent object's uploaded pages.
-      // Child objects build their own paths inside uploadBulkResultsByPageArchival.
-      const archivePrefix = buildS3KeyPrefix({
-        crmId,
-        crmName,
-        backupConfigId,
-        objectName,
-        operation: 'inserts',
-        type: 'archival',
-      });
+
 
       // Stream all pages of the bulk job to S3 and walk the full child tree.
       // Returns s3UrlsPerObject: Map<objectName, s3Keys[]> in insertion order
@@ -419,28 +420,42 @@ export const archiveAndHardDelete = async (
       //         });
       //     }
       // }
-    }
 
-    // --- Schema upload ---
-    // Store the object's field schema (with Parquet type mappings) to S3.
-    // This allows downstream ETL / analytics tools to understand the column
-    // types without having to re-query Salesforce metadata.
-    const schemaWithParquet = schema.map((field: { dataType: string }) => ({
-      ...field,
-      parquetDataType: toParquetDataType(field.dataType),
-    }));
-    const schemaKey = buildSchemaS3Key({
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      type: 'archival',
-    });
-    await uploadToS3(
-      destConfig,
-      schemaKey,
-      Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
-    );
+      // --- Schema upload ---
+      // Store the object's field schema (with Parquet type mappings) to S3.
+      // This allows downstream ETL / analytics tools to understand the column
+      // types without having to re-query Salesforce metadata.
+      const schemaWithParquet = schema.map((field: { dataType: string }) => ({
+        ...field,
+        parquetDataType: toParquetDataType(field.dataType),
+      }));
+      const schemaKey = buildSchemaS3Key({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        type: 'archival',
+      });
+      await uploadToS3(
+        destConfig,
+        schemaKey,
+        Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
+      );
+    } else if (object.children?.length) {
+      const ctx = {
+        instanceUrl,
+        tokens,
+        destConfig,
+        s3KeyPrefix: archivePrefix,
+        crmId,
+        crmName,
+        backupConfigId,
+      };
+      for (let index = 0; index < object.children.length; index++) {
+        const child = object.children[index];
+        await fetchObjectAndDescend(backupJobId, [], child, ctx)
+      }
+    }
 
     logger.info(
       `Object archival complete, backupConfigId:${backupConfigId}, backupJobId${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`
