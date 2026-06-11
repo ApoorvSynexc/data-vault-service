@@ -103,4 +103,5 @@ export interface IValidateSoqlItem {
   whereClause: string | null;
   isValid: boolean;
   error?: string;
+  relationshipDepth?: number;
 }
