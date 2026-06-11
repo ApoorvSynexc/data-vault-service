@@ -112,10 +112,14 @@ export function hasSubquery(whereBody: string): boolean {
 // e.g. "Id != null AND Owner.Email != null", "AccountId"
 //    → "AccountId != null AND AccountId.Owner.Email != null"
 
-function renderChildLeaf(node: WhereNode, prefix: string): string {
+// fieldApiName — the actual FK field on the child (e.g. "Test_1__c", "AccountId")
+//   used only for the Id special-case: parent "Id = 'x'" → child "Test_1__c = 'x'"
+// relName — the relationship traversal name (e.g. "Test_1__r", "Account")
+//   used for all other fields: parent "Name = 'Acme'" → child "Test_1__r.Name = 'Acme'"
+function renderChildLeaf(node: WhereNode, fieldApiName: string, relName: string): string {
   const open  = '('.repeat(node.openParen  || 0);
   const close = ')'.repeat(node.closeParen || 0);
-  const field = node.field === 'Id' ? prefix : `${prefix}.${node.field}`;
+  const field = node.field === 'Id' ? fieldApiName : `${relName}.${node.field}`;
 
   if (node.literalType === 'SUBQUERY') {
     return `${open}${field} ${node.operator} (${rebuildSubquery(node.valueQuery!)})${close}`;
@@ -126,21 +130,22 @@ function renderChildLeaf(node: WhereNode, prefix: string): string {
   return `${open}${field} ${node.operator} ${node.value}${close}`;
 }
 
-function rebuildChildWhere(node: WhereNode | null | undefined, prefix: string): string {
+function rebuildChildWhere(node: WhereNode | null | undefined, fieldApiName: string, relName: string): string {
   if (!node) { return ''; }
-  if (node.field) { return renderChildLeaf(node, prefix); }
-  const left  = rebuildChildWhere(node.left,  prefix);
-  const right = node.right ? rebuildChildWhere(node.right, prefix) : '';
+  if (node.field) { return renderChildLeaf(node, fieldApiName, relName); }
+  const left  = rebuildChildWhere(node.left,  fieldApiName, relName);
+  const right = node.right ? rebuildChildWhere(node.right, fieldApiName, relName) : '';
   if (!right) { return left; }
   return `${left} ${node.operator} ${right}`;
 }
 
 export function buildChildWhereBody(parentWhereBody: string, parentFieldApiName: string): string {
   const normalized = parentWhereBody.trim().replace(/^WHERE\s+/i, '');
+  const relName = toRelationshipName(parentFieldApiName);
   try {
     const ast = parseQuery(`SELECT Id FROM X WHERE ${normalized}`);
     if (!ast.where) { return `${parentFieldApiName} != null`; }
-    return rebuildChildWhere(ast.where as unknown as WhereNode, parentFieldApiName);
+    return rebuildChildWhere(ast.where as unknown as WhereNode, parentFieldApiName, relName);
   } catch {
     return `${parentFieldApiName} != null`;
   }

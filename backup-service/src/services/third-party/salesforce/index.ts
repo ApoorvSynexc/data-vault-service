@@ -67,7 +67,11 @@ const exportObjectToDestinationArchival = async (
   destinationType: string,
   destConfig: IDestinationConfig
 ): Promise<void> => {
+  logger.info(`[archival:payload] received | backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${object.name} status:${object.status ?? 'none'}`);
+  logger.info(`[archival:payload] full object | ${JSON.stringify(object, null, 2)}`);
+
   if (object.status === OBJECT_STATUS.completed) {
+    logger.info(`[archival:payload] skipping — already completed | backupJobId:${backupJobId} objectName:${object.name}`);
     return;
   }
 
