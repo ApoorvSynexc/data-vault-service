@@ -22,6 +22,7 @@ export interface IFieldFilter {
 
 export interface IObjectField {
   name: string;
+  dataType: string;
   filter: IFieldFilter;
 }
 
