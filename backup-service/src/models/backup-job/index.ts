@@ -21,6 +21,7 @@ export interface IFieldFilter {
 
 export interface IBackupField {
   name: string;
+  dataType: string;
   filter?: IFieldFilter;
 }
 
