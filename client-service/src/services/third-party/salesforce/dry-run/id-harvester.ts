@@ -5,6 +5,7 @@ export async function harvestIds(
   objectName: string,
   whereClause: string
 ): Promise<string[]> {
-  const whereBody = whereClause ? whereClause.replace(/^WHERE\s+/i, '').trim() : '';
-  return apexHarvestIds(crmId, objectName, whereBody);
+  const whereBody = whereClause ? whereClause.replace(/^WHERE\s+/i, '').trim() : undefined;
+  const { ids } = await apexHarvestIds(crmId, objectName, { whereClause: whereBody });
+  return ids;
 }
