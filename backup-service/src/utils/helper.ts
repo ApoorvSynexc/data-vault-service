@@ -77,14 +77,25 @@ const toParquetDataType = (salesforceDataType: string): string =>
   SALESFORCE_TO_PARQUET_TYPE[salesforceDataType.toUpperCase()] ?? 'BYTE_ARRAY';
 
 type S3KeyOperation = 'inserts' | 'updates' | 'deletes';
+type S3KeyType = 'backup' | 'archival';
 
-const buildS3KeyPrefix = (
-  crmId: string,
-  crmName: string,
-  backupConfigId: string,
-  objectName: string,
-  operation: S3KeyOperation
-): string => `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${objectName}/${operation}`;
+interface IS3KeyPrefixParams {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  objectName: string;
+  operation: S3KeyOperation;
+  type: S3KeyType;
+}
+
+const buildS3KeyPrefix = ({
+  crmId,
+  crmName,
+  backupConfigId,
+  objectName,
+  operation,
+  type,
+}: IS3KeyPrefixParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/raw_data/${objectName}/${operation}`;
 
 const buildSchemaS3Key = (
   crmId: string,
@@ -149,4 +160,6 @@ export {
   toParquetDataType,
   schemasAreEqual,
   parseCSVLine,
+  type IS3KeyPrefixParams,
+  type S3KeyType,
 };

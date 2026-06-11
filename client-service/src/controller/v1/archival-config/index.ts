@@ -20,6 +20,7 @@ import {
     realTimeTriggerManagement,
     computeJobStats,
     computeArchivalJobStats,
+    getApexObjectRecords,
 } from "../../../services";
 import { isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
@@ -48,6 +49,16 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
     }
     const result = await getApexFields(String(crmId), String(objectName));
     makeResponse(req, res, 200, true, 'fetch', result);
+};
+
+const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+    const { crmId, ...body } = req.body;
+    if (!crmId) {
+        return makeResponse(req, res, 400, false, 'crm_id_required');
+    }
+
+    const apexResult = await getApexObjectRecords(String(crmId), body);
+    makeResponse(req, res, 200, true, 'fetch', apexResult);
 };
 
 const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -312,6 +323,7 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
     getFieldsHanlder,
+    getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,
     getArchivalConfigHandler,

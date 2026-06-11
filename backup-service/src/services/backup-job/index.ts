@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, ScanCommand, UpdateCommand, UpdateCommandOutput } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE, OBJECT_STATUS } from '../../constant';
@@ -45,7 +45,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     updatedAt: now,
   };
 
-  console.log({item});
+  console.log({ item });
 
   await Promise.all([
     docClient.send(new PutCommand({ TableName: BACKUP_JOB_TABLE, Item: item })),
@@ -313,16 +313,34 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
   }
 };
 
-const recursivelyUpdateObjects = async (objects: IBackupObject[], object: { id: string, [key: string]: string | number }): Promise<IBackupObject[]> => {
+const recursivelyUpdateObjects = async (
+  objects: IBackupObject[],
+  object: { id: string; [key: string]: string | number }
+): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
       if (obj.id === object.id) {
         return {
           ...obj,
           ...object,
-          ...((object as any)?.salesforceApiCount ? { salesforceApiCount: (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount } : {}),
-          ...((object as any)?.deletedSuccessRecordCount ? { deletedSuccessRecordCount: (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount } : {}),
-          ...((object as any)?.deletedfailedRecordCount ? { deletedfailedRecordCount: (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount } : {})
+          ...((object as any)?.salesforceApiCount
+            ? {
+                salesforceApiCount:
+                  (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
+              }
+            : {}),
+          ...((object as any)?.deletedSuccessRecordCount
+            ? {
+                deletedSuccessRecordCount:
+                  (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
+              }
+            : {}),
+          ...((object as any)?.deletedfailedRecordCount
+            ? {
+                deletedfailedRecordCount:
+                  (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
+              }
+            : {}),
         };
       }
       if (obj.children?.length) {
@@ -334,8 +352,16 @@ const recursivelyUpdateObjects = async (objects: IBackupObject[], object: { id: 
   return results;
 };
 
-const updateArchivalObject = async ({ backupJobId, object, objects }: { backupJobId: string, object: { id: string, [key: string]: string | number }, objects?: IBackupObject[] }): Promise<IBackupObject[] | []> => {
-  let objectsPayload = [];
+const updateArchivalObject = async ({
+  backupJobId,
+  object,
+  objects,
+}: {
+  backupJobId: string;
+  object: { id: string; [key: string]: string | number };
+  objects?: IBackupObject[];
+}): Promise<IBackupObject[] | []> => {
+  let objectsPayload: IBackupObject[];
   if (objects && objects?.length) {
     objectsPayload = objects;
   } else {
@@ -352,18 +378,18 @@ const updateArchivalObject = async ({ backupJobId, object, objects }: { backupJo
     new UpdateCommand({
       TableName: BACKUP_JOB_TABLE,
       Key: { backupJobId },
-      UpdateExpression: "SET #object = :object",
+      UpdateExpression: 'SET #object = :object',
       ExpressionAttributeNames: {
-        "#object": "object",
+        '#object': 'object',
       },
       ExpressionAttributeValues: {
-        ":object": payload,
+        ':object': payload,
       },
     })
   );
 
   return payload;
-}
+};
 
 const getBackupJob = async (backupJobId: string): Promise<IBackupJob | null> => {
   const result = await docClient.send(
@@ -397,4 +423,13 @@ const getStaleRunningJobs = async (
   } while (lastKey !== undefined);
 };
 
-export { createBackupJob, createArchivalJob, updateJobStatus, recursivelyUpdateObjects, updateBackupObject, updateArchivalObject, getBackupJob, getStaleRunningJobs };
+export {
+  createBackupJob,
+  createArchivalJob,
+  updateJobStatus,
+  recursivelyUpdateObjects,
+  updateBackupObject,
+  updateArchivalObject,
+  getBackupJob,
+  getStaleRunningJobs,
+};

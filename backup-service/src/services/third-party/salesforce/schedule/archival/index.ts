@@ -27,19 +27,12 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { recursivelyUpdateObjects, updateArchivalObject } from '../../../../backup-job';
-import {
-    buildS3KeyPrefix,
-    buildSchemaS3Key,
-    toParquetDataType,
-} from '../../../../../utils/helper';
+import { buildS3KeyPrefix, buildSchemaS3Key, toParquetDataType } from '../../../../../utils/helper';
 import { uploadToS3 } from '../../../../destination/s3';
-import {
-    pollBulkJobArchival,
-    uploadBulkResultsByPageArchival,
-} from './bulk';
+import { pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
-import { bulkDeleteRecords } from './delete-bulk';
+// import { bulkDeleteRecords } from './delete-bulk';
 
 // ---------------------------------------------------------------------------
 // SOQL injection guards
@@ -80,7 +73,7 @@ const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN'
  *        decide quoting behaviour without a try/catch on Date parsing.
  */
 const isDateTimeFormat = (value: string): boolean => {
-    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d{3})?Z?$/.test(value);
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d{3})?Z?$/.test(value);
 };
 
 /**
@@ -101,26 +94,32 @@ const isDateTimeFormat = (value: string): boolean => {
  * THROWS:  If any input fails its safety check.
  */
 const buildFilterCondition = (name: string, operator: string, value: string): string => {
-    if (!SAFE_FIELD_NAME_RE.test(name)) {
-        throw new Error(`Invalid SOQL field name: "${name}"`);
-    }
-    if (!ALLOWED_OPERATORS.has(operator)) {
-        throw new Error(`Disallowed SOQL operator: "${operator}"`);
-    }
-    if (!SAFE_VALUE_RE.test(value)) {
-        throw new Error(`Invalid SOQL filter value: "${value}"`);
-    }
+  if (!SAFE_FIELD_NAME_RE.test(name)) {
+    throw new Error(`Invalid SOQL field name: "${name}"`);
+  }
+  if (!ALLOWED_OPERATORS.has(operator)) {
+    throw new Error(`Disallowed SOQL operator: "${operator}"`);
+  }
+  if (!SAFE_VALUE_RE.test(value)) {
+    throw new Error(`Invalid SOQL filter value: "${value}"`);
+  }
 
-    // Datetime literals are bare in SOQL; numbers and booleans are too.
-    // Everything else (strings, enums, etc.) must be wrapped in single quotes.
-    let formattedValue = value;
-    if (isDateTimeFormat(value)) {
-        formattedValue = new Date(value).toISOString();
-    } else if (!value.startsWith("'") && !value.startsWith('(') && isNaN(Number(value)) && value !== 'true' && value !== 'false') {
-        formattedValue = `'${value}'`;
-    }
+  // Datetime literals are bare in SOQL; numbers and booleans are too.
+  // Everything else (strings, enums, etc.) must be wrapped in single quotes.
+  let formattedValue = value;
+  if (isDateTimeFormat(value)) {
+    formattedValue = new Date(value).toISOString();
+  } else if (
+    !value.startsWith("'") &&
+    !value.startsWith('(') &&
+    isNaN(Number(value)) &&
+    value !== 'true' &&
+    value !== 'false'
+  ) {
+    formattedValue = `'${value}'`;
+  }
 
-    return `${name} ${operator} ${formattedValue}`;
+  return `${name} ${operator} ${formattedValue}`;
 };
 
 /**
@@ -149,43 +148,43 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
  *          or an empty string if no filters are configured.
  */
 const buildWhereClause = (object: IBackupObject): string => {
-    const { field, condition } = object;
-    if (!field?.length || !condition) {
-        return '';
+  const { field, condition } = object;
+  if (!field?.length || !condition) {
+    return '';
+  }
+
+  const filterMap = new Map<number, string>();
+  field.forEach((f, idx) => {
+    if (f.filter) {
+      filterMap.set(idx + 1, buildFilterCondition(f.name, f.filter.operator, f.filter.value));
+    }
+  });
+
+  if (filterMap.size === 0) {
+    return '';
+  }
+
+  if (condition.type === 'CUSTOM' && condition.expression) {
+    // Validate the CUSTOM expression: after stripping AND/OR/NOT keywords,
+    // only index numbers, whitespace, and parentheses should remain.
+    // This prevents embedding arbitrary SOQL in the expression string.
+    const stripped = condition.expression.replace(/\b(AND|OR|NOT)\b/gi, ' ');
+    if (!/^[\d\s()]+$/.test(stripped)) {
+      throw new Error(`Invalid SOQL custom expression: "${condition.expression}"`);
     }
 
-    const filterMap = new Map<number, string>();
-    field.forEach((f, idx) => {
-        if (f.filter) {
-            filterMap.set(idx + 1, buildFilterCondition(f.name, f.filter.operator, f.filter.value));
-        }
-    });
-
-    if (filterMap.size === 0) {
-        return '';
+    // Replace each index placeholder (e.g. "1") with its condition string.
+    // Sort descending so "12" is not partially replaced by "1".
+    let expr = condition.expression;
+    const sorted = Array.from(filterMap.entries()).sort((a, b) => b[0] - a[0]);
+    for (const [idx, cond] of sorted) {
+      expr = expr.replace(new RegExp(`\\b${idx}\\b`, 'g'), cond);
     }
+    return `WHERE ${expr}`;
+  }
 
-    if (condition.type === 'CUSTOM' && condition.expression) {
-        // Validate the CUSTOM expression: after stripping AND/OR/NOT keywords,
-        // only index numbers, whitespace, and parentheses should remain.
-        // This prevents embedding arbitrary SOQL in the expression string.
-        const stripped = condition.expression.replace(/\b(AND|OR|NOT)\b/gi, ' ');
-        if (!/^[\d\s()]+$/.test(stripped)) {
-            throw new Error(`Invalid SOQL custom expression: "${condition.expression}"`);
-        }
-
-        // Replace each index placeholder (e.g. "1") with its condition string.
-        // Sort descending so "12" is not partially replaced by "1".
-        let expr = condition.expression;
-        const sorted = Array.from(filterMap.entries()).sort((a, b) => b[0] - a[0]);
-        for (const [idx, cond] of sorted) {
-            expr = expr.replace(new RegExp(`\\b${idx}\\b`, 'g'), cond);
-        }
-        return `WHERE ${expr}`;
-    }
-
-    const separator = condition.type === 'OR' ? ' OR ' : ' AND ';
-    return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
+  const separator = condition.type === 'OR' ? ' OR ' : ' AND ';
+  return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
 };
 
 // ---------------------------------------------------------------------------
@@ -208,14 +207,18 @@ const buildWhereClause = (object: IBackupObject): string => {
  *
  * RETURNS: The matching IBackupObject, or undefined if not found.
  */
-const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
-    if (root.name === name) { return root; }
-    for (const child of root.children ?? []) {
-        const found = findObjectInTree(child, name);
-        if (found) { return found; }
-    }
-    return undefined;
-};
+// const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
+//   if (root.name === name) {
+//     return root;
+//   }
+//   for (const child of root.children ?? []) {
+//     const found = findObjectInTree(child, name);
+//     if (found) {
+//       return found;
+//     }
+//   }
+//   return undefined;
+// };
 
 // ---------------------------------------------------------------------------
 // Main entry point
@@ -262,179 +265,195 @@ const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | un
  *   error is re-thrown so the scheduler can handle it (e.g. retry or alert).
  */
 export const archiveAndHardDelete = async (
-    backupConfigId: string,
-    backupJobId: string,
-    instanceUrl: string,
-    tokens: SalesforceTokens,
-    crmName: string,
-    object: IBackupObject,
-    destConfig: IDestinationConfig
+  backupConfigId: string,
+  backupJobId: string,
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  crmName: string,
+  object: IBackupObject,
+  destConfig: IDestinationConfig
 ): Promise<void> => {
-    const { crmId } = tokens;
-    const objectName = object.name;
-    let backupConfig;
-    let totalRecordCount: number = 0;
-    let jobId: string;
+  const { crmId } = tokens;
+  const objectName = object.name;
+  let backupConfig;
+  let totalRecordCount: number;
+  let jobId: string;
 
-    try {
-        // Fetch the object's full field list and schema upfront.
-        // fieldNames drives the SOQL SELECT; schema is uploaded at the end
-        // so downstream consumers know the data types of every column.
-        const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
+  try {
+    // Fetch the object's full field list and schema upfront.
+    // fieldNames drives the SOQL SELECT; schema is uploaded at the end
+    // so downstream consumers know the data types of every column.
+    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
 
-        // --- Phase 1: Bulk Query Job ---
+    // --- Phase 1: Bulk Query Job ---
 
-        if (object.bulkJobId) {
-            // A bulk job was already created in a previous run (e.g. the process
-            // crashed before results were streamed). Reuse it instead of creating
-            // a new job, which would waste Salesforce API quota.
-            jobId = object.bulkJobId;
-            totalRecordCount = object.totalRecordCount ?? 0;
-        } else {
-            // No existing job — mark the object as starting and create a new one.
-            await updateArchivalObject({
-                backupJobId,
-                object: {
-                    id: object.id,
-                    salesforceApiCount: 1,
-                    status: OBJECT_STATUS.bulkQueryInProgress
-                }
-            });
+    if (object.bulkJobId) {
+      // A bulk job was already created in a previous run (e.g. the process
+      // crashed before results were streamed). Reuse it instead of creating
+      // a new job, which would waste Salesforce API quota.
+      jobId = object.bulkJobId;
+      totalRecordCount = object.totalRecordCount ?? 0;
+    } else {
+      // No existing job — mark the object as starting and create a new one.
+      await updateArchivalObject({
+        backupJobId,
+        object: {
+          id: object.id,
+          salesforceApiCount: 1,
+          status: OBJECT_STATUS.bulkQueryInProgress,
+        },
+      });
 
-            // Build the SOQL query. buildWhereClause returns a validated WHERE
-            // clause based on the user's configured field filters, or an empty
-            // string if no filters are set (meaning: export all records).
-            const whereClause = buildWhereClause(object);
-            const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
+      // Build the SOQL query. buildWhereClause returns a validated WHERE
+      // clause based on the user's configured field filters, or an empty
+      // string if no filters are set (meaning: export all records).
+      const whereClause = buildWhereClause(object);
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
 
-            // Submit the async Bulk Query job to Salesforce. This returns a job ID
-            // immediately; Salesforce processes the query in the background.
-            try {
-                jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
-            } catch (err: any) {
-                throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
-            }
+      // Submit the async Bulk Query job to Salesforce. This returns a job ID
+      // immediately; Salesforce processes the query in the background.
+      try {
+        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: "query" });
+      } catch (err: any) {
+        throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
+      }
 
-            // Poll until Salesforce finishes processing the query.
-            // Returns the total record count so we know whether to enter Phase 2.
-            try {
-                totalRecordCount = await pollBulkJobArchival({
-                    instanceUrl,
-                    tokens,
-                    jobId,
-                    backupJobId,
-                    object,
-                });
-            } catch (err: any) {
-                throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
-            }
-
-            // Persist the completed job ID so a restart can skip straight to
-            // result streaming without re-submitting or re-polling.
-            await updateArchivalObject({
-                backupJobId,
-                object: {
-                    id: object.id,
-                    salesforceApiCount: 1,
-                    status: OBJECT_STATUS.bulkQueryCompleted,
-                    bulkJobId: jobId,
-                }
-            });
-        }
-
-        logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
-
-        // --- Phase 2: Upload records to S3 ---
-
-        // Skip the upload + delete phases entirely if there are no records.
-        // This avoids unnecessary API calls and S3 operations for empty objects.
-        if (totalRecordCount) {
-            // Base S3 key path for this parent object's uploaded pages.
-            // Child objects build their own paths inside uploadBulkResultsByPageArchival.
-            const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-
-            // Stream all pages of the bulk job to S3 and walk the full child tree.
-            // Returns s3UrlsPerObject: Map<objectName, s3Keys[]> in insertion order
-            // (parent first, deepest child last).
-            const { s3UrlsPerObject } = await uploadBulkResultsByPageArchival({
-                instanceUrl,
-                tokens,
-                jobId,
-                backupJobId,
-                object,
-                destConfig,
-                s3KeyPrefix: archivePrefix,
-                crmId,
-                crmName,
-                backupConfigId,
-                // Allow resuming from the last saved locator if this is a retry.
-                startLocator: object.currentLocator ?? null,
-                startCompletedRecordCount: object.completedRecordCount ?? 0,
-            });
-
-            // Update the backup config's cumulative size in the DB.
-            // sizeInBytes is 0 for now (placeholder — real size tracking TBD).
-            const sizeInBytes = 0;
-            const updateParams: any = { sizeInBytes };
-            backupConfig = await getBackupConfigById(backupConfigId);
-            if (backupConfig?.objects) {
-                const updatedObjects = await recursivelyUpdateObjects(backupConfig.objects, { id: object.id, sizeInBytes });
-                updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-                updateParams.objects = updatedObjects;
-            }
-            await updateBackupConfig(backupConfigId, updateParams);
-
-            // --- Phase 3: Hard-delete records from Salesforce ---
-            // Iterate s3UrlsPerObject in REVERSE so the deepest children are deleted
-            // first. This prevents foreign-key constraint violations where deleting
-            // a parent before its children would fail or trigger unintended cascades.
-            // For each object: read its S3 CSV files → extract IDs → Bulk Ingest delete.
-            // for (const [objName, s3Urls] of [...s3UrlsPerObject.entries()].reverse()) {
-            //     const targetObject = findObjectInTree(object, objName);
-            //     if (targetObject && s3Urls.length > 0) {
-            //         await bulkDeleteRecords({
-            //             backupConfigId,
-            //             backupJobId,
-            //             instanceUrl,
-            //             tokens,
-            //             object: targetObject,
-            //             destConfig,
-            //             s3Urls,
-            //         });
-            //     }
-            // }
-        }
-
-        // --- Schema upload ---
-        // Store the object's field schema (with Parquet type mappings) to S3.
-        // This allows downstream ETL / analytics tools to understand the column
-        // types without having to re-query Salesforce metadata.
-        const schemaWithParquet = schema.map((field: { dataType: string }) => ({
-            ...field,
-            parquetDataType: toParquetDataType(field.dataType),
-        }));
-        const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
-        await uploadToS3(
-            destConfig,
-            schemaKey,
-            Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
-        );
-
-        logger.info(`Object archival complete, backupConfigId:${backupConfigId}, backupJobId${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
-
-    } catch (err: any) {
-        // Mark the object as failed in DB before re-throwing so the scheduler
-        // can detect the failure and either retry or surface an alert.
-        const errorMsg = err?.message ?? String(err);
-        await updateArchivalObject({
-            backupJobId,
-            object: {
-                id: object.id,
-                status: OBJECT_STATUS.failed,
-                errorMessage: errorMsg,
-            }
+      // Poll until Salesforce finishes processing the query.
+      // Returns the total record count so we know whether to enter Phase 2.
+      try {
+        totalRecordCount = await pollBulkJobArchival({
+          instanceUrl,
+          tokens,
+          jobId,
+          backupJobId,
+          object,
         });
-        logger.error(`Object archival failed, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName} - ${errorMsg}`);
-        throw err;
+      } catch (err: any) {
+        throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      // Persist the completed job ID so a restart can skip straight to
+      // result streaming without re-submitting or re-polling.
+      await updateArchivalObject({
+        backupJobId,
+        object: {
+          id: object.id,
+          salesforceApiCount: 1,
+          status: OBJECT_STATUS.bulkQueryCompleted,
+          bulkJobId: jobId,
+          totalRecordCount,
+        },
+      });
     }
+
+    logger.info(
+      `Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`
+    );
+
+    // --- Phase 2: Upload records to S3 ---
+
+    // Skip the upload + delete phases entirely if there are no records.
+    // This avoids unnecessary API calls and S3 operations for empty objects.
+    if (totalRecordCount) {
+      // Base S3 key path for this parent object's uploaded pages.
+      // Child objects build their own paths inside uploadBulkResultsByPageArchival.
+      const archivePrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        operation: 'inserts',
+        type: 'archival',
+      });
+
+      // Stream all pages of the bulk job to S3 and walk the full child tree.
+      // Returns s3UrlsPerObject: Map<objectName, s3Keys[]> in insertion order
+      // (parent first, deepest child last).
+      await uploadBulkResultsByPageArchival({
+        instanceUrl,
+        tokens,
+        jobId,
+        backupJobId,
+        object,
+        destConfig,
+        s3KeyPrefix: archivePrefix,
+        crmId,
+        crmName,
+        backupConfigId,
+        // Allow resuming from the last saved locator if this is a retry.
+        startLocator: object.currentLocator ?? null,
+        startCompletedRecordCount: object.completedRecordCount ?? 0,
+      });
+
+      // Update the backup config's cumulative size in the DB.
+      // sizeInBytes is 0 for now (placeholder — real size tracking TBD).
+      const sizeInBytes = 0;
+      const updateParams: any = { sizeInBytes };
+      backupConfig = await getBackupConfigById(backupConfigId);
+      if (backupConfig?.objects) {
+        const updatedObjects = await recursivelyUpdateObjects(backupConfig.objects, {
+          id: object.id,
+          sizeInBytes,
+        });
+        updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+        updateParams.objects = updatedObjects;
+      }
+      await updateBackupConfig(backupConfigId, updateParams);
+
+      // --- Phase 3: Hard-delete records from Salesforce ---
+      // Iterate s3UrlsPerObject in REVERSE so the deepest children are deleted
+      // first. This prevents foreign-key constraint violations where deleting
+      // a parent before its children would fail or trigger unintended cascades.
+      // For each object: read its S3 CSV files → extract IDs → Bulk Ingest delete.
+      // for (const [objName, s3Urls] of [...s3UrlsPerObject.entries()].reverse()) {
+      //     const targetObject = findObjectInTree(object, objName);
+      //     if (targetObject && s3Urls.length > 0) {
+      //         await bulkDeleteRecords({
+      //             backupConfigId,
+      //             backupJobId,
+      //             instanceUrl,
+      //             tokens,
+      //             object: targetObject,
+      //             destConfig,
+      //             s3Urls,
+      //         });
+      //     }
+      // }
+    }
+
+    // --- Schema upload ---
+    // Store the object's field schema (with Parquet type mappings) to S3.
+    // This allows downstream ETL / analytics tools to understand the column
+    // types without having to re-query Salesforce metadata.
+    const schemaWithParquet = schema.map((field: { dataType: string }) => ({
+      ...field,
+      parquetDataType: toParquetDataType(field.dataType),
+    }));
+    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    await uploadToS3(
+      destConfig,
+      schemaKey,
+      Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
+    );
+
+    logger.info(
+      `Object archival complete, backupConfigId:${backupConfigId}, backupJobId${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`
+    );
+  } catch (err: any) {
+    // Mark the object as failed in DB before re-throwing so the scheduler
+    // can detect the failure and either retry or surface an alert.
+    const errorMsg = err?.message ?? String(err);
+    await updateArchivalObject({
+      backupJobId,
+      object: {
+        id: object.id,
+        status: OBJECT_STATUS.failed,
+        errorMessage: errorMsg,
+      },
+    });
+    logger.error(
+      `Object archival failed, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName} - ${errorMsg}`
+    );
+    throw err;
+  }
 };
