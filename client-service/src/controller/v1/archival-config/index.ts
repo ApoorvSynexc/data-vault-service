@@ -22,32 +22,9 @@ import {
     getApexObjectRecords,
     triggerArchivalBackupJob,
 } from "../../../services";
-import { isOwner, wrapController } from "../../../utils/helper";
+import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
 import { IObject } from "../../../models";
-
-const filtereObjects = (objects: IObject[]) => {
-    const immediateObjects: IObject[] = [];
-    const scheduledObjects: IObject[] = [];
-
-    objects.forEach((obj: IObject) => {
-        const isOnceImmediate = obj.scheduleConfig?.type === SCHEDULE_TYPE.oneTime
-            && obj.scheduleConfig.scheduling?.frequency === 'ONCE'
-            && !obj.scheduleConfig.scheduling?.startDate
-            && !obj.scheduleConfig.scheduling?.startTime;
-        if (isOnceImmediate) {
-            immediateObjects.push(obj);
-        } else {
-            scheduledObjects.push(obj);
-        }
-    });
-
-    return {
-        immediateObjects,
-        scheduledObjects
-    }
-}
-
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const { crmId, objectName } = req.query;
