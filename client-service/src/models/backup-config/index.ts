@@ -41,6 +41,7 @@ export interface IObject {
   sizeInBytes?: number;
   field: IObjectField[];
   condition?: IObjectCondition;
+  scheduleConfig?: IScheduleConfig;
   children?: IObject[];
 }
 
