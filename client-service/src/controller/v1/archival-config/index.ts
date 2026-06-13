@@ -1,4 +1,4 @@
-import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS } from "../../../constant";
+import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -245,7 +245,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
     const config = existing!;
 
-    if (config.backupStatus === BACKUP_STATUS.pending) {
+    if (config.backupStatus === BACKUP_STATUS.pending && config.status !== STATUS.paused) {
         makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
         return;
     }
