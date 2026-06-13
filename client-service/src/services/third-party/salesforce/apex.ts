@@ -66,7 +66,7 @@ const getApexObjectsCount = async (crmId: string, body: object) => {
   return encryptedResult.data;
 };
 
-const getApexObjectChilds = async (crmId: string, objectName: string) => {
+const getApexObjectChilds = async (crmId: string, objectName: string, mode?: string) => {
   const crm = await getCrmById(crmId);
   if (!crm) {
     throw new Error('CRM not found');
@@ -77,7 +77,10 @@ const getApexObjectChilds = async (crmId: string, objectName: string) => {
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-childs?apiName=${objectName}`;
+  let url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-childs?apiName=${objectName}`;
+  if (mode) {
+    url += `&mode=${mode}`;
+  }
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET'},
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
@@ -85,7 +88,7 @@ const getApexObjectChilds = async (crmId: string, objectName: string) => {
   return encryptedResult.data;
 };
 
-const getApexFields = async (crmId: string, objectName: string) => {
+const getApexFields = async (crmId: string, objectName: string, mode?: string) => {
   const crm = await getCrmById(crmId);
   if (!crm) {
     throw new Error('CRM not found');
@@ -97,7 +100,10 @@ const getApexFields = async (crmId: string, objectName: string) => {
     throw new Error('Instance URL not found');
   }
 
-  const url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-fields-metadata?objectApiName=${objectName}`;
+  let url = `${instanceUrl}/services/apexrest/SYX_DVV/v1/data-vault/object-fields-metadata?objectApiName=${objectName}`;
+  if (mode) {
+    url += `&mode=${mode}`;
+  }
   const encryptedResult = await salesforceRequest(
     { url, method: 'GET' },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
