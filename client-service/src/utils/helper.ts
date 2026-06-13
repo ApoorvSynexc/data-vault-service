@@ -4,10 +4,11 @@ import {
   JWT_ACCESS_SECRET,
   JWT_REFRESH_EXPIRY,
   JWT_REFRESH_SECRET,
+  SCHEDULE_TYPE,
 } from '../constant';
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
-import { IBackupObject } from '../models';
+import { IBackupObject, IObject } from '../models';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -168,7 +169,30 @@ const formatDateTime = (dateString: string): string => {
   return date.toISOString();
 };
 
+const filtereObjects = (objects: IObject[]) => {
+    const immediateObjects: IObject[] = [];
+    const scheduledObjects: IObject[] = [];
+
+    objects.forEach((obj: IObject) => {
+        const isOnceImmediate = obj.scheduleConfig?.type === SCHEDULE_TYPE.oneTime
+            && obj.scheduleConfig.scheduling?.frequency === 'ONCE'
+            && !obj.scheduleConfig.scheduling?.startDate
+            && !obj.scheduleConfig.scheduling?.startTime;
+        if (isOnceImmediate) {
+            immediateObjects.push(obj);
+        } else {
+            scheduledObjects.push(obj);
+        }
+    });
+
+    return {
+        immediateObjects,
+        scheduledObjects
+    }
+}
+
 export {
+  filtereObjects,
   randomNumber,
   generateTokens,
   parseExpiryToSeconds,
