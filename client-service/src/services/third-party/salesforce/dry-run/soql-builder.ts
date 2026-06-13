@@ -1,5 +1,5 @@
 import { parseQuery } from '@jetstreamapp/soql-parser-js';
-import { formatSalesforceValueByDataType } from '../../../../utils/helper';
+import { formatSalesforceValueByDataType, formatFieldValuesForSOQL } from '../../../../utils/helper';
 import type { ISalesforceObject, IOccurrence, IFieldFilter } from './types';
 
 // ── Internal AST node shape ───────────────────────────────────────────────────
@@ -42,7 +42,7 @@ function isDateLiteral(value: string): boolean {
   );
 }
 
-function buildFieldCondition(f: IFieldFilter): string {
+function buildFieldCondition(f: IFieldFilter, preformattedValue: string): string {
   const { value, operator } = f.filter;
   const { name, dataType } = f;
 
@@ -62,7 +62,7 @@ function buildFieldCondition(f: IFieldFilter): string {
     return `${name} ${operator} ${value}`;
   }
 
-  return `${name} ${operator} ${formatSalesforceValueByDataType(value, dataType)}`;
+  return `${name} ${operator} ${preformattedValue}`;
 }
 
 // ── Own WHERE body ────────────────────────────────────────────────────────────
@@ -81,7 +81,10 @@ export function buildOwnWhereBody(obj: Pick<ISalesforceObject, 'condition' | 'fi
 
   if (!field || field.length === 0) return null;
 
-  const conditions = field.map(buildFieldCondition);
+  const formattedFields = formatFieldValuesForSOQL(field);
+  const conditions = field.map((f, idx) =>
+    buildFieldCondition(f, formattedFields[idx]?.filter?.value ?? formatSalesforceValueByDataType(f.filter.value, f.dataType))
+  );
 
   if (condition.type === 'AND') return conditions.join(' AND ');
   if (condition.type === 'OR') return conditions.join(' OR ');

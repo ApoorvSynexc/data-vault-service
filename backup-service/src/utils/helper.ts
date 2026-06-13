@@ -249,6 +249,7 @@ export {
   schemasAreEqual,
   parseCSVLine,
   formatFieldValuesForSOQL,
+  formatValueByDataType,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
   type S3KeyType,
