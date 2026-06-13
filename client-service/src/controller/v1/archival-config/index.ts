@@ -24,37 +24,46 @@ import {
 } from "../../../services";
 import { isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
+import { buildOwnWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, objectName } = req.query;
+    const { crmId, objectName, mode } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
 
     const [apexResult] = await Promise.all([
-        getApexObjectChilds(String(crmId), String(objectName)),
+        getApexObjectChilds(String(crmId), String(objectName), mode ? String(mode) : undefined),
     ]);
 
     makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, objectName } = req.query;
+    const { crmId, objectName, mode } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
     if (!objectName) {
         return makeResponse(req, res, 400, false, 'object_name_required');
     }
-    const result = await getApexFields(String(crmId), String(objectName));
+    const result = await getApexFields(String(crmId), String(objectName), mode ? String(mode) : undefined);
     makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, ...body } = req.body;
+    const { crmId, objectConfig, ...body } = req.body;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
+    }
+
+    // Build WHERE clause from objectConfig if the caller didn't supply one directly
+    if (objectConfig && !body.whereClause) {
+        const whereBody = buildOwnWhereBody(objectConfig);
+        if (whereBody) {
+            body.whereClause = whereBody;
+        }
     }
 
     const apexResult = await getApexObjectRecords(String(crmId), body);
