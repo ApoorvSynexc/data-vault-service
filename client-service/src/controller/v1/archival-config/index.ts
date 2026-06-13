@@ -1,4 +1,4 @@
-import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from "../../../constant";
+import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -7,7 +7,6 @@ import {
     getApexFields,
     getApexObjectChilds,
     getDestinationById,
-    triggerBackupJob,
     getBackupConfigsWithPagination,
     getCrmById,
     getTableCounter,
@@ -21,9 +20,33 @@ import {
     computeJobStats,
     computeArchivalJobStats,
     getApexObjectRecords,
+    triggerArchivalBackupJob,
 } from "../../../services";
 import { isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
+import { IObject } from "../../../models";
+
+const filtereObjects = (objects: IObject[]) => {
+    const immediateObjects: IObject[] = [];
+    const scheduledObjects: IObject[] = [];
+
+    objects.forEach((obj: IObject) => {
+        const isOnceImmediate = obj.scheduleConfig?.type === SCHEDULE_TYPE.oneTime
+            && obj.scheduleConfig.scheduling?.frequency === 'ONCE'
+            && !obj.scheduleConfig.scheduling?.startDate
+            && !obj.scheduleConfig.scheduling?.startTime;
+        if (isOnceImmediate) {
+            immediateObjects.push(obj);
+        } else {
+            scheduledObjects.push(obj);
+        }
+    });
+
+    return {
+        immediateObjects,
+        scheduledObjects
+    }
+}
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -127,16 +150,11 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
             return;
         }
 
-        if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
-            const scheduleConfig = req.body.scheduleConfig;
-            const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
-                && !scheduleConfig?.scheduling?.startDate
-                && !scheduleConfig?.scheduling?.startTime;
-            if (isOnceImmediate) {
-                await triggerBackupJob(config, undefined, 'archival');
-            } else {
-                // await createAwsEventScheduler(buildEventScheduleInput(config));
-            }
+        const { immediateObjects } = filtereObjects(req.body?.objects || []);
+        if (immediateObjects.length > 0) {
+            await triggerArchivalBackupJob(config, immediateObjects);
+        } else {
+            // await createAwsEventScheduler(buildEventScheduleInput(config));
         }
 
         makeResponse(req, res, 201, true, 'create', config);
@@ -220,6 +238,12 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     const updated = await updateBackupConfig(String(backupConfigId), req.body);
+    if (updated && !updated.lastBackupAt) {
+        const { immediateObjects } = filtereObjects(req.body?.objects || []);
+        if (immediateObjects.length > 0) {
+            await triggerArchivalBackupJob(updated, immediateObjects);
+        }
+    }
 
     if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
         // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
