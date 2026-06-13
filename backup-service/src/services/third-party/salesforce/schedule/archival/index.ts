@@ -25,101 +25,84 @@
 
 import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
-import { IBackupObject, IDestinationConfig } from '../../../../../models';
+import { IBackupField, IBackupObject, IDestinationConfig } from '../../../../../models';
 import { recursivelyUpdateObjects, updateArchivalObject } from '../../../../backup-job';
-import { buildS3KeyPrefix, buildSchemaS3Key, toParquetDataType } from '../../../../../utils/helper';
+import { buildS3KeyPrefix, buildSchemaS3Key, toParquetDataType, formatFieldValuesForSOQL, formatValueByDataType } from '../../../../../utils/helper';
 import { uploadToS3 } from '../../../../destination/s3';
 import { fetchObjectAndDescend, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
-// import { bulkDeleteRecords } from './delete-bulk';
+import { bulkDeleteRecords } from './delete-bulk';
 
 // ---------------------------------------------------------------------------
 // SOQL injection guards
 // ---------------------------------------------------------------------------
-// These regexes and sets validate every user-supplied value before it is
-// interpolated into a SOQL string. Salesforce SOQL is vulnerable to injection
-// in the same way SQL is — an attacker could append extra clauses, exfiltrate
-// data from other objects, or crash the query. We reject anything outside the
-// safe character sets at the boundary (buildFilterCondition) rather than
-// trying to escape within the SOQL string.
 
 // Valid Salesforce field API names: start with a letter, contain only
 // alphanumerics / underscores, and optionally traverse one relationship
 // (e.g. "Owner.Name"). Rejects any attempt to embed SQL meta-characters.
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
 
-// Allowlist for filter values: covers the characters needed for SOQL literals
-// (quoted strings, numbers, dates, booleans, IN lists) while explicitly
-// blocking ; ` -- /* */ which are SOQL/SQL meta-characters used in injection.
-const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
-
 // The only comparison operators we permit in filter conditions.
-// Anything else (e.g. UNION, subqueries) is rejected outright.
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
 
 // ---------------------------------------------------------------------------
 // SOQL helpers
 // ---------------------------------------------------------------------------
 
-/**
- * isDateTimeFormat
- *
- * WHAT:  Returns true if the value looks like a SOQL-compatible datetime string.
- *
- * WHY:   Datetime values must NOT be wrapped in single quotes in SOQL — they are
- *        bare literals (e.g. 2024-01-15T00:00:00Z). Numbers and booleans are
- *        also bare. Everything else gets quoted. This check lets buildFilterCondition
- *        decide quoting behaviour without a try/catch on Date parsing.
- */
-const isDateTimeFormat = (value: string): boolean => {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d{3})?Z?$/.test(value);
-};
+// Salesforce SOQL date/datetime relative literals that must NOT be quoted.
+const DATE_LITERALS = new Set([
+  'TODAY', 'YESTERDAY', 'TOMORROW',
+  'LAST_WEEK', 'THIS_WEEK', 'NEXT_WEEK',
+  'LAST_MONTH', 'THIS_MONTH', 'NEXT_MONTH',
+  'LAST_90_DAYS', 'NEXT_90_DAYS',
+  'LAST_QUARTER', 'THIS_QUARTER', 'NEXT_QUARTER',
+  'LAST_YEAR', 'THIS_YEAR', 'NEXT_YEAR',
+  'LAST_FISCAL_QUARTER', 'THIS_FISCAL_QUARTER', 'NEXT_FISCAL_QUARTER',
+  'LAST_FISCAL_YEAR', 'THIS_FISCAL_YEAR', 'NEXT_FISCAL_YEAR',
+]);
+
+const isDateLiteral = (value: string): boolean =>
+  DATE_LITERALS.has(value.toUpperCase()) ||
+  /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(value);
 
 /**
  * buildFilterCondition
  *
- * WHAT:  Constructs a single SOQL condition fragment, e.g. "Status = 'Active'".
+ * Builds one SOQL condition from a field config + its pre-formatted value.
  *
- * WHY:   Centralises the injection-safe transformation of a field name, operator,
- *        and value into a SOQL condition. Calling code never interpolates raw user
- *        input directly — it always goes through this function first.
- *
- * INPUT:
- *   name     — field API name (must match SAFE_FIELD_NAME_RE)
- *   operator — comparison operator (must be in ALLOWED_OPERATORS)
- *   value    — filter value (must match SAFE_VALUE_RE)
- *
- * RETURNS: A SOQL condition string ready to embed in a WHERE clause.
- * THROWS:  If any input fails its safety check.
+ * preformattedValue — the value already passed through formatFieldValuesForSOQL
+ *   (i.e. formatValueByDataType). Used as-is for the general case.
+ *   LIKE, IN/NOT IN, and date literals bypass it and use the raw value instead.
  */
-const buildFilterCondition = (name: string, operator: string, value: string): string => {
+const buildFilterCondition = (f: IBackupField & { filter: NonNullable<IBackupField['filter']> }, preformattedValue: string): string => {
+  const { name, dataType } = f;
+  const { value: rawValue, operator } = f.filter;
+
   if (!SAFE_FIELD_NAME_RE.test(name)) {
     throw new Error(`Invalid SOQL field name: "${name}"`);
   }
   if (!ALLOWED_OPERATORS.has(operator)) {
     throw new Error(`Disallowed SOQL operator: "${operator}"`);
   }
-  if (!SAFE_VALUE_RE.test(value)) {
-    throw new Error(`Invalid SOQL filter value: "${value}"`);
+
+  if (operator === 'LIKE') {
+    const escaped = rawValue.replace(/'/g, "''");
+    const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
+    return `${name} LIKE '${wrapped}'`;
   }
 
-  // Datetime literals are bare in SOQL; numbers and booleans are too.
-  // Everything else (strings, enums, etc.) must be wrapped in single quotes.
-  let formattedValue = value;
-  if (isDateTimeFormat(value)) {
-    formattedValue = new Date(value).toISOString();
-  } else if (
-    !value.startsWith("'") &&
-    !value.startsWith('(') &&
-    isNaN(Number(value)) &&
-    value !== 'true' &&
-    value !== 'false'
-  ) {
-    formattedValue = `'${value}'`;
+  if (operator === 'IN' || operator === 'NOT IN') {
+    const parts = rawValue.split(',').map(v => v.trim()).filter(Boolean);
+    return `${name} ${operator} (${parts.map(v => formatValueByDataType(v, dataType)).join(', ')})`;
   }
 
-  return `${name} ${operator} ${formattedValue}`;
+  const ldt = dataType.toLowerCase();
+  if ((ldt === 'date' || ldt === 'datetime') && isDateLiteral(rawValue)) {
+    return `${name} ${operator} ${rawValue}`;
+  }
+
+  return `${name} ${operator} ${preformattedValue}`;
 };
 
 /**
@@ -161,10 +144,15 @@ const buildWhereClause = (object: IBackupObject): string => {
 
   if (!field?.length) { return ''; }
 
+  // Pre-format all field values by data type. Used as-is for the general case;
+  // LIKE, IN/NOT IN, and date literals are handled with raw values inside buildFilterCondition.
+  const formattedFields = formatFieldValuesForSOQL(field);
+
   const filterMap = new Map<number, string>();
   field.forEach((f, idx) => {
     if (f.filter) {
-      filterMap.set(idx + 1, buildFilterCondition(f.name, f.filter.operator, f.filter.value));
+      const preformattedValue = (formattedFields[idx] as typeof f)?.filter?.value ?? formatValueByDataType(f.filter.value, f.dataType);
+      filterMap.set(idx + 1, buildFilterCondition(f as IBackupField & { filter: NonNullable<IBackupField['filter']> }, preformattedValue));
     }
   });
 
@@ -215,18 +203,14 @@ const buildWhereClause = (object: IBackupObject): string => {
  *
  * RETURNS: The matching IBackupObject, or undefined if not found.
  */
-// const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
-//   if (root.name === name) {
-//     return root;
-//   }
-//   for (const child of root.children ?? []) {
-//     const found = findObjectInTree(child, name);
-//     if (found) {
-//       return found;
-//     }
-//   }
-//   return undefined;
-// };
+const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
+  if (root.name === name) { return root; }
+  for (const child of root.children ?? []) {
+    const found = findObjectInTree(child, name);
+    if (found) { return found; }
+  }
+  return undefined;
+};
 
 // ---------------------------------------------------------------------------
 // Main entry point
@@ -368,7 +352,7 @@ export const archiveAndHardDelete = async (
     if (totalRecordCount) {
       logger.info(`[archival:orchestrator] phase 2 — upload starting | backupJobId:${backupJobId} objectName:${objectName} totalRecordCount:${totalRecordCount} resumeLocator:${object.currentLocator ?? 'none'}`);
 
-      await uploadBulkResultsByPageArchival({
+      const { s3UrlsPerObject } = await uploadBulkResultsByPageArchival({
         instanceUrl,
         tokens,
         jobId,
@@ -384,7 +368,7 @@ export const archiveAndHardDelete = async (
         startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
 
-      logger.info(`[archival:orchestrator] phase 2 complete — all records in S3 | backupJobId:${backupJobId} objectName:${objectName}`);
+      logger.info(`[archival:orchestrator] phase 2 complete — all records in S3 | backupJobId:${backupJobId} objectName:${objectName} objectsUploaded:[${[...s3UrlsPerObject.keys()].join(', ')}]`);
 
       // Update the backup config's cumulative size in the DB.
       const sizeInBytes = 0;
@@ -400,8 +384,39 @@ export const archiveAndHardDelete = async (
       }
       await updateBackupConfig(backupConfigId, updateParams);
 
-      // --- Phase 3: Hard-delete (currently commented out, schema upload runs here) ---
-      logger.info(`[archival:orchestrator] phase 3 — uploading schema | backupJobId:${backupJobId} objectName:${objectName}`);
+      // --- Phase 3: Hard-delete records from Salesforce ---
+      // Iterate s3UrlsPerObject in REVERSE so deepest children are deleted first,
+      // avoiding FK constraint violations (child records must go before their parents).
+      const deleteOrder = [...s3UrlsPerObject.entries()].reverse();
+      logger.info(`[archival:orchestrator] phase 3 — hard-delete starting | backupJobId:${backupJobId} deleteOrder:[${deleteOrder.map(([n]) => n).join(' → ')}]`);
+
+      for (const [objName, s3Urls] of deleteOrder) {
+        if (!s3Urls.length) {
+          logger.info(`[archival:orchestrator] delete skip (no S3 files) | backupJobId:${backupJobId} objectName:${objName}`);
+          continue;
+        }
+        const targetObject = findObjectInTree(object, objName);
+        if (!targetObject) {
+          logger.error(`[archival:orchestrator] delete skip (object not found in tree) | backupJobId:${backupJobId} objectName:${objName}`);
+          continue;
+        }
+        logger.info(`[archival:orchestrator] deleting | backupJobId:${backupJobId} objectName:${objName} s3FileCount:${s3Urls.length}`);
+        await bulkDeleteRecords({
+          backupConfigId,
+          backupJobId,
+          instanceUrl,
+          tokens,
+          object: targetObject,
+          destConfig,
+          s3Urls,
+        });
+        logger.info(`[archival:orchestrator] delete complete | backupJobId:${backupJobId} objectName:${objName}`);
+      }
+
+      logger.info(`[archival:orchestrator] phase 3 complete — all records deleted | backupJobId:${backupJobId} objectName:${objectName}`);
+
+      // --- Schema upload ---
+      logger.info(`[archival:orchestrator] uploading schema | backupJobId:${backupJobId} objectName:${objectName}`);
       const schemaWithParquet = schema.map((field: { dataType: string }) => ({
         ...field,
         parquetDataType: toParquetDataType(field.dataType),

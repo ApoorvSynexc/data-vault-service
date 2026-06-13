@@ -4,6 +4,7 @@ import { updateArchivalObject } from '../../../../backup-job';
 import { fetchCsvFromS3 } from '../../../../destination/s3';
 import { parseCSVLine } from '../../../../../utils/helper';
 import { SalesforceTokens } from '../../api-request';
+import { logger } from '../../../../../middlewares/logger';
 
 const SF_API_VERSION = 'v65.0';
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000;
@@ -124,16 +125,21 @@ const pollJobCompletion = async (paylaod: {
   let salesforceApiCount = 0;
   const { backupJobId, object, instanceUrl, tokens, jobId } = paylaod;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
+  let pollCount = 0;
+
+  logger.info(`[archival:delete:poll] started | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId}`);
 
   while (true) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 
     if (Date.now() >= deadline) {
+      logger.error(`[archival:delete:poll] timeout | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId}`);
       throw new Error(
         `Bulk delete job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`
       );
     }
 
+    pollCount += 1;
     const response = await fetch(
       `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
       {
@@ -149,20 +155,24 @@ const pollJobCompletion = async (paylaod: {
 
     const job = (await response.json()) as IJobStatusResponse;
 
+    logger.info(`[archival:delete:poll] tick #${pollCount} | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId} state:${job.state} processed:${job.numberRecordsProcessed} failed:${job.numberRecordsFailed}`);
+
     salesforceApiCount += 1;
     await updateArchivalObject({
       backupJobId,
       object: {
         id: object.id,
-        deletedSuccessRecordCount: job.numberRecordsProcessed,
         salesforceApiCount,
       },
     });
+
     if (job.state === 'JobComplete') {
+      logger.info(`[archival:delete:poll] complete | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId} processed:${job.numberRecordsProcessed} failed:${job.numberRecordsFailed} pollCount:${pollCount}`);
       return { job };
     }
 
     if (job.state === 'Failed' || job.state === 'Aborted') {
+      logger.error(`[archival:delete:poll] job ${job.state} | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId} error:${job.errorMessage ?? 'unknown'}`);
       throw new Error(
         `Bulk delete job ${jobId} ${job.state}: ${job.errorMessage ?? 'unknown error'}`
       );
@@ -175,56 +185,72 @@ const getJobResults = async (
   tokens: SalesforceTokens,
   jobId: string
 ): Promise<{ successCount: number; failedCount: number }> => {
-  const response = await fetch(
-    `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/successfulResults`,
-    {
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
-      },
-    }
-  );
+  const headers = { Authorization: `Bearer ${tokens.accessToken}` };
+  const base = `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`;
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch job results: ${response.statusText}`);
+  const [successRes, failedRes] = await Promise.all([
+    fetch(`${base}/successfulResults`, { headers }),
+    fetch(`${base}/failedResults`,     { headers }),
+  ]);
+
+  if (!successRes.ok) {
+    throw new Error(`Failed to fetch successful results: ${successRes.statusText}`);
+  }
+  if (!failedRes.ok) {
+    throw new Error(`Failed to fetch failed results: ${failedRes.statusText}`);
   }
 
-  const text = await response.text();
-  const successCount = text.split('\n').length - 2;
+  const [successText, failedText] = await Promise.all([successRes.text(), failedRes.text()]);
 
-  return { successCount, failedCount: 0 };
+  // CSV rows minus header row minus trailing empty line = record count
+  const successCount = successText.split('\n').filter(l => l.trim()).length - 1;
+  const failedCount  = failedText.split('\n').filter(l => l.trim()).length - 1;
+
+  return { successCount, failedCount };
 };
 
 export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<void> => {
   const { backupJobId, instanceUrl, tokens, object, destConfig, s3Urls } = payload;
   const objectName = object.name;
+
+  logger.info(`[archival:delete] starting | backupJobId:${backupJobId} objectName:${objectName} s3FileCount:${s3Urls.length}`);
+
   await updateArchivalObject({
     backupJobId,
-    object: {
-      id: object.id,
-      status: OBJECT_STATUS.deletionInProgress,
-    },
+    object: { id: object.id, status: OBJECT_STATUS.deletionInProgress },
   });
+
+  let totalDeleted = 0;
+  let totalFailed = 0;
 
   for (let i = 0; i < s3Urls.length; i++) {
     const objectKey = s3Urls[i];
+    logger.info(`[archival:delete] processing S3 file ${i + 1}/${s3Urls.length} | backupJobId:${backupJobId} objectName:${objectName} key:${objectKey}`);
 
     const { csvData } = await fetchCsvFromS3(destConfig, objectKey);
     const lines = csvData.split('\n').filter((line) => line.trim());
-    const headerLine = parseCSVLine(lines[0]);
-    const headers = headerLine.map((col) => col.toLowerCase());
+    const headers = parseCSVLine(lines[0]).map((col) => col.toLowerCase());
     const headerIndex = headers.findIndex((col) => col === 'id');
 
     if (headerIndex === -1) {
-      throw new Error('CSV does not contain Id column');
+      throw new Error(`CSV does not contain Id column — key:${objectKey}`);
     }
 
+    // Build Id-only CSV: header row + one Id per data row.
     const idOnlyCsv = lines.map((line) => parseCSVLine(line)[headerIndex]).join('\n');
+    const recordCount = lines.length - 1; // exclude header
+    logger.info(`[archival:delete] extracted ${recordCount} IDs | backupJobId:${backupJobId} objectName:${objectName} file:${i + 1}`);
 
     const job = await createBulkDeleteJob(instanceUrl, tokens, objectName);
-    await uploadDataToJob(instanceUrl, tokens, job.id, idOnlyCsv);
-    await closeAndSubmitJob(instanceUrl, tokens, job.id);
+    logger.info(`[archival:delete] bulk ingest job created | backupJobId:${backupJobId} objectName:${objectName} jobId:${job.id} file:${i + 1}`);
 
-    await pollJobCompletion({
+    await uploadDataToJob(instanceUrl, tokens, job.id, idOnlyCsv);
+    logger.info(`[archival:delete] CSV uploaded to job | backupJobId:${backupJobId} objectName:${objectName} jobId:${job.id}`);
+
+    await closeAndSubmitJob(instanceUrl, tokens, job.id);
+    logger.info(`[archival:delete] job submitted | backupJobId:${backupJobId} objectName:${objectName} jobId:${job.id}`);
+
+    const { job: completedJob } = await pollJobCompletion({
       instanceUrl,
       tokens,
       jobId: job.id,
@@ -233,24 +259,29 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
     });
 
     const jobResults = await getJobResults(instanceUrl, tokens, job.id);
+    totalDeleted += jobResults.successCount;
+    totalFailed += jobResults.failedCount;
 
+    logger.info(`[archival:delete] job finished | backupJobId:${backupJobId} objectName:${objectName} jobId:${job.id} successCount:${jobResults.successCount} failedCount:${jobResults.failedCount} processed:${completedJob.numberRecordsProcessed}`);
+
+    // Send the delta for this file only — updateArchivalObject increments the stored
+    // value, so passing the running total would compound across files.
     await updateArchivalObject({
       backupJobId,
       object: {
         id: object.id,
-        // deletedSuccessRecordCount: jobResults.successCount,
-        deletedfailedRecordCount: jobResults.failedCount,
+        ...(jobResults.successCount ? { deletedSuccessRecordCount: jobResults.successCount } : {}),
+        ...(jobResults.failedCount  ? { deletedfailedRecordCount:   jobResults.failedCount  } : {}),
         salesforceApiCount: 3,
       },
     });
   }
 
+  logger.info(`[archival:delete] all files processed | backupJobId:${backupJobId} objectName:${objectName} totalDeleted:${totalDeleted} totalFailed:${totalFailed}`);
+
   await updateArchivalObject({
     backupJobId,
-    object: {
-      id: object.id,
-      status: OBJECT_STATUS.completed,
-    },
+    object: { id: object.id, status: OBJECT_STATUS.completed },
   });
 };
 

@@ -349,7 +349,9 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
     return;
   }
   makeResponse(req, res, 201, true, 'create');
-  await initalizePayloadTransform(config.backupConfigId);
+  initalizePayloadTransform(config.backupConfigId).catch((err) => {
+    logger.error('EMR job failed after response sent:', err?.message ?? err);
+  });
 };
 
 const syncMeatadataHandler = async (req: IRequest, res: IResponse): Promise<void> => {

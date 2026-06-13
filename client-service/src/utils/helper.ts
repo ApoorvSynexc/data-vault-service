@@ -178,5 +178,6 @@ export {
   isOwner,
   timer,
   formatSalesforceValueByDataType,
+  formatFieldValuesForSOQL,
   flattenBackupObjects
 };
