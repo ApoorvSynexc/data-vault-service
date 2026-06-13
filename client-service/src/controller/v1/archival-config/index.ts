@@ -1,4 +1,4 @@
-import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS } from "../../../constant";
+import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -7,7 +7,6 @@ import {
     getApexFields,
     getApexObjectChilds,
     getDestinationById,
-    triggerBackupJob,
     getBackupConfigsWithPagination,
     getCrmById,
     getTableCounter,
@@ -21,9 +20,11 @@ import {
     computeJobStats,
     computeArchivalJobStats,
     getApexObjectRecords,
+    triggerArchivalBackupJob,
 } from "../../../services";
-import { isOwner, wrapController } from "../../../utils/helper";
+import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
+import { IObject } from "../../../models";
 import { buildOwnWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 
 
@@ -136,16 +137,11 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
             return;
         }
 
-        if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
-            const scheduleConfig = req.body.scheduleConfig;
-            const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
-                && !scheduleConfig?.scheduling?.startDate
-                && !scheduleConfig?.scheduling?.startTime;
-            if (isOnceImmediate) {
-                await triggerBackupJob(config, undefined, 'archival');
-            } else {
-                // await createAwsEventScheduler(buildEventScheduleInput(config));
-            }
+        const { immediateObjects } = filtereObjects(req.body?.objects || []);
+        if (immediateObjects.length > 0) {
+            await triggerArchivalBackupJob(config, immediateObjects);
+        } else {
+            // await createAwsEventScheduler(buildEventScheduleInput(config));
         }
 
         makeResponse(req, res, 201, true, 'create', config);
@@ -229,6 +225,12 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     const updated = await updateBackupConfig(String(backupConfigId), req.body);
+    if (updated && !updated.lastBackupAt) {
+        const { immediateObjects } = filtereObjects(req.body?.objects || []);
+        if (immediateObjects.length > 0) {
+            await triggerArchivalBackupJob(updated, immediateObjects);
+        }
+    }
 
     if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
         // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
@@ -254,7 +256,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
     const config = existing!;
 
-    if (config.backupStatus === BACKUP_STATUS.pending) {
+    if (config.backupStatus === BACKUP_STATUS.pending && config.status !== STATUS.paused) {
         makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
         return;
     }
