@@ -1,10 +1,12 @@
 import { OBJECT_STATUS } from '../../../../../constant';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
-import { fetchCsvFromS3 } from '../../../../destination/s3';
-import { parseCSVLine } from '../../../../../utils/helper';
+import { fetchCsvFromS3, uploadToS3 } from '../../../../destination/s3';
+import { parseCSVLine, splitCSVRows } from '../../../../../utils/helper';
 import { SalesforceTokens } from '../../api-request';
 import { logger } from '../../../../../middlewares/logger';
+
+const RECORD_ERROR_BATCH_SIZE = 200;
 
 const SF_API_VERSION = 'v65.0';
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000;
@@ -180,33 +182,75 @@ const pollJobCompletion = async (paylaod: {
   }
 };
 
-const getJobResults = async (
+// Uploads per-record delete errors to S3 in batches of RECORD_ERROR_BATCH_SIZE.
+// Returns the S3 key prefix under which the batch files were written, or null if
+// no errors or the upload fails (non-fatal — counts are still accurate from completedJob).
+const uploadErrorsToS3 = async (
+  errors: Array<{ recordId: string; reason: string }>,
+  destConfig: IDestinationConfig,
+  backupJobId: string,
+  objectName: string,
+): Promise<string | null> => {
+  if (errors.length === 0) return null;
+  const prefix = `record_errors/${objectName}/${backupJobId}`;
+  const batches: Array<Array<{ recordId: string; reason: string }>> = [];
+  for (let i = 0; i < errors.length; i += RECORD_ERROR_BATCH_SIZE) {
+    batches.push(errors.slice(i, i + RECORD_ERROR_BATCH_SIZE));
+  }
+  await Promise.all(
+    batches.map((batch, idx) => {
+      const csv = ['recordId,error', ...batch.map(e => `${e.recordId},${JSON.stringify(e.reason)}`)].join('\n');
+      const key = `${prefix}/batch_${String(idx + 1).padStart(5, '0')}.csv`;
+      return uploadToS3(destConfig, key, Buffer.from(csv, 'utf-8'));
+    })
+  );
+  logger.info(`[archival:delete:errors-s3] uploaded ${batches.length} batch file(s) | backupJobId:${backupJobId} objectName:${objectName} prefix:${prefix}`);
+  return prefix;
+};
+
+// Fetches per-record errors from Salesforce for one completed ingest job.
+// Returns raw error entries — the caller accumulates them across all source
+// files and uploads to S3 once after the loop, so batch numbering is global.
+const getJobErrors = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  jobId: string
-): Promise<{ successCount: number; failedCount: number }> => {
-  const headers = { Authorization: `Bearer ${tokens.accessToken}` };
-  const base = `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`;
+  jobId: string,
+  completedJob: IJobStatusResponse,
+  backupJobId: string,
+  objectName: string,
+): Promise<{ successCount: number; failedCount: number; errors: Array<{ recordId: string; reason: string }> }> => {
+  const successCount = completedJob.numberRecordsProcessed - completedJob.numberRecordsFailed;
+  const failedCount  = completedJob.numberRecordsFailed;
+  const errors: Array<{ recordId: string; reason: string }> = [];
 
-  const [successRes, failedRes] = await Promise.all([
-    fetch(`${base}/successfulResults`, { headers }),
-    fetch(`${base}/failedResults`,     { headers }),
-  ]);
-
-  if (!successRes.ok) {
-    throw new Error(`Failed to fetch successful results: ${successRes.statusText}`);
+  if (failedCount > 0) {
+    try {
+      const headers = { Authorization: `Bearer ${tokens.accessToken}` };
+      const base = `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`;
+      const failedRes = await fetch(`${base}/failedResults`, { headers });
+      if (failedRes.ok) {
+        const failedText = await failedRes.text();
+        const rows = splitCSVRows(failedText);
+        if (rows.length > 1) {
+          const headerCols = parseCSVLine(rows[0]).map(c => c.toLowerCase());
+          const idIdx  = headerCols.findIndex(c => c === 'sf__id');
+          const errIdx = headerCols.findIndex(c => c === 'sf__error');
+          for (const row of rows.slice(1)) {
+            const cols = parseCSVLine(row);
+            errors.push({
+              recordId: idIdx  >= 0 ? (cols[idIdx]  || 'unknown') : 'unknown',
+              reason:   errIdx >= 0 ? (cols[errIdx] || 'unknown') : 'unknown',
+            });
+          }
+          logger.warn(`[archival:delete:failed-records] backupJobId:${backupJobId} objectName:${objectName} jobId:${jobId} count:${errors.length} sample:${errors.slice(0, 3).map(e => `${e.recordId}: ${e.reason}`).join(' | ')}`);
+        }
+      }
+    } catch (err: any) {
+      logger.warn(`[archival:delete:failed-records] fetch error (non-fatal) | backupJobId:${backupJobId} objectName:${objectName} jobId:${jobId} err:${err?.message}`);
+    }
   }
-  if (!failedRes.ok) {
-    throw new Error(`Failed to fetch failed results: ${failedRes.statusText}`);
-  }
 
-  const [successText, failedText] = await Promise.all([successRes.text(), failedRes.text()]);
-
-  // CSV rows minus header row minus trailing empty line = record count
-  const successCount = successText.split('\n').filter(l => l.trim()).length - 1;
-  const failedCount  = failedText.split('\n').filter(l => l.trim()).length - 1;
-
-  return { successCount, failedCount };
+  return { successCount, failedCount, errors };
 };
 
 export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<void> => {
@@ -222,13 +266,18 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
 
   let totalDeleted = 0;
   let totalFailed = 0;
+  // Accumulate errors from all source files so they are written to S3 once
+  // after the loop with a single global batch sequence — no file overwrites.
+  const allErrors: Array<{ recordId: string; reason: string }> = [];
 
   for (let i = 0; i < s3Urls.length; i++) {
     const objectKey = s3Urls[i];
     logger.info(`[archival:delete] processing S3 file ${i + 1}/${s3Urls.length} | backupJobId:${backupJobId} objectName:${objectName} key:${objectKey}`);
 
     const { csvData } = await fetchCsvFromS3(destConfig, objectKey);
-    const lines = csvData.split('\n').filter((line) => line.trim());
+    // splitCSVRows correctly handles quoted fields containing embedded newlines,
+    // avoiding false row splits that inflate the record count.
+    const lines = splitCSVRows(csvData);
     const headers = parseCSVLine(lines[0]).map((col) => col.toLowerCase());
     const headerIndex = headers.findIndex((col) => col === 'id');
 
@@ -236,8 +285,8 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
       throw new Error(`CSV does not contain Id column — key:${objectKey}`);
     }
 
-    // Build Id-only CSV: header row + one Id per data row.
-    const idOnlyCsv = lines.map((line) => parseCSVLine(line)[headerIndex]).join('\n');
+    // Build Id-only CSV: header row ("Id") + one Salesforce Id per data row.
+    const idOnlyCsv = ['Id', ...lines.slice(1).map((line) => parseCSVLine(line)[headerIndex])].join('\n');
     const recordCount = lines.length - 1; // exclude header
     logger.info(`[archival:delete] extracted ${recordCount} IDs | backupJobId:${backupJobId} objectName:${objectName} file:${i + 1}`);
 
@@ -258,14 +307,14 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
       object,
     });
 
-    const jobResults = await getJobResults(instanceUrl, tokens, job.id);
+    const jobResults = await getJobErrors(instanceUrl, tokens, job.id, completedJob, backupJobId, objectName);
     totalDeleted += jobResults.successCount;
     totalFailed += jobResults.failedCount;
+    allErrors.push(...jobResults.errors);
 
     logger.info(`[archival:delete] job finished | backupJobId:${backupJobId} objectName:${objectName} jobId:${job.id} successCount:${jobResults.successCount} failedCount:${jobResults.failedCount} processed:${completedJob.numberRecordsProcessed}`);
 
-    // Send the delta for this file only — updateArchivalObject increments the stored
-    // value, so passing the running total would compound across files.
+    // Increment counts per file (delta only — updateArchivalObject accumulates).
     await updateArchivalObject({
       backupJobId,
       object: {
@@ -277,11 +326,23 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<vo
     });
   }
 
-  logger.info(`[archival:delete] all files processed | backupJobId:${backupJobId} objectName:${objectName} totalDeleted:${totalDeleted} totalFailed:${totalFailed}`);
+  // Upload all accumulated errors in one pass so batch_00001…batch_NNNNN are
+  // numbered globally across all source files, with no overwrites.
+  const recordErrorsS3Prefix = await uploadErrorsToS3(allErrors, destConfig, backupJobId, objectName);
+
+  logger.info(`[archival:delete] all files processed | backupJobId:${backupJobId} objectName:${objectName} totalDeleted:${totalDeleted} totalFailed:${totalFailed} totalErrors:${allErrors.length}`);
+
+  const objectFinalStatus = totalFailed > 0 && totalDeleted > 0
+    ? OBJECT_STATUS.partialFailure
+    : OBJECT_STATUS.completed;
 
   await updateArchivalObject({
     backupJobId,
-    object: { id: object.id, status: OBJECT_STATUS.completed },
+    object: {
+      id: object.id,
+      status: objectFinalStatus,
+      ...(recordErrorsS3Prefix ? { recordErrorsS3Prefix } : {}),
+    },
   });
 };
 

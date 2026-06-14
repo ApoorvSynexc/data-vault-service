@@ -126,6 +126,7 @@ const BACKUP_STATUS = {
   // resumed: 'RESUMED',
   success: 'SUCCESS',
   failed: 'FAILED',
+  partialFailure: 'PARTIAL_FAILURE',
   pending: 'PENDING',
 };
 const JOB_STATUS = {

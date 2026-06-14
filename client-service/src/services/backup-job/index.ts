@@ -44,10 +44,12 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
   return (result.Count ?? 0) > 0;
 };
 
-const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject[], lastUpdatedAt?: string) => {
-  const active = await hasActiveBackupJob(config.backupConfigId);
-  if (active) {
-    return null;
+const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject[], lastUpdatedAt?: string, bypassDedup?: boolean) => {
+  if (!bypassDedup) {
+    const active = await hasActiveBackupJob(config.backupConfigId);
+    if (active) {
+      return null;
+    }
   }
 
   const [crm, destination] = await Promise.all([

@@ -1,9 +1,10 @@
 import dayjs from 'dayjs';
-import { IBackupJob, IDestinationConfig, ISource } from '../../models';
-import { JOB_STATUS } from '../../constant';
+import { IBackupJob, IBackupObject, IDestinationConfig, ISource } from '../../models';
+import { BACKUP_STATUS, JOB_STATUS, OBJECT_STATUS } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler } from '../third-party/registry';
-import { getBackupJob, updateJobStatus } from '../backup-job';
+import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
+import { updateBackupConfig } from '../backup-config';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
 
@@ -140,6 +141,34 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       })
     ) as IDestinationConfig;
 
+    // For objects that failed during or before the delete phase, clear stale error
+    // fields so they don't persist into the retry run. Objects that already reached
+    // UPLOAD_COMPLETED are NOT reset — the orchestrator will skip straight to Phase 3
+    // (delete-only) for them, avoiding a redundant re-upload.
+    const clearObjectError = async (obj: IBackupObject) => {
+      const st = obj.status;
+      if (st === OBJECT_STATUS.failed || st === OBJECT_STATUS.partialFailure) {
+        // Clear stale error/deletion fields; leave status and bulkJobId intact
+        // so the orchestrator can determine which phase to resume from.
+        await updateArchivalObject({
+          backupJobId,
+          object: {
+            id: obj.id,
+            errorMessage: '',
+            recordErrorsS3Prefix: undefined,
+            deletedfailedRecordCount: 0,
+            deletedSuccessRecordCount: 0,
+          },
+        });
+      }
+      for (const child of obj.children ?? []) {
+        await clearObjectError(child);
+      }
+    };
+    for (const obj of object ?? []) {
+      await clearObjectError(obj);
+    }
+
     const handler = getCrmHandler(source.crmName);
     await handler.runArchival(
       backupConfigId,
@@ -158,12 +187,15 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     });
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
-    await updateJobStatus({
-      backupJobId,
-      status: JOB_STATUS.failed,
-      completedAt: dayjs().toISOString(),
-      errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    await Promise.all([
+      updateJobStatus({
+        backupJobId,
+        status: JOB_STATUS.failed,
+        completedAt: dayjs().toISOString(),
+        errorMessage: err?.message ?? 'Unknown error',
+      }).catch(() => {}),
+      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => {}),
+    ]);
   } finally {
     activeJobs.delete(backupJobId);
   }
