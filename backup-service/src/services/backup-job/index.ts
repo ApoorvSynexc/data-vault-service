@@ -330,11 +330,11 @@ const recursivelyUpdateObjects = async (
     objects.map(async (obj) => {
       if (obj.id === object.id) {
         const isReset = (object as any).status === OBJECT_STATUS.created;
-        return {
+        const merged = {
           ...obj,
           ...object,
           // Clear stale error fields when the object is reset for a retry run.
-          ...(isReset ? { errorMessage: undefined, recordErrorsS3Prefix: undefined, deletedfailedRecordCount: 0, deletedSuccessRecordCount: 0 } : {}),
+          ...(isReset ? { errorMessage: '', deletedfailedRecordCount: 0, deletedSuccessRecordCount: 0 } : {}),
           ...(!isReset && (object as any)?.salesforceApiCount
             ? {
                 salesforceApiCount:
@@ -358,6 +358,10 @@ const recursivelyUpdateObjects = async (
             ? { recordErrorsS3Prefix: (object as any).recordErrorsS3Prefix }
             : {}),
         };
+        // Strip undefined values — DynamoDB rejects them in map/array attributes.
+        return Object.fromEntries(
+          Object.entries(merged).filter(([, v]) => v !== undefined)
+        ) as IBackupObject;
       }
       if (obj.children?.length) {
         return { ...obj, children: await recursivelyUpdateObjects(obj.children, object) };

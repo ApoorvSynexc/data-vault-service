@@ -34,26 +34,6 @@ export interface IDryRunPayload {
   objects: ISalesforceObject[];
 }
 
-// ── Engine internal types ─────────────────────────────────────────────────────
-
-export interface IOccurrence extends ISalesforceObject {
-  parentObjectName: string | null;
-  depth: number;
-  ancestorChain: ISalesforceObject[];
-}
-
-export interface IGraphNode {
-  occurrences: IOccurrence[];
-  dependsOn: Set<string>;
-}
-
-export type IExecutionGraph = Map<string, IGraphNode>;
-
-export interface IPivotResult {
-  crossObjectAncestors: number[];
-  idHarvestAncestors: number[];
-}
-
 export interface ICountItem {
   key: string;
   apiName: string;

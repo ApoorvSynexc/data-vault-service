@@ -31,6 +31,7 @@ const JOB_STATUS = {
   running: 'RUNNING',
   success: 'SUCCESS',
   failed: 'FAILED',
+  partialFailure: 'PARTIAL_FAILURE',
 };
 
 const JOB_TYPE = {
@@ -57,7 +58,10 @@ const OBJECT_STATUS = {
   uploadCompleted: 'UPLOAD_COMPLETED',
   deletionInProgress: 'DELETION_IN_PROGRESS',
   completed: 'COMPLETED',
-  partialFailure: 'PARTIAL_FAILURE',
+  // Delete phase failed before any records were processed (job-level / infrastructure error)
+  deletionJobFailed: 'DELETION_JOB_FAILED',
+  // Delete job succeeded but some individual records were rejected by Salesforce
+  deletionRecordsFailed: 'DELETION_RECORDS_FAILED',
   failed: 'FAILED',
 };
 

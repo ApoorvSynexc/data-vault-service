@@ -3,6 +3,7 @@ import { logger } from '../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig, ISource } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { updateBackupConfig } from '../../backup-config';
+import { getBackupJob } from '../../backup-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
@@ -199,11 +200,11 @@ const salesforceHandler: ICrmBackupHandler = {
     destinationType: string,
     destConfig: IDestinationConfig,
     object?: IBackupObject[]
-  ): Promise<void> => {
+  ): Promise<'SUCCESS' | 'PARTIAL_FAILURE'> => {
     const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
 
     if (!object?.length) {
-      return;
+      return 'SUCCESS';
     }
 
     const tokens: SalesforceTokens = {
@@ -212,37 +213,54 @@ const salesforceHandler: ICrmBackupHandler = {
       crmId,
     };
 
-    let anyFailed = false;
-    let anySucceeded = false;
-    for (let i = 0; i < object.length; i++) {
-      try {
-        await exportWithRetryArchival(
-          backupConfigId,
-          backupJobId,
-          instanceUrl,
-          tokens,
-          crmName,
-          object[i],
-          destinationType,
-          destConfig
-        );
-        anySucceeded = true;
-      } catch (err: any) {
-        // Object already marked FAILED + errorMessage inside archiveAndHardDelete.
-        // Log and continue so remaining objects are not skipped.
-        anyFailed = true;
-        logger.error(`[archival] object failed — continuing with remaining objects | backupJobId:${backupJobId} objectName:${object[i].name} error:${err?.message}`);
-      }
+    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
+      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+      await Promise.allSettled(
+        batch.map((item) =>
+          exportWithRetryArchival(
+            backupConfigId,
+            backupJobId,
+            instanceUrl,
+            tokens,
+            crmName,
+            item,
+            destinationType,
+            destConfig
+          ).catch((err: any) => {
+            // Object already marked FAILED + errorMessage inside archiveAndHardDelete.
+            // Log and continue so remaining objects are not skipped.
+            logger.error(`[archival] object failed — continuing with remaining objects | backupJobId:${backupJobId} objectName:${item.name} error:${err?.message}`);
+          })
+        )
+      );
     }
 
-    const finalStatus = anyFailed && anySucceeded
+    // Derive final status from the actual object statuses written to DynamoDB.
+    // Only COMPLETED counts as success — DELETION_RECORDS_FAILED and DELETION_JOB_FAILED
+    // are both failure states even though the delete phase ran.
+    const freshJob = await getBackupJob(backupJobId);
+    const flattenObjects = (items: IBackupObject[]): IBackupObject[] =>
+      items.flatMap((o) => [o, ...flattenObjects(o.children ?? [])]);
+    const allObjects = flattenObjects(freshJob?.object ?? []);
+
+    const FAILURE_STATUSES = new Set([
+      OBJECT_STATUS.failed,
+      OBJECT_STATUS.deletionJobFailed,
+      OBJECT_STATUS.deletionRecordsFailed,
+    ]);
+    const hasAnyFailure  = allObjects.some((o) => FAILURE_STATUSES.has(o.status ?? ''));
+    const hasAnySuccess  = allObjects.some((o) => o.status === OBJECT_STATUS.completed);
+
+    const finalStatus = hasAnyFailure && hasAnySuccess
       ? BACKUP_STATUS.partialFailure
-      : anyFailed
+      : hasAnyFailure
       ? BACKUP_STATUS.failed
       : BACKUP_STATUS.success;
 
     await updateBackupConfig(backupConfigId, { backupStatus: finalStatus });
-    logger.info(`Archival job completed | backupJobId:${backupJobId} anyFailed:${anyFailed} anySucceeded:${anySucceeded} finalStatus:${finalStatus}`);
+    logger.info(`Archival job completed | backupJobId:${backupJobId} hasAnyFailure:${hasAnyFailure} hasAnySuccess:${hasAnySuccess} finalStatus:${finalStatus}`);
+
+    return hasAnyFailure ? 'PARTIAL_FAILURE' : 'SUCCESS';
   },
 };
 

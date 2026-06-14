@@ -185,7 +185,7 @@ const apexValidateSoql = async (
   return result.data;
 };
 
-// ── Shared filter types for harvest-ids and object-record-count ───────────────
+// ── Shared filter types for object-record-count ───────────────────────────────
 type ApexWhereFilter = { whereClause?: string };
 type ApexIdsFilter   = { parentFieldName: string; ids: string[] };
 type ApexFilterMode  = ApexWhereFilter | ApexIdsFilter;
@@ -199,56 +199,6 @@ export interface IApexCountOneResult {
   errorCode?: string;
   errorMessage?: string;
 }
-
-const HARVEST_PAGE_SIZE = 2000;
-
-// Harvest all matching record IDs with cursor-based pagination.
-// Accepts either a whereClause string or a parentFieldName + ids pair.
-// Returns the harvested IDs and the number of Apex API calls made (one per page).
-const apexHarvestIds = async (
-  crmId: string,
-  apiName: string,
-  filter: ApexFilterMode = {}
-): Promise<{ ids: string[]; callCount: number }> => {
-  const crm = await getCrmById(crmId);
-  if (!crm) { throw new Error('CRM not found'); }
-
-  const { access_token, refresh_token } = getCrmTokens(crm);
-  const instanceUrl = crm.crmProfile?.instanceUrl;
-  if (!instanceUrl) { throw new Error('Instance URL not found'); }
-
-  const tokens = { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl };
-  const filterPayload = isIdsMode(filter)
-    ? { parentFieldName: filter.parentFieldName, ids: filter.ids }
-    : { whereClause: (filter as ApexWhereFilter).whereClause ?? null };
-
-  const allIds: string[] = [];
-  let cursor = '';
-  let callCount = 0;
-
-  for (;;) {
-    callCount++;
-    const result = await salesforceRequest(
-      {
-        url:    `${APEX_BASE(instanceUrl)}/harvest-ids`,
-        method: 'POST',
-        body:   JSON.stringify({ apiName, ...filterPayload, cursor, pageSize: HARVEST_PAGE_SIZE }),
-      },
-      tokens
-    );
-
-    const data = result.data;
-    if (!data.success) {
-      throw new Error(`[harvest-ids] failed for ${apiName}: ${JSON.stringify(data)}`);
-    }
-
-    allIds.push(...(data.ids ?? []));
-    if (data.done) { break; }
-    cursor = data.nextCursor;
-  }
-
-  return { ids: allIds, callCount };
-};
 
 // Count a single object via one Apex call — used by the dry-run leaf step.
 // Accepts either a whereClause string or a parentFieldName + ids pair.
@@ -289,4 +239,4 @@ export const apexCountOne = async (
   return { count: r.recordCount ?? null, success: r.success, errorCode: r.errorCode, errorMessage: r.errorMessage };
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexCountBatch, apexValidateSoql, apexHarvestIds };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexCountBatch, apexValidateSoql };
