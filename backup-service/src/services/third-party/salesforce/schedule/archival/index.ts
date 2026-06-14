@@ -29,16 +29,21 @@ import { IBackupField, IBackupObject, IDestinationConfig } from '../../../../../
 import { recursivelyUpdateObjects, updateArchivalObject } from '../../../../backup-job';
 import { buildS3KeyPrefix, buildSchemaS3Key, toParquetDataType, formatFieldValuesForSOQL, formatValueByDataType } from '../../../../../utils/helper';
 import { listS3Objects, uploadToS3 } from '../../../../destination/s3';
-import { fetchObjectAndDescend, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
+import { uploadSingleObject, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
-import { bulkDeleteRecords } from './delete-bulk';
+import { buildFailedRecordsIdCsv, bulkDeleteRecords } from './delete-bulk';
 
-// Statuses that mean Phase 2 (upload) already completed — retry should only run Phase 3 (delete).
+// Statuses that mean Phase 2 (upload) already completed — retry skips to Phase 3 (delete all from S3).
 const DELETE_ONLY_STATUSES = new Set([
   OBJECT_STATUS.uploadCompleted,
   OBJECT_STATUS.deletionInProgress,
-  OBJECT_STATUS.partialFailure,
+  OBJECT_STATUS.deletionJobFailed,
+]);
+
+// Phase 3 retry using only the previously-failed record IDs from the error log.
+const FAILED_RECORDS_RETRY_STATUSES = new Set([
+  OBJECT_STATUS.deletionRecordsFailed,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -191,25 +196,9 @@ const buildWhereClause = (object: IBackupObject): string => {
 };
 
 // ---------------------------------------------------------------------------
-// Tree helper
+// Tree helpers
 // ---------------------------------------------------------------------------
 
-/**
- * findObjectInTree
- *
- * WHAT:  Recursively searches the parent-child object tree for a node whose
- *        name matches the given string.
- *
- * WHY:   After uploadBulkResultsByPageArchival returns s3UrlsPerObject (keyed
- *        by object name string), we need the actual IBackupObject instance for
- *        each entry to pass to bulkDeleteRecords (which needs object.id and
- *        object.name). This function resolves that lookup from the original tree.
- *
- * INPUT:  root — the root of the object tree (the parent object)
- *         name — Salesforce API object name to search for
- *
- * RETURNS: The matching IBackupObject, or undefined if not found.
- */
 const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
   if (root.name === name) { return root; }
   for (const child of root.children ?? []) {
@@ -217,6 +206,88 @@ const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | un
     if (found) { return found; }
   }
   return undefined;
+};
+
+// Carries a node + the already-transformed WHERE body for that node's level.
+interface NodeWithContext {
+  object: IBackupObject;
+  parentWhereBody: string;
+}
+
+const CONCURRENCY_LIMIT = 6;
+
+// ---------------------------------------------------------------------------
+// Phase 3 — recursive post-order delete (children before parent)
+// ---------------------------------------------------------------------------
+
+// Params shared across every level of the deleteNode recursion.
+interface IDeleteNodeParams {
+  backupConfigId: string;
+  backupJobId: string;
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  destConfig: IDestinationConfig;
+  s3UrlsById: Map<string, string[]>;
+  // IDs of nodes whose upload failed during Phase 2 — used to block parent deletes.
+  uploadFailedIds: Set<string>;
+  node: IBackupObject;
+  skipCompleted: boolean;
+}
+
+// Returns the final status string of the node so the parent can gate its own delete.
+const deleteNode = async (params: IDeleteNodeParams): Promise<string> => {
+  const { backupConfigId, backupJobId, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, node, skipCompleted } = params;
+  const children = node.children ?? [];
+
+  // 1. Delete all children first (in parallel batches), children-before-parent.
+  //    Collect the final status each child resolves to.
+  const childStatuses: string[] = [];
+  for (let i = 0; i < children.length; i += CONCURRENCY_LIMIT) {
+    const batch = children.slice(i, i + CONCURRENCY_LIMIT);
+    const results = await Promise.allSettled(
+      batch.map((child) => deleteNode({ ...params, node: child }))
+    );
+    for (const r of results) {
+      childStatuses.push(r.status === 'fulfilled' ? r.value : OBJECT_STATUS.deletionJobFailed);
+    }
+  }
+
+  // 2. Skip if already completed on a previous run.
+  if (skipCompleted && node.status === OBJECT_STATUS.completed) {
+    logger.info(`[archival:delete] skip (already completed) | backupJobId:${backupJobId} objectName:${node.name}`);
+    return OBJECT_STATUS.completed;
+  }
+
+  // 3. If any direct child returned DELETION_JOB_FAILED, block this parent's delete.
+  //    DELETION_RECORDS_FAILED does NOT block — it means the Salesforce job ran
+  //    successfully but individual records were rejected, so parent can still run.
+  const hasBlockingChildFailure = childStatuses.some((s) => s === OBJECT_STATUS.deletionJobFailed);
+  if (hasBlockingChildFailure) {
+    logger.warn(`[archival:delete] parent blocked — child DELETION_JOB_FAILED | backupJobId:${backupJobId} objectName:${node.name}`);
+    await updateArchivalObject({
+      backupJobId,
+      object: { id: node.id, status: OBJECT_STATUS.deletionJobFailed, errorMessage: 'Blocked: one or more child objects failed deletion' },
+    });
+    return OBJECT_STATUS.deletionJobFailed;
+  }
+
+  // 4. If no S3 keys, the node either had 0 records (COMPLETED) or its upload FAILED.
+  //    Use uploadFailedIds (populated during Phase 2 BFS) — node.status is stale in-memory.
+  const s3Keys = s3UrlsById.get(node.id) ?? [];
+  if (!s3Keys.length) {
+    if (uploadFailedIds.has(node.id)) {
+      logger.warn(`[archival:delete] skip — upload failed, blocking parent | backupJobId:${backupJobId} objectName:${node.name}`);
+      return OBJECT_STATUS.deletionJobFailed;
+    }
+    logger.info(`[archival:delete] skip (no S3 files / 0 records) | backupJobId:${backupJobId} objectName:${node.name}`);
+    return OBJECT_STATUS.completed;
+  }
+
+  // 5. Run this node's delete job and return the status it wrote to DynamoDB.
+  logger.info(`[archival:delete] deleting | backupJobId:${backupJobId} objectName:${node.name} s3FileCount:${s3Keys.length}`);
+  const finalStatus = await bulkDeleteRecords({ backupConfigId, backupJobId, instanceUrl, tokens, object: node, destConfig, s3Urls: s3Keys });
+  logger.info(`[archival:delete] complete | backupJobId:${backupJobId} objectName:${node.name} finalStatus:${finalStatus}`);
+  return finalStatus;
 };
 
 // ---------------------------------------------------------------------------
@@ -274,9 +345,6 @@ export const archiveAndHardDelete = async (
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
-  let backupConfig;
-  let totalRecordCount: number;
-  let jobId: string;
   const whereClause = buildWhereClause(object);
 
   logger.info(`[archival:orchestrator] started | backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} incomingStatus:${object.status ?? 'none'} whereClause:"${whereClause || '(none)'}"`);
@@ -290,33 +358,74 @@ export const archiveAndHardDelete = async (
     type: 'archival',
   });
 
+  // keyed by object.id — populated during BFS upload, read during post-order delete
+  const s3UrlsById = new Map<string, string[]>();
+
+  // Check once — used by both retry shortcuts below.
+  const hasFailedDescendant = (node: IBackupObject): boolean =>
+    node.status === OBJECT_STATUS.failed ||
+    (node.children ?? []).some(hasFailedDescendant);
+
   try {
-    // When the object already completed Phase 2 (upload) in a previous run, skip
-    // straight to Phase 3 (delete). Recover S3 URLs by listing the deterministic
-    // prefix — no re-query or re-upload needed.
-    if (DELETE_ONLY_STATUSES.has(object.status ?? '')) {
-      logger.info(`[archival:orchestrator] delete-only retry — skipping phases 1 & 2 | backupJobId:${backupJobId} objectName:${objectName}`);
-
-      // Build s3UrlsPerObject by listing S3 for this object and every descendant.
-      const s3UrlsPerObject = new Map<string, string[]>();
-      const collectS3Urls = async (node: IBackupObject) => {
-        const nodePrefix = buildS3KeyPrefix({ crmId, crmName, backupConfigId, objectName: node.name, operation: 'inserts', type: 'archival' });
-        s3UrlsPerObject.set(node.name, await listS3Objects(destConfig, nodePrefix));
-        for (const child of node.children ?? []) {
-          await collectS3Urls(child);
-        }
-      };
-      await collectS3Urls(object);
-
-      // Reuse the same delete loop as a normal Phase 3 run (deepest-child-first).
-      await runDeletePhase({ backupConfigId, backupJobId, instanceUrl, tokens, object, destConfig, s3UrlsPerObject, skipCompleted: true });
-      logger.info(`[archival:orchestrator] delete-only retry complete | backupJobId:${backupJobId} objectName:${objectName}`);
-      return;
+    // -------------------------------------------------------------------------
+    // DELETION_RECORDS_FAILED retry — resubmit only the previously-failed record
+    // IDs from error logs; no re-query or re-upload needed.
+    //
+    // Exception: if any descendant is still FAILED (upload never completed),
+    // fall through to Phase 1+2+3 so the child is re-uploaded first.
+    // -------------------------------------------------------------------------
+    if (FAILED_RECORDS_RETRY_STATUSES.has(object.status ?? '')) {
+      if (hasFailedDescendant(object)) {
+        logger.info(`[archival:orchestrator] failed-records retry has FAILED descendants — falling through to full Phase 1+2+3 | backupJobId:${backupJobId} objectName:${objectName}`);
+        // Fall through to Phase 1+2+3 below.
+      } else {
+        logger.info(`[archival:orchestrator] failed-records-only retry | backupJobId:${backupJobId} objectName:${objectName}`);
+        await runFailedRecordsPhase({ backupConfigId, backupJobId, instanceUrl, tokens, object, destConfig });
+        logger.info(`[archival:orchestrator] failed-records-only retry complete | backupJobId:${backupJobId} objectName:${objectName}`);
+        return;
+      }
     }
 
-    // --- Phase 1 + 2 + 3 (normal / bulk-query-failed retry) ---
+    // -------------------------------------------------------------------------
+    // DELETE_ONLY retry — Phase 2 already completed for this node; go straight
+    // to the post-order delete, rebuilding s3UrlsById from S3 listings.
+    //
+    // Exception: if any descendant is still FAILED (upload never completed),
+    // skip the shortcut entirely and fall through to Phase 1+2+3. Phase 1 will
+    // resume from the existing bulkJobId cheaply; Phase 2 BFS will re-run the
+    // failed child (uploadSingleObject skips already-UPLOAD_COMPLETED siblings).
+    // -------------------------------------------------------------------------
+    if (DELETE_ONLY_STATUSES.has(object.status ?? '')) {
+      if (hasFailedDescendant(object)) {
+        logger.info(`[archival:orchestrator] delete-only retry has FAILED descendants — falling through to full Phase 1+2+3 | backupJobId:${backupJobId} objectName:${objectName}`);
+        // Fall through to Phase 1+2+3 below. Phase 1 resumes from existing bulkJobId.
+      } else {
+        logger.info(`[archival:orchestrator] delete-only retry — skipping phases 1 & 2 | backupJobId:${backupJobId} objectName:${objectName}`);
 
+        const rebuildS3Urls = async (node: IBackupObject): Promise<void> => {
+          if (DELETE_ONLY_STATUSES.has(node.status ?? '') || node.status === OBJECT_STATUS.completed) {
+            const prefix = buildS3KeyPrefix({ crmId, crmName, backupConfigId, objectName: node.name, operation: 'inserts', type: 'archival' });
+            s3UrlsById.set(node.id, await listS3Objects(destConfig, prefix));
+          }
+          for (const child of node.children ?? []) {
+            await rebuildS3Urls(child);
+          }
+        };
+        await rebuildS3Urls(object);
+
+        await deleteNode({ backupConfigId, backupJobId, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds: new Set(), node: object, skipCompleted: true });
+        logger.info(`[archival:orchestrator] delete-only retry complete | backupJobId:${backupJobId} objectName:${objectName}`);
+        return;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 1 — Bulk Query for root object (create or resume)
+    // -------------------------------------------------------------------------
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
+
+    let jobId: string;
+    let totalRecordCount: number;
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
@@ -329,7 +438,7 @@ export const archiveAndHardDelete = async (
       logger.info(`[archival:orchestrator] SOQL | backupJobId:${backupJobId} objectName:${objectName} soql:${soql}`);
 
       try {
-        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: "query" });
+        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'query' });
       } catch (err: any) {
         throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
       }
@@ -345,38 +454,139 @@ export const archiveAndHardDelete = async (
 
     logger.info(`[archival:orchestrator] phase 1 complete | backupJobId:${backupJobId} objectName:${objectName} totalRecordCount:${totalRecordCount}`);
 
-    if (totalRecordCount) {
-      const { s3UrlsPerObject } = await uploadBulkResultsByPageArchival({
+    // -------------------------------------------------------------------------
+    // Phase 2 — BFS level-by-level upload (top-down)
+    //
+    // Level 0: root object (via uploadBulkResultsByPageArchival which handles
+    //          page-level resumption from currentLocator).
+    // Level N+1: children of all successfully-uploaded level-N nodes.
+    //
+    // If a node's upload FAILS → its children stay PENDING (never enqueued).
+    // If a node has 0 records → mark COMPLETED, skip its entire subtree.
+    // -------------------------------------------------------------------------
+    const parentWhereBody = whereClause.replace(/^WHERE\s+/i, '').trim();
+
+    if (totalRecordCount === 0) {
+      // Root has 0 records — mark it COMPLETED and skip the entire tree.
+      logger.info(`[archival:orchestrator] 0 records — marking root COMPLETED, skipping subtree | backupJobId:${backupJobId} objectName:${objectName}`);
+      await updateArchivalObject({ backupJobId, object: { id: object.id, status: OBJECT_STATUS.completed, completedRecordCount: 0, errorMessage: '' } });
+      return;
+    }
+
+    // Process root (level 0) first — it has its own upload logic (page resumption).
+    // Skip if root already completed upload (e.g. falling through from DELETION_JOB_FAILED
+    // with a FAILED child — root's S3 files already exist, no need to re-stream).
+    logger.info(`[archival:orchestrator] phase 2 starting — BFS upload | backupJobId:${backupJobId} objectName:${objectName}`);
+    const ROOT_UPLOAD_DONE_STATUSES = new Set([
+      OBJECT_STATUS.uploadCompleted,
+      OBJECT_STATUS.deletionInProgress,
+      OBJECT_STATUS.deletionJobFailed,
+      OBJECT_STATUS.deletionRecordsFailed,
+      OBJECT_STATUS.completed,
+    ]);
+    if (ROOT_UPLOAD_DONE_STATUSES.has(object.status ?? '')) {
+      logger.info(`[archival:orchestrator] root upload already done — rebuilding S3 urls from listing | backupJobId:${backupJobId} objectName:${objectName} status:${object.status}`);
+      const existingKeys = await listS3Objects(destConfig, archivePrefix);
+      s3UrlsById.set(object.id, existingKeys);
+    } else {
+      const { s3UrlsPerObject: rootS3Map } = await uploadBulkResultsByPageArchival({
         instanceUrl, tokens, jobId, backupJobId, object, destConfig,
         s3KeyPrefix: archivePrefix, crmId, crmName, backupConfigId,
-        parentWhereBody: whereClause.replace(/^WHERE\s+/i, '').trim(),
+        parentWhereBody,
         startLocator: object.currentLocator ?? null,
         startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
-      logger.info(`[archival:orchestrator] phase 2 complete | backupJobId:${backupJobId} objectName:${objectName}`);
-
-      backupConfig = await getBackupConfigById(backupConfigId);
-      if (backupConfig?.objects) {
-        const updatedObjects = await recursivelyUpdateObjects(backupConfig.objects, { id: object.id, sizeInBytes: 0 });
-        await updateBackupConfig(backupConfigId, { sizeInBytes: (backupConfig.sizeInBytes ?? 0), objects: updatedObjects });
+      // uploadBulkResultsByPageArchival keys by object.name; remap to object.id
+      for (const [name, keys] of rootS3Map) {
+        const found = findObjectInTree(object, name);
+        if (found) s3UrlsById.set(found.id, keys);
       }
-
-      await runDeletePhase({ backupConfigId, backupJobId, instanceUrl, tokens, object, destConfig, s3UrlsPerObject, skipCompleted: false });
-      logger.info(`[archival:orchestrator] phase 3 complete | backupJobId:${backupJobId} objectName:${objectName}`);
-
-      const schemaWithParquet = schema.map((field: { dataType: string }) => ({ ...field, parquetDataType: toParquetDataType(field.dataType) }));
-      await uploadToS3(destConfig, buildSchemaS3Key({ crmId, crmName, backupConfigId, objectName, type: 'archival' }), Buffer.from(JSON.stringify(schemaWithParquet, null, 2)));
-      logger.info(`[archival:orchestrator] schema uploaded | backupJobId:${backupJobId} objectName:${objectName}`);
-
-    } else if (object.children?.length) {
-      const ctx = { instanceUrl, tokens, destConfig, s3KeyPrefix: archivePrefix, crmId, crmName, backupConfigId };
-      for (const child of object.children) {
-        await fetchObjectAndDescend(backupJobId, '', child, ctx);
-      }
-      await updateArchivalObject({ backupJobId, object: { id: object.id, status: OBJECT_STATUS.completed } });
-    } else {
-      logger.info(`[archival:orchestrator] 0 records and no children — nothing to do | backupJobId:${backupJobId} objectName:${objectName}`);
     }
+    logger.info(`[archival:orchestrator] root upload complete | backupJobId:${backupJobId} objectName:${objectName}`);
+
+    // BFS: enqueue root's children for level 1.
+    // Pass the root's raw parentWhereBody — uploadSingleObject calls transformWhereBodyForChild
+    // itself, so we must NOT pre-transform here to avoid double-transformation.
+    let currentLevel: NodeWithContext[] = (object.children ?? []).map((child) => ({
+      object: child,
+      parentWhereBody,
+    }));
+
+    const ctx = { instanceUrl, tokens, destConfig, s3KeyPrefix: archivePrefix, crmId, crmName, backupConfigId };
+
+    // Tracks node IDs whose upload failed — used by deleteNode to block parent deletes.
+    // node.status is stale (in-memory) so we can't rely on it in Phase 3.
+    const uploadFailedIds = new Set<string>();
+
+    while (currentLevel.length > 0) {
+      const nextLevel: NodeWithContext[] = [];
+
+      for (let i = 0; i < currentLevel.length; i += CONCURRENCY_LIMIT) {
+        const batch = currentLevel.slice(i, i + CONCURRENCY_LIMIT);
+        const results = await Promise.allSettled(
+          batch.map(async ({ object: node, parentWhereBody: pwb }) => {
+            const { s3UrlsMap, effectiveWhereBody } = await uploadSingleObject(backupJobId, pwb, node, ctx);
+            let keys = s3UrlsMap.get(node.name) ?? [];
+            // If upload was skipped (already done), rebuild S3 keys from listing.
+            if (!keys.length && (node.status === OBJECT_STATUS.uploadCompleted || node.status === OBJECT_STATUS.completed)) {
+              const prefix = buildS3KeyPrefix({ crmId, crmName, backupConfigId, objectName: node.name, operation: 'inserts', type: 'archival' });
+              keys = await listS3Objects(destConfig, prefix);
+            }
+            s3UrlsById.set(node.id, keys);
+            return { node, effectiveWhereBody, s3Keys: keys };
+          })
+        );
+
+        for (let j = 0; j < results.length; j++) {
+          const result = results[j];
+          if (result.status === 'fulfilled') {
+            const { node, effectiveWhereBody, s3Keys } = result.value;
+            // Only enqueue children if this node had records (0 records = COMPLETED, subtree skipped).
+            // Pass effectiveWhereBody as the grandchild's parentWhereBody — uploadSingleObject already
+            // applied transformWhereBodyForChild once; grandchildren need the already-transformed WHERE.
+            if (s3Keys.length > 0) {
+              for (const child of node.children ?? []) {
+                nextLevel.push({
+                  object: child,
+                  parentWhereBody: effectiveWhereBody,
+                });
+              }
+            }
+          } else {
+            // Upload failed — record the node ID so deleteNode can block the parent's delete.
+            const failedNode = batch[j];
+            uploadFailedIds.add(failedNode.object.id);
+          }
+        }
+      }
+
+      currentLevel = nextLevel;
+    }
+
+    logger.info(`[archival:orchestrator] phase 2 complete (all levels) | backupJobId:${backupJobId} objectName:${objectName}`);
+
+    const backupConfig = await getBackupConfigById(backupConfigId);
+    if (backupConfig?.objects) {
+      const updatedObjects = await recursivelyUpdateObjects(backupConfig.objects, { id: object.id, sizeInBytes: 0 });
+      await updateBackupConfig(backupConfigId, { sizeInBytes: (backupConfig.sizeInBytes ?? 0), objects: updatedObjects });
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3 — recursive post-order delete (bottom-up, parent-gated)
+    //
+    // Children are deleted first (in parallel, max 6). A parent's delete starts
+    // only after ALL its children finish. If any direct child has
+    // DELETION_JOB_FAILED, the parent is also set to DELETION_JOB_FAILED
+    // without running its own delete job.
+    // DELETION_RECORDS_FAILED does NOT block the parent.
+    // -------------------------------------------------------------------------
+    logger.info(`[archival:orchestrator] phase 3 starting — post-order delete | backupJobId:${backupJobId} objectName:${objectName}`);
+    await deleteNode({ backupConfigId, backupJobId, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, node: object, skipCompleted: false });
+    logger.info(`[archival:orchestrator] phase 3 complete | backupJobId:${backupJobId} objectName:${objectName}`);
+
+    const schemaWithParquet = schema.map((field: { dataType: string }) => ({ ...field, parquetDataType: toParquetDataType(field.dataType) }));
+    await uploadToS3(destConfig, buildSchemaS3Key({ crmId, crmName, backupConfigId, objectName, type: 'archival' }), Buffer.from(JSON.stringify(schemaWithParquet, null, 2)));
+    logger.info(`[archival:orchestrator] schema uploaded | backupJobId:${backupJobId} objectName:${objectName}`);
 
     logger.info(`[archival:orchestrator] completed | backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName}`);
   } catch (err: any) {
@@ -387,38 +597,34 @@ export const archiveAndHardDelete = async (
   }
 };
 
-// Shared delete loop used by both normal Phase 3 and delete-only retries.
-// skipCompleted=true skips objects already at COMPLETED (used on retry to avoid re-deleting).
-const runDeletePhase = async (params: {
+// Retry path for DELETION_RECORDS_FAILED: reads failed record IDs from the error
+// log in S3 and resubmits only those IDs to a new Salesforce delete job.
+// Walks the full object tree so child objects with the same status are also retried.
+const runFailedRecordsPhase = async (params: {
   backupConfigId: string;
   backupJobId: string;
   instanceUrl: string;
   tokens: SalesforceTokens;
   object: IBackupObject;
   destConfig: IDestinationConfig;
-  s3UrlsPerObject: Map<string, string[]>;
-  skipCompleted: boolean;
 }): Promise<void> => {
-  const { backupConfigId, backupJobId, instanceUrl, tokens, object, destConfig, s3UrlsPerObject, skipCompleted } = params;
-  const deleteOrder = [...s3UrlsPerObject.entries()].reverse();
-  logger.info(`[archival:orchestrator] phase 3 starting | backupJobId:${backupJobId} deleteOrder:[${deleteOrder.map(([n]) => n).join(' → ')}]`);
+  const { backupConfigId, backupJobId, instanceUrl, tokens, object, destConfig } = params;
 
-  for (const [objName, s3Urls] of deleteOrder) {
-    if (!s3Urls.length) {
-      logger.info(`[archival:orchestrator] delete skip (no S3 files) | backupJobId:${backupJobId} objectName:${objName}`);
-      continue;
+  const processNode = async (node: IBackupObject) => {
+    // Children first (bottom-up) — child records must be deleted before parent.
+    for (const child of node.children ?? []) {
+      await processNode(child);
     }
-    const targetObject = findObjectInTree(object, objName);
-    if (!targetObject) {
-      logger.error(`[archival:orchestrator] delete skip (object not found in tree) | backupJobId:${backupJobId} objectName:${objName}`);
-      continue;
+
+    if (node.status === OBJECT_STATUS.deletionRecordsFailed) {
+      logger.info(`[archival:orchestrator] failed-records retry | backupJobId:${backupJobId} objectName:${node.name} objectId:${node.id}`);
+      const failedRecordsIdCsv = await buildFailedRecordsIdCsv(destConfig, backupJobId, node.name, node.id);
+      await bulkDeleteRecords({ backupConfigId, backupJobId, instanceUrl, tokens, object: node, destConfig, failedRecordsIdCsv });
+    } else if (node.status !== OBJECT_STATUS.completed) {
+      logger.info(`[archival:orchestrator] failed-records retry skip | backupJobId:${backupJobId} objectName:${node.name} status:${node.status}`);
     }
-    if (skipCompleted && targetObject.status === OBJECT_STATUS.completed) {
-      logger.info(`[archival:orchestrator] delete skip (already completed) | backupJobId:${backupJobId} objectName:${objName}`);
-      continue;
-    }
-    logger.info(`[archival:orchestrator] deleting | backupJobId:${backupJobId} objectName:${objName} s3FileCount:${s3Urls.length}`);
-    await bulkDeleteRecords({ backupConfigId, backupJobId, instanceUrl, tokens, object: targetObject, destConfig, s3Urls });
-    logger.info(`[archival:orchestrator] delete complete | backupJobId:${backupJobId} objectName:${objName}`);
-  }
+  };
+
+  await processNode(object);
 };
+

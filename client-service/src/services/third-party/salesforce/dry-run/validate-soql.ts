@@ -39,13 +39,23 @@ export async function validateSoql(payload: IValidateSoqlPayload): Promise<IVali
 
   const response = await apexValidateSoql(crmId, object.name, whereClause);
 
-  if (response.isValid) {
-    return { whereClause, isValid: true, relationshipDepth: getMaxRelationshipDepth(whereClause) };
+  if (!response.isValid) {
+    return {
+      whereClause,
+      isValid: false,
+      error: response.message ?? `Salesforce error: ${response.errorCode ?? 'unknown'}`,
+    };
   }
 
-  return {
-    whereClause,
-    isValid: false,
-    error: response.message ?? `Salesforce error: ${response.errorCode ?? 'unknown'}`,
-  };
+  const depth = getMaxRelationshipDepth(whereClause);
+
+  if (depth > 4) {
+    return {
+      whereClause,
+      isValid: false,
+      error: `Query uses ${depth} levels of relationship traversal. Maximum allowed is 4.`,
+    };
+  }
+
+  return { whereClause, isValid: true, relationshipDepth: depth };
 }

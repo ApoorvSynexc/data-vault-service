@@ -26,6 +26,9 @@ export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> 
   if (job.status === JOB_STATUS.success) {
     throw new HttpError(409, `Backup job ${backupJobId} already completed successfully`);
   }
+  if (job.status === JOB_STATUS.partialFailure || job.status === JOB_STATUS.failed) {
+    return job; // allow retry on any non-success terminal state
+  }
   if (job.status === JOB_STATUS.running) {
     throw new HttpError(409, `Backup job ${backupJobId} is already running`);
   }
@@ -147,7 +150,11 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     // (delete-only) for them, avoiding a redundant re-upload.
     const clearObjectError = async (obj: IBackupObject) => {
       const st = obj.status;
-      if (st === OBJECT_STATUS.failed || st === OBJECT_STATUS.partialFailure) {
+      if (
+        st === OBJECT_STATUS.failed ||
+        st === OBJECT_STATUS.deletionJobFailed ||
+        st === OBJECT_STATUS.deletionRecordsFailed
+      ) {
         // Clear stale error/deletion fields; leave status and bulkJobId intact
         // so the orchestrator can determine which phase to resume from.
         await updateArchivalObject({
@@ -155,7 +162,6 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
           object: {
             id: obj.id,
             errorMessage: '',
-            recordErrorsS3Prefix: undefined,
             deletedfailedRecordCount: 0,
             deletedSuccessRecordCount: 0,
           },
@@ -170,7 +176,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     }
 
     const handler = getCrmHandler(source.crmName);
-    await handler.runArchival(
+    const archivalResult = await handler.runArchival(
       backupConfigId,
       backupJobId,
       source,
@@ -180,9 +186,13 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       job.lastUpdatedAt
     );
 
+    const finalJobStatus = archivalResult === 'PARTIAL_FAILURE'
+      ? JOB_STATUS.partialFailure
+      : JOB_STATUS.success;
+
     await updateJobStatus({
       backupJobId,
-      status: JOB_STATUS.success,
+      status: finalJobStatus,
       completedAt: dayjs().toISOString(),
     });
   } catch (err: any) {

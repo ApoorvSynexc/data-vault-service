@@ -1,4 +1,5 @@
 import {
+  DeleteObjectsCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -98,6 +99,33 @@ export const fetchCsvFromS3 = async (
     }
     throw new Error(`Failed to fetch S3 file: ${err.message}`, { cause: err });
   }
+};
+
+// Deletes all keys listed in `keys` from the bucket, batched at 1,000 per request.
+export const deleteS3Objects = async (
+  config: IDestinationConfig,
+  keys: string[]
+): Promise<void> => {
+  if (!keys.length) return;
+  const client = getS3Client(config);
+  for (let i = 0; i < keys.length; i += 1000) {
+    const batch = keys.slice(i, i + 1000);
+    await client.send(
+      new DeleteObjectsCommand({
+        Bucket: config.bucketName,
+        Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
+      })
+    );
+  }
+};
+
+// Lists all keys under prefix then deletes them — used to wipe stale error logs before re-upload.
+export const listAndDeleteS3Prefix = async (
+  config: IDestinationConfig,
+  prefix: string
+): Promise<void> => {
+  const keys = await listS3Objects(config, prefix);
+  await deleteS3Objects(config, keys);
 };
 
 // Returns all S3 object keys under a given prefix, sorted alphabetically.

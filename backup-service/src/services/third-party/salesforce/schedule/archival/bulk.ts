@@ -1,21 +1,12 @@
 /**
  * bulk.ts — Salesforce Archival: Upload Phase
  *
- * Responsible for exporting all Salesforce records (parent + full child tree)
- * to S3 before the hard-delete phase runs.
+ * Responsible for exporting Salesforce records for a SINGLE object node to S3.
+ * The BFS level-by-level orchestration (parent before children, children before
+ * grandchildren) is driven by archiveAndHardDelete in index.ts.
  *
- * Overall data flow per archival run:
- *
- *   Parent: Bulk API Query Job → stream all CSV pages → upload to S3
- *   After parent completes:
- *     └─ Child A: own Bulk Query Job (WHERE built via dot-notation from parent's filter)
- *         └─ stream pages → upload to S3
- *         └─ Grandchild A1: own Bulk Query Job (WHERE from child A's WHERE via dot-notation)
- *             └─ stream pages → upload to S3
- *     └─ Child B: own Bulk Query Job → ...
- *
- *   Each level's WHERE is: transformWhereBodyForChild(parentEffectiveWhere, childFieldApiName)
- *   No record IDs are extracted or passed between levels.
+ * Each node's WHERE is: transformWhereBodyForChild(parentEffectiveWhere, childFieldApiName)
+ * No record IDs are extracted or passed between levels.
  */
 
 import { OBJECT_STATUS } from '../../../../../constant';
@@ -244,19 +235,19 @@ function transformWhereBodyForChild(whereBody: string, fkFieldName: string): str
 // Child tree traversal
 // ---------------------------------------------------------------------------
 
-// fetchObjectAndDescend
+// uploadSingleObject
 //
-// Creates its own Bulk API v2 Query job for the child object using a WHERE
+// Creates a Bulk API v2 Query job for a single object node using a WHERE
 // clause built via dot-notation from the parent's WHERE body, polls until
-// complete, streams all result pages to S3, then recurses for each grandchild.
-// No parent IDs are extracted or passed — the relationship is expressed
-// entirely through dot-notation field traversal in the WHERE clause.
-async function fetchObjectAndDescend(
+// complete, and streams all result pages to S3.
+// Does NOT recurse into children — the BFS orchestrator in index.ts handles
+// level ordering and concurrency.
+async function uploadSingleObject(
   backupJobId: string,
   parentWhereBody: string,
   object: IBackupObject,
   ctx: IFetchContext
-): Promise<Map<string, string[]>> {
+): Promise<{ s3UrlsMap: Map<string, string[]>; effectiveWhereBody: string }> {
   const s3UrlsMap = new Map<string, string[]>();
   const fieldApiName = (object as any).fieldApiName as string | undefined;
 
@@ -266,12 +257,18 @@ async function fetchObjectAndDescend(
       backupJobId,
       object: { id: object.id, status: OBJECT_STATUS.failed, errorMessage: 'fieldApiName missing' },
     });
-    return s3UrlsMap;
+    return { s3UrlsMap, effectiveWhereBody: '' };
   }
 
   // Build this child's effective WHERE by prefixing the parent's conditions
   // with the child's FK field name.
   const effectiveWhereBody = transformWhereBodyForChild(parentWhereBody, fieldApiName);
+
+  // Skip re-upload for nodes that already completed Phase 2 on a previous run.
+  if (object.status === OBJECT_STATUS.uploadCompleted || object.status === OBJECT_STATUS.completed) {
+    logger.info(`[archival:child] skip (already uploaded) | backupJobId:${backupJobId} objectName:${object.name} status:${object.status}`);
+    return { s3UrlsMap, effectiveWhereBody };
+  }
 
   logger.info(`[archival:child] starting | backupJobId:${backupJobId} objectName:${object.name} fieldApiName:${fieldApiName}`);
   logger.info(`[archival:child] WHERE build | objectName:${object.name} parentWhereBody:"${parentWhereBody || '(none)'}" → effectiveWhereBody:"${effectiveWhereBody}"`);
@@ -316,7 +313,7 @@ async function fetchObjectAndDescend(
         backupJobId,
         object: { id: object.id, status: OBJECT_STATUS.completed, completedRecordCount: 0, errorMessage: '' },
       });
-      return s3UrlsMap;
+      return { s3UrlsMap, effectiveWhereBody };
     }
 
     logger.info(`[archival:child] upload starting | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${totalRecordCount}`);
@@ -416,20 +413,8 @@ async function fetchObjectAndDescend(
       logger.error(`[archival:child] schema comparison failed | backupJobId:${backupJobId} objectName:${object.name} error:${err?.message ?? err}`);
     }
 
-    // Recurse for grandchildren, passing this object's effective WHERE body.
-    if (object.children?.length) {
-      logger.info(`[archival:child] descending to ${object.children.length} grandchild(ren) | backupJobId:${backupJobId} objectName:${object.name} children:[${object.children.map(c => c.name).join(', ')}]`);
-      for (const child of object.children) {
-        const childMap = await fetchObjectAndDescend(backupJobId, effectiveWhereBody, child, ctx);
-        for (const [name, keys] of childMap) {
-          const existing = s3UrlsMap.get(name) ?? [];
-          s3UrlsMap.set(name, [...new Set([...existing, ...keys])]);
-        }
-      }
-    }
-
     logger.info(`[archival:child] completed | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`);
-    return s3UrlsMap;
+    return { s3UrlsMap, effectiveWhereBody };
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
     logger.error(`[archival:child] failed | backupJobId:${backupJobId} objectName:${object.name} error:${errorMsg}`);
@@ -439,42 +424,21 @@ async function fetchObjectAndDescend(
 }
 
 // ---------------------------------------------------------------------------
-// Main — stream parent records via Bulk API, then walk the child tree
+// Main — stream parent records via Bulk API (root node only)
 // ---------------------------------------------------------------------------
 
 /**
  * uploadBulkResultsByPageArchival
  *
- * WHAT:
- *   Streams a completed Salesforce Bulk API v2 Query job page-by-page (up to
- *   50K records per page), uploads each page's CSV to S3, and then for every
- *   page walks the full configured child/grandchild tree via fetchObjectAndDescend,
- *   uploading every level's records to S3 as well.
- *
- * WHY:
- *   This is the core data-export step of the archival pipeline. The Bulk API
- *   is the only Salesforce-approved way to efficiently export large datasets
- *   without hitting governor limits. After this function returns, every record
- *   in the parent-child tree is safely in S3 and the hard-delete phase can run.
- *
- * HOW IT WORKS:
- *   1. Marks the object status as transferInProgress.
- *   2. Loops over Bulk API result pages using sforce-locator for pagination:
- *        a. Uploads the raw 50K CSV page to S3 (unique key via randomUUID()).
- *        b. Extracts parent IDs from the CSV text.
- *        c. Splits those IDs into 200-ID chunks (SOQL IN() limit).
- *        d. For each child type, for each chunk:
- *             → calls fetchObjectAndDescend (uploads children + descendants to S3)
- *             → merges returned S3 keys into s3UrlsPerObject
- *        e. Persists progress (locator, count) to DB after each page so a
- *           crash can resume from the last successful page instead of restarting.
- *   3. Returns the full s3UrlsPerObject map for the delete phase.
- *   4. On any error: marks the object as failed in DB and re-throws.
+ * Streams a completed Salesforce Bulk API v2 Query job page-by-page (up to
+ * 50K records per page) and uploads each page's CSV to S3. Handles locator-based
+ * resumption for the root object. Child/grandchild traversal is handled by the
+ * BFS orchestrator in archival/index.ts via uploadSingleObject.
  *
  * INPUT:
  *   jobId            — a JobComplete Bulk API v2 Query job
- *   object           — parent config including the full nested children[] tree
- *   s3KeyPrefix      — base S3 path used to build parent upload keys
+ *   object           — root object config
+ *   s3KeyPrefix      — base S3 path used to build upload keys
  *   startLocator     — if set, resumes streaming from this page (retry support)
  *   startCompletedRecordCount — count to start from when resuming (retry support)
  *
@@ -502,26 +466,11 @@ const uploadBulkResultsByPageArchival = async (
     object,
     destConfig,
     s3KeyPrefix,
-    crmId,
-    crmName,
-    backupConfigId,
     parentWhereBody,
     startLocator = null,
     startCompletedRecordCount = 0,
     maxRecords = MAX_RECORDS_PER_PAGE,
   } = payload;
-
-  // ctx is a plain read-only bag of config. S3 key uniqueness is handled at
-  // each upload site via randomUUID(), so no shared mutable state is needed.
-  const ctx: IFetchContext = {
-    instanceUrl,
-    tokens,
-    destConfig,
-    s3KeyPrefix,
-    crmId,
-    crmName,
-    backupConfigId,
-  };
 
   // s3UrlsPerObject accumulates every S3 key written during this run,
   // keyed by object name. Map insertion order is preserved — parent is
@@ -603,20 +552,6 @@ const uploadBulkResultsByPageArchival = async (
 
     logger.info(`[archival:parent] all pages uploaded | backupJobId:${backupJobId} objectName:${object.name} totalPages:${pageCount} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`);
 
-    // After all parent pages are in S3, process each child with its own
-    // Bulk Query job using a dot-notation WHERE derived from the parent's filter.
-    if (object.children?.length) {
-      logger.info(`[archival:parent] descending to ${object.children.length} child(ren) | backupJobId:${backupJobId} objectName:${object.name} children:[${object.children.map(c => c.name).join(', ')}]`);
-      for (const child of object.children) {
-        const childResult = await fetchObjectAndDescend(backupJobId, parentWhereBody, child, ctx);
-        for (const [name, keys] of childResult) {
-          const existing = s3UrlsPerObject.get(name) ?? [];
-          s3UrlsPerObject.set(name, [...new Set([...existing, ...keys])]);
-        }
-      }
-    } else {
-      logger.info(`[archival:parent] no children configured | backupJobId:${backupJobId} objectName:${object.name}`);
-    }
   } catch (err: any) {
     const failedAt = locator ?? INITIAL_PAGE_KEY;
     const errorMessage = `archival failed at locator [${failedAt}]: ${err?.message ?? err}`;
@@ -632,4 +567,4 @@ const uploadBulkResultsByPageArchival = async (
   return { s3UrlsPerObject };
 };
 
-export { pollBulkJobArchival, uploadBulkResultsByPageArchival, fetchObjectAndDescend };
+export { pollBulkJobArchival, uploadBulkResultsByPageArchival, uploadSingleObject, transformWhereBodyForChild };
