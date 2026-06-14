@@ -218,9 +218,12 @@ const getBackupJobsByConfig = async (
 const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
 
-  const endpoint = type === 'archival' ? '/archival/resume' : '/resume';
+  const endpoint = config.type === 'ARCHIVAL' ? '/archival/resume' : '/resume';
+  const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`
+  console.log({url});
+  
   return httpRequest({
-    url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`,
+    url,
     method: 'GET',
   });
 };
