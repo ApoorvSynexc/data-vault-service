@@ -212,22 +212,37 @@ const salesforceHandler: ICrmBackupHandler = {
       crmId,
     };
 
+    let anyFailed = false;
+    let anySucceeded = false;
     for (let i = 0; i < object.length; i++) {
-      await exportWithRetryArchival(
-        backupConfigId,
-        backupJobId,
-        instanceUrl,
-        tokens,
-        crmName,
-        object[i],
-        destinationType,
-        destConfig
-      );
-      // }
+      try {
+        await exportWithRetryArchival(
+          backupConfigId,
+          backupJobId,
+          instanceUrl,
+          tokens,
+          crmName,
+          object[i],
+          destinationType,
+          destConfig
+        );
+        anySucceeded = true;
+      } catch (err: any) {
+        // Object already marked FAILED + errorMessage inside archiveAndHardDelete.
+        // Log and continue so remaining objects are not skipped.
+        anyFailed = true;
+        logger.error(`[archival] object failed — continuing with remaining objects | backupJobId:${backupJobId} objectName:${object[i].name} error:${err?.message}`);
+      }
     }
 
-    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
-    logger.info(`Archival job completed`, { backupJobId });
+    const finalStatus = anyFailed && anySucceeded
+      ? BACKUP_STATUS.partialFailure
+      : anyFailed
+      ? BACKUP_STATUS.failed
+      : BACKUP_STATUS.success;
+
+    await updateBackupConfig(backupConfigId, { backupStatus: finalStatus });
+    logger.info(`Archival job completed | backupJobId:${backupJobId} anyFailed:${anyFailed} anySucceeded:${anySucceeded} finalStatus:${finalStatus}`);
   },
 };
 

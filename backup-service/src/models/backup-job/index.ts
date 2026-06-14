@@ -44,6 +44,7 @@ export interface IBackupObject {
   completedRecordCount?: number;
   deletedSuccessRecordCount?: number;
   deletedfailedRecordCount?: number;
+  recordErrorsS3Prefix?: string;
   insertCount?: number;
   updateCount?: number;
   deleteCount?: number;

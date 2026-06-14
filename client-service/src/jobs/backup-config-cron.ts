@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { getScheduledIncrementalBackupConfigs, triggerArchivalBackupJob, triggerBackupJob } from '../services';
+import { getScheduledIncrementalBackupConfigs, triggerArchivalBackupJob, triggerBackupJob, hasActiveBackupJob } from '../services';
 import { logger } from '../middlewares';
 import { filtereObjects } from '../utils/helper';
 
@@ -16,7 +16,13 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
         if(config.type === "ARCHIVAL"){
           const { scheduledObjects } = filtereObjects(config.objects || []);
           if (scheduledObjects.length) {
-            await triggerArchivalBackupJob(config, scheduledObjects, config.lastBackupAt);
+            const active = await hasActiveBackupJob(config.backupConfigId);
+            if (!active) {
+              // One job log per scheduled object — bypassDedup because we already checked above
+              await Promise.all(
+                scheduledObjects.map(obj => triggerArchivalBackupJob(config, [obj], config.lastBackupAt, true))
+              );
+            }
           }
         } else {
           await triggerBackupJob(config, config.lastBackupAt);

@@ -44,6 +44,7 @@ const BACKUP_STATUS = {
   active: 'ACTIVE',
   success: 'SUCCESS',
   failed: 'FAILED',
+  partialFailure: 'PARTIAL_FAILURE',
   paused: 'PAUSED',
   resumed: 'RESUMED',
 };
@@ -56,6 +57,7 @@ const OBJECT_STATUS = {
   uploadCompleted: 'UPLOAD_COMPLETED',
   deletionInProgress: 'DELETION_IN_PROGRESS',
   completed: 'COMPLETED',
+  partialFailure: 'PARTIAL_FAILURE',
   failed: 'FAILED',
 };
 

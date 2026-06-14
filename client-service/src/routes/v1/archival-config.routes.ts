@@ -16,5 +16,6 @@ router.delete('/', archivalConfigController.deletearchivalConfigHandler);
 router.post('/dry-run', dryRunArchivalValidation, archivalConfigController.dryRunArchivalHandler);
 router.post('/validate-soql', validateSoqlArchivalValidation, archivalConfigController.validateSoqlArchivalHandler);
 router.post('/', createArchivalConfigValidation, archivalConfigController.createArchivalConfigHandler);
+router.get('/record-errors', archivalConfigController.getRecordErrorsHandler);
 
 export const archivalRouter = router;

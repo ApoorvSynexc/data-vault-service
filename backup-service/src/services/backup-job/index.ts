@@ -132,6 +132,7 @@ const updateJobStatus = async (params: UpdateJobStatusParams): Promise<void> => 
   const now = new Date().toISOString();
 
   const expressionParts = ['#status = :status', 'updatedAt = :updatedAt'];
+  const removeParts: string[] = [];
   const expressionNames: Record<string, string> = { '#status': 'status' };
   const expressionValues: Record<string, any> = { ':status': status, ':updatedAt': now };
 
@@ -146,6 +147,9 @@ const updateJobStatus = async (params: UpdateJobStatusParams): Promise<void> => 
   if (errorMessage) {
     expressionParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
+  } else if (status === 'RUNNING') {
+    // Clear stale error from a previous failed run when the job is retried.
+    removeParts.push('errorMessage');
   }
 
   // Check if record exists, merge with any additional condition
@@ -154,12 +158,17 @@ const updateJobStatus = async (params: UpdateJobStatusParams): Promise<void> => 
     finalCondition = `${finalCondition} AND ${conditionExpression}`;
   }
 
+  const updateExpression = [
+    `SET ${expressionParts.join(', ')}`,
+    ...(removeParts.length ? [`REMOVE ${removeParts.join(', ')}`] : []),
+  ].join(' ');
+
   try {
     await docClient.send(
       new UpdateCommand({
         TableName: BACKUP_JOB_TABLE,
         Key: { backupJobId },
-        UpdateExpression: `SET ${expressionParts.join(', ')}`,
+        UpdateExpression: updateExpression,
         ExpressionAttributeNames: expressionNames,
         ExpressionAttributeValues: { ...expressionValues, ...conditionExpressionValues },
         ConditionExpression: finalCondition,
@@ -315,31 +324,38 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
 
 const recursivelyUpdateObjects = async (
   objects: IBackupObject[],
-  object: { id: string; [key: string]: string | number | boolean }
+  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined }
 ): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
       if (obj.id === object.id) {
+        const isReset = (object as any).status === OBJECT_STATUS.created;
         return {
           ...obj,
           ...object,
-          ...((object as any)?.salesforceApiCount
+          // Clear stale error fields when the object is reset for a retry run.
+          ...(isReset ? { errorMessage: undefined, recordErrorsS3Prefix: undefined, deletedfailedRecordCount: 0, deletedSuccessRecordCount: 0 } : {}),
+          ...(!isReset && (object as any)?.salesforceApiCount
             ? {
                 salesforceApiCount:
                   (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
               }
             : {}),
-          ...((object as any)?.deletedSuccessRecordCount
+          ...(!isReset && (object as any)?.deletedSuccessRecordCount
             ? {
                 deletedSuccessRecordCount:
                   (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
               }
             : {}),
-          ...((object as any)?.deletedfailedRecordCount
+          ...(!isReset && (object as any)?.deletedfailedRecordCount
             ? {
                 deletedfailedRecordCount:
                   (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
               }
+            : {}),
+          // recordErrorsS3Prefix: last write wins (each bulk job gets its own prefix)
+          ...(!isReset && (object as any)?.recordErrorsS3Prefix
+            ? { recordErrorsS3Prefix: (object as any).recordErrorsS3Prefix }
             : {}),
         };
       }
@@ -358,7 +374,7 @@ const updateArchivalObject = async ({
   objects,
 }: {
   backupJobId: string;
-  object: { id: string; [key: string]: string | number | boolean };
+  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
   let objectsPayload: IBackupObject[];

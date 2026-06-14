@@ -131,6 +131,37 @@ const schemasAreEqual = (existing: any[], latest: any[]): boolean => {
   });
 };
 
+// Split a full CSV string into rows, correctly handling quoted fields that
+// contain embedded newlines. Returns non-empty rows only.
+const splitCSVRows = (csv: string): string[] => {
+  const rows: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csv.length; i++) {
+    const char = csv[i];
+    const next = csv[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+        current += char;
+      }
+    } else if ((char === '\n' || (char === '\r' && next === '\n')) && !inQuotes) {
+      if (char === '\r') i++; // skip the \n of \r\n
+      if (current.trim()) rows.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) rows.push(current);
+  return rows;
+};
+
 // Parse CSV line respecting quoted fields (handles commas inside quotes)
 const parseCSVLine = (line: string): string[] => {
   const result: string[] = [];
@@ -247,6 +278,7 @@ export {
   buildSchemaS3Key,
   toParquetDataType,
   schemasAreEqual,
+  splitCSVRows,
   parseCSVLine,
   formatFieldValuesForSOQL,
   formatValueByDataType,
