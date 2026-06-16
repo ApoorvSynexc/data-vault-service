@@ -1,4 +1,3 @@
-import { access } from 'node:fs';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   createDestination,

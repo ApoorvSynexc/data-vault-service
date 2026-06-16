@@ -10,6 +10,7 @@ import { destinationRouter } from './destination.route';
 import { internalRouter } from './internal.route';
 import { publicRouter } from './public.routes';
 import { archivalRouter } from './archival-config.routes';
+import { salesforceRouter } from './salesforce.route';
 
 const router = Router();
 
@@ -17,6 +18,7 @@ const router = Router();
 router.use('/auth', authRouter);
 router.use('/internal', internalRouter);
 router.use('/public', publicRouter);
+router.use('/salesforce', salesforceRouter);
 
 // Private routes
 router.use('/user', authenticate, userRouter);
