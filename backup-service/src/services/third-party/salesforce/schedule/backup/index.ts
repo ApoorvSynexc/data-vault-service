@@ -1,4 +1,4 @@
-import { BACKUP_STATUS, OBJECT_STATUS } from '../../../../../constant';
+import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
@@ -9,11 +9,7 @@ import {
   schemasAreEqual,
 } from '../../../../../utils/helper';
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destination/s3';
-import {
-  pollBulkJob,
-  classifyAndUploadBulkResultsByPage,
-  uploadBulkResultsByPage,
-} from './bulk';
+import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 
@@ -42,7 +38,13 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
 
   // If value is not already quoted and not a number/boolean, wrap it in single quotes
   let formattedValue = value;
-  if (!value.startsWith("'") && !value.startsWith('(') && isNaN(Number(value)) && value !== 'true' && value !== 'false') {
+  if (
+    !value.startsWith("'") &&
+    !value.startsWith('(') &&
+    isNaN(Number(value)) &&
+    value !== 'true' &&
+    value !== 'false'
+  ) {
     formattedValue = `'${value}'`;
   }
 
@@ -141,7 +143,7 @@ export const exportFirstTime = async (
           jobId,
           backupJobId,
           objectIndex,
-          salesforceApiCount
+          salesforceApiCount,
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -152,7 +154,7 @@ export const exportFirstTime = async (
         objectIndex,
         status: OBJECT_STATUS.bulkQueryCompleted,
         bulkJobId: jobId,
-        salesforceApiCount
+        salesforceApiCount,
       });
     }
 
@@ -163,7 +165,14 @@ export const exportFirstTime = async (
       Changes: totalRecordCount,
     });
 
-    const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
+    const insertPrefix = buildS3KeyPrefix({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      operation: 'inserts',
+      type: 'backup',
+    });
     const { sizeInBytes } = await uploadBulkResultsByPage({
       instanceUrl,
       tokens,
@@ -192,7 +201,13 @@ export const exportFirstTime = async (
       ...field,
       parquetDataType: toParquetDataType(field.dataType),
     }));
-    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    const schemaKey = buildSchemaS3Key({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
     await uploadToS3(
       destConfig,
       schemaKey,
@@ -286,7 +301,7 @@ export const exportIncremental = async (
           jobId: bulkJobId,
           backupJobId,
           objectIndex,
-          salesforceApiCount
+          salesforceApiCount,
         });
       } catch (err: any) {
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
@@ -313,9 +328,30 @@ export const exportIncremental = async (
         objectName,
         Changes: totalRecordCount,
       });
-      const insertPrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
-      const updatePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'updates');
-      const deletePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'deletes');
+      const insertPrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        operation: 'inserts',
+        type: 'backup',
+      });
+      const updatePrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        operation: 'updates',
+        type: 'backup',
+      });
+      const deletePrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        operation: 'deletes',
+        type: 'backup',
+      });
       const { sizeInBytes } = await classifyAndUploadBulkResultsByPage({
         instanceUrl,
         tokens,
@@ -362,7 +398,13 @@ export const exportIncremental = async (
     // versioned files exist yet. fields.json is never overwritten — every new
     // schema version is written as a new fields_<timestamp>.json so no version
     // is ever lost.
-    const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectName);
+    const schemaKey = buildSchemaS3Key({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
     const schemaFolder = schemaKey.replace('/fields.json', '/');
     const allSchemaKeys = await listS3Objects(destConfig, schemaFolder);
     const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));

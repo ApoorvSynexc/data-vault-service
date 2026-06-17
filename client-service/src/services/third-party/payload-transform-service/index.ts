@@ -6,8 +6,41 @@ import { getBackupJobsByConfig } from '../../backup-job';
 import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { IBackupConfig, IBackupJob } from '../../../models';
+import { flattenBackupObjects } from '../../../utils/helper';
 
 const client = new EMRServerlessClient({ region: AWS_REGION });
+
+
+// ─── Process object operations from backup jobs ────────────────────────────────
+function processArchivalObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
+    const objectOperations: Record<string, string[]> = {};
+
+    for (const job of jobs) {
+        const jobObjects = flattenBackupObjects(job.object ?? []) ?? [];
+
+        if (job.jobType === "BULK") {
+            for (const obj of jobObjects) {
+                if (!objectOperations[obj.name]) {
+                    objectOperations[obj.name] = [];
+                }
+
+                const operations = objectOperations[obj.name];
+                const allOpsFound = ['inserts'].every((op) =>
+                    operations.includes(op)
+                );
+                if (allOpsFound) {
+                    continue;
+                }
+
+                if (obj.completedRecordCount && obj.completedRecordCount > 0 && !operations.includes('inserts')) {
+                    operations.push('inserts');
+                }
+            }
+        }
+    }
+
+    return objectOperations;
+}
 
 // ─── Process object operations from backup jobs ────────────────────────────────
 function processObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
@@ -72,13 +105,28 @@ function processObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
 }
 
 // Schema chnage detection 
+function archivalSchemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Record<string, string[]>): Record<string, string[]> {
+    const objects = flattenBackupObjects(backupConfig.objects ?? []) ?? [];
+    const objectOperationsKeys = Object.keys(objectOperations);
+
+    for (const obj of objects) {
+        if (obj.schemaChange && objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
+            console.log("Schema chnage detect: ", { name: obj.name });
+            objectOperations[obj.name].push("schema-change");
+        }
+    }
+
+    return objectOperations;
+}
+
+// Schema chnage detection 
 function schemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Record<string, string[]>): Record<string, string[]> {
     const objects = backupConfig.objects ?? [];
     const objectOperationsKeys = Object.keys(objectOperations);
 
     for (const obj of objects) {
         if (obj.schemaChange && objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
-            console.log("Schema chnage detect: ", {name:obj.name});
+            console.log("Schema chnage detect: ", { name: obj.name });
             objectOperations[obj.name].push("schema-change");
         }
     }
@@ -128,11 +176,15 @@ async function buildPayload(backupConfigId: string) {
             throw new Error('No backup jobs found');
         }
 
-        let objectOperations = processObjectOperations(allBackupJobs ?? []);
-        objectOperations = schemaChangeDetection(backupConfig, objectOperations);
+        let objectOperations = backupConfig.type === 'NORMAL' ?
+            processObjectOperations(allBackupJobs ?? []) :
+            processArchivalObjectOperations(allBackupJobs ?? []);
+        objectOperations = backupConfig.type === 'NORMAL' ?
+            schemaChangeDetection(backupConfig, objectOperations) :
+            archivalSchemaChangeDetection(backupConfig, objectOperations);
 
         return {
-            jobType: 'BACKUP',
+            jobType: backupConfig.type === 'NORMAL' ? 'BACKUP' : 'ARCHIVAL',
             backupConfigId: backupConfigId,
             details: {
                 clientId: backupConfig.userId,
