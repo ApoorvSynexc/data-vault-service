@@ -19,13 +19,22 @@ const VALID_SNAPSHOT_TYPES = ['BACKUP', 'ARCHIVAL', 'UNIFIED'] as const;
 type SnapshotType = typeof VALID_SNAPSHOT_TYPES[number];
 
 const DEFAULT_PAGE_SIZE = 10;
+// Hard cap to prevent a single request from pulling too many DynamoDB records at once.
 const MAX_PAGE_SIZE = 100;
 
+// Strips encrypted fields before sending a job to the client.
+// source and destination contain ciphertext — exposing them would leak encrypted credentials.
 const sanitize = ({ source, destination, ...rest }: IBackupJob) => ({
   ...rest,
   destination: { type: destination.type },
 });
 
+/**
+ * GET /fetch-logs?backupJobId=
+ * Returns the activity log (object[]) for a specific job.
+ * Ownership is verified by comparing the job's userId to the authenticated user —
+ * prevents users from reading logs of jobs that don't belong to them.
+ */
 const fetchLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupJobId } = req.query;
 
@@ -44,6 +53,12 @@ const fetchLogsHandler = async (req: IRequest, res: IResponse): Promise<void> =>
   makeResponse(req, res, 200, true, 'fetch', logs.object ?? []);
 };
 
+/**
+ * GET /list?backupConfigId=&limit=&cursor=&status=
+ * Lists restore/retrieve jobs with cursor-based pagination.
+ * When backupConfigId is provided, scopes results to that config.
+ * When omitted, returns all jobs across all configs for the authenticated user.
+ */
 const listRestoreRetrieveJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupConfigId, limit, cursor, status } = req.query as Record<string, string>;
   const userId = req.user!.userId;
@@ -77,6 +92,12 @@ const listRestoreRetrieveJobsHandler = async (req: IRequest, res: IResponse): Pr
   });
 };
 
+/**
+ * GET /?backupJobId=
+ * Returns a single restore/retrieve job, sanitized to remove encrypted fields.
+ * isOwner returns false for null jobs, so a missing job and a foreign job both return not_exist
+ * — intentionally avoids leaking whether a given ID exists.
+ */
 const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupJobId } = req.query;
 
@@ -95,6 +116,13 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
   makeResponse(req, res, 200, true, 'fetch', sanitize(job!));
 };
 
+/**
+ * GET /snapshot-logs?snapshotType=&destinationId=&configId=&pageSize=
+ * Returns activity log entries for a specific config scoped to a destination.
+ * Both configId and destinationId are required — configId scopes to one config,
+ * destinationId acts as an ownership guard (config must belong to that destination).
+ * pageSize is clamped between 1 and MAX_PAGE_SIZE to prevent runaway queries.
+ */
 const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { snapshotType, destinationId, configId, pageSize } = req.query as Record<string, string>;
   const userId = req.user!.userId;
@@ -131,6 +159,13 @@ const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Pr
   makeResponse(req, res, 200, true, 'fetch', jobs);
 };
 
+/**
+ * GET /get-objectlist-by-configid?backupConfigId=&configType=
+ * Returns the objects[] the user selected when creating the config — not job execution results.
+ * configType is validated against the config's stored type to prevent cross-type access
+ * (e.g. a NORMAL configType cannot return an ARCHIVAL config's objects).
+ * Returns not_exist if the config doesn't exist, belongs to another user, or its type mismatches.
+ */
 const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupConfigId, configType } = req.query as Record<string, string>;
   const userId = req.user!.userId;
