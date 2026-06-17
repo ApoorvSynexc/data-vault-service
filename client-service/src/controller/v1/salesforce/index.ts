@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
 import { createUser, getUserByCrmProfileUserId } from '../../../services/user';
-import { createRole } from '../../../services';
+import { createRole, getCrmByOrgId } from '../../../services';
 
 const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const permissions = defaultPermissions;
@@ -22,6 +22,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
   for await (const user of users) {
     const { profile, role, ...rest } = user;
     const crmProfileUserId = profile.userId;
+    const orgId = profile.orgId;
 
     if (!role.permissions?.length) {
       // delete user
@@ -33,6 +34,10 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
         // update role
       } else {
         // Check Crm is exist
+        const crmExist = await getCrmByOrgId(orgId);
+        if (!crmExist) {
+          // create CRM
+        }
         const roleName = 'Custom';
         const roleId = uuidv4();
         await createRole({ roleId, name: roleName, permissions: role.permissions });
