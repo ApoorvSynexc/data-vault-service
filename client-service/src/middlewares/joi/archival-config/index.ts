@@ -21,6 +21,7 @@ const fieldFilterSchema = Joi.object({
 
 const objectFieldSchema = Joi.object({
     name: Joi.string().required(),
+    dataType: Joi.string().required(),
     filter: fieldFilterSchema.required(),
 });
 
@@ -109,23 +110,37 @@ const objectSchema = Joi.object({
     children: Joi.array().items(objectChildrenSchema).optional(),
 });
 
-export const dryRunArchivalValidation = (
-    req: Request,
-    res: Response,
-    next: NextFunction
-) => {
-    const schema = Joi.object({
-        objects: Joi.array().items(objectSchema).required()
-    });
+const crmObjectsSchema = Joi.object({
+    crmId: Joi.string().required(),
+    objects: Joi.array().items(objectSchema).required(),
+});
 
-    const { error } = schema.validate(req.body, { abortEarly: false });
-    if (error) {
-        makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
-        return;
-    }
+const validateWithSchema = (schema: Joi.ObjectSchema) =>
+    (req: Request, res: Response, next: NextFunction) => {
+        console.log(`Validating request body: ${JSON.stringify(req.body)}`);
+        const { error } = schema.validate(req.body, { abortEarly: false });
+        if (error) {
+            makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+            return;
+        }
+        next();
+    };
 
-    next();
-};
+export const dryRunArchivalValidation = validateWithSchema(crmObjectsSchema);
+
+const validateSoqlObjectSchema = Joi.object({
+    name: Joi.string().required(),
+    condition: conditionSchema.optional(),
+    field: Joi.array().items(objectFieldSchema).optional(),
+});
+
+const validateSoqlSchema = Joi.object({
+    crmId: Joi.string().required(),
+    object: validateSoqlObjectSchema.required(),
+    isParent: Joi.boolean().required(),
+});
+
+export const validateSoqlArchivalValidation = validateWithSchema(validateSoqlSchema);
 
 export const createArchivalConfigValidation = (
     req: Request,

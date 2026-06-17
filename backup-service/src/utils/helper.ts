@@ -77,21 +77,41 @@ const toParquetDataType = (salesforceDataType: string): string =>
   SALESFORCE_TO_PARQUET_TYPE[salesforceDataType.toUpperCase()] ?? 'BYTE_ARRAY';
 
 type S3KeyOperation = 'inserts' | 'updates' | 'deletes';
+type S3KeyType = 'backup' | 'archival';
 
-const buildS3KeyPrefix = (
-  crmId: string,
-  crmName: string,
-  backupConfigId: string,
-  objectName: string,
-  operation: S3KeyOperation
-): string => `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${objectName}/${operation}`;
+interface IS3KeyPrefixParams {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  objectName: string;
+  operation: S3KeyOperation;
+  type: S3KeyType;
+}
 
-const buildSchemaS3Key = (
-  crmId: string,
-  crmName: string,
-  backupConfigId: string,
-  objectName: string
-): string => `${crmName}/${crmId}/backup/${backupConfigId}/schema/${objectName}/fields.json`;
+const buildS3KeyPrefix = ({
+  crmId,
+  crmName,
+  backupConfigId,
+  objectName,
+  operation,
+  type,
+}: IS3KeyPrefixParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/raw_data/${objectName}/${operation}`;
+
+interface ISchemaS3KeyParams {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  objectName: string;
+  type: S3KeyType;
+}
+
+const buildSchemaS3Key = ({
+  crmId,
+  crmName,
+  backupConfigId,
+  objectName,
+  type,
+}: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
 
 // ---------------------------------------------------------------------------
 // Order-independent schema equality check.
@@ -109,6 +129,37 @@ const schemasAreEqual = (existing: any[], latest: any[]): boolean => {
     const lf = sorted(latest)[i];
     return key(ef) === key(lf) && ef.dataType === lf.dataType;
   });
+};
+
+// Split a full CSV string into rows, correctly handling quoted fields that
+// contain embedded newlines. Returns non-empty rows only.
+const splitCSVRows = (csv: string): string[] => {
+  const rows: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csv.length; i++) {
+    const char = csv[i];
+    const next = csv[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+        current += char;
+      }
+    } else if ((char === '\n' || (char === '\r' && next === '\n')) && !inQuotes) {
+      if (char === '\r') i++; // skip the \n of \r\n
+      if (current.trim()) rows.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) rows.push(current);
+  return rows;
 };
 
 // Parse CSV line respecting quoted fields (handles commas inside quotes)
@@ -140,6 +191,85 @@ const parseCSVLine = (line: string): string[] => {
   return result;
 };
 
+const formatFieldValuesForSOQL = (fields: any[]): any[] => {
+  return fields.map(field => {
+    if (!field.filter) {
+      return field;
+    }
+
+    const formattedValue = formatValueByDataType(field.filter.value, field.dataType);
+
+    return {
+      ...field,
+      filter: {
+        ...field.filter,
+        value: formattedValue
+      }
+    };
+  });
+};
+
+const formatValueByDataType = (value: string, dataType: string): string => {
+  if (!value && value !== '0' && value !== 'false') return value;
+
+  const lowerDataType = dataType.toLowerCase();
+
+  switch (lowerDataType) {
+    case 'string':
+    case 'text':
+    case 'textarea':
+    case 'email':
+    case 'phone':
+    case 'url':
+    case 'picklist':
+    case 'multipicklist':
+      return `'${escapeSOQLString(value)}'`;
+
+    case 'date':
+      return `'${formatDate(value)}'`;
+
+    case 'datetime':
+      return `'${formatDateTime(value)}'`;
+
+    case 'integer':
+    case 'double':
+    case 'decimal':
+    case 'currency':
+    case 'percent':
+    case 'number':
+      return value;
+
+    case 'boolean':
+      return isTruthy(value) ? 'true' : 'false';
+
+    default:
+      return `'${escapeSOQLString(value)}'`;
+  }
+};
+
+const isTruthy = (value: string | boolean): boolean => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = String(value).toLowerCase().trim();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+  return Boolean(value);
+};
+
+const escapeSOQLString = (str: string): string => {
+  return str.replace(/'/g, "''");
+};
+
+const formatDate = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+};
+
+const formatDateTime = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toISOString();
+};
+
 export {
   randomNumber,
   parseExpiryToSeconds,
@@ -148,5 +278,11 @@ export {
   buildSchemaS3Key,
   toParquetDataType,
   schemasAreEqual,
+  splitCSVRows,
   parseCSVLine,
+  formatFieldValuesForSOQL,
+  formatValueByDataType,
+  type IS3KeyPrefixParams,
+  type ISchemaS3KeyParams,
+  type S3KeyType,
 };

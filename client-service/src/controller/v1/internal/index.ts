@@ -15,14 +15,14 @@ import {
 import { wrapController } from '../../../utils/helper';
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, objectName } = req.query;
+  const { crmId, objectName, mode } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
-  const result = await getApexFields(String(crmId), String(objectName));
+  const result = await getApexFields(String(crmId), String(objectName), mode ? String(mode) : undefined);
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 

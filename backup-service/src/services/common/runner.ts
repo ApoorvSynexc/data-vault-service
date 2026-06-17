@@ -1,9 +1,10 @@
 import dayjs from 'dayjs';
-import { IBackupJob, IDestinationConfig, ISource } from '../../models';
-import { JOB_STATUS } from '../../constant';
+import { IBackupJob, IBackupObject, IDestinationConfig, ISource } from '../../models';
+import { BACKUP_STATUS, JOB_STATUS, OBJECT_STATUS } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler } from '../third-party/registry';
-import { getBackupJob, updateJobStatus } from '../backup-job';
+import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
+import { updateBackupConfig } from '../backup-config';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
 
@@ -24,6 +25,9 @@ export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> 
   }
   if (job.status === JOB_STATUS.success) {
     throw new HttpError(409, `Backup job ${backupJobId} already completed successfully`);
+  }
+  if (job.status === JOB_STATUS.partialFailure || job.status === JOB_STATUS.failed) {
+    return job; // allow retry on any non-success terminal state
   }
   if (job.status === JOB_STATUS.running) {
     throw new HttpError(409, `Backup job ${backupJobId} is already running`);
@@ -140,8 +144,41 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       })
     ) as IDestinationConfig;
 
+    // For objects that failed during or before the delete phase, clear stale error
+    // fields so they don't persist into the retry run. Objects that already reached
+    // UPLOAD_COMPLETED are NOT reset — the orchestrator will skip straight to Phase 3
+    // (delete-only) for them, avoiding a redundant re-upload.
+    const clearObjectError = async (obj: IBackupObject) => {
+      const st = obj.status;
+      if (
+        st === OBJECT_STATUS.failed ||
+        st === OBJECT_STATUS.deletionJobFailed ||
+        st === OBJECT_STATUS.deletionRecordsFailed
+      ) {
+        // Clear stale error fields before retry. For DELETION_RECORDS_FAILED, preserve
+        // deletedSuccessRecordCount — the retry only resubmits previously-failed records,
+        // so the original successes are still valid and the retry's new successes must
+        // accumulate on top of them, not replace them.
+        await updateArchivalObject({
+          backupJobId,
+          object: {
+            id: obj.id,
+            errorMessage: '',
+            deletedfailedRecordCount: 0,
+            ...(st !== OBJECT_STATUS.deletionRecordsFailed ? { deletedSuccessRecordCount: 0 } : {}),
+          },
+        });
+      }
+      for (const child of obj.children ?? []) {
+        await clearObjectError(child);
+      }
+    };
+    for (const obj of object ?? []) {
+      await clearObjectError(obj);
+    }
+
     const handler = getCrmHandler(source.crmName);
-    await handler.runArchival(
+    const archivalResult = await handler.runArchival(
       backupConfigId,
       backupJobId,
       source,
@@ -151,19 +188,26 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       job.lastUpdatedAt
     );
 
+    const finalJobStatus = archivalResult === 'PARTIAL_FAILURE'
+      ? JOB_STATUS.partialFailure
+      : JOB_STATUS.success;
+
     await updateJobStatus({
       backupJobId,
-      status: JOB_STATUS.success,
+      status: finalJobStatus,
       completedAt: dayjs().toISOString(),
     });
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
-    await updateJobStatus({
-      backupJobId,
-      status: JOB_STATUS.failed,
-      completedAt: dayjs().toISOString(),
-      errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    await Promise.all([
+      updateJobStatus({
+        backupJobId,
+        status: JOB_STATUS.failed,
+        completedAt: dayjs().toISOString(),
+        errorMessage: err?.message ?? 'Unknown error',
+      }).catch(() => {}),
+      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => {}),
+    ]);
   } finally {
     activeJobs.delete(backupJobId);
   }

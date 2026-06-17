@@ -4,10 +4,11 @@ import {
   JWT_ACCESS_SECRET,
   JWT_REFRESH_EXPIRY,
   JWT_REFRESH_SECRET,
+  SCHEDULE_TYPE,
 } from '../constant';
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
-import { IBackupObject } from '../models';
+import { IBackupObject, IObject } from '../models';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -85,10 +86,113 @@ const timer = (ms: number): Promise<void> => {
 
 // Flatten all nested objects (children at any depth) into a single array
 const flattenBackupObjects = (objects: IBackupObject[]): IBackupObject[] => {
+  if(!objects.length) return [];
   return objects.flatMap((obj) => [obj, ...(obj.children ? flattenBackupObjects(obj.children) : [])]);
 };
 
+const formatFieldValuesForSOQL = (fields: any[]): any[] => {
+  return fields.map(field => {
+    if (!field.filter) {
+      return field;
+    }
+
+    const formattedValue = formatSalesforceValueByDataType(field.filter.value, field.dataType);
+
+    return {
+      ...field,
+      filter: {
+        ...field.filter,
+        value: formattedValue
+      }
+    };
+  });
+};
+
+const formatSalesforceValueByDataType = (value: string, dataType: string): string => {
+  if (!value && value !== '0' && value !== 'false') return value;
+
+  const lowerDataType = dataType.toLowerCase();
+
+  switch (lowerDataType) {
+    case 'string':
+    case 'text':
+    case 'textarea':
+    case 'email':
+    case 'phone':
+    case 'url':
+    case 'picklist':
+    case 'multipicklist':
+      return `'${escapeSOQLString(value)}'`;
+
+    case 'date':
+      return `'${formatDate(value)}'`;
+
+    case 'datetime':
+      return `'${formatDateTime(value)}'`;
+
+    case 'integer':
+    case 'double':
+    case 'decimal':
+    case 'currency':
+    case 'percent':
+    case 'number':
+      return value;
+
+    case 'boolean':
+      return isTruthy(value) ? 'true' : 'false';
+
+    default:
+      return `'${escapeSOQLString(value)}'`;
+  }
+};
+
+const isTruthy = (value: string | boolean): boolean => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = String(value).toLowerCase().trim();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+  return Boolean(value);
+};
+
+const escapeSOQLString = (str: string): string => {
+  return str.replace(/'/g, "''");
+};
+
+const formatDate = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+};
+
+const formatDateTime = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toISOString();
+};
+
+const filtereObjects = (objects: IObject[]) => {
+    const immediateObjects: IObject[] = [];
+    const scheduledObjects: IObject[] = [];
+
+    objects.forEach((obj: IObject) => {
+        const isOnceImmediate = obj.scheduleConfig?.type === SCHEDULE_TYPE.oneTime
+            && obj.scheduleConfig.scheduling?.frequency === 'ONCE'
+            && !obj.scheduleConfig.scheduling?.startDate
+            && !obj.scheduleConfig.scheduling?.startTime;
+        if (isOnceImmediate) {
+            immediateObjects.push(obj);
+        } else {
+            scheduledObjects.push(obj);
+        }
+    });
+
+    return {
+        immediateObjects,
+        scheduledObjects
+    }
+}
+
 export {
+  filtereObjects,
   randomNumber,
   generateTokens,
   parseExpiryToSeconds,
@@ -97,5 +201,7 @@ export {
   buildSlug,
   isOwner,
   timer,
+  formatSalesforceValueByDataType,
+  formatFieldValuesForSOQL,
   flattenBackupObjects
 };

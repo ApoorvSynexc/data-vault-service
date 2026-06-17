@@ -21,6 +21,7 @@ export interface IFieldFilter {
 
 export interface IBackupField {
   name: string;
+  dataType: string;
   filter?: IFieldFilter;
 }
 
@@ -43,6 +44,7 @@ export interface IBackupObject {
   completedRecordCount?: number;
   deletedSuccessRecordCount?: number;
   deletedfailedRecordCount?: number;
+  recordErrorsS3Prefix?: string;
   insertCount?: number;
   updateCount?: number;
   deleteCount?: number;
@@ -100,6 +102,6 @@ export interface IBackupJob {
   operation?: string;
   recordCount?: number;
   s3Path?: string;
-  schemaChanged?: boolean;
+  schemaChange?: boolean;
   sizeInBytes?: number;
 }
