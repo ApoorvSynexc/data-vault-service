@@ -10,6 +10,7 @@ import {
   SCHEDULE_TYPE,
   WEEK_DAY,
   STATUS,
+  DATASET,
 } from '../../../constant';
 
 const fieldFilterSchema = Joi.object({
@@ -109,6 +110,9 @@ export const createBackupConfigValidation = (
       otherwise: Joi.forbidden(),
     }),
     objects: Joi.array().items(objectSchema).optional(),
+    dataset: Joi.string()
+      .valid(...Object.values(DATASET))
+      .optional(),
     status: Joi.string()
       .valid(...Object.values(STATUS))
       .optional()
@@ -125,8 +129,9 @@ export const createBackupConfigValidation = (
 
 export const updateBackupConfigValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
+    crmId: Joi.string().optional(),
     name: Joi.string().optional(),
-    description: Joi.string().optional(),
+    description: Joi.string().optional().allow(""),
     objectNames: Joi.array().items(Joi.string()).min(1).optional(),
     schedule: Joi.string()
       .valid(...Object.values(SCHEDULE_MODE))
@@ -134,6 +139,9 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
     scheduleConfig: scheduleConfigSchema.optional(),
     objects: Joi.array().items(objectSchema).optional(),
     destinationId: Joi.string().optional(),
+    dataset: Joi.string()
+      .valid(...Object.values(DATASET))
+      .optional(),
     status: Joi.string()
       .valid(...Object.values(STATUS))
       .optional()

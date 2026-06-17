@@ -3,7 +3,7 @@ import { BatchWriteCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamo
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, JOB_STATUS } from '../../constant';
-import { IBackupConfig, IBackupJob } from '../../models';
+import { IBackupConfig, IBackupJob, IObject } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
 import { getCrmById, getCrmTokens } from '../crm';
@@ -11,9 +11,9 @@ import { getDestinationById, getDecryptedDestinationConfig } from '../destinatio
 import { incrementTableCounter } from '../counter';
 import { flattenBackupObjects } from '../../utils/helper';
 
-const getSourceObjects = (config: IBackupConfig) => {
-  if (config.objects?.length) {
-    return config.objects.map((object) => ({
+const getSourceObjects = (objects?: IObject[]) => {
+  if (objects?.length) {
+    return objects.map((object) => ({
       name: object.name,
       field: object.field ?? [],
       ...(object.condition ? { condition: object.condition } : {}),
@@ -21,11 +21,6 @@ const getSourceObjects = (config: IBackupConfig) => {
       ...(object.id ? { id: object.id } : {}),
     }));
   }
-
-  return config.objectNames.map((name) => ({
-    name,
-    field: [],
-  }));
 };
 
 // Returns true if a PENDING or RUNNING job already exists for this config.
@@ -47,6 +42,60 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
     })
   );
   return (result.Count ?? 0) > 0;
+};
+
+const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject[], lastUpdatedAt?: string, bypassDedup?: boolean) => {
+  if (!bypassDedup) {
+    const active = await hasActiveBackupJob(config.backupConfigId);
+    if (active) {
+      return null;
+    }
+  }
+
+  const [crm, destination] = await Promise.all([
+    getCrmById(config.crmId),
+    getDestinationById(config.destinationId),
+  ]);
+
+  if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
+  if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
+
+  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+
+  const credentials = getCrmTokens(crm);
+  const payload = {
+    userId: config.userId,
+    backupConfigId: config.backupConfigId,
+    source: {
+      ...credentials,
+      crmId: crm.crmId,
+      crmName: crm.crmName,
+      instanceUrl: crm.crmProfile?.instanceUrl,
+      object: getSourceObjects(objects),
+    },
+    destination: {
+      type: destination.type,
+      config: getDecryptedDestinationConfig(destination),
+    },
+    ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
+    ...(config.spaceId && { spaceId: config.spaceId }),
+  };
+
+  const endpoint ='/archival';
+  let result;
+  try {
+    result = await httpRequest({
+      url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
+    throw error;
+  }
+
+  await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
+  return result;
 };
 
 const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string, type: 'backup' | 'archival' = 'backup') => {
@@ -74,7 +123,7 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string, t
       crmId: crm.crmId,
       crmName: crm.crmName,
       instanceUrl: crm.crmProfile?.instanceUrl,
-      object: getSourceObjects(config),
+      object: getSourceObjects(config?.objects),
     },
     destination: {
       type: destination.type,
@@ -169,9 +218,12 @@ const getBackupJobsByConfig = async (
 const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
 
-  const endpoint = type === 'archival' ? '/archival/resume' : '/resume';
+  const endpoint = config.type === 'ARCHIVAL' ? '/archival/resume' : '/resume';
+  const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`
+  console.log({url});
+  
   return httpRequest({
-    url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`,
+    url,
     method: 'GET',
   });
 };
@@ -370,6 +422,7 @@ const computeArchivalJobStats = async (query: { indexName: string; keyName: stri
 
 export {
   triggerBackupJob,
+  triggerArchivalBackupJob,
   hasActiveBackupJob,
   resumeBackupJob,
   getBackupJobById,

@@ -18,7 +18,7 @@ export interface ICrmBackupHandler {
     destConfig: IDestinationConfig,
     object?: IBackupObject[],
     lastUpdatedAt?: string
-  ): Promise<void>;
+  ): Promise<'SUCCESS' | 'PARTIAL_FAILURE'>;
 }
 
 export interface ICrmRealtimeHandler {
