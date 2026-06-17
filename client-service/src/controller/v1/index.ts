@@ -2,6 +2,7 @@ export * from './archival-config';
 export * from './auth';
 export * from './backup-config';
 export * from './backup-job';
+export * from './restore-retrieve';
 export * from './dashboard';
 export * from './destination';
 export * from './crm';

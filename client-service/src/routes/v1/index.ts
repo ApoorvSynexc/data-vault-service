@@ -5,6 +5,7 @@ import { authenticate } from '../../middlewares';
 import { crmRouter } from './crm.route';
 import { backupRouter } from './backup-config.route';
 import { backupJobRouter } from './backup-job.route';
+import { restoreRetrieveRouter } from './restore-retrieve.route';
 import { dashboardRouter } from './dashboard.routes';
 import { destinationRouter } from './destination.route';
 import { internalRouter } from './internal.route';
@@ -24,6 +25,7 @@ router.use('/crm', authenticate, crmRouter);
 router.use('/backup-config', authenticate, backupRouter);
 router.use('/archival-config', authenticate, archivalRouter);
 router.use('/backup-job', authenticate, backupJobRouter);
+router.use('/restore-retrieve', authenticate, restoreRetrieveRouter);
 router.use('/dashboard', authenticate, dashboardRouter);
 router.use('/destination', authenticate, destinationRouter);
 

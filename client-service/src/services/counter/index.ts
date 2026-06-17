@@ -71,4 +71,10 @@ const getTableCounter = async (
   return (result.Item as ITableCounter) ?? null;
 };
 
+const getSnapshotActivityLogs = async (snapshotType: string, destinationId: string) => {
+  const params = {
+    TableName: TABLE_COUNTER_TABLE,
+    Key: { tableName: snapshotType, entityId: destinationId },
+  };
+}
 export { incrementAndGetCounter, incrementTableCounter, getTableCounter };

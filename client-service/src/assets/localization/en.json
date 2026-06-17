@@ -48,5 +48,6 @@
   "backup_pending_cannot_delete": "Cannot delete backup configuration with PENDING status",
   "organization_already_exist": "Organization already exist",
   "params_required": "Required parameters are missing",
-  "destination_config_unavailable": "Destination configuration is unavailable"
+  "destination_config_unavailable": "Destination configuration is unavailable",
+  "invalid_snapshot_type": "snapshotType must be BACKUP, ARCHIVAL, or UNIFIED"
 }
