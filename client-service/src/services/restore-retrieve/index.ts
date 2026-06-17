@@ -154,16 +154,22 @@ const resolveJobTypesForSnapshot = (snapshotType: SnapshotType): string[] => {
   return [JOB_TYPE_BY_SNAPSHOT[snapshotType]];
 };
 
+// Cursor shape: { [configId]: { [jobType]: LastEvaluatedKey } }
+// Storing per-config per-jobType keys lets each DynamoDB query resume exactly
+// where it left off, regardless of how many configs or job types are queried.
+type SnapshotCursorMap = Record<string, Record<string, Record<string, any>>>;
+
 /**
- * Queries jobs for a config in parallel across multiple job types.
- * Runs one DynamoDB query per job type (needed for UNIFIED which requires both NORMAL + ARCHIVAL).
- * ScanIndexForward=false ensures newest jobs come first within each type.
+ * Queries jobs for a config across one or more job types, resuming from per-type
+ * LastEvaluatedKeys when provided. Returns items and the updated LastEvaluatedKey
+ * per job type so the caller can build the next page cursor.
  */
-const fetchJobsForConfig = async (
+const fetchJobsForConfigPaginated = async (
   backupConfigId: string,
   jobTypes: string[],
-  pageSize: number
-): Promise<IBackupJob[]> => {
+  pageSize: number,
+  lastEvaluatedKeysByType: Record<string, Record<string, any>> = {}
+): Promise<{ items: IBackupJob[]; lastEvaluatedKeysByType: Record<string, Record<string, any>> }> => {
   const results = await Promise.all(
     jobTypes.map((jobType) =>
       docClient.send(
@@ -179,12 +185,23 @@ const fetchJobsForConfig = async (
           },
           Limit: pageSize,
           ScanIndexForward: false,
+          ...(lastEvaluatedKeysByType[jobType] ? { ExclusiveStartKey: lastEvaluatedKeysByType[jobType] } : {}),
         })
       )
     )
   );
 
-  return results.flatMap((result) => (result.Items ?? []) as IBackupJob[]);
+  const nextKeysByType: Record<string, Record<string, any>> = {};
+  results.forEach((result, idx) => {
+    if (result.LastEvaluatedKey) {
+      nextKeysByType[jobTypes[idx]] = result.LastEvaluatedKey;
+    }
+  });
+
+  return {
+    items: results.flatMap((result) => (result.Items ?? []) as IBackupJob[]),
+    lastEvaluatedKeysByType: nextKeysByType,
+  };
 };
 
 const computeJobDataSize = (job: IBackupJob): number =>
@@ -233,14 +250,26 @@ const resolveScheduleFilterForConfig = (
   return true;
 };
 
+/**
+ * Fetches one page of snapshot activity log entries across all matching configs.
+ *
+ * Pagination strategy — per-config, per-jobType cursor map:
+ *   Each config stores its own DynamoDB LastEvaluatedKey per job type inside the
+ *   cursor. On every page request each config resumes exactly where it left off,
+ *   fetching only `limit` rows from DynamoDB — no offset scan, no wasted reads.
+ *
+ * nextCursor is only emitted when at least one config still has more rows to return,
+ * so the caller knows when the stream is exhausted.
+ */
 const getSnapshotActivityLogs = async (params: {
   userId: string;
   destinationId: string;
   snapshotType: SnapshotType;
   scheduleType?: BackupScheduleType;
-  pageSize: number;
-}): Promise<ISnapshotActivityLogEntry[]> => {
-  const { userId, destinationId, snapshotType, scheduleType, pageSize } = params;
+  limit: number;
+  cursor?: string;
+}): Promise<{ entries: ISnapshotActivityLogEntry[]; nextCursor?: string }> => {
+  const { userId, destinationId, snapshotType, scheduleType, limit, cursor } = params;
 
   const allUserConfigs = await getBackupConfigsByUser(userId);
 
@@ -251,8 +280,13 @@ const getSnapshotActivityLogs = async (params: {
   );
 
   if (matchingConfigs.length === 0) {
-    return [];
+    return { entries: [] };
   }
+
+  // Decode the cursor map — falls back to empty object (first page) on missing/invalid cursor.
+  const cursorMap: SnapshotCursorMap = cursor
+    ? (decodeCursor(cursor) as SnapshotCursorMap) ?? {}
+    : {};
 
   // Deduplicate crmIds and fetch all CRMs in parallel to avoid redundant DB calls.
   const uniqueCrmIds = [...new Set(matchingConfigs.map((c: IBackupConfig) => c.crmId))];
@@ -265,23 +299,46 @@ const getSnapshotActivityLogs = async (params: {
 
   const jobTypes = resolveJobTypesForSnapshot(snapshotType);
 
-  const entriesPerConfig = await Promise.all(
+  // Query each config in parallel, each resuming from its own saved cursor position.
+  const resultsPerConfig = await Promise.all(
     matchingConfigs.map(async (config: IBackupConfig) => {
-      const jobs = await fetchJobsForConfig(config.backupConfigId, jobTypes, pageSize);
+      const { items, lastEvaluatedKeysByType } = await fetchJobsForConfigPaginated(
+        config.backupConfigId,
+        jobTypes,
+        limit,
+        cursorMap[config.backupConfigId] ?? {}
+      );
 
       const crm = crmById.get(config.crmId);
       const configName = config.name ?? config.backupConfigId;
       const sourceName = crm?.crmProfile?.name ?? crm?.name ?? crm?.crmName ?? config.crmId;
 
-      return jobs.map((job) => buildActivityLogEntry(job, configName, sourceName));
+      return {
+        entries: items.map((job: IBackupJob) => buildActivityLogEntry(job, configName, sourceName)),
+        configId: config.backupConfigId,
+        lastEvaluatedKeysByType,
+      };
     })
   );
 
-  const allEntries = entriesPerConfig.flat();
+  // Merge entries from all configs and sort newest-first.
+  const allEntries = resultsPerConfig.flatMap((r) => r.entries);
+  allEntries.sort((a: ISnapshotActivityLogEntry, b: ISnapshotActivityLogEntry) =>
+    b.dateTime.localeCompare(a.dateTime)
+  );
 
-  allEntries.sort((a, b) => b.dateTime.localeCompare(a.dateTime));
+  // Build the next cursor map — only include configs that still have more rows.
+  const nextCursorMap: SnapshotCursorMap = {};
+  for (const { configId, lastEvaluatedKeysByType } of resultsPerConfig) {
+    if (Object.keys(lastEvaluatedKeysByType).length > 0) {
+      nextCursorMap[configId] = lastEvaluatedKeysByType;
+    }
+  }
 
-  return allEntries.slice(0, pageSize);
+  const nextCursor =
+    Object.keys(nextCursorMap).length > 0 ? encodeCursor(nextCursorMap) : undefined;
+
+  return { entries: allEntries.slice(0, limit), nextCursor };
 };
 
 export type ConfigType = 'NORMAL' | 'ARCHIVAL';
