@@ -12,7 +12,7 @@ export interface ICrm {
   crmId: string; // PK
   organizationId: string; // GSI: organizationId-index
   crmName: string; // GSI sort key
-  slug: string; // unique per user, generated from crmProfile.name
+  slug?: string; // unique per user, generated from crmProfile.name
   name?: string;
   isConnected: boolean;
   environment?: 'production' | 'sandbox';

@@ -10,17 +10,13 @@ import { docClient } from '../../config';
 import { CRM_TABLE, STATUS } from '../../constant';
 import { ICrm, ICrmProfile } from '../../models';
 import { decrypt, encryptForTenant } from '../../utils/encryption';
-import { toSlug, buildSlug } from '../../utils/helper';
-import { incrementAndGetCounter } from '../counter';
 
 interface UpsertCrmParams {
+  crmId?: string;
   userId: string;
   crmName: string;
-  crmProfile: ICrmProfile;
-  crmCredentials: Record<string, any>;
-  environment?: 'production' | 'sandbox' | 'custom';
-  customUrl?: string;
-  spaceId?: string;
+  organizationId: string;
+  environment?: 'production' | 'sandbox';
   name?: string;
 }
 
@@ -34,28 +30,16 @@ interface ReconnectCrmParams {
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
-  const { userId, crmName, crmProfile, crmCredentials, environment, customUrl, spaceId, name } = params;
+  const { crmId, crmName, organizationId, environment, name } = params;
   const now = new Date().toISOString();
-  const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), userId);
-
-  const slugBase = crmProfile.name || crmName;
-  const count = await incrementAndGetCounter('slug:crm', `${userId}::${toSlug(slugBase)}`);
-  const slug = buildSlug(slugBase, count);
 
   const crm: ICrm = {
-    crmId: uuidv4(),
-    userId,
-    organizationId: crmProfile.organizationId,
+    crmId:crmId ?? uuidv4(),
+    organizationId,
     crmName,
-    slug,
     isConnected: true,
-    crmProfile,
-    encryptedCredentials: ciphertext,
-    iv,
     environment: environment ?? 'production',
-    customUrl,
     status: STATUS.active,
-    ...(spaceId && { spaceId }),
     ...(name && { name }),
     createdAt: now,
     updatedAt: now,
@@ -64,6 +48,7 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
   await docClient.send(new PutCommand({ TableName: CRM_TABLE, Item: crm }));
   return crm;
 };
+
 
 const getCrmById = async (crmId: string): Promise<ICrm | null> => {
   const result = await docClient.send(
