@@ -155,15 +155,17 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
         st === OBJECT_STATUS.deletionJobFailed ||
         st === OBJECT_STATUS.deletionRecordsFailed
       ) {
-        // Clear stale error/deletion fields; leave status and bulkJobId intact
-        // so the orchestrator can determine which phase to resume from.
+        // Clear stale error fields before retry. For DELETION_RECORDS_FAILED, preserve
+        // deletedSuccessRecordCount — the retry only resubmits previously-failed records,
+        // so the original successes are still valid and the retry's new successes must
+        // accumulate on top of them, not replace them.
         await updateArchivalObject({
           backupJobId,
           object: {
             id: obj.id,
             errorMessage: '',
             deletedfailedRecordCount: 0,
-            deletedSuccessRecordCount: 0,
+            ...(st !== OBJECT_STATUS.deletionRecordsFailed ? { deletedSuccessRecordCount: 0 } : {}),
           },
         });
       }
