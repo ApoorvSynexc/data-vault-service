@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { IDestinationConfig, IRealtimePayload } from '../../../models';
-import { createRealtimeBackupJob } from '../../../services/realtime-backup-job';
+import { upsertRealtimeBackupJob } from '../../../services/realtime-backup-job';
 import { runRealtimeBackupJob } from '../../../services/realtime-backup-job/runner';
 import { wrapController } from '../../../utils/helper';
 
@@ -23,7 +23,8 @@ const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<voi
     spaceId?: string;
   } = req.body;
 
-  const job = await createRealtimeBackupJob({
+  // Find the existing active job for this config+object stream, or create one on first hit.
+  const job = await upsertRealtimeBackupJob({
     userId,
     backupConfigId,
     crmId,

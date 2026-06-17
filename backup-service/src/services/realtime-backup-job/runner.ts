@@ -4,7 +4,7 @@ import { logger } from '../../middlewares/logger';
 import { IBackupJob, IDestinationConfig, IRealtimePayload } from '../../models';
 import { decrypt } from '../../utils/encryption';
 import { getRealtimeCrmHandler } from '../third-party/registry';
-import { updateRealtimeJobStatus } from './index';
+import { updateRealtimeJob } from './index';
 import { updateBackupConfig } from '../backup-config';
 
 export const runRealtimeBackupJob = async (
@@ -12,9 +12,13 @@ export const runRealtimeBackupJob = async (
   payload: IRealtimePayload
 ): Promise<void> => {
   const { backupJobId, crmId, crmName, backupConfigId, destination } = job;
-  const startedAt = dayjs().toISOString();
 
-  await updateRealtimeJobStatus({ backupJobId, status: JOB_STATUS.running, startedAt });
+  // Mark RUNNING at the start of each hit so the UI shows activity.
+  await updateRealtimeJob({
+    backupJobId,
+    status: JOB_STATUS.running,
+    startedAt: dayjs().toISOString(),
+  });
 
   try {
     const destConfig = JSON.parse(
@@ -35,27 +39,27 @@ export const runRealtimeBackupJob = async (
       payload
     );
 
-    await updateRealtimeJobStatus({
+    // Mark SUCCESS and atomically accumulate size + record count from this hit.
+    await updateRealtimeJob({
       backupJobId,
       status: JOB_STATUS.success,
-      completedAt: dayjs().toISOString(),
+      lastCompletedAt: dayjs().toISOString(),
       s3Path,
       schemaChanged,
-      sizeInBytes,
+      sizeInBytesIncrement: sizeInBytes,
+      recordCountIncrement: payload.records.length,
     });
 
     await updateBackupConfig(job.backupConfigId, { backupStatus: BACKUP_STATUS.success });
   } catch (err: any) {
-    const errorMsg = err?.message ?? String(err);
-    logger.error(`Realtime job failed`, {
-      backupJobId,
-      errorMessage: errorMsg,
-    });
-    await updateRealtimeJobStatus({
+    const errorMsg = err?.message ?? 'Unknown error';
+    logger.error(`Realtime job failed`, { backupJobId, errorMessage: errorMsg });
+
+    await updateRealtimeJob({
       backupJobId,
       status: JOB_STATUS.failed,
-      completedAt: dayjs().toISOString(),
-      errorMessage: err?.message ?? 'Unknown error',
+      lastCompletedAt: dayjs().toISOString(),
+      errorMessage: errorMsg,
     }).catch(() => {});
   }
 };
