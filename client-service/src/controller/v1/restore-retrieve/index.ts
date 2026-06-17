@@ -8,19 +8,19 @@ import {
   getObjectListByConfigId,
   getTableCounter,
   ConfigType,
+  BackupScheduleType,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['NORMAL', 'ARCHIVAL'];
+const VALID_BACKUP_SCHEDULE_TYPES: BackupScheduleType[] = ['REALTIME', 'SCHEDULE'];
 
 const VALID_SNAPSHOT_TYPES = ['BACKUP', 'ARCHIVAL', 'UNIFIED'] as const;
 type SnapshotType = typeof VALID_SNAPSHOT_TYPES[number];
 
 const DEFAULT_PAGE_SIZE = 10;
-// Hard cap to prevent a single request from pulling too many DynamoDB records at once.
-const MAX_PAGE_SIZE = 100;
 
 // Strips encrypted fields before sending a job to the client.
 // source and destination contain ciphertext — exposing them would leak encrypted credentials.
@@ -117,14 +117,14 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
 };
 
 /**
- * GET /snapshot-logs?snapshotType=&destinationId=&configId=&pageSize=
- * Returns activity log entries for a specific config scoped to a destination.
- * Both configId and destinationId are required — configId scopes to one config,
- * destinationId acts as an ownership guard (config must belong to that destination).
- * pageSize is clamped between 1 and MAX_PAGE_SIZE to prevent runaway queries.
+ * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=
+ * Returns activity log entries for all configs under a destination, filtered by snapshotType.
+ * scheduleType (REALTIME | SCHEDULE) is only accepted when snapshotType is BACKUP.
+ * For UNIFIED, BACKUP-side is always restricted to SCHEDULE — scheduleType is ignored.
+ * Page size is fixed at DEFAULT_PAGE_SIZE — not exposed as a param to keep the API simple.
  */
 const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { snapshotType, destinationId, configId, pageSize } = req.query as Record<string, string>;
+  const { snapshotType, destinationId, scheduleType } = req.query as Record<string, string>;
   const userId = req.user!.userId;
 
   if (!snapshotType || !VALID_SNAPSHOT_TYPES.includes(snapshotType as SnapshotType)) {
@@ -137,22 +137,22 @@ const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Pr
     return;
   }
 
-  if (!configId) {
-    makeResponse(req, res, 400, false, 'config_id_required');
+  if (scheduleType && snapshotType !== 'BACKUP') {
+    makeResponse(req, res, 400, false, 'invalid_schedule_type_for_snapshot');
     return;
   }
 
-  const resolvedPageSize = Math.min(
-    Math.max(1, parseInt(pageSize ?? String(DEFAULT_PAGE_SIZE), 10)),
-    MAX_PAGE_SIZE
-  );
+  if (scheduleType && !VALID_BACKUP_SCHEDULE_TYPES.includes(scheduleType as BackupScheduleType)) {
+    makeResponse(req, res, 400, false, 'invalid_schedule_type');
+    return;
+  }
 
   const jobs = await getSnapshotActivityLogs({
     userId,
     destinationId,
-    configId,
     snapshotType: snapshotType as SnapshotType,
-    pageSize: resolvedPageSize,
+    scheduleType: scheduleType as BackupScheduleType | undefined,
+    pageSize: DEFAULT_PAGE_SIZE,
   });
 
   // Already shaped as ISnapshotActivityLogEntry — no sanitization needed, no encrypted fields.

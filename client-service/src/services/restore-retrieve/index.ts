@@ -130,6 +130,7 @@ const getJobActivityLogs = async (
 };
 
 export type SnapshotType = 'BACKUP' | 'ARCHIVAL' | 'UNIFIED';
+export type BackupScheduleType = 'REALTIME' | 'SCHEDULE';
 
 export interface ISnapshotActivityLogEntry {
   dateTime: string;
@@ -210,20 +211,43 @@ const buildActivityLogEntry = (
  *   3. For each config, query jobs of the required type(s).
  *   4. Shape each job into ISnapshotActivityLogEntry, merge, sort, and slice to pageSize.
  */
+const resolveScheduleFilterForConfig = (
+  config: IBackupConfig,
+  snapshotType: SnapshotType,
+  scheduleType?: BackupScheduleType
+): boolean => {
+  // ARCHIVAL configs have no schedule concept — always include them.
+  if (config.type === 'ARCHIVAL') return true;
+
+  // For BACKUP: apply the caller-supplied scheduleType filter if provided.
+  if (snapshotType === 'BACKUP') {
+    return scheduleType ? config.schedule === scheduleType : true;
+  }
+
+  // For UNIFIED: BACKUP-side configs must be SCHEDULE only,
+  // because archival is always scheduled and mixing REALTIME would be inconsistent.
+  if (snapshotType === 'UNIFIED') {
+    return config.type === 'NORMAL' ? config.schedule === 'SCHEDULE' : true;
+  }
+
+  return true;
+};
+
 const getSnapshotActivityLogs = async (params: {
   userId: string;
   destinationId: string;
-  configId: string;
   snapshotType: SnapshotType;
+  scheduleType?: BackupScheduleType;
   pageSize: number;
 }): Promise<ISnapshotActivityLogEntry[]> => {
-  const { userId, destinationId, configId, snapshotType, pageSize } = params;
+  const { userId, destinationId, snapshotType, scheduleType, pageSize } = params;
 
   const allUserConfigs = await getBackupConfigsByUser(userId);
 
   const matchingConfigs = allUserConfigs.filter(
     (config: IBackupConfig) =>
-      config.destinationId === destinationId && config.backupConfigId === configId
+      config.destinationId === destinationId &&
+      resolveScheduleFilterForConfig(config, snapshotType, scheduleType)
   );
 
   if (matchingConfigs.length === 0) {
