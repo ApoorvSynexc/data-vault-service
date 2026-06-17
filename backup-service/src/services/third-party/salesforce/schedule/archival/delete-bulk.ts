@@ -127,7 +127,6 @@ const pollJobCompletion = async (paylaod: {
   backupJobId: string;
   object: IBackupObject;
 }): Promise<{ job: IJobStatusResponse }> => {
-  let salesforceApiCount = 0;
   const { backupJobId, object, instanceUrl, tokens, jobId } = paylaod;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
   let pollCount = 0;
@@ -162,12 +161,13 @@ const pollJobCompletion = async (paylaod: {
 
     logger.info(`[archival:delete:poll] tick #${pollCount} | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId} state:${job.state} processed:${job.numberRecordsProcessed} failed:${job.numberRecordsFailed}`);
 
-    salesforceApiCount += 1;
+    // Send 1 (delta) per tick so recursivelyUpdateObjects accumulates correctly
+    // across all runs — first run, retries, and resumed jobs all add to the total.
     await updateArchivalObject({
       backupJobId,
       object: {
         id: object.id,
-        salesforceApiCount,
+        salesforceApiCount: 1,
       },
     });
 
