@@ -1,112 +1,183 @@
 export const defaultPermissions = [
     {
-        dashboard: [
+        label: "Dashboard",
+        value: "dashboard",
+        description: "",
+        permissions: [
             {
                 label: "View",
-                value: "read"
-            }
-        ],
-        backup: [
-            {
-                label: "View",
-                value: "read"
-            },
-            {
-                label: "Config",
-                value: "write"
-            },
-            {
-                label: "Execute",
-                value: "execute"
-            },
-            {
-                label: "Delete",
-                value: "delete"
-            }
-        ],
-        archival: [
-            {
-                label: "View",
-                value: "read"
-            },
-            {
-                label: "Config",
-                value: "write"
-            },
-            {
-                label: "Execute",
-                value: "execute"
-            },
-            {
-                label: "Delete",
-                value: "delete"
-            }
-        ],
-        restore: [
-            {
-                label: "View",
-                value: "read"
-            },
-            {
-                label: "Config",
-                value: "write"
-            },
-            {
-                label: "Execute",
-                value: "execute"
-            },
-            {
-                label: "Delete",
-                value: "delete"
-            }
-        ],
-        connection: [
-            {
-                label: "View",
-                value: "read"
-            },
-            {
-                label: "Config",
-                value: "write"
-            },
-            {
-                label: "Delete",
-                value: "delete"
-            }
-        ],
-        storage: [
-            {
-                label: "View",
-                value: "read"
-            }
-        ],
-        activitylogs: [
-            {
-                label: "View",
-                value: "read"
-            }
-        ],
-        report:[
-            {
-                label: "View",
-                value: "read"
-            }
-        ],
-        security:[
-            {
-                label: "View",
-                value: "read"
-            }
-        ],
-        settings: [
-            {
-                label: "View",
-                value: "read"
-            },
-            {
-                label: "Config",
-                value: "write"
+                value: "read",
+                description: ""
             }
         ]
-    }
+    },
+    {
+        label: "Backup",
+        value: "backup",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: "",
+            },
+            {
+                label: "Config",
+                value: "write",
+                description: "",
+            },
+            {
+                label: "Execute",
+                value: "execute",
+                description: "",
+            },
+            {
+                label: "Delete",
+                value: "delete",
+                description: "",
+            }
+        ]
+    },
+    {
+        label: "Archival",
+        value: "archival",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: "",
+            },
+            {
+                label: "Config",
+                value: "write",
+                description: "",
+            },
+            {
+                label: "Execute",
+                value: "execute",
+                description: "",
+            },
+            {
+                label: "Delete",
+                value: "delete",
+                description: "",
+            }
+        ]
+    },
+    {
+        label: "Restore",
+        value: "restore",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: "",
+            },
+            {
+                label: "Config",
+                value: "write",
+                description: "",
+            },
+            {
+                label: "Execute",
+                value: "execute",
+                description: "",
+            },
+            {
+                label: "Delete",
+                value: "delete",
+                description: "",
+            }
+        ]
+    },
+    {
+        label: "Connection",
+        value: "connection",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: "",
+            },
+            {
+                label: "Config",
+                value: "write",
+                description: "",
+            },
+            {
+                label: "Delete",
+                value: "delete",
+                description: "",
+            }
+        ]
+    },
+    {
+        label: "Storage",
+        value: "storage",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: ""
+            }
+        ]
+    },
+    {
+        label: "Activity Logs",
+        value: "activitylogs",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: ""
+            }
+        ]
+    },
+    {
+        label: "Report",
+        value: "report",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: ""
+            }
+        ]
+    },
+    {
+        label: "Security",
+        value: "security",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: ""
+            }
+        ]
+    },
+
+    {
+        label: "Settings",
+        value: "settings",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: ""
+            },
+            {
+                label: "Config",
+                value: "write",
+                description: ""
+            }
+        ]
+    },
 ]
