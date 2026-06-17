@@ -117,14 +117,14 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
 };
 
 /**
- * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=
- * Returns activity log entries for all configs under a destination, filtered by snapshotType.
+ * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=&limit=&cursor=
+ * Returns a paginated page of activity log entries across all matching configs for a destination.
  * scheduleType (REALTIME | SCHEDULE) is only accepted when snapshotType is BACKUP.
  * For UNIFIED, BACKUP-side is always restricted to SCHEDULE — scheduleType is ignored.
- * Page size is fixed at DEFAULT_PAGE_SIZE — not exposed as a param to keep the API simple.
+ * Cursor encodes per-config DynamoDB resume keys — each config resumes exactly where it left off.
  */
 const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { snapshotType, destinationId, scheduleType } = req.query as Record<string, string>;
+  const { snapshotType, destinationId, scheduleType, limit, cursor } = req.query as Record<string, string>;
   const userId = req.user!.userId;
 
   if (!snapshotType || !VALID_SNAPSHOT_TYPES.includes(snapshotType as SnapshotType)) {
@@ -147,16 +147,18 @@ const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Pr
     return;
   }
 
-  const jobs = await getSnapshotActivityLogs({
+  const limitNum = Math.max(1, parseInt(limit ?? String(DEFAULT_PAGE_SIZE), 10));
+
+  const { entries, nextCursor } = await getSnapshotActivityLogs({
     userId,
     destinationId,
     snapshotType: snapshotType as SnapshotType,
     scheduleType: scheduleType as BackupScheduleType | undefined,
-    pageSize: DEFAULT_PAGE_SIZE,
+    limit: limitNum,
+    cursor,
   });
 
-  // Already shaped as ISnapshotActivityLogEntry — no sanitization needed, no encrypted fields.
-  makeResponse(req, res, 200, true, 'fetch', jobs);
+  makeResponse(req, res, 200, true, 'fetch', entries, { limit: limitNum, nextCursor });
 };
 
 /**
