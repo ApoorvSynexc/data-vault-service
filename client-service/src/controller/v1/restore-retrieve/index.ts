@@ -5,11 +5,15 @@ import {
   getRestoreRetrieveJobsByUser,
   getJobActivityLogs,
   getSnapshotActivityLogs,
+  getObjectListByConfigId,
   getTableCounter,
+  ConfigType,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
+
+const VALID_CONFIG_TYPES: ConfigType[] = ['NORMAL', 'ARCHIVAL'];
 
 const VALID_SNAPSHOT_TYPES = ['BACKUP', 'ARCHIVAL', 'UNIFIED'] as const;
 type SnapshotType = typeof VALID_SNAPSHOT_TYPES[number];
@@ -92,7 +96,7 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
 };
 
 const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { snapshotType, destinationId, pageSize } = req.query as Record<string, string>;
+  const { snapshotType, destinationId, configId, pageSize } = req.query as Record<string, string>;
   const userId = req.user!.userId;
 
   if (!snapshotType || !VALID_SNAPSHOT_TYPES.includes(snapshotType as SnapshotType)) {
@@ -105,6 +109,11 @@ const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Pr
     return;
   }
 
+  if (!configId) {
+    makeResponse(req, res, 400, false, 'config_id_required');
+    return;
+  }
+
   const resolvedPageSize = Math.min(
     Math.max(1, parseInt(pageSize ?? String(DEFAULT_PAGE_SIZE), 10)),
     MAX_PAGE_SIZE
@@ -113,6 +122,7 @@ const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Pr
   const jobs = await getSnapshotActivityLogs({
     userId,
     destinationId,
+    configId,
     snapshotType: snapshotType as SnapshotType,
     pageSize: resolvedPageSize,
   });
@@ -121,9 +131,38 @@ const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Pr
   makeResponse(req, res, 200, true, 'fetch', jobs);
 };
 
+const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupConfigId, configType } = req.query as Record<string, string>;
+  const userId = req.user!.userId;
+
+  if (!backupConfigId) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  if (!configType || !VALID_CONFIG_TYPES.includes(configType as ConfigType)) {
+    makeResponse(req, res, 400, false, 'invalid_config_type');
+    return;
+  }
+
+  const { objects, found } = await getObjectListByConfigId(
+    backupConfigId,
+    configType as ConfigType,
+    userId
+  );
+
+  if (!found) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', objects);
+};
+
 export const restoreRetrieveJobController = wrapController({
   fetchLogsHandler,
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
   getSnapshotActivityLogsHandler,
+  getObjectListByConfigIdHandler,
 });

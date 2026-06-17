@@ -49,5 +49,7 @@
   "organization_already_exist": "Organization already exist",
   "params_required": "Required parameters are missing",
   "destination_config_unavailable": "Destination configuration is unavailable",
-  "invalid_snapshot_type": "snapshotType must be BACKUP, ARCHIVAL, or UNIFIED"
+  "invalid_snapshot_type": "snapshotType must be BACKUP, ARCHIVAL, or UNIFIED",
+  "config_id_required": "configId is required",
+  "invalid_config_type": "configType must be NORMAL or ARCHIVAL"
 }
