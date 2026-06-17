@@ -391,4 +391,18 @@ const getUsersWithPagination = async (
   };
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersWithPagination };
+const getUserByCrmProfileUserId = async (crmProfileUserId: string): Promise<IUser | null> => {
+  const result = await docClient.send(
+    new ScanCommand({
+      TableName: USER_TABLE,
+      FilterExpression: 'crmProfile.userId = :crmProfileUserId',
+      ExpressionAttributeValues: {
+        ':crmProfileUserId': crmProfileUserId,
+      },
+      Limit: 1,
+    })
+  );
+  return (result.Items?.[0] as IUser) ?? null;
+};
+
+export { createUser, getUser, updateUser, getUsers, getUsersWithPagination, getUserByCrmProfileUserId };
