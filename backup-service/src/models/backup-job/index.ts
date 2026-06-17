@@ -100,8 +100,9 @@ export interface IBackupJob {
   crmName?: string;
   objectApiName?: string;
   operation?: string;
-  recordCount?: number;
-  s3Path?: string;
+  recordCount?: number;  // accumulated across all hits via atomic ADD
+  sizeInBytes?: number;  // accumulated across all hits via atomic ADD
+  s3Path?: string;       // S3 path of the most recent hit's upload
   schemaChange?: boolean;
-  sizeInBytes?: number;
+  lastCompletedAt?: string; // timestamp of the most recent successfully processed hit
 }

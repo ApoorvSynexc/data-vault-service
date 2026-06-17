@@ -83,19 +83,27 @@ interface IS3KeyPrefixParams {
   crmId: string;
   crmName: string;
   backupConfigId: string;
+  backupJobId: string;
   objectName: string;
-  operation: S3KeyOperation;
   type: S3KeyType;
+  operation?: S3KeyOperation;
 }
 
+// Builds the S3 key prefix for raw data uploads.
+// Backup paths include an operation sub-folder (inserts / updates / deletes).
+// Archival paths omit it — files are differentiated by a UUID suffix appended at upload time.
 const buildS3KeyPrefix = ({
   crmId,
   crmName,
   backupConfigId,
+  backupJobId,
   objectName,
-  operation,
   type,
-}: IS3KeyPrefixParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/raw_data/${objectName}/${operation}`;
+  operation,
+}: IS3KeyPrefixParams): string => {
+  const base = `${crmName}/${crmId}/${type}/${backupConfigId}/raw_data/${backupJobId}/${objectName}`;
+  return operation ? `${base}/${operation}` : base;
+};
 
 interface ISchemaS3KeyParams {
   crmId: string;

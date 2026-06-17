@@ -29,6 +29,17 @@ import {
 } from '../../../../../utils/helper';
 import { randomUUID } from 'crypto';
 
+// Builds a unique S3 key for one archival CSV file within the object's folder.
+// Each file gets a UUID name so concurrent/retry uploads never overwrite each other.
+const buildArchivalFileS3Key = (
+  crmId: string,
+  crmName: string,
+  backupConfigId: string,
+  backupJobId: string,
+  objectName: string
+): string =>
+  `${buildS3KeyPrefix({ crmId, crmName, backupConfigId, backupJobId, objectName, type: 'archival' })}/${randomUUID()}.csv`;
+
 // Salesforce API version used for all REST and Bulk API calls in this module.
 const SF_API_VERSION = 'v65.0';
 
@@ -75,7 +86,7 @@ interface IUploadBulkResultsByPageArchival {
   backupJobId: string;
   object: IBackupObject; // Parent object config, including its children array
   destConfig: IDestinationConfig; // S3 destination bucket + credentials
-  s3KeyPrefix: string; // Base S3 key path for parent record uploads
+  s3KeyPrefix: string; // Base S3 folder path — used by the caller for S3 listings; individual file keys are built via buildArchivalFileS3Key
   crmId: string;
   crmName: string;
   backupConfigId: string;
@@ -99,7 +110,7 @@ interface IFetchContext {
   instanceUrl: string;
   tokens: SalesforceTokens;
   destConfig: IDestinationConfig;
-  s3KeyPrefix: string;
+  s3KeyPrefix: string; // Base S3 folder path for S3 listings in child skip-check
   crmId: string;
   crmName: string;
   backupConfigId: string;
@@ -346,14 +357,7 @@ async function uploadSingleObject(
 
       const csvText = await response.text();
       const csvBuffer = Buffer.from(csvText, 'utf-8');
-      const s3Key = `${buildS3KeyPrefix({
-        crmId: ctx.crmId,
-        crmName: ctx.crmName,
-        backupConfigId: ctx.backupConfigId,
-        objectName: object.name,
-        operation: 'inserts',
-        type: 'archival',
-      })}_${randomUUID()}`;
+      const s3Key = buildArchivalFileS3Key(ctx.crmId, ctx.crmName, ctx.backupConfigId, backupJobId, object.name);
 
       await uploadToS3(ctx.destConfig, s3Key, csvBuffer);
       totalSizeInBytes += csvBuffer.byteLength;
@@ -438,7 +442,7 @@ async function uploadSingleObject(
  * INPUT:
  *   jobId            — a JobComplete Bulk API v2 Query job
  *   object           — root object config
- *   s3KeyPrefix      — base S3 path used to build upload keys
+ *   crmId/crmName/backupConfigId/backupJobId — used to build S3 keys via buildArchivalFileS3Key
  *   startLocator     — if set, resumes streaming from this page (retry support)
  *   startCompletedRecordCount — count to start from when resuming (retry support)
  *
@@ -465,7 +469,9 @@ const uploadBulkResultsByPageArchival = async (
     backupJobId,
     object,
     destConfig,
-    s3KeyPrefix,
+    crmId,
+    crmName,
+    backupConfigId,
     parentWhereBody,
     startLocator = null,
     startCompletedRecordCount = 0,
@@ -521,7 +527,7 @@ const uploadBulkResultsByPageArchival = async (
 
       // Read the full CSV text and upload to S3.
       const csvText = await response.text();
-      const parentS3Key = `${s3KeyPrefix}_${randomUUID()}`;
+      const parentS3Key = buildArchivalFileS3Key(crmId, crmName, backupConfigId, backupJobId, object.name);
       const csvBuffer = Buffer.from(csvText, 'utf-8');
       await uploadToS3(destConfig, parentS3Key, csvBuffer);
       totalSizeInBytes += csvBuffer.byteLength;

@@ -353,8 +353,8 @@ export const archiveAndHardDelete = async (
     crmId,
     crmName,
     backupConfigId,
+    backupJobId,
     objectName,
-    operation: 'inserts',
     type: 'archival',
   });
 
@@ -404,7 +404,7 @@ export const archiveAndHardDelete = async (
 
         const rebuildS3Urls = async (node: IBackupObject): Promise<void> => {
           if (DELETE_ONLY_STATUSES.has(node.status ?? '') || node.status === OBJECT_STATUS.completed) {
-            const prefix = buildS3KeyPrefix({ crmId, crmName, backupConfigId, objectName: node.name, operation: 'inserts', type: 'archival' });
+            const prefix = buildS3KeyPrefix({ crmId, crmName, backupConfigId, backupJobId, objectName: node.name, type: 'archival' });
             s3UrlsById.set(node.id, await listS3Objects(destConfig, prefix));
           }
           for (const child of node.children ?? []) {
@@ -529,7 +529,7 @@ export const archiveAndHardDelete = async (
             let keys = s3UrlsMap.get(node.name) ?? [];
             // If upload was skipped (already done), rebuild S3 keys from listing.
             if (!keys.length && (node.status === OBJECT_STATUS.uploadCompleted || node.status === OBJECT_STATUS.completed)) {
-              const prefix = buildS3KeyPrefix({ crmId, crmName, backupConfigId, objectName: node.name, operation: 'inserts', type: 'archival' });
+              const prefix = buildS3KeyPrefix({ crmId, crmName, backupConfigId, backupJobId, objectName: node.name, type: 'archival' });
               keys = await listS3Objects(destConfig, prefix);
             }
             s3UrlsById.set(node.id, keys);
