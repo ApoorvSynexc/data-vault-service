@@ -86,7 +86,13 @@ const compareSchemaInRealtime = async (
   // Compare against the latest versioned file (fields_<timestamp>.json with the
   // highest timestamp). Fall back to the original fields.json only when no
   // versioned files exist yet.
-  const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
+  const schemaKey = buildSchemaS3Key({
+    crmId,
+    crmName,
+    backupConfigId,
+    objectName: objectApiName,
+    type: 'backup',
+  });
   const schemaFolder = schemaKey.replace('/fields.json', '/');
   const allSchemaKeys = await listS3Objects(destConfig, schemaFolder);
   const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
@@ -157,7 +163,13 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
       schemaChanged = schemaComparison.schemaChanged;
 
       if (schemaChanged) {
-        const schemaKey = buildSchemaS3Key(crmId, crmName, backupConfigId, objectApiName);
+        const schemaKey = buildSchemaS3Key({
+          crmId,
+          crmName,
+          backupConfigId,
+          objectName: objectApiName,
+          type: 'backup',
+        });
         const newSchemaBuffer = Buffer.from(JSON.stringify(schemaComparison.latestSchema, null, 2));
         const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
         await uploadToS3(destConfig, versionedKey, newSchemaBuffer);

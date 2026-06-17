@@ -22,6 +22,7 @@ export interface IFieldFilter {
 
 export interface IObjectField {
   name: string;
+  dataType: string;
   filter: IFieldFilter;
 }
 
@@ -40,6 +41,7 @@ export interface IObject {
   sizeInBytes?: number;
   field: IObjectField[];
   condition?: IObjectCondition;
+  scheduleConfig?: IScheduleConfig;
   children?: IObject[];
 }
 
@@ -60,6 +62,7 @@ export interface IBackupConfig {
   name?: string;
   description?: string;
   type: string; // NORMAL | ARCHIVAL
+  dataset?: "ENTIRE" | "PARTIAL";
   objectNames: string[];
   schedule: string; // REALTIME | SCHEDULE
   scheduleConfig?: IScheduleConfig;
