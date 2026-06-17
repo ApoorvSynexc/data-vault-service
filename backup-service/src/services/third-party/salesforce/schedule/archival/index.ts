@@ -95,6 +95,19 @@ const buildWhereClause = (object: IBackupObject): string => {
     return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
 };
 
+// When a root object has 0 records there is nothing to upload or delete for
+// any descendant either — mark the entire subtree COMPLETED immediately so
+// children never stay stuck in PENDING/CREATED.
+const markSubtreeCompleted = async (backupJobId: string, node: IBackupObject): Promise<void> => {
+    for (const child of node.children ?? []) {
+        await updateArchivalObject({
+            backupJobId,
+            object: { id: child.id, status: OBJECT_STATUS.completed, completedRecordCount: 0, errorMessage: '' },
+        });
+        await markSubtreeCompleted(backupJobId, child);
+    }
+};
+
 // Archive: export all records to storage and hard delete from Salesforce
 export const archiveAndHardDelete = async (
     backupConfigId: string,
@@ -159,6 +172,15 @@ export const archiveAndHardDelete = async (
         }
         
         logger.info(`Object found records for archival, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectId:${object.id} objectName:${objectName} recordCount:${totalRecordCount}`);
+
+        if (!totalRecordCount) {
+            // Root has 0 records — nothing to upload or delete for the entire tree.
+            // Mark root and every descendant COMPLETED so none stay stuck in PENDING.
+            logger.info(`Object archival 0 records — marking root and subtree COMPLETED, backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName}`);
+            await updateArchivalObject({ backupJobId, object: { id: object.id, status: OBJECT_STATUS.completed, completedRecordCount: 0, errorMessage: '' } });
+            await markSubtreeCompleted(backupJobId, object);
+        }
+
         if (totalRecordCount) {
             const archivePrefix = buildS3KeyPrefix(crmId, crmName, backupConfigId, objectName, 'inserts');
             const { sizeInBytes, s3Urls } = await uploadBulkResultsByPageArchival({
