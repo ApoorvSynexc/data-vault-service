@@ -199,6 +199,19 @@ const buildWhereClause = (object: IBackupObject): string => {
 // Tree helpers
 // ---------------------------------------------------------------------------
 
+// When a root object has 0 records there is nothing to upload or delete for
+// any descendant either — mark the entire subtree COMPLETED immediately so
+// children never stay stuck in PENDING/CREATED.
+const markSubtreeCompleted = async (backupJobId: string, node: IBackupObject): Promise<void> => {
+  for (const child of node.children ?? []) {
+    await updateArchivalObject({
+      backupJobId,
+      object: { id: child.id, status: OBJECT_STATUS.completed, completedRecordCount: 0, errorMessage: '' },
+    });
+    await markSubtreeCompleted(backupJobId, child);
+  }
+};
+
 const findObjectInTree = (root: IBackupObject, name: string): IBackupObject | undefined => {
   if (root.name === name) { return root; }
   for (const child of root.children ?? []) {
@@ -467,9 +480,11 @@ export const archiveAndHardDelete = async (
     const parentWhereBody = whereClause.replace(/^WHERE\s+/i, '').trim();
 
     if (totalRecordCount === 0) {
-      // Root has 0 records — mark it COMPLETED and skip the entire tree.
-      logger.info(`[archival:orchestrator] 0 records — marking root COMPLETED, skipping subtree | backupJobId:${backupJobId} objectName:${objectName}`);
+      // Root has 0 records — nothing to upload or delete for the entire tree.
+      // Mark root and every descendant COMPLETED so none stay stuck in PENDING.
+      logger.info(`[archival:orchestrator] 0 records — marking root and subtree COMPLETED | backupJobId:${backupJobId} objectName:${objectName}`);
       await updateArchivalObject({ backupJobId, object: { id: object.id, status: OBJECT_STATUS.completed, completedRecordCount: 0, errorMessage: '' } });
+      await markSubtreeCompleted(backupJobId, object);
       return;
     }
 
