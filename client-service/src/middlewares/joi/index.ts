@@ -2,6 +2,7 @@ export * from './archival-config';
 export * from './auth';
 export * from './backup-config';
 export * from './crm';
+export * from './salesforce';
 export * from './destination';
 export * from './user';
 export * from './shared';
