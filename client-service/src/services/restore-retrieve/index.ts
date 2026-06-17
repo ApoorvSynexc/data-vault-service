@@ -190,15 +190,17 @@ const buildActivityLogEntry = (
 const getSnapshotActivityLogs = async (params: {
   userId: string;
   destinationId: string;
+  configId: string;
   snapshotType: SnapshotType;
   pageSize: number;
 }): Promise<ISnapshotActivityLogEntry[]> => {
-  const { userId, destinationId, snapshotType, pageSize } = params;
+  const { userId, destinationId, configId, snapshotType, pageSize } = params;
 
   const allUserConfigs = await getBackupConfigsByUser(userId);
 
   const matchingConfigs = allUserConfigs.filter(
-    (config: IBackupConfig) => config.destinationId === destinationId
+    (config: IBackupConfig) =>
+      config.destinationId === destinationId && config.backupConfigId === configId
   );
 
   if (matchingConfigs.length === 0) {
@@ -235,10 +237,40 @@ const getSnapshotActivityLogs = async (params: {
   return allEntries.slice(0, pageSize);
 };
 
+export type ConfigType = 'NORMAL' | 'ARCHIVAL';
+
+/**
+ * Returns the object list from the most recent job for a given config.
+ * Uses configType to query only the relevant job type (NORMAL or ARCHIVAL).
+ * Returns found=false when the config does not belong to the authenticated user.
+ */
+const getObjectListByConfigId = async (
+  backupConfigId: string,
+  configType: ConfigType,
+  userId: string
+): Promise<{ objects: IBackupJob['object']; found: boolean }> => {
+  const allUserConfigs = await getBackupConfigsByUser(userId);
+
+  const configBelongsToUser = allUserConfigs.some(
+    (config: IBackupConfig) => config.backupConfigId === backupConfigId
+  );
+
+  if (!configBelongsToUser) {
+    return { objects: [], found: false };
+  }
+
+  const jobs = await fetchJobsForConfig(backupConfigId, [configType], 1);
+
+  const mostRecentJob = jobs.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+
+  return { objects: mostRecentJob?.object ?? [], found: true };
+};
+
 export {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
   getJobActivityLogs,
   getSnapshotActivityLogs,
+  getObjectListByConfigId,
 };
