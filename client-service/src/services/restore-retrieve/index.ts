@@ -2,12 +2,18 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE } from '../../constant';
-import { IBackupConfig, IBackupJob, ICrm } from '../../models';
-import { getBackupConfigsByUser } from '../backup-config';
+import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
+import { getBackupConfigsByUser, getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 
+// All restore and retrieve jobs share the same BACKUP_JOB_TABLE, distinguished by this type value.
 const RESTORE_JOB_TYPE = 'RESTORE';
 
+/**
+ * Fetches a single restore/retrieve job by its ID.
+ * Returns null if the job doesn't exist or belongs to a different job type (e.g. NORMAL, ARCHIVAL).
+ * This prevents one user from accessing another user's job by guessing an ID.
+ */
 const getRestoreRetrieveJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
   const result = await docClient.send(
     new GetCommand({ TableName: BACKUP_JOB_TABLE, Key: { backupJobId } })
@@ -22,6 +28,11 @@ const getRestoreRetrieveJobById = async (backupJobId: string): Promise<IBackupJo
   return item;
 };
 
+/**
+ * Lists restore/retrieve jobs scoped to a specific backup config, newest-first.
+ * Supports cursor-based pagination and optional status filtering.
+ * Uses the backupConfigId-index GSI — no table scan needed.
+ */
 const getRestoreRetrieveJobsByConfig = async (
   backupConfigId: string,
   options?: { limit?: number; cursor?: string; status?: string }
@@ -56,6 +67,10 @@ const getRestoreRetrieveJobsByConfig = async (
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
+/**
+ * Lists all restore/retrieve jobs for a user across all their configs, newest-first.
+ * Used when no backupConfigId is provided — falls back to the userId-index GSI.
+ */
 const getRestoreRetrieveJobsByUser = async (
   userId: string,
   options?: { limit?: number; cursor?: string; status?: string }
@@ -123,11 +138,14 @@ export interface ISnapshotActivityLogEntry {
   dataSize: number;
 }
 
+// Snapshot types are user-facing terms; job types are internal DB values.
+// BACKUP maps to NORMAL because the original backup job type was named NORMAL before snapshots were introduced.
 const JOB_TYPE_BY_SNAPSHOT: Record<Exclude<SnapshotType, 'UNIFIED'>, string> = {
   BACKUP: 'NORMAL',
   ARCHIVAL: 'ARCHIVAL',
 };
 
+// UNIFIED means the user wants both backup and archival jobs merged into one view.
 const resolveJobTypesForSnapshot = (snapshotType: SnapshotType): string[] => {
   if (snapshotType === 'UNIFIED') {
     return [JOB_TYPE_BY_SNAPSHOT.BACKUP, JOB_TYPE_BY_SNAPSHOT.ARCHIVAL];
@@ -135,6 +153,11 @@ const resolveJobTypesForSnapshot = (snapshotType: SnapshotType): string[] => {
   return [JOB_TYPE_BY_SNAPSHOT[snapshotType]];
 };
 
+/**
+ * Queries jobs for a config in parallel across multiple job types.
+ * Runs one DynamoDB query per job type (needed for UNIFIED which requires both NORMAL + ARCHIVAL).
+ * ScanIndexForward=false ensures newest jobs come first within each type.
+ */
 const fetchJobsForConfig = async (
   backupConfigId: string,
   jobTypes: string[],
@@ -239,31 +262,40 @@ const getSnapshotActivityLogs = async (params: {
 
 export type ConfigType = 'NORMAL' | 'ARCHIVAL';
 
+const flattenObjectNames = (objects: IObject[]): string[] => {
+  const names: string[] = [];
+  for (const obj of objects) {
+    names.push(obj.name);
+    if (obj.children?.length) {
+      names.push(...flattenObjectNames(obj.children));
+    }
+  }
+  return names;
+};
+
 /**
- * Returns the object list from the most recent job for a given config.
- * Uses configType to query only the relevant job type (NORMAL or ARCHIVAL).
- * Returns found=false when the config does not belong to the authenticated user.
+ * Returns a flat, deduplicated list of object names from the backup config.
+ * Recursively walks the parent→children tree so nested objects are included.
+ * configType is validated against the stored config type to prevent cross-type access
+ * (e.g. passing configType=ARCHIVAL on a NORMAL config should not return results).
+ * Returns found=false when the config doesn't exist, doesn't belong to the user,
+ * or its type doesn't match the requested configType.
  */
 const getObjectListByConfigId = async (
   backupConfigId: string,
   configType: ConfigType,
   userId: string
-): Promise<{ objects: IBackupJob['object']; found: boolean }> => {
-  const allUserConfigs = await getBackupConfigsByUser(userId);
+): Promise<{ objects: string[]; found: boolean }> => {
+  const config = await getBackupConfigById(backupConfigId);
 
-  const configBelongsToUser = allUserConfigs.some(
-    (config: IBackupConfig) => config.backupConfigId === backupConfigId
-  );
-
-  if (!configBelongsToUser) {
+  if (!config || config.userId !== userId || config.type !== configType) {
     return { objects: [], found: false };
   }
 
-  const jobs = await fetchJobsForConfig(backupConfigId, [configType], 1);
+  const allNames = flattenObjectNames(config.objects ?? []);
+  const uniqueNames = [...new Set(allNames)];
 
-  const mostRecentJob = jobs.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-
-  return { objects: mostRecentJob?.object ?? [], found: true };
+  return { objects: uniqueNames, found: true };
 };
 
 export {

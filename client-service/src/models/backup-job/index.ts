@@ -30,6 +30,7 @@ export interface IBackupObject {
 
 export interface IBackupJob {
   backupJobId: string; // PK
+  type: string; // NORMAL | ARCHIVAL | RESTORE — discriminates job kind in the shared table
   jobType: 'BULK' | 'REALTIME';
   userId: string; // GSI: userId-index
   backupConfigId: string; // GSI: backupConfigId-index

@@ -1,6 +1,15 @@
 import { Router } from 'express';
 import { restoreRetrieveJobController } from '../../controller';
 
+/**
+ * Restore & Retrieve routes — all require authentication (applied at the parent router level).
+ *
+ * GET /fetch-logs                   — activity log for a specific job (by backupJobId)
+ * GET /snapshot-logs                — activity log entries for a config scoped to a destination
+ * GET /list                         — paginated list of restore/retrieve jobs (by config or user)
+ * GET /get-objectlist-by-configid   — object list from the most recent job for a given config
+ * GET /                             — single restore/retrieve job (by backupJobId)
+ */
 const router = Router();
 
 router.get('/fetch-logs', restoreRetrieveJobController.fetchLogsHandler);
