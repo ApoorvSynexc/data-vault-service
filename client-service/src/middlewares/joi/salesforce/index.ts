@@ -38,7 +38,43 @@ export const upsertUsersValidation = (req: Request, res: Response, next: NextFun
   const { error } = schema.validate(req.body, { abortEarly: false });
   if (error) {
     console.log(error);
-    
+
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    return;
+  }
+  next();
+};
+
+export const createRoleValidation = (req: Request, res: Response, next: NextFunction) => {
+  const schema = Joi.object({
+    organizationId: Joi.string().required(),
+    name: Joi.string().trim().required(),
+    description: Joi.string().trim().optional(),
+    permissions: Joi.array()
+      .items(Joi.string())
+      .required(),
+  });
+
+  const { error } = schema.validate(req.body, { abortEarly: false });
+  if (error) {
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    return;
+  }
+  next();
+};
+
+export const updateRoleValidation = (req: Request, res: Response, next: NextFunction) => {
+  const schema = Joi.object({
+    crmId: Joi.string().required(),
+    name: Joi.string().trim().optional(),
+    description: Joi.string().trim().optional(),
+    permissions: Joi.array()
+      .items(Joi.string())
+      .optional(),
+  }).min(1);
+
+  const { error } = schema.validate(req.body, { abortEarly: false });
+  if (error) {
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }
