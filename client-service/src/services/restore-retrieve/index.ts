@@ -1,7 +1,7 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE } from '../../constant';
+import { BACKUP_JOB_TABLE, JOB_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
 import { getBackupConfigsByUser, getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
@@ -137,6 +137,8 @@ export interface ISnapshotActivityLogEntry {
   configName: string;
   sourceName: string;
   dataSize: number;
+  backupType: string;
+  status: string;
 }
 
 // Snapshot types are user-facing terms; job types are internal DB values.
@@ -177,11 +179,12 @@ const fetchJobsForConfigPaginated = async (
           TableName: BACKUP_JOB_TABLE,
           IndexName: 'backupConfigId-index',
           KeyConditionExpression: 'backupConfigId = :backupConfigId',
-          FilterExpression: '#type = :type',
-          ExpressionAttributeNames: { '#type': 'type' },
+          FilterExpression: '#type = :type AND #status = :status',
+          ExpressionAttributeNames: { '#type': 'type', '#status': 'status' },
           ExpressionAttributeValues: {
             ':backupConfigId': backupConfigId,
             ':type': jobType,
+            ':status': JOB_STATUS.success,
           },
           Limit: pageSize,
           ScanIndexForward: false,
@@ -216,6 +219,8 @@ const buildActivityLogEntry = (
   configName,
   sourceName,
   dataSize: computeJobDataSize(job),
+  backupType: job.type,
+  status: job.status,
 });
 
 /**
