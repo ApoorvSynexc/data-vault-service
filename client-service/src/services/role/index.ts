@@ -8,6 +8,7 @@ import { IRole } from '../../models';
 // DynamoDB table layout
 //   PK:  roleId        (UUID)
 //   GSI: name-index    PK = name
+//   GSI: crmId-index   PK = crmId
 // ---------------------------------------------------------------------------
 
 const createRole = async (data: Partial<IRole>): Promise<void> => {
@@ -126,4 +127,21 @@ const deleteRole = async (filter: Record<string, any>): Promise<boolean> => {
   return true;
 };
 
-export { createRole, getRole, getRoles, updateRole, deleteRole };
+const getRolesByCrmId = async (crmId: string): Promise<IRole[]> => {
+  if (!crmId) {
+    return [];
+  }
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: ROLE_TABLE,
+      IndexName: 'crmId-index',
+      KeyConditionExpression: 'crmId = :crmId',
+      ExpressionAttributeValues: { ':crmId': crmId },
+    })
+  );
+
+  return (result.Items ?? []) as IRole[];
+};
+
+export { createRole, getRole, getRoles, getRolesByCrmId, updateRole, deleteRole };
