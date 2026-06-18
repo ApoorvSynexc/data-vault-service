@@ -24,7 +24,6 @@ interface UpsertRealtimeBackupJobParams {
   objectApiName: string;
   operation: string;
   transactionId: string;
-  recordCount: number;
   spaceId?: string;
 }
 
@@ -123,18 +122,19 @@ const findActiveJobByTransaction = async (
  *   queries on backupConfigId and then filters on transactionId; without the field on the
  *   item, the filter would never match and every hit would create a new job.
  *
- * WHY recordCount is initialized from the first hit's record count (not 0):
- *   The first hit's records are real data that must be counted. Initializing to 0 and
- *   then using ADD would require an extra update step. Since createRealtimeJob is only
- *   called once per job, setting the initial value directly is correct. Subsequent hits
- *   use the ADD path in updateRealtimeJob to accumulate.
+ * WHY recordCount is initialized to 0 (not the first hit's count):
+ *   The runner always calls updateRealtimeJob with recordCountIncrement after uploading,
+ *   including for the very first hit. If we also set the initial count here, the first
+ *   hit's records get counted twice (once on create, once via ADD in the runner).
+ *   Initializing to 0 makes the runner the single source of truth for all accumulation —
+ *   every hit, including the first, goes through the same ADD path.
  */
 const createRealtimeJob = async (
   params: UpsertRealtimeBackupJobParams
 ): Promise<IBackupJob> => {
   const {
     userId, backupConfigId, crmId, crmName, destination,
-    objectApiName, operation, transactionId, recordCount, spaceId,
+    objectApiName, operation, transactionId, spaceId,
   } = params;
 
   const now = new Date().toISOString();
@@ -151,7 +151,7 @@ const createRealtimeJob = async (
     objectApiName,
     operation,
     transactionId,
-    recordCount,
+    recordCount: 0,
     sizeInBytes: 0,
     status: JOB_STATUS.running,
     startedAt: now,
