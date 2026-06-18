@@ -1,7 +1,7 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, JOB_STATUS } from '../../constant';
+import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
 import { getBackupConfigsByUser, getBackupConfigById } from '../backup-config';
 import { getBackupJobsByConfig } from '../backup-job';
@@ -123,6 +123,7 @@ const SCHEDULE_TO_JOB_TYPE: Record<BackupScheduleType, string> = {
 };
 
 export interface ISnapshotActivityLogEntry {
+  backupConfigId: string;
   dateTime: string;
   configName: string;
   sourceName: string;
@@ -156,6 +157,7 @@ const buildBackupJobLogEntry = (
   sourceName: string
 ): ISnapshotActivityLogEntry => {
   const entry: ISnapshotActivityLogEntry = {
+    backupConfigId: job.backupConfigId,
     dateTime: job.createdAt,
     configName,
     sourceName,
@@ -220,10 +222,11 @@ const getBackupSnapshotLogs = async (params: {
   userId: string;
   destinationId: string;
   scheduleType?: BackupScheduleType;
+  backupConfigId?: string;
   limit: number;
   cursor?: string;
 }): Promise<{ entries: ISnapshotActivityLogEntry[]; nextCursor?: string }> => {
-  const { userId, destinationId, scheduleType, limit, cursor } = params;
+  const { userId, destinationId, scheduleType, backupConfigId, limit, cursor } = params;
 
   const allConfigs = await getBackupConfigsByUser(userId);
 
@@ -231,7 +234,8 @@ const getBackupSnapshotLogs = async (params: {
     (config) =>
       config.destinationId === destinationId &&
       config.type === 'NORMAL' &&
-      (scheduleType ? config.schedule === scheduleType : true)
+      (scheduleType ? config.schedule === scheduleType : true) &&
+      (backupConfigId ? config.backupConfigId === backupConfigId : true)
   );
 
   if (matchingConfigs.length === 0) return { entries: [] };
@@ -291,6 +295,7 @@ const getBackupSnapshotLogs = async (params: {
 // ---------------------------------------------------------------------------
 
 export interface IArchivalConfigEntry {
+  backupConfigId: string;
   configName: string;
   sourceName: string;
   dataSize: number;
@@ -315,6 +320,7 @@ const buildArchivalConfigEntry = (
   config: IBackupConfig,
   sourceName: string
 ): IArchivalConfigEntry => ({
+  backupConfigId: config.backupConfigId,
   configName: config.name ?? config.backupConfigId,
   sourceName,
   dataSize: config.sizeInBytes ?? 0,
@@ -342,15 +348,20 @@ const buildArchivalConfigEntry = (
 const getArchivalSnapshotLogs = async (params: {
   userId: string;
   destinationId: string;
+  backupConfigId?: string;
   limit: number;
   cursor?: string;
 }): Promise<{ entries: IArchivalConfigEntry[]; nextCursor?: string }> => {
-  const { userId, destinationId, limit, cursor } = params;
+  const { userId, destinationId, backupConfigId, limit, cursor } = params;
 
   const allConfigs = await getBackupConfigsByUser(userId);
 
   const archivalConfigs = allConfigs.filter(
-    (config) => config.destinationId === destinationId && config.type === 'ARCHIVAL'
+    (config) =>
+      config.destinationId === destinationId &&
+      config.type === 'ARCHIVAL' &&
+      config.status === STATUS.active &&
+      (backupConfigId ? config.backupConfigId === backupConfigId : true)
   );
 
   if (archivalConfigs.length === 0) return { entries: [] };
@@ -394,6 +405,7 @@ const getSnapshotActivityLogs = async (params: {
   destinationId: string;
   snapshotType: SnapshotType;
   scheduleType?: BackupScheduleType;
+  backupConfigId?: string;
   limit: number;
   cursor?: string;
 }): Promise<{ entries: ISnapshotActivityLogEntry[] | IArchivalConfigEntry[]; nextCursor?: string }> => {

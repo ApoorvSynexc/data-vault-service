@@ -16,6 +16,7 @@ router.get('/fetch-logs', restoreRetrieveJobController.fetchLogsHandler);
 router.get('/snapshot-logs', restoreRetrieveJobController.getSnapshotActivityLogsHandler);
 router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler);
 router.get('/get-objectlist-by-configid', restoreRetrieveJobController.getObjectListByConfigIdHandler);
+router.get('/get-backup-configs-name', restoreRetrieveJobController.getBackupConfigsNameHandler);
 router.get('/', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 
 export const restoreRetrieveRouter = router;
