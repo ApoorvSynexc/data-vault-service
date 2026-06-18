@@ -137,6 +137,7 @@ const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
   const roleId = uuidv4();
   await createRole({
     roleId,
+    crmId: crm.crmId,
     ...body
   });
 
