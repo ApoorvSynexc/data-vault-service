@@ -3,10 +3,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
 import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
-import { createRole, deleteRole, getBackupConfigsByUser, getCrmByOrgId, updateRole, upsertCrm } from '../../../services';
+import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, updateRole, upsertCrm } from '../../../services';
 
 interface ISalesforceProfile {
-  orgId: string;
+  organizationId: string;
   instanceUrl: string;
   userId: string;
   username: string;
@@ -26,6 +26,7 @@ interface ISalesforceUser {
 }
 
 interface IUpsertUsersRequest {
+  organizationId: string;
   users: ISalesforceUser[];
 }
 
@@ -48,33 +49,39 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const body = req.body as IUpsertUsersRequest;
-  const { users } = body;
+  const { users, organizationId } = body;
 
   if (!users?.length) {
     makeResponse(req, res, 400, false, 'id_required');
     return;
   }
 
+
   const result = [];
   for await (const user of users) {
     try {
       const { profile, role, ...rest } = user;
       const crmProfileUserId = profile.userId;
-      const orgId = profile.orgId;
+      const orgId = profile.organizationId;
       const existingUser = await getUserByCrmProfileUserId(crmProfileUserId);
-
+      
       //If permission not exist, then clean up user and role
       if (!role.permissions?.length) {
         if (existingUser?.userId) {
+          console.log("11111");
+          
           // check if user created any restore
           const backups = await getBackupConfigsByUser(existingUser?.userId);
           if (!backups?.length) {
+            console.log("22222");
             await deleteRole({ roleId: existingUser.role.roleId });
             await deleteUser(existingUser.userId);
           } else {
             result.push({ ...user, status: "failed", message: "user has backups, archival or restores" });
           }
         }
+
+        result.push({ ...user, staus: 'success', action: 'deleted' });
       } else {
         // If permission exist and if User exist then update user and role
         if (existingUser) {
@@ -88,28 +95,45 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             { roleId: existingUser.role.roleId },
             { permissions: role.permissions }
           )
+          result.push({ ...user, staus: 'success', action: 'updated' });
           // If permission exist and if user not exist then create user and role
         } else {
           const roleName = 'Custom';
           const userId = uuidv4();
           const roleId = uuidv4();
+          let crmId = uuidv4();
           const crmExist = await getCrmByOrgId(orgId);
+          if (crmExist) {
+            crmId = crmExist.crmId
+          }
           await createRole({ roleId, name: roleName, permissions: role.permissions });
-          await createUser({ ...rest, profile, role: { name: roleName, roleId } });
+          await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, crmId });
           await upsertCrm({
             userId,
-            crmId: crmExist ? crmExist.crmId : undefined,
+            crmId,
             organizationId: orgId,
             crmName: 'salesforce',
           });
+          result.push({ ...user, staus: 'success', action: 'created' });
         }
       }
-      result.push({ ...user, staus: 'success' });
     } catch (error: any) {
       result.push({ ...user, staus: 'failed', errorMessage: error.message });
     }
   }
 
+  // If all user and role delete from db then delete crm
+  if (organizationId) {
+    const crm = await getCrmByOrgId(organizationId);
+    if (crm) {
+      const usersByCrmId = await getUsersByCrmId(crm.crmId);
+      if (!usersByCrmId.length) {
+        await deleteCrm(crm.crmId);
+      }
+    }
+  }
+
+  console.log(JSON.stringify({ result }));
   makeResponse(req, res, 201, true, 'update', result);
 };
 
