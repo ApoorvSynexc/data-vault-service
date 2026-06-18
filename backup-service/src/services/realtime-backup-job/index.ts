@@ -143,6 +143,7 @@ const createRealtimeJob = async (
   const item: IBackupJob = {
     backupJobId: uuidv4(),
     jobType: JOB_TYPE.realtime as 'REALTIME',
+    type: 'NORMAL',
     userId,
     backupConfigId,
     crmId,
