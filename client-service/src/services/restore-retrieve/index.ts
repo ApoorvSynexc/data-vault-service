@@ -210,6 +210,12 @@ const fetchJobsForConfigPaginated = async (
 const computeJobDataSize = (job: IBackupJob): number =>
   (job.object ?? []).reduce((total, obj) => total + (obj.sizeInBytes ?? 0), 0);
 
+// BULK jobs are triggered by a schedule; REALTIME jobs are triggered by live Salesforce events.
+const JOB_TYPE_LABEL: Record<string, string> = {
+  BULK: 'Scheduled',
+  REALTIME: 'RealTime',
+};
+
 const buildActivityLogEntry = (
   job: IBackupJob,
   configName: string,
@@ -219,7 +225,7 @@ const buildActivityLogEntry = (
   configName,
   sourceName,
   dataSize: computeJobDataSize(job),
-  backupType: job.type,
+  backupType: JOB_TYPE_LABEL[job.jobType] ?? job.jobType,
   status: job.status,
 });
 
