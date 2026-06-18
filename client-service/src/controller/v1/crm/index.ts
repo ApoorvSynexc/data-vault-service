@@ -12,7 +12,6 @@ import {
   getSalesforceToken,
   reconnectCrm,
   upsertCrm,
-  updateCrmCredentials,
   updateCrm,
   deleteCrm,
   getBackupConfigsByCrm,
@@ -41,7 +40,7 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmName, crmId, environment, customUrl, name } = req.query;
+  const { crmName, crmId, environment, name } = req.query;
 
   if (!crmName && !crmId) {
     makeResponse(req, res, 400, false, 'crm_name_required');
@@ -50,11 +49,6 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
 
   const env = (environment as SalesforceEnvironment) ?? 'production';
 
-  if (env === 'custom' && !customUrl) {
-    makeResponse(req, res, 400, false, 'custom_url_required');
-    return;
-  }
-
   const userId = req.user!.userId;
   let resolvedCrmName = String(crmName ?? '');
   let oauthStateKey: string | undefined;
@@ -62,13 +56,6 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
   if (!resolvedCrmName && crmId) {
     const crm = await getCrmById(String(crmId));
     if (!crm) {
-      makeResponse(req, res, 400, false, 'not_exist');
-      return;
-    }
-
-    const spaceId = req.user?.spaceId;
-    const isCrmOwner = spaceId ? crm.spaceId === spaceId : crm.userId === userId;
-    if (!isCrmOwner) {
       makeResponse(req, res, 400, false, 'not_exist');
       return;
     }
@@ -85,8 +72,7 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
       const { url, codeVerifier, state } = getSalesforceLoginUrl(
         oauthStateKey,
         undefined,
-        env,
-        customUrl ? String(customUrl) : undefined
+        env
       );
       await createOAuthState(
         state,
@@ -95,7 +81,7 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
         resolvedCrmName,
         crmId ? String(crmId) : undefined,
         env,
-        customUrl ? String(customUrl) : undefined,
+        undefined,
         name ? String(name) : undefined
       );
       redirectUrl = url;
@@ -123,8 +109,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
         token = await getSalesforceToken(
           String(code),
           oauthState.codeVerifier,
-          oauthState.environment,
-          oauthState.customUrl
+          oauthState.environment
         );
         break;
     }
@@ -143,38 +128,20 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       refreshToken: token.refresh_token,
       userId: oauthState.userId,
     },
-    oauthState.environment,
-    oauthState.customUrl
+    oauthState.environment
   );
-  
+
   const existingCrms = await getCrmByOrgId(sfProfile.organization_id);
-  if (existingCrms && existingCrms.crmProfile?.userId === sfProfile.user_id && existingCrms.crmId !== oauthState.crmId ) {
+  if (existingCrms && existingCrms.crmId !== oauthState.crmId ) {
     makeResponse(req, res, 409, false, 'organization_already_exist');
     return;
   }
 
-  const nextCrmProfile = {
-    instanceUrl: token.instance_url,
-    organizationId: sfProfile.organization_id,
-    userId: sfProfile.user_id,
-    name: sfProfile.name,
-    email: sfProfile.email,
-    username: sfProfile.preferred_username,
-    photoUrl: sfProfile.photos?.thumbnail,
-  };
-
-  const nextCrmCredentials = {
-    access_token: token.access_token,
-    refresh_token: token.refresh_token,
-  };
-
   if (oauthState.crmId) {
     const reconnected = await reconnectCrm({
       crmId: oauthState.crmId,
-      crmProfile: nextCrmProfile,
-      crmCredentials: nextCrmCredentials,
+      organizationId: sfProfile.organization_id,
       environment: oauthState.environment,
-      customUrl: oauthState.customUrl,
       name: oauthState.name,
     });
 
@@ -183,17 +150,14 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       return;
     }
   } else {
-    // Get spaceId from authenticated user's token
-    const spaceId = req.user?.spaceId;
-
     // Create user account with Salesforce profile data if user doesn't exist
-    const existingUser = await getUser({ 'contact.email': nextCrmProfile.email, status: STATUS.active });
+    const existingUser = await getUser({ 'contact.email': sfProfile.email, status: STATUS.active });
 
     if (existingUser) {
       return makeResponse(req, res, 400, false, 'email_exit');
     }
 
-    const nameParts = nextCrmProfile.name?.split(' ') ?? [];
+    const nameParts = sfProfile.name?.split(' ') ?? [];
     const userRole = defaultRoles.find((r) => r.name === 'user')!;
 
     await createUser({
@@ -201,21 +165,17 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
       firstName: nameParts[0] ?? '',
       lastName: nameParts.slice(1).join(' ') ?? '',
       contact: {
-        email: nextCrmProfile.email,
+        email: sfProfile.email,
         isEmailVerified: true,
       },
       role: { name: userRole.name, roleId: userRole.roleId },
-      ...(spaceId && { spaceId }),
     });
 
     await upsertCrm({
       userId: oauthState.userId,
       crmName: oauthState.crmName,
-      crmProfile: nextCrmProfile,
-      crmCredentials: nextCrmCredentials,
+      organizationId: sfProfile.organization_id,
       environment: oauthState.environment,
-      customUrl: oauthState.customUrl,
-      ...(spaceId && { spaceId }),
       ...(oauthState.name && { name: oauthState.name }),
     });
   }
@@ -233,18 +193,7 @@ const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     crms = await getCrmsByUser(req.user!.userId);
   }
 
-  makeResponse(
-    req,
-    res,
-    200,
-    true,
-    'fetch',
-    crms.map((crm) => ({
-      ...crm,
-      encryptedCredentials: undefined,
-      iv: undefined,
-    }))
-  );
+  makeResponse(req, res, 200, true, 'fetch', crms);
 };
 
 const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -283,22 +232,10 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   let refreshed: any;
   try {
-    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment, crm.customUrl);
+    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);
   } catch {
     throw new SalesforceAuthExpiredError();
   }
-
-  const newAccessToken: string = refreshed.access_token;
-  const newRefreshToken: string = refreshed.refresh_token ?? tokens.refresh_token;
-
-  await updateCrmCredentials(
-    String(crmId),
-    {
-      access_token: newAccessToken,
-      refresh_token: newRefreshToken,
-    },
-    crm.userId
-  );
 
   makeResponse(req, res, 200, true, 'update', refreshed);
 };
@@ -309,15 +246,6 @@ const updateCrmHandler = async (req: IRequest, res: IResponse): Promise<void> =>
   const crm = await getCrmById(String(crmId));
   if (!crm) {
     makeResponse(req, res, 404, false, 'not_exist');
-    return;
-  }
-
-  const spaceId = req.user?.spaceId;
-  const userId = req.user!.userId;
-
-  const isCrmOwner = spaceId ? crm.spaceId === spaceId : crm.userId === userId;
-  if (!isCrmOwner) {
-    makeResponse(req, res, 403, false, 'not_exist');
     return;
   }
 
@@ -337,15 +265,6 @@ const crmDeleteHandler = async (req: IRequest, res: IResponse): Promise<void> =>
   const crm = await getCrmById(String(crmId));
   if (!crm) {
     makeResponse(req, res, 404, false, 'not_exist');
-    return;
-  }
-
-  const spaceId = req.user?.spaceId;
-  const userId = req.user!.userId;
-
-  const isCrmOwner = spaceId ? crm.spaceId === spaceId : crm.userId === userId;
-  if (!isCrmOwner) {
-    makeResponse(req, res, 403, false, 'not_exist');
     return;
   }
 
