@@ -171,15 +171,15 @@ const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
 
 const getRolesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { organizationId } = req.query;
-
+  
   if (!organizationId) {
-    return makeResponse(req, res, 400, false, 'id_required');
+     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const crm = await getCrmByOrgId(String(organizationId));
-  if (!crm) {
-    return makeResponse(req, res, 404, false, 'not_exist');
-  }
+   const crm = await getCrmByOrgId(String(organizationId));
+    if (!crm) {
+      return makeResponse(req, res, 404, false, 'not_exist');
+    }
 
   const roles = await getRolesByCrmId(crm.crmId);
   makeResponse(req, res, 200, true, 'fetch', roles);
