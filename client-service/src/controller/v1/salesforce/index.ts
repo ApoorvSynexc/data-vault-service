@@ -35,31 +35,15 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 };
 
 const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, orgId } = req.query;
-
-  let resolvedCrmId: string | null = null;
-
-  // If crmId provided, use it directly
-  if (crmId) {
-    resolvedCrmId = String(crmId);
-  }
-  // If orgId provided, get the CRM and use its crmId
-  else if (orgId) {
-    const crm = await getCrmByOrgId(String(orgId));
-    if (!crm) {
-      return makeResponse(req, res, 404, false, 'not_exist');
-    }
-    resolvedCrmId = crm.crmId;
-  }
-  // If neither provided, return error
-  else {
-    return makeResponse(req, res, 400, false, 'id_required');
+  const { orgId } = req.query;
+  const crm = await getCrmByOrgId(String(orgId));
+  if (!crm) {
+    return makeResponse(req, res, 404, false, 'not_exist');
   }
 
-  // Query users by crmId using database filter
-  const usersByCrmId = await getUsersByCrmId(resolvedCrmId);
-
-  makeResponse(req, res, 200, true, 'fetch', usersByCrmId);
+  const usersByCrmId = await getUsersByCrmId(crm.crmId);
+  const filteredUsers = usersByCrmId.map((user) => ({ ...user, password: undefined }));
+  makeResponse(req, res, 200, true, 'fetch', filteredUsers);
 };
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -88,7 +72,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             await deleteRole({ roleId: existingUser.role.roleId });
             await deleteUser(existingUser.userId);
           } else {
-            result.push({...user, status: "failed", message: "user has backups, archival or restores"});
+            result.push({ ...user, status: "failed", message: "user has backups, archival or restores" });
           }
         }
       } else {
@@ -132,4 +116,5 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
 export const salesofrceController = wrapController({
   getPermissionsHandler,
   upsertUsersHandler,
+  getUsersHandler
 });

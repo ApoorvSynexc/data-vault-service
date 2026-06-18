@@ -134,26 +134,10 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     BillingMode: 'PAY_PER_REQUEST',
     AttributeDefinitions: [
       { AttributeName: 'crmId', AttributeType: 'S' },
-      { AttributeName: 'userId', AttributeType: 'S' },
-      { AttributeName: 'crmName', AttributeType: 'S' },
-      { AttributeName: 'spaceId', AttributeType: 'S' },
       { AttributeName: 'organizationId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'crmId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
-      {
-        IndexName: 'userId-crmName-index',
-        KeySchema: [
-          { AttributeName: 'userId', KeyType: 'HASH' },
-          { AttributeName: 'crmName', KeyType: 'RANGE' },
-        ],
-        Projection: { ProjectionType: 'ALL' },
-      },
-      {
-        IndexName: 'spaceId-index',
-        KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
-        Projection: { ProjectionType: 'ALL' },
-      },
       {
         IndexName: 'organizationId-index',
         KeySchema: [{ AttributeName: 'organizationId', KeyType: 'HASH' }],
@@ -253,6 +237,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       { AttributeName: 'userId', AttributeType: 'S' },
       { AttributeName: 'contactEmail', AttributeType: 'S' },
       { AttributeName: 'contactMobileKey', AttributeType: 'S' },
+      { AttributeName: 'crmId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
@@ -264,6 +249,11 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       {
         IndexName: 'mobile-index',
         KeySchema: [{ AttributeName: 'contactMobileKey', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'crmId-index',
+        KeySchema: [{ AttributeName: 'crmId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],

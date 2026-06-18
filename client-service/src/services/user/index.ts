@@ -412,10 +412,10 @@ const getUsersByCrmId = async (crmId: string): Promise<IUser[]> => {
   }
 
   const result = await docClient.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: USER_TABLE,
-      FilterExpression: '#crmId = :crmId',
-      ExpressionAttributeNames: { '#crmId': 'crmId' },
+      IndexName: 'crmId-index',
+      KeyConditionExpression: 'crmId = :crmId',
       ExpressionAttributeValues: { ':crmId': crmId },
     })
   );
