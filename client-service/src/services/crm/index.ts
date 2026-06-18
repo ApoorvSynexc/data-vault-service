@@ -8,8 +8,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { CRM_TABLE, STATUS } from '../../constant';
-import { ICrm, ICrmProfile } from '../../models';
-import { decrypt, encryptForTenant } from '../../utils/encryption';
+import { ICrm } from '../../models';
 
 interface UpsertCrmParams {
   crmId?: string;
@@ -17,15 +16,6 @@ interface UpsertCrmParams {
   crmName: string;
   organizationId: string;
   environment?: 'production' | 'sandbox';
-  name?: string;
-}
-
-interface ReconnectCrmParams {
-  crmId: string;
-  crmProfile: ICrmProfile;
-  crmCredentials: Record<string, any>;
-  environment?: 'production' | 'sandbox' | 'custom';
-  customUrl?: string;
   name?: string;
 }
 
@@ -49,7 +39,6 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
   return crm;
 };
 
-
 const getCrmById = async (crmId: string): Promise<ICrm | null> => {
   const result = await docClient.send(
     new GetCommand({
@@ -66,7 +55,7 @@ const getCrmByUser = async (userId: string, crmName: string): Promise<ICrm | nul
       TableName: CRM_TABLE,
       IndexName: 'userId-crmName-index',
       KeyConditionExpression: 'userId = :uid AND crmName = :crm',
-      ProjectionExpression: 'crmId, userId, spaceId, crmName, slug, #name, isConnected, crmProfile, encryptedCredentials, iv, environment, customUrl, #status, createdAt, updatedAt',
+      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, isConnected, environment, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId, ':crm': crmName },
       Limit: 1,
@@ -81,7 +70,7 @@ const getCrmsByUser = async (userId: string): Promise<ICrm[]> => {
       TableName: CRM_TABLE,
       IndexName: 'userId-crmName-index',
       KeyConditionExpression: 'userId = :uid',
-      ProjectionExpression: 'crmId, userId, spaceId, crmName, slug, #name, isConnected, crmProfile, encryptedCredentials, iv, environment, customUrl, #status, createdAt, updatedAt',
+      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, isConnected, environment, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId },
     })
@@ -96,7 +85,7 @@ const getCrmsBySpace = async (spaceId: string): Promise<ICrm[]> => {
       TableName: CRM_TABLE,
       IndexName: 'spaceId-index',
       KeyConditionExpression: 'spaceId = :spaceId',
-      ProjectionExpression: 'crmId, userId, spaceId, crmName, slug, #name, isConnected, crmProfile, encryptedCredentials, iv, environment, customUrl, #status, createdAt, updatedAt',
+      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, isConnected, environment, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':spaceId': spaceId },
     })
@@ -118,8 +107,7 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
     new UpdateCommand({
       TableName: CRM_TABLE,
       Key: { crmId },
-      UpdateExpression:
-        'SET isConnected = :isConnected, updatedAt = :updatedAt REMOVE encryptedCredentials, iv',
+      UpdateExpression: 'SET isConnected = :isConnected, updatedAt = :updatedAt',
       ExpressionAttributeValues: {
         ':isConnected': false,
         ':updatedAt': updatedAt,
@@ -130,8 +118,6 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
   return {
     ...existing,
     isConnected: false,
-    encryptedCredentials: undefined,
-    iv: undefined,
     updatedAt,
   };
 };
@@ -152,64 +138,36 @@ const deleteCrm = async (crmId: string): Promise<boolean> => {
   return true;
 };
 
-const updateCrmCredentials = async (
-  crmId: string,
-  credentials: Record<string, any>,
-  userId: string
-): Promise<void> => {
-  const { ciphertext, iv } = encryptForTenant(JSON.stringify(credentials), userId);
-  const updatedAt = new Date().toISOString();
+const reconnectCrm = async (params: UpsertCrmParams): Promise<ICrm | null> => {
+  const { crmId, organizationId, environment, name } = params;
 
-  await docClient.send(
-    new UpdateCommand({
-      TableName: CRM_TABLE,
-      Key: { crmId },
-      UpdateExpression: 'SET encryptedCredentials = :enc, iv = :iv, updatedAt = :updatedAt',
-      ExpressionAttributeValues: {
-        ':enc': ciphertext,
-        ':iv': iv,
-        ':updatedAt': updatedAt,
-      },
-    })
-  );
-};
+  if(!crmId) {
+    throw new Error('crmId is required');
+  }
 
-const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> => {
-  const { crmId, crmProfile, crmCredentials, environment, customUrl, name } = params;
   const existing = await getCrmById(crmId);
 
   if (!existing) {
     return null;
   }
 
-  if(existing.crmProfile?.organizationId !== crmProfile.organizationId) {
-    throw new Error(`Organization ID mismatch. Reconnection failed. Please try with this ${existing.crmProfile?.organizationId} organization or contact support.`);
+  if(existing?.organizationId !== organizationId) {
+    throw new Error(`Organization ID mismatch. Reconnection failed. Please try with this ${existing.organizationId} organization or contact support.`);
   }
 
-  const { ciphertext, iv } = encryptForTenant(JSON.stringify(crmCredentials), existing.userId);
   const updatedAt = new Date().toISOString();
   const resolvedEnvironment = environment ?? 'production';
 
   const updateExpressionParts = [
-    'SET isConnected = :isConnected, crmProfile = :crmProfile, organizationId = :organizationId, encryptedCredentials = :enc, iv = :iv, #status = :status, environment = :environment, updatedAt = :updatedAt',
+    'SET isConnected = :isConnected, organizationId = :organizationId, #status = :status, environment = :environment, updatedAt = :updatedAt',
   ];
   const expressionAttributeValues: Record<string, any> = {
     ':isConnected': true,
-    ':crmProfile': crmProfile,
-    ':organizationId': crmProfile.organizationId,
-    ':enc': ciphertext,
-    ':iv': iv,
+    ':organizationId': organizationId,
     ':status': STATUS.active,
     ':environment': resolvedEnvironment,
     ':updatedAt': updatedAt,
   };
-
-  if (customUrl) {
-    updateExpressionParts[0] += ', customUrl = :customUrl';
-    expressionAttributeValues[':customUrl'] = customUrl;
-  } else if (existing.customUrl) {
-    updateExpressionParts.push('REMOVE customUrl');
-  }
 
   if (name) {
     updateExpressionParts[0] += ', #name = :name';
@@ -232,12 +190,8 @@ const reconnectCrm = async (params: ReconnectCrmParams): Promise<ICrm | null> =>
   return {
     ...existing,
     isConnected: true,
-    crmProfile,
-    organizationId: crmProfile.organizationId,
-    encryptedCredentials: ciphertext,
-    iv,
+    organizationId,
     environment: resolvedEnvironment,
-    customUrl,
     name,
     status: STATUS.active,
     updatedAt,
@@ -255,14 +209,6 @@ const getCrmByOrgId = async (orgId: string): Promise<ICrm | null> => {
     })
   );
   return (result.Items?.[0] as ICrm) ?? null;
-};
-
-const getCrmTokens = (crm: ICrm): Record<string, any> => {
-  if (!crm.encryptedCredentials || !crm.iv) {
-    return {};
-  }
-
-  return JSON.parse(decrypt({ ciphertext: crm.encryptedCredentials, iv: crm.iv }, crm.userId));
 };
 
 const updateCrm = async (crmId: string, updates: Record<string, any>): Promise<ICrm | null> => {
@@ -325,7 +271,5 @@ export {
   getCrmsBySpace,
   disconnectCrm,
   deleteCrm,
-  getCrmTokens,
-  updateCrmCredentials,
   updateCrm,
 };

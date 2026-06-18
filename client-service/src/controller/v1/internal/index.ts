@@ -3,7 +3,6 @@ import {
   getCrmById,
   getCrmTokens,
   getApexFields,
-  updateCrmCredentials,
   updateBackupConfig,
   getBackupConfigById,
 } from '../../../services';
@@ -44,22 +43,10 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   let refreshed: any;
   try {
-    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment, crm.customUrl);
+    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);
   } catch {
     throw new SalesforceAuthExpiredError();
   }
-
-  const newAccessToken: string = refreshed.access_token;
-  const newRefreshToken: string = refreshed.refresh_token ?? tokens.refresh_token;
-
-  await updateCrmCredentials(
-    String(crmId),
-    {
-      access_token: newAccessToken,
-      refresh_token: newRefreshToken,
-    },
-    crm.userId
-  );
 
   makeResponse(req, res, 200, true, 'update', refreshed);
 };
