@@ -59,6 +59,8 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           if (!backups?.length) {
             await deleteRole({ roleId: existingUser.role.roleId });
             await deleteUser(existingUser.userId);
+          } else {
+            result.push({...user, status: "failed", message: "user has backups, archival or restores"});
           }
         }
       } else {
