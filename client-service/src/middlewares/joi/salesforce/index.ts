@@ -3,7 +3,7 @@ import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 
 const profileSchema = Joi.object({
-  orgId: Joi.string().required(),
+  organizationId: Joi.string().required(),
   instanceUrl: Joi.string().uri().required(),
   userId: Joi.string().required(),
   username: Joi.string().required(),
@@ -16,7 +16,6 @@ const profileSchema = Joi.object({
 const roleSchema = Joi.object({
   permissions: Joi.array()
     .items(Joi.string())
-    .min(1)
     .required(),
 });
 
@@ -29,6 +28,7 @@ const userSchema = Joi.object({
 
 export const upsertUsersValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
+    organizationId: Joi.string().required(),
     users: Joi.array()
       .items(userSchema)
       .min(1)
