@@ -1,4 +1,5 @@
 import {
+  DeleteCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -405,4 +406,20 @@ const getUserByCrmProfileUserId = async (crmProfileUserId: string): Promise<IUse
   return (result.Items?.[0] as IUser) ?? null;
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersWithPagination, getUserByCrmProfileUserId };
+const deleteUser = async (userId: string): Promise<boolean> => {
+  const existing = await getUser({ userId });
+  if (!existing) {
+    return false;
+  }
+
+  await docClient.send(
+    new DeleteCommand({
+      TableName: USER_TABLE,
+      Key: { userId },
+    })
+  );
+
+  return true;
+};
+
+export { createUser, getUser, updateUser, getUsers, getUsersWithPagination, getUserByCrmProfileUserId, deleteUser };
