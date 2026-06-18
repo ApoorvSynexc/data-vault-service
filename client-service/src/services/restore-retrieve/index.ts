@@ -139,6 +139,10 @@ export interface ISnapshotActivityLogEntry {
   dataSize: number;
   backupType: string;
   status: string;
+  // Only present for REALTIME jobs
+  recordCount?: number;
+  objectApiName?: string;
+  operation?: string;
 }
 
 // Snapshot types are user-facing terms; job types are internal DB values.
@@ -165,33 +169,51 @@ type SnapshotCursorMap = Record<string, Record<string, Record<string, any>>>;
  * Queries jobs for a config across one or more job types, resuming from per-type
  * LastEvaluatedKeys when provided. Returns items and the updated LastEvaluatedKey
  * per job type so the caller can build the next page cursor.
+ *
+ * scheduleFilter is only set when the caller requests REALTIME or SCHEDULE specifically.
+ * When set, an extra FilterExpression clause narrows results to the matching jobType
+ * (REALTIME → jobType = 'REALTIME', SCHEDULE → jobType = 'BULK').
+ * Without this filter both BULK and REALTIME jobs would be returned for BACKUP configs,
+ * making it impossible to scope the view to one schedule mode.
  */
 const fetchJobsForConfigPaginated = async (
   backupConfigId: string,
   jobTypes: string[],
   pageSize: number,
-  lastEvaluatedKeysByType: Record<string, Record<string, any>> = {}
+  lastEvaluatedKeysByType: Record<string, Record<string, any>> = {},
+  scheduleFilter?: BackupScheduleType
 ): Promise<{ items: IBackupJob[]; lastEvaluatedKeysByType: Record<string, Record<string, any>> }> => {
+  const jobTypeFilter = scheduleFilter === 'REALTIME' ? 'REALTIME' : scheduleFilter === 'SCHEDULE' ? 'BULK' : undefined;
+
   const results = await Promise.all(
-    jobTypes.map((jobType) =>
-      docClient.send(
+    jobTypes.map((jobType) => {
+      const filterParts = ['#type = :type', '#status = :status'];
+      const expressionNames: Record<string, string> = { '#type': 'type', '#status': 'status' };
+      const expressionValues: Record<string, any> = {
+        ':backupConfigId': backupConfigId,
+        ':type': jobType,
+        ':status': JOB_STATUS.success,
+      };
+
+      if (jobTypeFilter) {
+        filterParts.push('jobType = :jobType');
+        expressionValues[':jobType'] = jobTypeFilter;
+      }
+
+      return docClient.send(
         new QueryCommand({
           TableName: BACKUP_JOB_TABLE,
           IndexName: 'backupConfigId-index',
           KeyConditionExpression: 'backupConfigId = :backupConfigId',
-          FilterExpression: '#type = :type AND #status = :status',
-          ExpressionAttributeNames: { '#type': 'type', '#status': 'status' },
-          ExpressionAttributeValues: {
-            ':backupConfigId': backupConfigId,
-            ':type': jobType,
-            ':status': JOB_STATUS.success,
-          },
+          FilterExpression: filterParts.join(' AND '),
+          ExpressionAttributeNames: expressionNames,
+          ExpressionAttributeValues: expressionValues,
           Limit: pageSize,
           ScanIndexForward: false,
           ...(lastEvaluatedKeysByType[jobType] ? { ExclusiveStartKey: lastEvaluatedKeysByType[jobType] } : {}),
         })
-      )
-    )
+      );
+    })
   );
 
   const nextKeysByType: Record<string, Record<string, any>> = {};
@@ -226,14 +248,24 @@ const buildActivityLogEntry = (
   job: IBackupJob,
   configName: string,
   sourceName: string
-): ISnapshotActivityLogEntry => ({
-  dateTime: job.createdAt,
-  configName,
-  sourceName,
-  dataSize: computeJobDataSize(job),
-  backupType: JOB_TYPE_LABEL[job.jobType] ?? job.jobType,
-  status: job.status,
-});
+): ISnapshotActivityLogEntry => {
+  const entry: ISnapshotActivityLogEntry = {
+    dateTime: job.createdAt,
+    configName,
+    sourceName,
+    dataSize: computeJobDataSize(job),
+    backupType: JOB_TYPE_LABEL[job.jobType] ?? job.jobType,
+    status: job.status,
+  };
+
+  if (job.jobType === 'REALTIME') {
+    entry.recordCount = job.recordCount;
+    entry.objectApiName = job.objectApiName;
+    entry.operation = job.operation;
+  }
+
+  return entry;
+};
 
 /**
  * Fetches activity log entries for all configs tied to a destination, enriched with
@@ -323,7 +355,8 @@ const getSnapshotActivityLogs = async (params: {
         config.backupConfigId,
         jobTypes,
         limit,
-        cursorMap[config.backupConfigId] ?? {}
+        cursorMap[config.backupConfigId] ?? {},
+        scheduleType
       );
 
       const crm = crmById.get(config.crmId);
