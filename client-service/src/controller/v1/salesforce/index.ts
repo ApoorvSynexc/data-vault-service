@@ -3,7 +3,31 @@ import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
 import { createUser, getUserByCrmProfileUserId } from '../../../services/user';
-import { createRole, getCrmByOrgId } from '../../../services';
+import { createRole, getCrmByOrgId, upsertCrm } from '../../../services';
+
+interface ISalesforceProfile {
+  orgId: string;
+  instanceUrl: string;
+  userId: string;
+  username: string;
+  email: string;
+  photoUrl?: string;
+}
+
+interface IRole {
+  permissions: string[];
+}
+
+interface ISalesforceUser {
+  firstName: string;
+  lastName: string;
+  profile: ISalesforceProfile;
+  role: IRole;
+}
+
+interface IUpsertUsersRequest {
+  users: ISalesforceUser[];
+}
 
 const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const permissions = defaultPermissions;
@@ -11,7 +35,7 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 };
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const body = req.body;
+  const body = req.body as IUpsertUsersRequest;
   const { users } = body;
 
   if (!users?.length) {
@@ -34,14 +58,18 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
         // update role
       } else {
         // Check Crm is exist
-        const crmExist = await getCrmByOrgId(orgId);
-        if (!crmExist) {
-          // create CRM
-        }
         const roleName = 'Custom';
+        const userId = uuidv4();
         const roleId = uuidv4();
+        const crmExist = await getCrmByOrgId(orgId);
         await createRole({ roleId, name: roleName, permissions: role.permissions });
         await createUser({ ...rest, profile, role: { name: roleName, roleId } });
+        await upsertCrm({
+          userId,
+          crmId: crmExist ? crmExist.crmId : undefined,
+          organizationId: orgId,
+          crmName: 'salesforce',
+        });
       }
     }
   }
@@ -51,5 +79,5 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
 
 export const salesofrceController = wrapController({
   getPermissionsHandler,
-  upsertUsersHandler
+  upsertUsersHandler,
 });

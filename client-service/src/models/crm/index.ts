@@ -14,7 +14,6 @@ export interface ICrm {
   crmName: string; // GSI sort key
   slug?: string; // unique per user, generated from crmProfile.name
   name?: string;
-  isConnected: boolean;
   environment?: 'production' | 'sandbox';
   status: string;
   updatedAt: string;

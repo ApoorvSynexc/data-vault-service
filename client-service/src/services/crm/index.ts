@@ -24,10 +24,9 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
   const now = new Date().toISOString();
 
   const crm: ICrm = {
-    crmId:crmId ?? uuidv4(),
+    crmId: crmId ?? uuidv4(),
     organizationId,
     crmName,
-    isConnected: true,
     environment: environment ?? 'production',
     status: STATUS.active,
     ...(name && { name }),
@@ -55,7 +54,7 @@ const getCrmByUser = async (userId: string, crmName: string): Promise<ICrm | nul
       TableName: CRM_TABLE,
       IndexName: 'userId-crmName-index',
       KeyConditionExpression: 'userId = :uid AND crmName = :crm',
-      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, isConnected, environment, #status, createdAt, updatedAt',
+      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, environment, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId, ':crm': crmName },
       Limit: 1,
@@ -70,7 +69,7 @@ const getCrmsByUser = async (userId: string): Promise<ICrm[]> => {
       TableName: CRM_TABLE,
       IndexName: 'userId-crmName-index',
       KeyConditionExpression: 'userId = :uid',
-      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, isConnected, environment, #status, createdAt, updatedAt',
+      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, environment, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':uid': userId },
     })
@@ -85,7 +84,7 @@ const getCrmsBySpace = async (spaceId: string): Promise<ICrm[]> => {
       TableName: CRM_TABLE,
       IndexName: 'spaceId-index',
       KeyConditionExpression: 'spaceId = :spaceId',
-      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, isConnected, environment, #status, createdAt, updatedAt',
+      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, environment, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
       ExpressionAttributeValues: { ':spaceId': spaceId },
     })
@@ -107,9 +106,8 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
     new UpdateCommand({
       TableName: CRM_TABLE,
       Key: { crmId },
-      UpdateExpression: 'SET isConnected = :isConnected, updatedAt = :updatedAt',
+      UpdateExpression: 'SET updatedAt = :updatedAt',
       ExpressionAttributeValues: {
-        ':isConnected': false,
         ':updatedAt': updatedAt,
       },
     })
@@ -117,7 +115,6 @@ const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
 
   return {
     ...existing,
-    isConnected: false,
     updatedAt,
   };
 };
@@ -141,7 +138,7 @@ const deleteCrm = async (crmId: string): Promise<boolean> => {
 const reconnectCrm = async (params: UpsertCrmParams): Promise<ICrm | null> => {
   const { crmId, organizationId, environment, name } = params;
 
-  if(!crmId) {
+  if (!crmId) {
     throw new Error('crmId is required');
   }
 
@@ -151,7 +148,7 @@ const reconnectCrm = async (params: UpsertCrmParams): Promise<ICrm | null> => {
     return null;
   }
 
-  if(existing?.organizationId !== organizationId) {
+  if (existing?.organizationId !== organizationId) {
     throw new Error(`Organization ID mismatch. Reconnection failed. Please try with this ${existing.organizationId} organization or contact support.`);
   }
 
@@ -159,10 +156,9 @@ const reconnectCrm = async (params: UpsertCrmParams): Promise<ICrm | null> => {
   const resolvedEnvironment = environment ?? 'production';
 
   const updateExpressionParts = [
-    'SET isConnected = :isConnected, organizationId = :organizationId, #status = :status, environment = :environment, updatedAt = :updatedAt',
+    'SET organizationId = :organizationId, #status = :status, environment = :environment, updatedAt = :updatedAt',
   ];
   const expressionAttributeValues: Record<string, any> = {
-    ':isConnected': true,
     ':organizationId': organizationId,
     ':status': STATUS.active,
     ':environment': resolvedEnvironment,
@@ -189,7 +185,6 @@ const reconnectCrm = async (params: UpsertCrmParams): Promise<ICrm | null> => {
 
   return {
     ...existing,
-    isConnected: true,
     organizationId,
     environment: resolvedEnvironment,
     name,
@@ -205,7 +200,7 @@ const getCrmByOrgId = async (orgId: string): Promise<ICrm | null> => {
       IndexName: 'organizationId-index',
       KeyConditionExpression: 'organizationId = :orgId',
       ExpressionAttributeValues: { ':orgId': orgId },
-      Limit: 1, 
+      Limit: 1,
     })
   );
   return (result.Items?.[0] as ICrm) ?? null;
@@ -230,7 +225,6 @@ const updateCrm = async (crmId: string, updates: Record<string, any>): Promise<I
       const placeholder = `:val${partIndex}`;
       const nameKey = `#attr${partIndex}`;
 
-      // Use attribute name placeholder for reserved words
       expressionAttributeNames[nameKey] = key;
       expressionAttributeValues[placeholder] = value;
       updateExpressionParts.push(`${nameKey} = ${placeholder}`);
