@@ -3,7 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
 import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
-import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, updateRole, upsertCrm } from '../../../services';
+import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, updateRole, upsertCrm } from '../../../services';
+import { IUser } from '../../../models';
 
 interface ISalesforceProfile {
   organizationId: string;
@@ -43,7 +44,13 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   }
 
   const usersByCrmId = await getUsersByCrmId(crm.crmId);
-  const filteredUsers = usersByCrmId.map((user) => ({ ...user, password: undefined }));
+  const filteredUsers: IUser[] = [];
+  for await (const element of usersByCrmId) {
+    const role = await getRole({ roleId: element.role.roleId });
+    if (role?.permissions?.length) {
+      filteredUsers.push({ ...element, role: { ...element.role, permissions: role.permissions } });
+    }
+  }
   makeResponse(req, res, 200, true, 'fetch', filteredUsers);
 };
 
@@ -64,7 +71,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
       const crmProfileUserId = profile.userId;
       const orgId = profile.organizationId;
       const existingUser = await getUserByCrmProfileUserId(crmProfileUserId);
-      
+
       //If permission not exist, then clean up user and role
       if (!role.permissions?.length) {
         if (existingUser?.userId) {

@@ -30,6 +30,7 @@ export interface IUser {
   role: {
     name: string;
     roleId: string;
+    permissions?: string[]
   }
   gender?: string;
   password?: string;
