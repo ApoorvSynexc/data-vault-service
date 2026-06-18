@@ -207,8 +207,14 @@ const fetchJobsForConfigPaginated = async (
   };
 };
 
-const computeJobDataSize = (job: IBackupJob): number =>
-  (job.object ?? []).reduce((total, obj) => total + (obj.sizeInBytes ?? 0), 0);
+// BULK jobs accumulate sizeInBytes inside each object[] item.
+// REALTIME jobs accumulate sizeInBytes at the job root (no object[] array).
+const computeJobDataSize = (job: IBackupJob): number => {
+  if (job.jobType === 'REALTIME') {
+    return job.sizeInBytes ?? 0;
+  }
+  return (job.object ?? []).reduce((total, obj) => total + (obj.sizeInBytes ?? 0), 0);
+};
 
 // BULK jobs are triggered by a schedule; REALTIME jobs are triggered by live Salesforce events.
 const JOB_TYPE_LABEL: Record<string, string> = {
