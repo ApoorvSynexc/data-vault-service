@@ -17,7 +17,7 @@ import { IBackupJob } from '../../../models';
 const VALID_CONFIG_TYPES: ConfigType[] = ['NORMAL', 'ARCHIVAL'];
 const VALID_BACKUP_SCHEDULE_TYPES: BackupScheduleType[] = ['REALTIME', 'SCHEDULE'];
 
-const VALID_SNAPSHOT_TYPES = ['BACKUP', 'ARCHIVAL', 'UNIFIED'] as const;
+const VALID_SNAPSHOT_TYPES = ['BACKUP', 'ARCHIVAL'] as const;
 type SnapshotType = typeof VALID_SNAPSHOT_TYPES[number];
 
 const DEFAULT_PAGE_SIZE = 10;
@@ -118,10 +118,14 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
 
 /**
  * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=&limit=&cursor=
- * Returns a paginated page of activity log entries across all matching configs for a destination.
- * scheduleType (REALTIME | SCHEDULE) is only accepted when snapshotType is BACKUP.
- * For UNIFIED, BACKUP-side is always restricted to SCHEDULE — scheduleType is ignored.
- * Cursor encodes per-config DynamoDB resume keys — each config resumes exactly where it left off.
+ *
+ * snapshotType=BACKUP   — returns paginated job-level log entries (one row per completed job).
+ *                         scheduleType (REALTIME | SCHEDULE) optionally filters by execution mode.
+ *                         Cursor encodes per-config DynamoDB resume keys.
+ *
+ * snapshotType=ARCHIVAL — returns paginated config-level entries (one row per archival config).
+ *                         scheduleType is not accepted for ARCHIVAL (archival has no schedule mode).
+ *                         Cursor encodes a numeric offset into the in-memory config list.
  */
 const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { snapshotType, destinationId, scheduleType, limit, cursor } = req.query as Record<string, string>;
