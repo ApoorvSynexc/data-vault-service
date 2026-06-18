@@ -6,6 +6,7 @@ import {
   getJobActivityLogs,
   getSnapshotActivityLogs,
   getObjectListByConfigId,
+  getBackupConfigNamesByDestination,
   getTableCounter,
   ConfigType,
   BackupScheduleType,
@@ -117,18 +118,20 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
 };
 
 /**
- * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=&limit=&cursor=
+ * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=&limit=&cursor=&backupConfigId=
  *
  * snapshotType=BACKUP   — returns paginated job-level log entries (one row per completed job).
  *                         scheduleType (REALTIME | SCHEDULE) optionally filters by execution mode.
+ *                         backupConfigId optionally scopes results to a single config.
  *                         Cursor encodes per-config DynamoDB resume keys.
  *
  * snapshotType=ARCHIVAL — returns paginated config-level entries (one row per archival config).
  *                         scheduleType is not accepted for ARCHIVAL (archival has no schedule mode).
+ *                         backupConfigId optionally scopes results to a single config.
  *                         Cursor encodes a numeric offset into the in-memory config list.
  */
 const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { snapshotType, destinationId, scheduleType, limit, cursor } = req.query as Record<string, string>;
+  const { snapshotType, destinationId, scheduleType, backupConfigId, limit, cursor } = req.query as Record<string, string>;
   const userId = req.user!.userId;
 
   if (!snapshotType || !VALID_SNAPSHOT_TYPES.includes(snapshotType as SnapshotType)) {
@@ -158,6 +161,7 @@ const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Pr
     destinationId,
     snapshotType: snapshotType as SnapshotType,
     scheduleType: scheduleType as BackupScheduleType | undefined,
+    backupConfigId,
     limit: limitNum,
     cursor,
   });
@@ -200,10 +204,31 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   makeResponse(req, res, 200, true, 'fetch', objects);
 };
 
+/**
+ * GET /get-backup-configs-name?destinationId=
+ * Returns a lightweight list of { backupConfigId, name } for all configs
+ * belonging to the authenticated user that are tied to the given destination.
+ * Used by the UI to populate config-name dropdowns without fetching full config payloads.
+ */
+const getBackupConfigsNameHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { destinationId } = req.query as Record<string, string>;
+  const userId = req.user!.userId;
+
+  if (!destinationId) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const configNames = await getBackupConfigNamesByDestination(userId, destinationId);
+
+  makeResponse(req, res, 200, true, 'fetch', configNames);
+};
+
 export const restoreRetrieveJobController = wrapController({
   fetchLogsHandler,
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
   getSnapshotActivityLogsHandler,
   getObjectListByConfigIdHandler,
+  getBackupConfigsNameHandler,
 });
