@@ -4,35 +4,25 @@ import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, JOB_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
 import { getBackupConfigsByUser, getBackupConfigById } from '../backup-config';
+import { getBackupJobsByConfig } from '../backup-job';
 import { getCrmById } from '../crm';
 
-// All restore and retrieve jobs share the same BACKUP_JOB_TABLE, distinguished by this type value.
 const RESTORE_JOB_TYPE = 'RESTORE';
 
-/**
- * Fetches a single restore/retrieve job by its ID.
- * Returns null if the job doesn't exist or belongs to a different job type (e.g. NORMAL, ARCHIVAL).
- * This prevents one user from accessing another user's job by guessing an ID.
- */
+// ---------------------------------------------------------------------------
+// Restore / Retrieve job queries
+// ---------------------------------------------------------------------------
+
 const getRestoreRetrieveJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
   const result = await docClient.send(
     new GetCommand({ TableName: BACKUP_JOB_TABLE, Key: { backupJobId } })
   );
 
   const item = result.Item as IBackupJob | undefined;
-
-  if (!item || item.type !== RESTORE_JOB_TYPE) {
-    return null;
-  }
-
+  if (!item || item.type !== RESTORE_JOB_TYPE) return null;
   return item;
 };
 
-/**
- * Lists restore/retrieve jobs scoped to a specific backup config, newest-first.
- * Supports cursor-based pagination and optional status filtering.
- * Uses the backupConfigId-index GSI — no table scan needed.
- */
 const getRestoreRetrieveJobsByConfig = async (
   backupConfigId: string,
   options?: { limit?: number; cursor?: string; status?: string }
@@ -62,15 +52,10 @@ const getRestoreRetrieveJobsByConfig = async (
   }
 
   const result = await docClient.send(new QueryCommand(queryParams));
-
   const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
-/**
- * Lists all restore/retrieve jobs for a user across all their configs, newest-first.
- * Used when no backupConfigId is provided — falls back to the userId-index GSI.
- */
 const getRestoreRetrieveJobsByUser = async (
   userId: string,
   options?: { limit?: number; cursor?: string; status?: string }
@@ -100,13 +85,10 @@ const getRestoreRetrieveJobsByUser = async (
   }
 
   const result = await docClient.send(new QueryCommand(queryParams));
-
   const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
-// Returns the activity log (object[]) for any job — backup, archival, or restore.
-// Fetches only userId + object to avoid loading encrypted source/destination into memory.
 const getJobActivityLogs = async (
   backupJobId: string
 ): Promise<{ userId: string; object: IBackupJob['object'] } | null> => {
@@ -119,9 +101,7 @@ const getJobActivityLogs = async (
     })
   );
 
-  if (!result.Item) {
-    return null;
-  }
+  if (!result.Item) return null;
 
   return {
     userId: result.Item.userId as string,
@@ -129,8 +109,18 @@ const getJobActivityLogs = async (
   };
 };
 
-export type SnapshotType = 'BACKUP' | 'ARCHIVAL' | 'UNIFIED';
+// ---------------------------------------------------------------------------
+// Snapshot activity log — BACKUP type (job-level entries)
+// ---------------------------------------------------------------------------
+
+export type SnapshotType = 'BACKUP' | 'ARCHIVAL';
 export type BackupScheduleType = 'REALTIME' | 'SCHEDULE';
+
+// Maps schedule filter values to the jobType stored on the DynamoDB item.
+const SCHEDULE_TO_JOB_TYPE: Record<BackupScheduleType, string> = {
+  REALTIME: 'REALTIME',
+  SCHEDULE: 'BULK',
+};
 
 export interface ISnapshotActivityLogEntry {
   dateTime: string;
@@ -139,112 +129,28 @@ export interface ISnapshotActivityLogEntry {
   dataSize: number;
   backupType: string;
   status: string;
-  // Only present for REALTIME jobs
+  // Only populated for REALTIME jobs
   recordCount?: number;
   objectApiName?: string;
   operation?: string;
 }
 
-// Snapshot types are user-facing terms; job types are internal DB values.
-// BACKUP maps to NORMAL because the original backup job type was named NORMAL before snapshots were introduced.
-const JOB_TYPE_BY_SNAPSHOT: Record<Exclude<SnapshotType, 'UNIFIED'>, string> = {
-  BACKUP: 'NORMAL',
-  ARCHIVAL: 'ARCHIVAL',
-};
+// Cursor shape for BACKUP: { [configId]: { [jobType]: DynamoDB LastEvaluatedKey } }
+// Each config tracks its own DynamoDB resume key so configs paginate independently.
+type BackupCursorMap = Record<string, Record<string, Record<string, any>>>;
 
-// UNIFIED means the user wants both backup and archival jobs merged into one view.
-const resolveJobTypesForSnapshot = (snapshotType: SnapshotType): string[] => {
-  if (snapshotType === 'UNIFIED') {
-    return [JOB_TYPE_BY_SNAPSHOT.BACKUP, JOB_TYPE_BY_SNAPSHOT.ARCHIVAL];
-  }
-  return [JOB_TYPE_BY_SNAPSHOT[snapshotType]];
-};
-
-// Cursor shape: { [configId]: { [jobType]: LastEvaluatedKey } }
-// Storing per-config per-jobType keys lets each DynamoDB query resume exactly
-// where it left off, regardless of how many configs or job types are queried.
-type SnapshotCursorMap = Record<string, Record<string, Record<string, any>>>;
-
-/**
- * Queries jobs for a config across one or more job types, resuming from per-type
- * LastEvaluatedKeys when provided. Returns items and the updated LastEvaluatedKey
- * per job type so the caller can build the next page cursor.
- *
- * scheduleFilter is only set when the caller requests REALTIME or SCHEDULE specifically.
- * When set, an extra FilterExpression clause narrows results to the matching jobType
- * (REALTIME → jobType = 'REALTIME', SCHEDULE → jobType = 'BULK').
- * Without this filter both BULK and REALTIME jobs would be returned for BACKUP configs,
- * making it impossible to scope the view to one schedule mode.
- */
-const fetchJobsForConfigPaginated = async (
-  backupConfigId: string,
-  jobTypes: string[],
-  pageSize: number,
-  lastEvaluatedKeysByType: Record<string, Record<string, any>> = {},
-  scheduleFilter?: BackupScheduleType
-): Promise<{ items: IBackupJob[]; lastEvaluatedKeysByType: Record<string, Record<string, any>> }> => {
-  const jobTypeFilter = scheduleFilter === 'REALTIME' ? 'REALTIME' : scheduleFilter === 'SCHEDULE' ? 'BULK' : undefined;
-
-  const results = await Promise.all(
-    jobTypes.map((jobType) => {
-      const filterParts = ['#type = :type', '#status = :status'];
-      const expressionNames: Record<string, string> = { '#type': 'type', '#status': 'status' };
-      const expressionValues: Record<string, any> = {
-        ':backupConfigId': backupConfigId,
-        ':type': jobType,
-        ':status': JOB_STATUS.success,
-      };
-
-      if (jobTypeFilter) {
-        filterParts.push('jobType = :jobType');
-        expressionValues[':jobType'] = jobTypeFilter;
-      }
-
-      return docClient.send(
-        new QueryCommand({
-          TableName: BACKUP_JOB_TABLE,
-          IndexName: 'backupConfigId-index',
-          KeyConditionExpression: 'backupConfigId = :backupConfigId',
-          FilterExpression: filterParts.join(' AND '),
-          ExpressionAttributeNames: expressionNames,
-          ExpressionAttributeValues: expressionValues,
-          Limit: pageSize,
-          ScanIndexForward: false,
-          ...(lastEvaluatedKeysByType[jobType] ? { ExclusiveStartKey: lastEvaluatedKeysByType[jobType] } : {}),
-        })
-      );
-    })
-  );
-
-  const nextKeysByType: Record<string, Record<string, any>> = {};
-  results.forEach((result, idx) => {
-    if (result.LastEvaluatedKey) {
-      nextKeysByType[jobTypes[idx]] = result.LastEvaluatedKey;
-    }
-  });
-
-  return {
-    items: results.flatMap((result) => (result.Items ?? []) as IBackupJob[]),
-    lastEvaluatedKeysByType: nextKeysByType,
-  };
-};
-
-// BULK jobs accumulate sizeInBytes inside each object[] item.
-// REALTIME jobs accumulate sizeInBytes at the job root (no object[] array).
-const computeJobDataSize = (job: IBackupJob): number => {
-  if (job.jobType === 'REALTIME') {
-    return job.sizeInBytes ?? 0;
-  }
-  return (job.object ?? []).reduce((total, obj) => total + (obj.sizeInBytes ?? 0), 0);
-};
-
-// BULK jobs are triggered by a schedule; REALTIME jobs are triggered by live Salesforce events.
 const JOB_TYPE_LABEL: Record<string, string> = {
   BULK: 'Scheduled',
   REALTIME: 'RealTime',
 };
 
-const buildActivityLogEntry = (
+const computeBackupJobDataSize = (job: IBackupJob): number => {
+  // REALTIME jobs store sizeInBytes at the root; BULK jobs accumulate it inside object[].
+  if (job.jobType === 'REALTIME') return job.sizeInBytes ?? 0;
+  return (job.object ?? []).reduce((total, obj) => total + (obj.sizeInBytes ?? 0), 0);
+};
+
+const buildBackupJobLogEntry = (
   job: IBackupJob,
   configName: string,
   sourceName: string
@@ -253,7 +159,7 @@ const buildActivityLogEntry = (
     dateTime: job.createdAt,
     configName,
     sourceName,
-    dataSize: computeJobDataSize(job),
+    dataSize: computeBackupJobDataSize(job),
     backupType: JOB_TYPE_LABEL[job.jobType] ?? job.jobType,
     status: job.status,
   };
@@ -268,77 +174,73 @@ const buildActivityLogEntry = (
 };
 
 /**
- * Fetches activity log entries for all configs tied to a destination, enriched with
- * config name and CRM source name, then merged and sorted newest-first.
+ * Queries one page of successful backup jobs for a config, supporting an optional
+ * scheduleType filter (REALTIME or SCHEDULE) and per-type cursor resumption.
  *
- * Flow:
- *   1. Load all user configs, filter by destinationId (no GSI on jobs for destinationId).
- *   2. Fetch the CRM for each unique crmId across matching configs (deduplicated).
- *   3. For each config, query jobs of the required type(s).
- *   4. Shape each job into ISnapshotActivityLogEntry, merge, sort, and slice to pageSize.
+ * The lastEvaluatedKeysByType map holds a raw DynamoDB key per jobType so each
+ * job type resumes exactly where it left off across pages.
  */
-const resolveScheduleFilterForConfig = (
-  config: IBackupConfig,
-  snapshotType: SnapshotType,
-  scheduleType?: BackupScheduleType
-): boolean => {
-  // ARCHIVAL configs have no schedule concept — always include them.
-  if (config.type === 'ARCHIVAL') return true;
+const fetchBackupJobsForConfigPaginated = async (
+  backupConfigId: string,
+  pageSize: number,
+  lastEvaluatedKeysByType: Record<string, Record<string, any>>,
+  scheduleFilter?: BackupScheduleType
+): Promise<{ items: IBackupJob[]; lastEvaluatedKeysByType: Record<string, Record<string, any>> }> => {
+  const jobTypeFilter = scheduleFilter ? SCHEDULE_TO_JOB_TYPE[scheduleFilter] : undefined;
 
-  // For BACKUP: apply the caller-supplied scheduleType filter if provided.
-  if (snapshotType === 'BACKUP') {
-    return scheduleType ? config.schedule === scheduleType : true;
+  const { items, nextCursor } = await getBackupJobsByConfig(backupConfigId, {
+    limit: pageSize,
+    status: JOB_STATUS.success,
+    type: 'NORMAL',
+    jobType: jobTypeFilter,
+    cursor: lastEvaluatedKeysByType['NORMAL']
+      ? encodeCursor(lastEvaluatedKeysByType['NORMAL'])
+      : undefined,
+  });
+
+  const nextKeysByType: Record<string, Record<string, any>> = {};
+  if (nextCursor) {
+    const decoded = decodeCursor(nextCursor);
+    if (decoded) nextKeysByType['NORMAL'] = decoded;
   }
 
-  // For UNIFIED: BACKUP-side configs must be SCHEDULE only,
-  // because archival is always scheduled and mixing REALTIME would be inconsistent.
-  if (snapshotType === 'UNIFIED') {
-    return config.type === 'NORMAL' ? config.schedule === 'SCHEDULE' : true;
-  }
-
-  return true;
+  return { items, lastEvaluatedKeysByType: nextKeysByType };
 };
 
 /**
- * Fetches one page of snapshot activity log entries across all matching configs.
+ * Returns paginated backup job log entries across all configs tied to a destination.
  *
- * Pagination strategy — per-config, per-jobType cursor map:
- *   Each config stores its own DynamoDB LastEvaluatedKey per job type inside the
- *   cursor. On every page request each config resumes exactly where it left off,
- *   fetching only `limit` rows from DynamoDB — no offset scan, no wasted reads.
- *
- * nextCursor is only emitted when at least one config still has more rows to return,
- * so the caller knows when the stream is exhausted.
+ * Flow:
+ *   1. Load all user configs; filter to those matching the destination and schedule.
+ *   2. Fetch CRMs for all matched configs in parallel (deduplicated by crmId).
+ *   3. Query one page of successful jobs per config, each resuming from its own cursor.
+ *   4. Merge all entries, sort newest-first, slice to the requested page size.
  */
-const getSnapshotActivityLogs = async (params: {
+const getBackupSnapshotLogs = async (params: {
   userId: string;
   destinationId: string;
-  snapshotType: SnapshotType;
   scheduleType?: BackupScheduleType;
   limit: number;
   cursor?: string;
 }): Promise<{ entries: ISnapshotActivityLogEntry[]; nextCursor?: string }> => {
-  const { userId, destinationId, snapshotType, scheduleType, limit, cursor } = params;
+  const { userId, destinationId, scheduleType, limit, cursor } = params;
 
-  const allUserConfigs = await getBackupConfigsByUser(userId);
+  const allConfigs = await getBackupConfigsByUser(userId);
 
-  const matchingConfigs = allUserConfigs.filter(
-    (config: IBackupConfig) =>
+  const matchingConfigs = allConfigs.filter(
+    (config) =>
       config.destinationId === destinationId &&
-      resolveScheduleFilterForConfig(config, snapshotType, scheduleType)
+      config.type === 'NORMAL' &&
+      (scheduleType ? config.schedule === scheduleType : true)
   );
 
-  if (matchingConfigs.length === 0) {
-    return { entries: [] };
-  }
+  if (matchingConfigs.length === 0) return { entries: [] };
 
-  // Decode the cursor map — falls back to empty object (first page) on missing/invalid cursor.
-  const cursorMap: SnapshotCursorMap = cursor
-    ? (decodeCursor(cursor) as SnapshotCursorMap) ?? {}
+  const cursorMap: BackupCursorMap = cursor
+    ? (decodeCursor(cursor) as BackupCursorMap) ?? {}
     : {};
 
-  // Deduplicate crmIds and fetch all CRMs in parallel to avoid redundant DB calls.
-  const uniqueCrmIds = [...new Set(matchingConfigs.map((c: IBackupConfig) => c.crmId))];
+  const uniqueCrmIds = [...new Set(matchingConfigs.map((c) => c.crmId))];
   const crmResults = await Promise.all(uniqueCrmIds.map((crmId) => getCrmById(crmId)));
   const crmById = new Map<string, ICrm>(
     crmResults
@@ -346,14 +248,10 @@ const getSnapshotActivityLogs = async (params: {
       .map((crm) => [crm.crmId, crm])
   );
 
-  const jobTypes = resolveJobTypesForSnapshot(snapshotType);
-
-  // Query each config in parallel, each resuming from its own saved cursor position.
   const resultsPerConfig = await Promise.all(
-    matchingConfigs.map(async (config: IBackupConfig) => {
-      const { items, lastEvaluatedKeysByType } = await fetchJobsForConfigPaginated(
+    matchingConfigs.map(async (config) => {
+      const { items, lastEvaluatedKeysByType } = await fetchBackupJobsForConfigPaginated(
         config.backupConfigId,
-        jobTypes,
         limit,
         cursorMap[config.backupConfigId] ?? {},
         scheduleType
@@ -364,32 +262,153 @@ const getSnapshotActivityLogs = async (params: {
       const sourceName = crm?.crmProfile?.name ?? crm?.name ?? crm?.crmName ?? config.crmId;
 
       return {
-        entries: items.map((job: IBackupJob) => buildActivityLogEntry(job, configName, sourceName)),
+        entries: items.map((job) => buildBackupJobLogEntry(job, configName, sourceName)),
         configId: config.backupConfigId,
         lastEvaluatedKeysByType,
       };
     })
   );
 
-  // Merge entries from all configs and sort newest-first.
   const allEntries = resultsPerConfig.flatMap((r) => r.entries);
-  allEntries.sort((a: ISnapshotActivityLogEntry, b: ISnapshotActivityLogEntry) =>
-    b.dateTime.localeCompare(a.dateTime)
-  );
+  allEntries.sort((a, b) => b.dateTime.localeCompare(a.dateTime));
 
-  // Build the next cursor map — only include configs that still have more rows.
-  const nextCursorMap: SnapshotCursorMap = {};
+  const nextCursorMap: BackupCursorMap = {};
   for (const { configId, lastEvaluatedKeysByType } of resultsPerConfig) {
     if (Object.keys(lastEvaluatedKeysByType).length > 0) {
       nextCursorMap[configId] = lastEvaluatedKeysByType;
     }
   }
 
-  const nextCursor =
-    Object.keys(nextCursorMap).length > 0 ? encodeCursor(nextCursorMap) : undefined;
+  const nextCursor = Object.keys(nextCursorMap).length > 0
+    ? encodeCursor(nextCursorMap)
+    : undefined;
 
   return { entries: allEntries.slice(0, limit), nextCursor };
 };
+
+// ---------------------------------------------------------------------------
+// Snapshot activity log — ARCHIVAL type (config-level entries)
+// ---------------------------------------------------------------------------
+
+export interface IArchivalConfigEntry {
+  configName: string;
+  sourceName: string;
+  dataSize: number;
+  selectedObjectCount: number;
+  lastJobRunTime?: string;
+  lastJobStatus?: string;
+}
+
+// Cursor shape for ARCHIVAL: { offset: number }
+// getBackupConfigsByUser returns all configs in memory, so we paginate with a
+// simple numeric offset rather than a DynamoDB LastEvaluatedKey.
+type ArchivalCursor = { offset: number };
+
+const countSelectedObjects = (config: IBackupConfig): number => {
+  // Prefer objects[] (full metadata) over objectNames[] (name-only list).
+  // Both represent the user's selection; objects[] is more authoritative when present.
+  if (config.objects && config.objects.length > 0) return config.objects.length;
+  return config.objectNames?.length ?? 0;
+};
+
+const buildArchivalConfigEntry = (
+  config: IBackupConfig,
+  sourceName: string
+): IArchivalConfigEntry => ({
+  configName: config.name ?? config.backupConfigId,
+  sourceName,
+  dataSize: config.sizeInBytes ?? 0,
+  selectedObjectCount: countSelectedObjects(config),
+  lastJobRunTime: config.lastBackupAt,
+  // Only include lastJobStatus when there is no lastBackupAt — it acts as a fallback
+  // so the UI always has something to display even if no job has completed yet.
+  lastJobStatus: config.lastBackupAt ? undefined : config.backupStatus,
+});
+
+/**
+ * Returns a paginated list of archival configs tied to a destination.
+ * Each entry represents one archival config — not an individual job run.
+ *
+ * Pagination uses a simple numeric offset because getBackupConfigsByUser loads
+ * all configs into memory (no DynamoDB pagination token available at that layer).
+ *
+ * Flow:
+ *   1. Load all user configs; filter to ARCHIVAL configs matching the destination.
+ *   2. Decode the cursor to find the current page offset (defaults to 0).
+ *   3. Slice the config list to the requested page size.
+ *   4. Fetch CRMs for only the configs on this page (not all configs).
+ *   5. Build one entry per config and return with a nextCursor if more pages remain.
+ */
+const getArchivalSnapshotLogs = async (params: {
+  userId: string;
+  destinationId: string;
+  limit: number;
+  cursor?: string;
+}): Promise<{ entries: IArchivalConfigEntry[]; nextCursor?: string }> => {
+  const { userId, destinationId, limit, cursor } = params;
+
+  const allConfigs = await getBackupConfigsByUser(userId);
+
+  const archivalConfigs = allConfigs.filter(
+    (config) => config.destinationId === destinationId && config.type === 'ARCHIVAL'
+  );
+
+  if (archivalConfigs.length === 0) return { entries: [] };
+
+  const { offset } = (decodeCursor(cursor) as ArchivalCursor | undefined) ?? { offset: 0 };
+  const pageConfigs = archivalConfigs.slice(offset, offset + limit);
+
+  const uniqueCrmIds = [...new Set(pageConfigs.map((c) => c.crmId))];
+  const crmResults = await Promise.all(uniqueCrmIds.map((crmId) => getCrmById(crmId)));
+  const crmById = new Map<string, ICrm>(
+    crmResults
+      .filter((crm): crm is ICrm => crm !== null)
+      .map((crm) => [crm.crmId, crm])
+  );
+
+  const entries = pageConfigs.map((config) => {
+    const crm = crmById.get(config.crmId);
+    const sourceName = crm?.crmProfile?.name ?? crm?.name ?? crm?.crmName ?? config.crmId;
+    return buildArchivalConfigEntry(config, sourceName);
+  });
+
+  const nextOffset = offset + limit;
+  const nextCursor = nextOffset < archivalConfigs.length
+    ? encodeCursor({ offset: nextOffset })
+    : undefined;
+
+  return { entries, nextCursor };
+};
+
+// ---------------------------------------------------------------------------
+// Unified entry point — routes to the correct handler by snapshotType
+// ---------------------------------------------------------------------------
+
+/**
+ * Routes snapshot log requests to the correct handler based on snapshotType:
+ *   BACKUP   → paginated job-level entries (one row per completed backup job)
+ *   ARCHIVAL → paginated config-level entries (one row per archival config)
+ */
+const getSnapshotActivityLogs = async (params: {
+  userId: string;
+  destinationId: string;
+  snapshotType: SnapshotType;
+  scheduleType?: BackupScheduleType;
+  limit: number;
+  cursor?: string;
+}): Promise<{ entries: ISnapshotActivityLogEntry[] | IArchivalConfigEntry[]; nextCursor?: string }> => {
+  const { snapshotType, ...rest } = params;
+
+  if (snapshotType === 'ARCHIVAL') {
+    return getArchivalSnapshotLogs(rest);
+  }
+
+  return getBackupSnapshotLogs(rest);
+};
+
+// ---------------------------------------------------------------------------
+// Object list helper
+// ---------------------------------------------------------------------------
 
 export type ConfigType = 'NORMAL' | 'ARCHIVAL';
 
@@ -397,21 +416,11 @@ const flattenObjectNames = (objects: IObject[]): string[] => {
   const names: string[] = [];
   for (const obj of objects) {
     names.push(obj.name);
-    if (obj.children?.length) {
-      names.push(...flattenObjectNames(obj.children));
-    }
+    if (obj.children?.length) names.push(...flattenObjectNames(obj.children));
   }
   return names;
 };
 
-/**
- * Returns a flat, deduplicated list of object names from the backup config.
- * Recursively walks the parent→children tree so nested objects are included.
- * configType is validated against the stored config type to prevent cross-type access
- * (e.g. passing configType=ARCHIVAL on a NORMAL config should not return results).
- * Returns found=false when the config doesn't exist, doesn't belong to the user,
- * or its type doesn't match the requested configType.
- */
 const getObjectListByConfigId = async (
   backupConfigId: string,
   configType: ConfigType,
@@ -425,7 +434,6 @@ const getObjectListByConfigId = async (
 
   const allNames = flattenObjectNames(config.objects ?? []);
   const uniqueNames = [...new Set(allNames)];
-
   return { objects: uniqueNames, found: true };
 };
 

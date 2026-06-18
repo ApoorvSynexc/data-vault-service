@@ -188,26 +188,51 @@ const getBackupJobsByUser = async (
 
 const getBackupJobsByConfig = async (
   backupConfigId: string,
-  options?: { limit?: number; cursor?: string; status?: string }
+  options?: {
+    limit?: number;
+    cursor?: string;
+    status?: string;
+    // Filters on the `type` field (NORMAL | ARCHIVAL | RESTORE) — scopes to a job kind.
+    type?: string;
+    // Filters on the `jobType` field (BULK | REALTIME) — scopes to an execution mode.
+    jobType?: string;
+  }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
   const exclusiveStartKey = decodeCursor(options?.cursor);
+
+  const filterParts: string[] = [];
+  const expressionNames: Record<string, string> = {};
+  const expressionValues: Record<string, any> = { ':backupConfigId': backupConfigId };
+
+  if (options?.status) {
+    filterParts.push('#status = :status');
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = options.status;
+  }
+
+  if (options?.type) {
+    filterParts.push('#type = :type');
+    expressionNames['#type'] = 'type';
+    expressionValues[':type'] = options.type;
+  }
+
+  if (options?.jobType) {
+    filterParts.push('jobType = :jobType');
+    expressionValues[':jobType'] = options.jobType;
+  }
 
   const queryParams: any = {
     TableName: BACKUP_JOB_TABLE,
     IndexName: 'backupConfigId-index',
     KeyConditionExpression: 'backupConfigId = :backupConfigId',
-    ExpressionAttributeValues: { ':backupConfigId': backupConfigId },
+    ExpressionAttributeValues: expressionValues,
     Limit: limit,
     ScanIndexForward: false,
     ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+    ...(filterParts.length ? { FilterExpression: filterParts.join(' AND ') } : {}),
+    ...(Object.keys(expressionNames).length ? { ExpressionAttributeNames: expressionNames } : {}),
   };
-
-  if (options?.status) {
-    queryParams.FilterExpression = '#status = :status';
-    queryParams.ExpressionAttributeNames = { '#status': 'status' };
-    queryParams.ExpressionAttributeValues[':status'] = options.status;
-  }
 
   const result = await docClient.send(new QueryCommand(queryParams));
 
