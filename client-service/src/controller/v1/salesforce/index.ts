@@ -4,31 +4,16 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
 import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, updateRole, upsertCrm } from '../../../services';
-import { IUser } from '../../../models';
-
-interface ISalesforceProfile {
-  organizationId: string;
-  instanceUrl: string;
-  userId: string;
-  username: string;
-  email: string;
-  photoUrl?: string;
-}
-
-interface IRole {
-  permissions: string[];
-}
-
-interface ISalesforceUser {
-  firstName: string;
-  lastName: string;
-  profile: ISalesforceProfile;
-  role: IRole;
-}
+import { ICrmProfile, IRole, IUser } from '../../../models';
 
 interface IUpsertUsersRequest {
   organizationId: string;
-  users: ISalesforceUser[];
+  users: Array<{
+    firstName: string;
+    lastName: string;
+    profile: ICrmProfile;
+    role: IRole;
+  }>
 }
 
 const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
