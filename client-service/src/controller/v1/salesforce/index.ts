@@ -36,8 +36,8 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 };
 
 const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { orgId } = req.query;
-  const crm = await getCrmByOrgId(String(orgId));
+  const { organizationId } = req.query;
+  const crm = await getCrmByOrgId(String(organizationId));
   if (!crm) {
     return makeResponse(req, res, 404, false, 'not_exist');
   }
