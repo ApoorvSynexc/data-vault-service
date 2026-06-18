@@ -33,6 +33,7 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
     userId: data.userId ?? uuidv4(),
     contactEmail: data.contact?.email ?? undefined,
     contactMobileKey: data.contact?.mobile ? buildMobileKey(data.contact.mobile) : undefined,
+    crmProfileUserId: data.crmProfile?.userId ?? undefined,
     status: data.status ?? STATUS.active,
     createdAt: now,
     updatedAt: now,
@@ -143,6 +144,11 @@ const updateUser = async (
 
   const $set: Record<string, any> = (payload as any).$set ?? payload;
   const now = new Date().toISOString();
+
+  // Extract crmProfileUserId from crmProfile if present
+  if ($set.crmProfile?.userId) {
+    $set.crmProfileUserId = $set.crmProfile.userId;
+  }
 
   const names: Record<string, string> = { '#updatedAt': 'updatedAt' };
   const values: Record<string, any> = { ':updatedAt': now };
@@ -394,9 +400,10 @@ const getUsersWithPagination = async (
 
 const getUserByCrmProfileUserId = async (crmProfileUserId: string): Promise<IUser | null> => {
   const result = await docClient.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: USER_TABLE,
-      FilterExpression: 'crmProfile.userId = :crmProfileUserId',
+      IndexName: 'crmProfileUserId-index',
+      KeyConditionExpression: 'crmProfileUserId = :crmProfileUserId',
       ExpressionAttributeValues: {
         ':crmProfileUserId': crmProfileUserId,
       },
