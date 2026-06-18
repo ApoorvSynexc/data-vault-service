@@ -2,7 +2,7 @@ import { defaultPermissions } from '../../../assets';
 import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
-import { createUser, deleteUser, getUserByCrmProfileUserId, updateUser } from '../../../services/user';
+import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
 import { createRole, deleteRole, getBackupConfigsByUser, getCrmByOrgId, updateRole, upsertCrm } from '../../../services';
 
 interface ISalesforceProfile {
@@ -32,6 +32,34 @@ interface IUpsertUsersRequest {
 const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const permissions = defaultPermissions;
   makeResponse(req, res, 200, true, 'fetch', permissions);
+};
+
+const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { crmId, orgId } = req.query;
+
+  let resolvedCrmId: string | null = null;
+
+  // If crmId provided, use it directly
+  if (crmId) {
+    resolvedCrmId = String(crmId);
+  }
+  // If orgId provided, get the CRM and use its crmId
+  else if (orgId) {
+    const crm = await getCrmByOrgId(String(orgId));
+    if (!crm) {
+      return makeResponse(req, res, 404, false, 'not_exist');
+    }
+    resolvedCrmId = crm.crmId;
+  }
+  // If neither provided, return error
+  else {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  // Query users by crmId using database filter
+  const usersByCrmId = await getUsersByCrmId(resolvedCrmId);
+
+  makeResponse(req, res, 200, true, 'fetch', usersByCrmId);
 };
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {

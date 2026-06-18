@@ -406,6 +406,23 @@ const getUserByCrmProfileUserId = async (crmProfileUserId: string): Promise<IUse
   return (result.Items?.[0] as IUser) ?? null;
 };
 
+const getUsersByCrmId = async (crmId: string): Promise<IUser[]> => {
+  if (!crmId) {
+    return [];
+  }
+
+  const result = await docClient.send(
+    new ScanCommand({
+      TableName: USER_TABLE,
+      FilterExpression: '#crmId = :crmId',
+      ExpressionAttributeNames: { '#crmId': 'crmId' },
+      ExpressionAttributeValues: { ':crmId': crmId },
+    })
+  );
+
+  return (result.Items ?? []) as IUser[];
+};
+
 const deleteUser = async (userId: string): Promise<boolean> => {
   const existing = await getUser({ userId });
   if (!existing) {
@@ -422,4 +439,4 @@ const deleteUser = async (userId: string): Promise<boolean> => {
   return true;
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersWithPagination, getUserByCrmProfileUserId, deleteUser };
+export { createUser, getUser, updateUser, getUsers, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser };
