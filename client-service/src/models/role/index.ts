@@ -7,4 +7,5 @@ export interface IRole {
   status?: string;
   createdAt?: string;
   updatedAt?: string;
+  crmId?: string;
 }

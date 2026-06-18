@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
 import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
-import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, updateRole, upsertCrm } from '../../../services';
+import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrmProfile, IRole, IUser } from '../../../models';
 
 interface IUpsertUsersRequest {
@@ -126,8 +126,71 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
   makeResponse(req, res, 201, true, 'update', result);
 };
 
+const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { organizationId, ...body } = req.body;
+
+  const roleId = uuidv4();
+  await createRole({
+    roleId,
+    ...body
+  });
+
+  makeResponse(req, res, 201, true, 'create', { roleId });
+};
+
+const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { roleId, ...body } = req.body;
+
+  const existingRole = await getRole({ roleId: String(roleId) });
+  if (!existingRole) {
+    return makeResponse(req, res, 404, false, 'not_exist');
+  }
+
+  const updatedRole = await updateRole(
+    { roleId: String(roleId) },
+    body
+  );
+
+  makeResponse(req, res, 200, true, 'update', updatedRole);
+};
+
+const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { roleId } = req.query;
+
+  if (!roleId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const deleted = await deleteRole({ roleId: String(roleId) });
+  if (!deleted) {
+    return makeResponse(req, res, 404, false, 'not_exist');
+  }
+
+  makeResponse(req, res, 200, true, 'delete');
+};
+
+const getRolesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { organizationId } = req.query;
+
+  if (!organizationId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const crm = await getCrmByOrgId(String(organizationId));
+  if (!crm) {
+    return makeResponse(req, res, 404, false, 'not_exist');
+  }
+
+  const roles = await getRolesByCrmId(crm.crmId);
+  makeResponse(req, res, 200, true, 'fetch', roles);
+};
+
 export const salesofrceController = wrapController({
   getPermissionsHandler,
   upsertUsersHandler,
-  getUsersHandler
+  getUsersHandler,
+  createRoleHandler,
+  updateRoleHandler,
+  deleteRoleHandler,
+  getRolesHandler,
 });

@@ -196,12 +196,18 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     AttributeDefinitions: [
       { AttributeName: 'roleId', AttributeType: 'S' },
       { AttributeName: 'name', AttributeType: 'S' },
+      { AttributeName: 'crmId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'roleId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'name-index',
         KeySchema: [{ AttributeName: 'name', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'crmId-index',
+        KeySchema: [{ AttributeName: 'crmId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],
