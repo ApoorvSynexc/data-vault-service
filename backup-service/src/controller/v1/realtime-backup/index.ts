@@ -72,7 +72,6 @@ const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<voi
     objectApiName: realtimePayload.objectApiName,
     operation: realtimePayload.operation,
     transactionId: realtimePayload.transactionId,
-    recordCount: realtimePayload.records.length,
     ...(spaceId && { spaceId }),
   });
 
