@@ -37,6 +37,8 @@ export const upsertUsersValidation = (req: Request, res: Response, next: NextFun
 
   const { error } = schema.validate(req.body, { abortEarly: false });
   if (error) {
+    console.log(error);
+    
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }

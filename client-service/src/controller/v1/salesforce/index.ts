@@ -68,12 +68,9 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
       //If permission not exist, then clean up user and role
       if (!role.permissions?.length) {
         if (existingUser?.userId) {
-          console.log("11111");
-          
           // check if user created any restore
           const backups = await getBackupConfigsByUser(existingUser?.userId);
           if (!backups?.length) {
-            console.log("22222");
             await deleteRole({ roleId: existingUser.role.roleId });
             await deleteUser(existingUser.userId);
           } else {

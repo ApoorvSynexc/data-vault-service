@@ -238,6 +238,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       { AttributeName: 'contactEmail', AttributeType: 'S' },
       { AttributeName: 'contactMobileKey', AttributeType: 'S' },
       { AttributeName: 'crmId', AttributeType: 'S' },
+      { AttributeName: 'crmProfileUserId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
@@ -254,6 +255,11 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       {
         IndexName: 'crmId-index',
         KeySchema: [{ AttributeName: 'crmId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'crmProfileUserId-index',
+        KeySchema: [{ AttributeName: 'crmProfileUserId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],
