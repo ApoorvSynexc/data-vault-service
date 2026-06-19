@@ -158,8 +158,8 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
     new ScanCommand({
       TableName: BACKUP_CONFIG_TABLE,
       FilterExpression:
-        '(#status = :active OR #status = :backupResume) AND #schedule = :schedule AND #scheduleConfig.#scheduleType = :scheduleType AND (#backupStatus = :backupSuccess OR #backupStatus = :backupFailed OR attribute_not_exists(#backupStatus))',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #configType, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+        '(#status = :active OR #status = :backupResume) AND #schedule = :schedule AND (#scheduleConfig.#scheduleType = :scheduleType OR #configType = :archivalType) AND (#backupStatus = :backupSuccess OR #backupStatus = :backupFailed OR #backupStatus = :backupPartialFailure OR attribute_not_exists(#backupStatus))',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #configType, objectNames, #objects, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: {
         '#status': 'status',
         '#schedule': 'schedule',
@@ -168,14 +168,17 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
         '#configType': 'type',
         '#name': 'name',
         '#backupStatus': 'backupStatus',
+        '#objects': 'objects',
       },
       ExpressionAttributeValues: {
         ':active': STATUS.active,
         ':backupResume': STATUS.resumed,
         ':schedule': 'SCHEDULE',
         ':scheduleType': 'INCREMENTAL',
+        ':archivalType': 'ARCHIVAL',
         ':backupSuccess': BACKUP_STATUS.success,
         ':backupFailed': BACKUP_STATUS.failed,
+        ':backupPartialFailure': BACKUP_STATUS.partialFailure,
       },
     })
   );

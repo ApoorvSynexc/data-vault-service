@@ -1,4 +1,4 @@
-import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS } from "../../../constant";
+import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -7,7 +7,6 @@ import {
     getApexFields,
     getApexObjectChilds,
     getDestinationById,
-    triggerBackupJob,
     getBackupConfigsWithPagination,
     getCrmById,
     getTableCounter,
@@ -20,34 +19,59 @@ import {
     realTimeTriggerManagement,
     computeJobStats,
     computeArchivalJobStats,
+    getApexObjectRecords,
+    triggerArchivalBackupJob,
+    getBackupJobById,
+    getDecryptedDestinationConfig,
 } from "../../../services";
-import { isOwner, wrapController } from "../../../utils/helper";
+import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
+import { IObject } from "../../../models";
+import { buildOwnWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
+import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, objectName } = req.query;
+    const { crmId, objectName, mode } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
 
     const [apexResult] = await Promise.all([
-        getApexObjectChilds(String(crmId), String(objectName)),
+        getApexObjectChilds(String(crmId), String(objectName), mode ? String(mode) : undefined),
     ]);
 
     makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, objectName } = req.query;
+    const { crmId, objectName, mode } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
     if (!objectName) {
         return makeResponse(req, res, 400, false, 'object_name_required');
     }
-    const result = await getApexFields(String(crmId), String(objectName));
+    const result = await getApexFields(String(crmId), String(objectName), mode ? String(mode) : undefined);
     makeResponse(req, res, 200, true, 'fetch', result);
+};
+
+const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+    const { crmId, objectConfig, ...body } = req.body;
+    if (!crmId) {
+        return makeResponse(req, res, 400, false, 'crm_id_required');
+    }
+
+    // Build WHERE clause from objectConfig if the caller didn't supply one directly
+    if (objectConfig && !body.whereClause) {
+        const whereBody = buildOwnWhereBody(objectConfig);
+        if (whereBody) {
+            body.whereClause = whereBody;
+        }
+    }
+
+    const apexResult = await getApexObjectRecords(String(crmId), body);
+    makeResponse(req, res, 200, true, 'fetch', apexResult);
 };
 
 const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -116,16 +140,11 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
             return;
         }
 
-        if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
-            const scheduleConfig = req.body.scheduleConfig;
-            const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
-                && !scheduleConfig?.scheduling?.startDate
-                && !scheduleConfig?.scheduling?.startTime;
-            if (isOnceImmediate) {
-                await triggerBackupJob(config, undefined, 'archival');
-            } else {
-                // await createAwsEventScheduler(buildEventScheduleInput(config));
-            }
+        const { immediateObjects } = filtereObjects(req.body?.objects || []);
+        if (immediateObjects.length > 0) {
+            await triggerArchivalBackupJob(config, immediateObjects);
+        } else {
+            // await createAwsEventScheduler(buildEventScheduleInput(config));
         }
 
         makeResponse(req, res, 201, true, 'create', config);
@@ -209,6 +228,12 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     const updated = await updateBackupConfig(String(backupConfigId), req.body);
+    if (updated && !updated.lastBackupAt) {
+        const { immediateObjects } = filtereObjects(req.body?.objects || []);
+        if (immediateObjects.length > 0) {
+            await triggerArchivalBackupJob(updated, immediateObjects);
+        }
+    }
 
     if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
         // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
@@ -234,7 +259,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
     const config = existing!;
 
-    if (config.backupStatus === BACKUP_STATUS.pending) {
+    if (config.backupStatus === BACKUP_STATUS.pending && config.status !== STATUS.paused) {
         makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
         return;
     }
@@ -309,9 +334,116 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
     makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
+const PAGE_SIZE = 10;
+const BATCH_SIZE = 200; // records per S3 file
+
+// GET /v1/archival-config/record-errors?backupJobId=&objectId=&page=
+// Returns one page (10 records) of per-record delete errors stored in S3.
+// S3 files are named batch_00001.csv, batch_00002.csv … each holding 200 records.
+// Page → file mapping is deterministic so forward/backward navigation never
+// skips or repeats records: file_idx = floor((page-1)*10 / 200).
+const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const { backupJobId, objectId, page } = req.query as Record<string, string>;
+    if (!backupJobId || !objectId) {
+        makeResponse(req, res, 400, false, 'params_required');
+        return;
+    }
+
+    const pageNum = Math.max(1, parseInt(page ?? '1', 10));
+
+    const job = await getBackupJobById(backupJobId);
+    if (!job || (job.userId !== req.user!.userId && job.spaceId !== req.user?.spaceId)) {
+        makeResponse(req, res, 400, false, 'not_exist');
+        return;
+    }
+
+    // Find the target object (flat search — objects can be nested in children[])
+    const findObject = (items: any[]): any => {
+        for (const obj of items) {
+            if (obj.id === objectId) return obj;
+            if (obj.children?.length) {
+                const found = findObject(obj.children);
+                if (found) return found;
+            }
+        }
+        return null;
+    };
+
+    const targetObj = findObject(job.object ?? []);
+    if (!targetObj?.recordErrorsS3Prefix) {
+        makeResponse(req, res, 200, true, 'fetch', { records: [], totalRecords: 0, totalPages: 0, page: pageNum });
+        return;
+    }
+
+    // Resolve destination config via the backup config's destinationId.
+    // The job record's destination is encrypted with the backup-service key (AES-GCM),
+    // which the client-service cannot decrypt. Go through the destination table instead.
+    const config = await getBackupConfigById(job.backupConfigId);
+    if (!config?.destinationId) {
+        makeResponse(req, res, 500, false, 'destination_config_unavailable');
+        return;
+    }
+    const destination = await getDestinationById(config.destinationId);
+    if (!destination) {
+        makeResponse(req, res, 500, false, 'destination_config_unavailable');
+        return;
+    }
+    const destConfig = getDecryptedDestinationConfig(destination);
+
+    const s3Cfg = {
+        bucketName: destConfig.bucketName,
+        region: destConfig.region,
+        accessKeyId: destConfig.accessKeyId,
+        secretAccessKey: destConfig.secretAccessKey,
+    };
+
+    const prefix = targetObj.recordErrorsS3Prefix;
+    const allKeys = await listS3Keys(s3Cfg, prefix);
+
+    // totalRecords = sum of (BATCH_SIZE * all-but-last files) + rows in last file.
+    // We approximate with allKeys.length * BATCH_SIZE and clip on the last page —
+    // the actual row count is returned after reading the file.
+    const globalOffset = (pageNum - 1) * PAGE_SIZE;
+    const fileIdx = Math.floor(globalOffset / BATCH_SIZE);
+
+    if (fileIdx >= allKeys.length) {
+        makeResponse(req, res, 200, true, 'fetch', { records: [], totalRecords: allKeys.length * BATCH_SIZE, totalPages: Math.ceil((allKeys.length * BATCH_SIZE) / PAGE_SIZE), page: pageNum });
+        return;
+    }
+
+    const fileText = await getS3Text(s3Cfg, allKeys[fileIdx]);
+    const rows = fileText.split('\n').filter(l => l.trim());
+    // rows[0] is the CSV header (recordId,error)
+    const dataRows = rows.slice(1);
+
+    const inFileOffset = globalOffset % BATCH_SIZE;
+    const pageSlice = dataRows.slice(inFileOffset, inFileOffset + PAGE_SIZE);
+
+    const records = pageSlice.map(row => {
+        const commaIdx = row.indexOf(',');
+        if (commaIdx === -1) return { recordId: row, error: '' };
+        const recordId = row.slice(0, commaIdx);
+        let error = row.slice(commaIdx + 1);
+        // strip surrounding JSON quotes added during write
+        try { error = JSON.parse(error); } catch { /* leave as-is */ }
+        return { recordId, error };
+    });
+
+    // Compute accurate totalRecords: (files - 1) * BATCH_SIZE + dataRows.length of last file
+    // We only know the current file's row count; for the last file use dataRows.length.
+    const isLastFile = fileIdx === allKeys.length - 1;
+    const totalRecords = isLastFile
+        ? fileIdx * BATCH_SIZE + dataRows.length
+        : allKeys.length * BATCH_SIZE; // upper-bound until last page is visited
+    const totalPages = Math.ceil(totalRecords / PAGE_SIZE);
+
+    makeResponse(req, res, 200, true, 'fetch', { records, totalRecords, totalPages, page: pageNum });
+};
+
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
     getFieldsHanlder,
+    getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,
     getArchivalConfigHandler,
@@ -320,4 +452,5 @@ export const archivalConfigController = wrapController({
     getArchivalJobStatsHandler,
     dryRunArchivalHandler,
     validateSoqlArchivalHandler,
+    getRecordErrorsHandler,
 });

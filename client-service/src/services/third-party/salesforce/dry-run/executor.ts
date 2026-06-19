@@ -1,108 +1,93 @@
-import { buildDotNotationWhere } from './soql-builder';
-import type {
-  IDryRunPayload,
-  IDryRunResult,
-  IDryRunObjectResult,
-  ICountItem,
-  ISalesforceObject,
-} from './types';
-import type { SalesforceClient } from './sf-client';
+import { apexCountOne } from '../apex';
+import { buildOwnWhereBody, buildChildWhereBody } from './soql-builder';
+import { logger } from '../../../../middlewares';
+import type { IDryRunPayload, IDryRunResult, IDryRunObjectResult, ISalesforceObject } from './types';
 
-const BATCH_SIZE = 20;
+type Counter = { apiCallCount: number };
 
-// ── Tree flattening ───────────────────────────────────────────────────────────
-
-interface IFlatNode {
-  obj: ISalesforceObject;
-  ancestors: ISalesforceObject[];
-}
-
-function _flattenTree(
-  objects: ISalesforceObject[],
-  ancestors: ISalesforceObject[],
-  out: IFlatNode[]
-): void {
-  for (const obj of objects) {
-    out.push({ obj, ancestors });
-    if (obj.children?.length) {
-      _flattenTree(obj.children, [...ancestors, obj], out);
-    }
-  }
-}
-
-// ── Batch counting ────────────────────────────────────────────────────────────
-
-interface ICountEntry {
-  count: number | null;
-  success: boolean;
-  error?: string;
-}
-
-async function _runCountBatches(
-  items: ICountItem[],
-  sfClient: SalesforceClient
-): Promise<Map<string, ICountEntry>> {
-  const resultMap = new Map<string, ICountEntry>();
-
-  for (let i = 0; i < items.length; i += BATCH_SIZE) {
-    const batch = items.slice(i, i + BATCH_SIZE);
-    const results = await sfClient.countBatch(batch);
-    for (const r of results) {
-      resultMap.set(r.key, {
-        count: r.recordCount,
-        success: r.success,
-        error: r.errorMessage ?? (r.errorCode ? `Error code: ${r.errorCode}` : undefined),
-      });
-    }
-  }
-
-  return resultMap;
-}
-
-// ── Result reconstruction ─────────────────────────────────────────────────────
-
-function _buildObjectResult(
-  obj: ISalesforceObject,
-  ancestors: ISalesforceObject[],
-  countMap: Map<string, ICountEntry>
-): IDryRunObjectResult {
-  const entry = countMap.get(obj.id);
-  const result: IDryRunObjectResult = {
-    id: obj.id,
-    name: obj.name,
-    count: entry?.count ?? null,
-    success: entry?.success ?? false,
-  };
-
-  if (entry?.error) { result.error = entry.error; }
-
-  if (obj.children?.length) {
-    result.children = obj.children.map(child =>
-      _buildObjectResult(child, [...ancestors, obj], countMap)
-    );
-  }
-
+// Recursively builds zero-count results without API calls — used when parent count = 0.
+function buildZeroResult(obj: ISalesforceObject): IDryRunObjectResult {
+  const result: IDryRunObjectResult = { id: obj.id, name: obj.name, count: 0, success: true };
+  if (obj.children?.length) { result.children = obj.children.map(buildZeroResult); }
   return result;
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// Builds the effective WHERE body for an object:
+//   Root (no fieldApiName):  own configured conditions only.
+//   Child (has fieldApiName): parent's conditions prefixed with FK, combined with own conditions.
+//   When parent has no filter: FK != null is the baseline (avoids counting orphans).
+function getEffectiveWhereBody(obj: ISalesforceObject, parentEffectiveWhere: string | null): string | null {
+  const ownWhere = buildOwnWhereBody(obj);
+  const fk = obj.fieldApiName;
 
-export async function executeDryRun(
-  payload: IDryRunPayload,
-  sfClient: SalesforceClient
-): Promise<IDryRunResult> {
-  const flatNodes: IFlatNode[] = [];
-  _flattenTree(payload.objects, [], flatNodes);
+  if (!fk) {
+    return ownWhere;
+  }
 
-  const countItems: ICountItem[] = flatNodes.map(({ obj, ancestors }) => ({
-    key:         obj.id,
-    apiName:     obj.name,
-    whereClause: buildDotNotationWhere(obj, ancestors) ?? '',
-  }));
+  const propagated = parentEffectiveWhere
+    ? buildChildWhereBody(parentEffectiveWhere, fk)
+    : `${fk} != null`;
 
-  const countMap = await _runCountBatches(countItems, sfClient);
+  if (!ownWhere) { return propagated; }
+  return `(${propagated}) AND (${ownWhere})`;
+}
 
-  return {
-    objects: payload.objects.map(obj => _buildObjectResult(obj, [], countMap)),
-  };
+export async function executeDryRun(payload: IDryRunPayload): Promise<IDryRunResult> {
+  const counter: Counter = { apiCallCount: 0 };
+  const objects = await Promise.all(
+    payload.objects.map(obj => processNode(payload.crmId, obj, null, counter))
+  );
+  return { objects, apiCallCount: counter.apiCallCount };
+}
+
+async function processNode(
+  crmId: string,
+  obj: ISalesforceObject,
+  parentEffectiveWhere: string | null,
+  counter: Counter
+): Promise<IDryRunObjectResult> {
+  if (parentEffectiveWhere !== null && !obj.fieldApiName) {
+    return {
+      id: obj.id, name: obj.name, count: null, success: false,
+      error: `Object "${obj.name}" is missing fieldApiName — cannot build dot-notation WHERE`,
+    };
+  }
+
+  const effectiveWhere = getEffectiveWhereBody(obj, parentEffectiveWhere);
+
+  logger.info(`[dry-run] processNode — object: "${obj.name}" | fieldApiName: "${obj.fieldApiName ?? 'none'}" | parentEffectiveWhere: ${parentEffectiveWhere ?? 'null'} | effectiveWhere: ${effectiveWhere ?? 'null'}`);
+
+  try {
+    const r = await apexCountOne(crmId, obj.name, { whereClause: effectiveWhere ?? undefined });
+    counter.apiCallCount += 1;
+
+    logger.info(`[dry-run] apexCountOne response — object: "${obj.name}" | success: ${r.success} | count: ${r.count ?? 'null'} | errorCode: ${r.errorCode ?? 'none'} | errorMessage: ${r.errorMessage ?? 'none'}`);
+
+    const result: IDryRunObjectResult = {
+      id: obj.id, name: obj.name,
+      count: r.success ? r.count : null,
+      success: r.success,
+      ...(r.errorMessage && { error: r.errorMessage }),
+    };
+
+    if (obj.children?.length) {
+      if (!r.success) {
+        result.children = obj.children.map(child => ({
+          id: child.id, name: child.name, count: null, success: false,
+          error: `Parent count failed: ${r.errorMessage ?? r.errorCode ?? 'unknown'}`,
+        }));
+      } else if (r.count === 0) {
+        result.children = obj.children.map(buildZeroResult);
+      } else {
+        result.children = await Promise.all(
+          obj.children.map(child => processNode(crmId, child, effectiveWhere, counter))
+        );
+      }
+    }
+
+    return result;
+  } catch (err: any) {
+    logger.error(`[dry-run] processNode threw — object: "${obj.name}" | effectiveWhere: ${effectiveWhere ?? 'null'} | error: ${err?.message ?? String(err)}`);
+    return { id: obj.id, name: obj.name, count: null, success: false, error: err?.message ?? String(err) };
+  }
 }

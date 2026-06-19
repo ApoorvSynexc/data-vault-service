@@ -6,6 +6,7 @@ export type FilterOperator = '=' | '!=' | 'LIKE' | 'IN';
 
 export interface IFieldFilter {
   name: string;
+  dataType: string;
   filter: {
     value: string;
     operator: FilterOperator;
@@ -32,8 +33,6 @@ export interface IDryRunPayload {
   crmId: string;
   objects: ISalesforceObject[];
 }
-
-// ── Engine internal types ─────────────────────────────────────────────────────
 
 export interface ICountItem {
   key: string;
@@ -63,6 +62,7 @@ export interface IDryRunObjectResult {
 
 export interface IDryRunResult {
   objects: IDryRunObjectResult[];
+  apiCallCount: number;
 }
 
 // ── validate-soql types ───────────────────────────────────────────────────────
@@ -83,4 +83,5 @@ export interface IValidateSoqlItem {
   whereClause: string | null;
   isValid: boolean;
   error?: string;
+  relationshipDepth?: number;
 }

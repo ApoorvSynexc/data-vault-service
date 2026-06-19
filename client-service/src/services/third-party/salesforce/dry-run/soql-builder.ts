@@ -1,5 +1,6 @@
 import { parseQuery } from '@jetstreamapp/soql-parser-js';
-import type { ISalesforceObject } from './types';
+import { formatSalesforceValueByDataType, formatFieldValuesForSOQL } from '../../../../utils/helper';
+import type { ISalesforceObject, IFieldFilter } from './types';
 
 // ── Internal AST node shape ───────────────────────────────────────────────────
 // Mirrors the soql-parser-js AST structure we traverse; cast from the
@@ -41,28 +42,27 @@ function isDateLiteral(value: string): boolean {
   );
 }
 
-function quoteValue(value: string | number | boolean | null): string | number {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  if (value === null || value === 'null') return 'null';
-  if (typeof value === 'string' && isDateLiteral(value)) return value;
-  return `'${String(value).replace(/'/g, "\\'")}'`;
-}
-
-function buildFieldCondition(f: { name: string; filter: { value: string; operator: string } }): string {
+function buildFieldCondition(f: IFieldFilter, preformattedValue: string): string {
   const { value, operator } = f.filter;
+  const { name, dataType } = f;
 
   if (operator === 'LIKE') {
-    const wrapped = String(value).includes('%') ? value : `%${value}%`;
-    return `${f.name} LIKE '${String(wrapped).replace(/'/g, "\\'")}'`;
+    const escaped = String(value).replace(/'/g, "''");
+    const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
+    return `${name} LIKE '${wrapped}'`;
   }
 
   if (operator === 'IN') {
-    const values = Array.isArray(value) ? value : [value];
-    return `${f.name} IN (${values.map(v => quoteValue(v)).join(', ')})`;
+    const values = String(value).split(',').map(v => v.trim()).filter(Boolean);
+    return `${name} IN (${values.map(v => formatSalesforceValueByDataType(v, dataType)).join(', ')})`;
   }
 
-  return `${f.name} ${operator} ${quoteValue(value)}`;
+  const ldt = dataType.toLowerCase();
+  if ((ldt === 'date' || ldt === 'datetime') && isDateLiteral(value)) {
+    return `${name} ${operator} ${value}`;
+  }
+
+  return `${name} ${operator} ${preformattedValue}`;
 }
 
 // ── Own WHERE body ────────────────────────────────────────────────────────────
@@ -81,7 +81,10 @@ export function buildOwnWhereBody(obj: Pick<ISalesforceObject, 'condition' | 'fi
 
   if (!field || field.length === 0) return null;
 
-  const conditions = field.map(buildFieldCondition);
+  const formattedFields = formatFieldValuesForSOQL(field);
+  const conditions = field.map((f, idx) =>
+    buildFieldCondition(f, formattedFields[idx]?.filter?.value ?? formatSalesforceValueByDataType(f.filter.value, f.dataType))
+  );
 
   if (condition.type === 'AND') return conditions.join(' AND ');
   if (condition.type === 'OR') return conditions.join(' OR ');
@@ -92,16 +95,16 @@ export function buildOwnWhereBody(obj: Pick<ISalesforceObject, 'condition' | 'fi
   return null;
 }
 
-// ── Subquery detection ────────────────────────────────────────────────────────
-
-export function hasSubquery(whereBody: string): boolean {
-  return (
-    /\bIN\s*\(\s*SELECT\b/i.test(whereBody) ||
-    /\bNOT\s+IN\s*\(\s*SELECT\b/i.test(whereBody)
-  );
-}
-
-// ── Relationship path helpers ─────────────────────────────────────────────────
+// ── Child WHERE builder ───────────────────────────────────────────────────────
+// Transforms a parent's WHERE body into a child's WHERE body using dot-notation.
+// Each field reference is prefixed with parentFieldApiName.
+// Special case: 'Id' field → parentFieldApiName alone (FK itself, not FK.Id).
+//
+// e.g. "Owner.Email != null AND Status = 'Active'", "AccountId"
+//    → "AccountId.Owner.Email != null AND AccountId.Status = 'Active'"
+//
+// e.g. "Id != null AND Owner.Email != null", "AccountId"
+//    → "AccountId != null AND AccountId.Owner.Email != null"
 
 function toRelationshipName(fieldApiName: string): string {
   if (!fieldApiName) return '';
@@ -110,41 +113,21 @@ function toRelationshipName(fieldApiName: string): string {
   return fieldApiName;
 }
 
-/**
- * Returns the dot-notation relationship path from the current object up to
- * ancestor at index `i` in `ancestorChain` (root=0, direct parent=last).
- */
-function getRelPathToAncestor(
-  currentObj: Pick<ISalesforceObject, 'fieldApiName'>,
-  ancestorChain: Pick<ISalesforceObject, 'fieldApiName'>[],
-  i: number
-): string {
-  const D = ancestorChain.length;
-  const parts = [toRelationshipName(currentObj.fieldApiName!)];
-  for (let j = D - 1; j > i; j--) {
-    parts.push(toRelationshipName(ancestorChain[j].fieldApiName!));
-  }
-  return parts.join('.');
-}
-
-// ── WHERE clause transformer ──────────────────────────────────────────────────
-// Prepends every field reference in an ancestor's WHERE body with the given
-// relationship path so it can be used as a cross-object filter on a child.
-//
-// depth 1: `Industry = 'Tech'`           → `Account.Industry = 'Tech'`
-// depth 2: `Account.Industry = 'Tech'`   → `Contact.Account.Industry = 'Tech'`
-
 function rebuildSubquery(subAst: NonNullable<WhereNode['valueQuery']>): string {
   const fields = subAst.fields.map(f => f.field).join(', ');
   let sql = `SELECT ${fields} FROM ${subAst.sObject}`;
-  if (subAst.where) sql += ` WHERE ${rebuildWhere(subAst.where, null)}`;
+  if (subAst.where) sql += ` WHERE ${rebuildChildWhere(subAst.where, 'Id', 'Id')}`;
   return sql;
 }
 
-function renderLeaf(node: WhereNode, prefix: string | null): string {
+// fieldApiName — the actual FK field on the child (e.g. "Test_1__c", "AccountId")
+//   used only for the Id special-case: parent "Id = 'x'" → child "Test_1__c = 'x'"
+// relName — the relationship traversal name (e.g. "Test_1__r", "Account")
+//   used for all other fields: parent "Name = 'Acme'" → child "Test_1__r.Name = 'Acme'"
+function renderChildLeaf(node: WhereNode, fieldApiName: string, relName: string): string {
   const open  = '('.repeat(node.openParen  || 0);
   const close = ')'.repeat(node.closeParen || 0);
-  const field = prefix ? `${prefix}.${node.field}` : node.field!;
+  const field = node.field === 'Id' ? fieldApiName : `${relName}.${node.field}`;
 
   if (node.literalType === 'SUBQUERY') {
     return `${open}${field} ${node.operator} (${rebuildSubquery(node.valueQuery!)})${close}`;
@@ -155,49 +138,45 @@ function renderLeaf(node: WhereNode, prefix: string | null): string {
   return `${open}${field} ${node.operator} ${node.value}${close}`;
 }
 
-function rebuildWhere(node: WhereNode | null | undefined, prefix: string | null): string {
-  if (!node) return '';
-  if (node.field) return renderLeaf(node, prefix);
-
-  const left  = rebuildWhere(node.left,  prefix);
-  const right = node.right ? rebuildWhere(node.right, prefix) : '';
-  if (!right) return left;
+function rebuildChildWhere(node: WhereNode | null | undefined, fieldApiName: string, relName: string): string {
+  if (!node) { return ''; }
+  if (node.field) { return renderChildLeaf(node, fieldApiName, relName); }
+  const left  = rebuildChildWhere(node.left,  fieldApiName, relName);
+  const right = node.right ? rebuildChildWhere(node.right, fieldApiName, relName) : '';
+  if (!right) { return left; }
   return `${left} ${node.operator} ${right}`;
 }
 
-export function transformWhere(whereClause: string, relPath: string): string {
-  const normalized = whereClause.trim().replace(/^WHERE\s+/i, '');
-  const ast = parseQuery(`SELECT Id FROM X WHERE ${normalized}`);
-  if (!ast.where) return normalized;
-  return rebuildWhere(ast.where as unknown as WhereNode, relPath);
-}
-
-// ── Dot-notation WHERE builder ────────────────────────────────────────────────
-// Combines a node's own WHERE conditions with each ancestor's conditions,
-// prefixing ancestor fields with the relationship traversal path so the
-// result is a single flat WHERE clause for the current object's SObject.
-//
-// Example (Case with parent Contact and grandparent Account):
-//   own:        Status = 'Open'
-//   Contact:    Contact.Email LIKE '%acme%'
-//   Account:    Contact.Account.Name = 'Acme'
-//   → "(Status = 'Open') AND (Contact.Email LIKE '%acme%') AND (Contact.Account.Name = 'Acme')"
-
-export function buildDotNotationWhere(
-  node: Pick<ISalesforceObject, 'condition' | 'field' | 'fieldApiName'>,
-  ancestors: Pick<ISalesforceObject, 'condition' | 'field' | 'fieldApiName'>[]
-): string | null {
-  const parts: string[] = [];
-
-  const ownWhere = buildOwnWhereBody(node);
-  if (ownWhere) { parts.push(`(${ownWhere})`); }
-
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    const ancestorWhere = buildOwnWhereBody(ancestors[i]);
-    if (!ancestorWhere) { continue; }
-    const relPath = getRelPathToAncestor(node, ancestors, i);
-    parts.push(`(${transformWhere(ancestorWhere, relPath)})`);
+export function buildChildWhereBody(parentWhereBody: string, parentFieldApiName: string): string {
+  const normalized = parentWhereBody.trim().replace(/^WHERE\s+/i, '');
+  const relName = toRelationshipName(parentFieldApiName);
+  try {
+    const ast = parseQuery(`SELECT Id FROM X WHERE ${normalized}`);
+    if (!ast.where) { return `${parentFieldApiName} != null`; }
+    return rebuildChildWhere(ast.where as unknown as WhereNode, parentFieldApiName, relName);
+  } catch {
+    return `${parentFieldApiName} != null`;
   }
-
-  return parts.length > 0 ? parts.join(' AND ') : null;
 }
+
+// ── Relationship depth analysis ───────────────────────────────────────────────
+// Returns the maximum number of relationship traversals (dots) across all
+// field references in a WHERE clause body.
+// e.g. "Owner.Profile.Name = 'Admin'"              → 2
+//      "Contact.Account.Owner.Profile.Name = 'X'"  → 4
+
+function walkMaxDepth(node: WhereNode | null | undefined): number {
+  if (!node) { return 0; }
+  if (node.field) { return (node.field.match(/\./g) ?? []).length; }
+  return Math.max(walkMaxDepth(node.left), walkMaxDepth(node.right));
+}
+
+export function getMaxRelationshipDepth(whereBody: string): number {
+  try {
+    const ast = parseQuery(`SELECT Id FROM X WHERE ${whereBody}`);
+    return walkMaxDepth(ast.where as unknown as WhereNode);
+  } catch {
+    return 0;
+  }
+}
+

@@ -21,7 +21,7 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   const { id: backupJobId } = req.query as { id: string };
   const job = await resumeBackupJob(backupJobId);
 
-  if(!job) {
+  if (!job) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
@@ -46,7 +46,7 @@ const createArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<
 const resumeArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { id: backupJobId } = req.query as { id: string };
   const job = await resumeBackupJob(backupJobId);
-  if(!job) {
+  if (!job) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }

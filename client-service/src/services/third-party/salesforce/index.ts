@@ -203,13 +203,14 @@ const getSalesforceToken = async (
   customUrl?: string
 ) => {
   const { tokenUrl } = getSalesforceUrls(environment, customUrl);
+  console.log({tokenUrl, environment, customUrl,code, code_verifier});
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     client_id: String(SALESFORCE_CLIENT_ID),
     client_secret: String(SALESFORCE_CLIENT_SECRET),
     redirect_uri: String(SALESFORCE_REDIRECT_URI),
-    code_verifier,
+    code_verifier,   
   }).toString();
 
   return httpRequest({
@@ -246,10 +247,12 @@ const refreashSalesforceToken = async (
 const getSalesforceProfile = async (
   tokens: SalesforceTokens,
   environment?: SalesforceEnvironment,
-  customUrl?: string
+  customUrl?: string,
 ) => {
   const { profileUrl } = getSalesforceUrls(environment, customUrl);
-  return salesforceRequest({ url: profileUrl, method: 'GET' }, tokens);
+  const url = profileUrl;
+  console.log({url})
+  return salesforceRequest({ url, method: 'GET' }, tokens);
 };
 
 export {

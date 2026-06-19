@@ -5,7 +5,9 @@ import { createArchivalConfigValidation, dryRunArchivalValidation, validateSoqlA
 const router = Router();
 
 router.get('/object-childs', archivalConfigController.getObjectChildHanlder);
+router.post('/object-records', archivalConfigController.getObjectRecordsHanlder);
 router.get('/fields', archivalConfigController.getFieldsHanlder);
+
 router.get('/list', archivalConfigController.listArchivalConfigsHandler);
 router.get('/', archivalConfigController.getArchivalConfigHandler);
 router.get('/stats', archivalConfigController.getArchivalJobStatsHandler);
@@ -14,5 +16,6 @@ router.delete('/', archivalConfigController.deletearchivalConfigHandler);
 router.post('/dry-run', dryRunArchivalValidation, archivalConfigController.dryRunArchivalHandler);
 router.post('/validate-soql', validateSoqlArchivalValidation, archivalConfigController.validateSoqlArchivalHandler);
 router.post('/', createArchivalConfigValidation, archivalConfigController.createArchivalConfigHandler);
+router.get('/record-errors', archivalConfigController.getRecordErrorsHandler);
 
 export const archivalRouter = router;
