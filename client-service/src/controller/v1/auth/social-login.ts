@@ -21,6 +21,7 @@ import {
   SalesforceEnvironment,
   getCrmByOrgId,
 } from '../../../services';
+import { encrypt } from '../../../utils/encryption';
 import {
   generateTokens,
   parseExpiryToSeconds,
@@ -135,92 +136,9 @@ const socialLoginCallbackHandler = async (
   // Check if user exists by email (only match active users)
   let user = await getUser({ 'contact.email': sfProfile.email, status: STATUS.active });
 
-  // Create new user if doesn't exist
   if (!user) {
-    const [firstName, ...lastNameParts] = sfProfile.name.split(' ');
-    const lastName = lastNameParts.join(' ') || '';
-
-    const userRole = defaultRoles.find((r) => r.name === 'user')!;
-    await createUser({
-      firstName,
-      lastName,
-      contact: {
-        email: sfProfile.email,
-        isEmailVerified: true,
-      },
-      authProvider: authProviderStr.toUpperCase(),
-      status: STATUS.active,
-      role: { name: userRole.name, roleId: userRole.roleId },
-    });
-
-    // Fetch the newly created user
-    user = await getUser({ 'contact.email': sfProfile.email });
-
-    if (!user) {
-      makeResponse(req, res, 500, false, 'unknown_error');
-      return;
-    }
-
-    // Create space for new user
-    const space = await createSpace(user.userId);
-    await updateUser({ userId: user.userId }, { spaceId: space.spaceId });
-    user.spaceId = space.spaceId;
-
-    // Create CRM connection for Salesforce
-    if (authProviderStr === 'salesforce') {
-      const crmProfile = {
-        instanceUrl: token.instance_url,
-        organizationId: sfProfile.organization_id,
-        userId: sfProfile.user_id,
-        name: sfProfile.name,
-        email: sfProfile.email,
-        username: sfProfile.preferred_username,
-        photoUrl: sfProfile.photos?.thumbnail,
-      };
-
-      const crmCredentials = {
-        access_token: token.access_token,
-        refresh_token: token.refresh_token,
-      };
-
-      await upsertCrm({
-        environment: oauthState.environment,
-        name: sfProfile?.name ?? "Admin",
-        userId: user.userId,
-        crmName: 'salesforce',
-        crmProfile,
-        crmCredentials,
-        spaceId: space.spaceId,
-      });
-    }
-  } else {
-    const crmExist = await getCrmByOrgId(sfProfile.organization_id);
-    if (!crmExist && authProviderStr === 'salesforce') {
-      const crmProfile = {
-        instanceUrl: token.instance_url,
-        organizationId: sfProfile.organization_id,
-        userId: sfProfile.user_id,
-        name: sfProfile.name,
-        email: sfProfile.email,
-        username: sfProfile.preferred_username,
-        photoUrl: sfProfile.photos?.thumbnail,
-      };
-
-      const crmCredentials = {
-        access_token: token.access_token,
-        refresh_token: token.refresh_token,
-      };
-
-      await upsertCrm({
-        environment: oauthState.environment,
-        name: sfProfile?.name ?? "Admin",
-        userId: user.userId,
-        crmName: 'salesforce',
-        crmProfile,
-        crmCredentials,
-        spaceId: user.spaceId,
-      });
-    }
+    makeResponse(req, res, 401, false, 'unauthorized');
+    return;
   }
 
   // Check user status
@@ -228,6 +146,14 @@ const socialLoginCallbackHandler = async (
     makeResponse(req, res, 403, false, 'blocked_or_removed');
     return;
   }
+
+  const crmCredential = {
+    access_token: token.access_token,
+    refresh_token: token.refresh_token,
+  }
+  const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+  await updateUser({ userId: user.userId }, { crmCredential: encrptedCrm });
+
 
   // Create session and generate tokens
   const deviceInfo = {

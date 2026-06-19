@@ -48,6 +48,7 @@ const asyncHandler =
         return;
       }
       const message = error instanceof Error ? error.message : 'unknown_error';
+      console.log("Error: ", message);
       makeResponse(
         req,
         res,
@@ -154,6 +155,7 @@ const isTruthy = (value: string | boolean): boolean => {
   }
   return Boolean(value);
 };
+
 
 const escapeSOQLString = (str: string): string => {
   return str.replace(/'/g, "''");
