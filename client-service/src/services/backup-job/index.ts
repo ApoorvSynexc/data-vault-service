@@ -6,7 +6,7 @@ import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, JOB_STATUS } from '../
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
-import { getCrmById, getCrmTokens } from '../crm';
+import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { incrementTableCounter } from '../counter';
 import { flattenBackupObjects } from '../../utils/helper';
@@ -45,7 +45,15 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
   return (result.Count ?? 0) > 0;
 };
 
-const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject[], lastUpdatedAt?: string, bypassDedup?: boolean) => {
+const triggerArchivalBackupJob = async (params: {
+  user: IUser;
+  config: IBackupConfig;
+  objects?: IObject[];
+  lastUpdatedAt?: string;
+  bypassDedup?: boolean;
+}) => {
+  const { config, objects, lastUpdatedAt, bypassDedup, user } = params;
+
   if (!bypassDedup) {
     const active = await hasActiveBackupJob(config.backupConfigId);
     if (active) {
@@ -62,8 +70,7 @@ const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject
   if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
-
-  const credentials = getCrmTokens(crm);
+  const credentials = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
   const payload = {
     userId: config.userId,
     backupConfigId: config.backupConfigId,
@@ -71,7 +78,7 @@ const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject
       ...credentials,
       crmId: crm.crmId,
       crmName: crm.crmName,
-      instanceUrl: crm.crmProfile?.instanceUrl,
+      instanceUrl: user.crmProfile?.instanceUrl,
       object: getSourceObjects(objects),
     },
     destination: {
