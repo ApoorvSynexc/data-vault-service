@@ -66,7 +66,7 @@ export const createRoleValidation = (req: Request, res: Response, next: NextFunc
 
 export const updateRoleValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    crmId: Joi.string().required(),
+    roleId: Joi.string().required(),
     name: Joi.string().trim().optional(),
     description: Joi.string().trim().optional(),
     permissions: Joi.array()
@@ -74,6 +74,7 @@ export const updateRoleValidation = (req: Request, res: Response, next: NextFunc
       .optional(),
   }).min(1);
 
+  console.log({body: req.body});
   const { error } = schema.validate(req.body, { abortEarly: false });
   if (error) {
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
