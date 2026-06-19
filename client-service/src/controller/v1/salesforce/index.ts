@@ -25,7 +25,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   const { organizationId } = req.query;
   const crm = await getCrmByOrgId(String(organizationId));
   if (!crm) {
-    return makeResponse(req, res, 404, false, 'not_exist');
+    return makeResponse(req, res, 200, true, 'fetch', []);
   }
 
   const usersByCrmId = await getUsersByCrmId(crm.crmId);
