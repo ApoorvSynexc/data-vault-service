@@ -61,6 +61,16 @@ interface ObjectRecordsBody {
 // Returns null when the root has no filter conditions (fields is null and condition
 // has no soqlQuery), which signals the caller to omit the whereClause entirely.
 
+// Converts a FK field name to its SOQL relationship traversal name.
+// "AccountId"  → "Account"   (strip trailing "Id")
+// "Trainer__c" → "Trainer__r" (replace "__c" with "__r")
+// "WhatId"     → "What"      (strip trailing "Id")
+const toRelationshipName = (fieldApiName: string): string => {
+  if (fieldApiName.endsWith('__c')) return `${fieldApiName.slice(0, -3)}__r`;
+  if (fieldApiName.endsWith('Id')) return fieldApiName.slice(0, -2);
+  return fieldApiName;
+};
+
 const buildWhereClauseFromParentChain = (parent: ParentNode): string | null => {
   const chain: ParentNode[] = [];
   let node: ParentNode | undefined = parent;
@@ -69,33 +79,48 @@ const buildWhereClauseFromParentChain = (parent: ParentNode): string | null => {
     node = node.parent;
   }
   // chain[0] = immediate parent (outermost), chain[last] = root (innermost)
-  chain.reverse(); // now root-first
+  chain.reverse(); // now root-first: [root, level1, level2, ..., immediate-parent]
 
   const root = chain[0];
-  let whereBody = buildOwnWhereBody({
+  const rootWhereBody = buildOwnWhereBody({
     condition: root.filters.condition ?? undefined,
     field: root.filters.fields ?? undefined,
   });
 
-  // Level 1 (root's immediate child): translate the root's WHERE body using
-  // relationship traversal via buildChildWhereBody (e.g. "Id != null" → "AccountId != null").
-  //
-  // Level 2+ (deeper children): the WHERE body is already a transformed FK expression
-  // (e.g. "AccountId != null"). Re-running buildChildWhereBody would incorrectly wrap it
-  // as "Trainer__r.AccountId != null", which Salesforce rejects. At this depth the only
-  // valid WHERE is "referenceName != null" — the child just needs the FK to exist.
-  for (let i = 1; i < chain.length; i++) {
-    const ancestor = chain[i];
-    const isImmediateChildOfRoot = i === 1;
-
-    if (!whereBody || !isImmediateChildOfRoot) {
-      whereBody = `${ancestor.referenceName} != null`;
-    } else {
-      whereBody = buildChildWhereBody(whereBody, ancestor.referenceName);
-    }
+  // Only the root + one child: use buildChildWhereBody directly.
+  // e.g. root WHERE "Id != null", child referenceName "AccountId" → "AccountId != null"
+  if (chain.length === 2) {
+    if (!rootWhereBody) { return `${chain[1].referenceName} != null`; }
+    return buildChildWhereBody(rootWhereBody, chain[1].referenceName);
   }
 
-  return whereBody;
+  // Multiple levels deep: build a dotted SOQL traversal path.
+  //
+  // For the deepest child (ContactRequest in the example), the WHERE must traverse
+  // all intermediate relationship names back to the root's immediate child's FK field.
+  //
+  // Example chain: [Account, Contact, Pok_mon__c, ContactRequest]
+  //   chain[3].referenceName = "WhatId"     → toRelName → "What"       (traversal)
+  //   chain[2].referenceName = "Trainer__c" → toRelName → "Trainer__r" (traversal)
+  //   chain[1].referenceName = "AccountId"                              (terminal field)
+  //
+  // Result: "What.Trainer__r.AccountId != null"
+  //
+  // The terminal field (chain[1].referenceName) is kept as-is — it's the FK column on
+  // the root's immediate child, not a relationship traversal name.
+
+  const traversalParts: string[] = [];
+
+  // chain[last] down to chain[2]: convert each referenceName to a relationship name
+  for (let i = chain.length - 1; i >= 2; i--) {
+    traversalParts.push(toRelationshipName(chain[i].referenceName));
+  }
+
+  // chain[1].referenceName is the terminal FK field — not converted
+  traversalParts.push(chain[1].referenceName);
+
+  const fieldPath = traversalParts.join('.');
+  return `${fieldPath} != null`;
 };
 
 
