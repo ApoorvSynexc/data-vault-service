@@ -14,6 +14,7 @@ export interface IUser {
   profile?: IMedia;
   firstName?: string;
   lastName?: string;
+  customUrl?: string;
   crmProfile?: ICrmProfile;
   crmCredential?: {
     ciphertext: string;

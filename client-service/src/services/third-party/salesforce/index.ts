@@ -5,6 +5,8 @@ import {
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
 } from '../../../constant';
+import { encrypt } from '../../../utils/encryption';
+import { updateUser } from '../../user';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -103,7 +105,6 @@ interface SalesforceRequestOptions {
 interface SalesforceTokens {
   accessToken: string;
   refreshToken: string;
-  crmId?: string;
   userId?: string;
   environment?: SalesforceEnvironment;
   customUrl?: string;
@@ -138,9 +139,7 @@ const salesforceRequest = async <T = any>(
     let refreshed: any;
     try {
       console.log('Refreshing Token');
-      refreshed = tokens.crmId
-        ? await deduplicatedRefresh(tokens.crmId, tokens.refreshToken, tokens.environment, tokens.customUrl)
-        : await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
+      refreshed = await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
       console.log('Refreshing Token success');
     } catch (e: any) {
       console.log('Refreshing Token failed', e?.message);
@@ -149,6 +148,15 @@ const salesforceRequest = async <T = any>(
     }
 
     const newAccessToken: string = refreshed.access_token;
+
+    if (tokens.userId) {
+      const crmCredential = {
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+      }
+      const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+      await updateUser({ userId: tokens.userId }, { crmCredential: encrptedCrm });
+    }
 
     const data = await makeCall(newAccessToken);
     return { data, accessToken: newAccessToken };
@@ -190,14 +198,14 @@ const getSalesforceToken = async (
   customUrl?: string
 ) => {
   const { tokenUrl } = getSalesforceUrls(environment, customUrl);
-  console.log({tokenUrl, environment, customUrl,code, code_verifier});
+  console.log({ tokenUrl, environment, customUrl, code, code_verifier });
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     client_id: String(SALESFORCE_CLIENT_ID),
     client_secret: String(SALESFORCE_CLIENT_SECRET),
     redirect_uri: String(SALESFORCE_REDIRECT_URI),
-    code_verifier,   
+    code_verifier,
   }).toString();
 
   return httpRequest({
@@ -238,7 +246,6 @@ const getSalesforceProfile = async (
 ) => {
   const { profileUrl } = getSalesforceUrls(environment, customUrl);
   const url = profileUrl;
-  console.log({url})
   return salesforceRequest({ url, method: 'GET' }, tokens);
 };
 

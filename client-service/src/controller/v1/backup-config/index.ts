@@ -14,7 +14,6 @@ import {
   getTableCounter,
   triggerBackupJob,
   getCrmById,
-  getCrmTokens,
   getDestinationById,
   deleteTriggers,
   realTimeTriggerManagement,
@@ -51,6 +50,7 @@ const buildEventScheduleInput = (config: IBackupConfig) => ({
 });
 import { wrapController, isOwner } from '../../../utils/helper';
 import { logger } from '../../../middlewares';
+import { decrypt } from '../../../utils/encryption';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crmId, mode } = req.query;
@@ -284,9 +284,10 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const existing = await getBackupConfigById(String(backupConfigId));
   const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
+  const crmCredential = req.user!.crmCredential;
+  const existing = await getBackupConfigById(String(backupConfigId));
 
   const isConfigOwner = spaceId ? existing?.spaceId === spaceId : existing?.userId === userId;
   if (!isConfigOwner) {
@@ -303,13 +304,13 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   try {
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const crm = await getCrmById(config.crmId);
-      if (crm) {
-        const tokens = getCrmTokens(crm) as any;
+      if (crm && crmCredential) {
+        const tokens = JSON.parse(decrypt(crmCredential));
         await getSalesforceProfile(
           {
+            userId,
             accessToken: tokens.access_token,
             refreshToken: tokens.refresh_token,
-            userId: crm.userId,
           },
           crm.environment
         );

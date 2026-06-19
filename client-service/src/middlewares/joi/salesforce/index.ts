@@ -55,7 +55,6 @@ export const createRoleValidation = (req: Request, res: Response, next: NextFunc
       .required(),
   });
 
-  console.log({body:  req.body});
   const { error } = schema.validate(req.body, { abortEarly: false });
   if (error) {
     console.log({Error: error});
