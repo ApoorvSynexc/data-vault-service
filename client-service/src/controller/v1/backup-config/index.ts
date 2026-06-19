@@ -107,6 +107,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 };
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const destination = await getDestinationById(String(req.body.destinationId));
   const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
 
@@ -130,14 +131,14 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      await triggerBackupJob(config, undefined, 'backup');
+      await triggerBackupJob({ user, config, type: 'backup' });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
       const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
-        await triggerBackupJob(config, undefined, 'backup');
+        await triggerBackupJob({ user, config, type: 'backup' });
       } else {
         // await createAwsEventScheduler(buildEventScheduleInput(config));
       }
@@ -250,6 +251,7 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { backupConfigId } = req.query;
   if (!backupConfigId) {
     return makeResponse(req, res, 400, false, 'id_required');
@@ -269,7 +271,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       && !scheduleConfig?.scheduling?.startDate
       && !scheduleConfig?.scheduling?.startTime;
     if (isOnceImmediate) {
-      await triggerBackupJob(updated, undefined, 'backup');
+      await triggerBackupJob({ user, config: updated, type: 'backup' });
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     // await updateAwsEventSchedule(buildEventScheduleInput(updated!));

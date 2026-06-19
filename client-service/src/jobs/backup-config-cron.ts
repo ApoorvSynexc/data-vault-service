@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { getScheduledIncrementalBackupConfigs, triggerArchivalBackupJob, triggerBackupJob, hasActiveBackupJob } from '../services';
+import { getScheduledIncrementalBackupConfigs, triggerArchivalBackupJob, triggerBackupJob, hasActiveBackupJob, getUser } from '../services';
 import { logger } from '../middlewares';
 import { filtereObjects } from '../utils/helper';
 
@@ -25,7 +25,10 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
             }
           }
         } else {
-          await triggerBackupJob(config, config.lastBackupAt);
+          const user = await getUser({ userId: config.userId });
+          if(user){
+            await triggerBackupJob({ user, config, lastUpdatedAt: config.lastBackupAt });
+          }
         }
       } catch (error) {
         console.error(`Scheduled backup failed for ${config.backupConfigId}`, error);
