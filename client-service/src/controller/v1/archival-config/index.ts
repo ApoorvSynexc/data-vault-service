@@ -77,11 +77,18 @@ const buildWhereClauseFromParentChain = (parent: ParentNode): string | null => {
     field: root.filters.fields ?? undefined,
   });
 
-  // Walk from the root outward, transforming the WHERE body for each child level.
+  // Level 1 (root's immediate child): translate the root's WHERE body using
+  // relationship traversal via buildChildWhereBody (e.g. "Id != null" → "AccountId != null").
+  //
+  // Level 2+ (deeper children): the WHERE body is already a transformed FK expression
+  // (e.g. "AccountId != null"). Re-running buildChildWhereBody would incorrectly wrap it
+  // as "Trainer__r.AccountId != null", which Salesforce rejects. At this depth the only
+  // valid WHERE is "referenceName != null" — the child just needs the FK to exist.
   for (let i = 1; i < chain.length; i++) {
     const ancestor = chain[i];
-    if (!whereBody) {
-      // No condition from root — use a simple NOT NULL fallback on the FK
+    const isImmediateChildOfRoot = i === 1;
+
+    if (!whereBody || !isImmediateChildOfRoot) {
       whereBody = `${ancestor.referenceName} != null`;
     } else {
       whereBody = buildChildWhereBody(whereBody, ancestor.referenceName);
