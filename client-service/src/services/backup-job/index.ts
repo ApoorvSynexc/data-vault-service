@@ -196,6 +196,9 @@ const getBackupJobsByConfig = async (
     type?: string;
     // Filters on the `jobType` field (BULK | REALTIME) — scopes to an execution mode.
     jobType?: string;
+    // ISO date strings for filtering on createdAt (inclusive range).
+    dateFrom?: string;
+    dateTo?: string;
   }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
@@ -220,6 +223,16 @@ const getBackupJobsByConfig = async (
   if (options?.jobType) {
     filterParts.push('jobType = :jobType');
     expressionValues[':jobType'] = options.jobType;
+  }
+
+  if (options?.dateFrom) {
+    filterParts.push('createdAt >= :dateFrom');
+    expressionValues[':dateFrom'] = options.dateFrom;
+  }
+
+  if (options?.dateTo) {
+    filterParts.push('createdAt <= :dateTo');
+    expressionValues[':dateTo'] = options.dateTo;
   }
 
   const queryParams: any = {

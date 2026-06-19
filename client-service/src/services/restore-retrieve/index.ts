@@ -3,11 +3,30 @@ import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
-import { getBackupConfigsByUser, getBackupConfigById } from '../backup-config';
+import { getBackupConfigById, getBackupConfigsWithPagination } from '../backup-config';
 import { getBackupJobsByConfig } from '../backup-job';
 import { getCrmById } from '../crm';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
+const BACKUP_JOB_CONCURRENCY = 5;
+
+// Runs an async task for each item with at most `concurrency` tasks in-flight at once.
+// Preserves input order in the returned results — safe for cursor maps keyed by index/configId.
+const runWithConcurrency = async <T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T) => Promise<R>
+): Promise<R[]> => {
+  const results: R[] = new Array(items.length);
+
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.all(batch.map(task));
+    batchResults.forEach((result, j) => { results[i + j] = result; });
+  }
+
+  return results;
+};
 
 // ---------------------------------------------------------------------------
 // Restore / Retrieve job queries
@@ -186,7 +205,9 @@ const fetchBackupJobsForConfigPaginated = async (
   backupConfigId: string,
   pageSize: number,
   lastEvaluatedKeysByType: Record<string, Record<string, any>>,
-  scheduleFilter?: BackupScheduleType
+  scheduleFilter?: BackupScheduleType,
+  dateFrom?: string,
+  dateTo?: string
 ): Promise<{ items: IBackupJob[]; lastEvaluatedKeysByType: Record<string, Record<string, any>> }> => {
   const jobTypeFilter = scheduleFilter ? SCHEDULE_TO_JOB_TYPE[scheduleFilter] : undefined;
 
@@ -198,6 +219,8 @@ const fetchBackupJobsForConfigPaginated = async (
     cursor: lastEvaluatedKeysByType['NORMAL']
       ? encodeCursor(lastEvaluatedKeysByType['NORMAL'])
       : undefined,
+    ...(dateFrom && { dateFrom }),
+    ...(dateTo && { dateTo }),
   });
 
   const nextKeysByType: Record<string, Record<string, any>> = {};
@@ -223,20 +246,28 @@ const getBackupSnapshotLogs = async (params: {
   destinationId: string;
   scheduleType?: BackupScheduleType;
   backupConfigId?: string;
+  crmId?: string;
+  dateFrom?: string;
+  dateTo?: string;
   limit: number;
   cursor?: string;
 }): Promise<{ entries: ISnapshotActivityLogEntry[]; nextCursor?: string }> => {
-  const { userId, destinationId, scheduleType, backupConfigId, limit, cursor } = params;
+  const { userId, destinationId, scheduleType, backupConfigId, crmId, dateFrom, dateTo, limit, cursor } = params;
 
-  const allConfigs = await getBackupConfigsByUser(userId);
-
-  const matchingConfigs = allConfigs.filter(
-    (config) =>
-      config.destinationId === destinationId &&
-      config.type === 'NORMAL' &&
-      (scheduleType ? config.schedule === scheduleType : true) &&
-      (backupConfigId ? config.backupConfigId === backupConfigId : true)
+  const { documents: allConfigs } = await getBackupConfigsWithPagination(
+    {
+      userId,
+      type: 'NORMAL',
+      destinationId,
+      ...(scheduleType && { schedule: scheduleType }),
+      ...(crmId && { crmId }),
+    },
+    { limit: 1000 }
   );
+
+  const matchingConfigs = backupConfigId
+    ? allConfigs.filter((c) => c.backupConfigId === backupConfigId)
+    : allConfigs;
 
   if (matchingConfigs.length === 0) return { entries: [] };
 
@@ -252,13 +283,17 @@ const getBackupSnapshotLogs = async (params: {
       .map((crm) => [crm.crmId, crm])
   );
 
-  const resultsPerConfig = await Promise.all(
-    matchingConfigs.map(async (config) => {
+  const resultsPerConfig = await runWithConcurrency(
+    matchingConfigs,
+    BACKUP_JOB_CONCURRENCY,
+    async (config) => {
       const { items, lastEvaluatedKeysByType } = await fetchBackupJobsForConfigPaginated(
         config.backupConfigId,
         limit,
         cursorMap[config.backupConfigId] ?? {},
-        scheduleType
+        scheduleType,
+        dateFrom,
+        dateTo
       );
 
       const crm = crmById.get(config.crmId);
@@ -270,7 +305,7 @@ const getBackupSnapshotLogs = async (params: {
         configId: config.backupConfigId,
         lastEvaluatedKeysByType,
       };
-    })
+    }
   );
 
   const allEntries = resultsPerConfig.flatMap((r) => r.entries);
@@ -304,11 +339,6 @@ export interface IArchivalConfigEntry {
   lastJobStatus?: string;
 }
 
-// Cursor shape for ARCHIVAL: { offset: number }
-// getBackupConfigsByUser returns all configs in memory, so we paginate with a
-// simple numeric offset rather than a DynamoDB LastEvaluatedKey.
-type ArchivalCursor = { offset: number };
-
 const countSelectedObjects = (config: IBackupConfig): number => {
   // Prefer objects[] (full metadata) over objectNames[] (name-only list).
   // Both represent the user's selection; objects[] is more authoritative when present.
@@ -332,44 +362,45 @@ const buildArchivalConfigEntry = (
 });
 
 /**
- * Returns a paginated list of archival configs tied to a destination.
+ * Returns a paginated list of active archival configs tied to a destination.
  * Each entry represents one archival config — not an individual job run.
  *
- * Pagination uses a simple numeric offset because getBackupConfigsByUser loads
- * all configs into memory (no DynamoDB pagination token available at that layer).
- *
  * Flow:
- *   1. Load all user configs; filter to ARCHIVAL configs matching the destination.
- *   2. Decode the cursor to find the current page offset (defaults to 0).
- *   3. Slice the config list to the requested page size.
- *   4. Fetch CRMs for only the configs on this page (not all configs).
- *   5. Build one entry per config and return with a nextCursor if more pages remain.
+ *   1. Query DynamoDB via getBackupConfigsWithPagination filtering by userId, type=ARCHIVAL,
+ *      status=ACTIVE, destinationId, and optionally name (contains) and backupConfigId.
+ *   2. Fetch CRMs for configs on this page in parallel.
+ *   3. Build one entry per config and return with a DynamoDB-native nextCursor.
  */
 const getArchivalSnapshotLogs = async (params: {
   userId: string;
   destinationId: string;
   backupConfigId?: string;
+  crmId?: string;
+  name?: string;
   limit: number;
   cursor?: string;
 }): Promise<{ entries: IArchivalConfigEntry[]; nextCursor?: string }> => {
-  const { userId, destinationId, backupConfigId, limit, cursor } = params;
+  const { userId, destinationId, backupConfigId, crmId, name, limit, cursor } = params;
 
-  const allConfigs = await getBackupConfigsByUser(userId);
-
-  const archivalConfigs = allConfigs.filter(
-    (config) =>
-      config.destinationId === destinationId &&
-      config.type === 'ARCHIVAL' &&
-      config.status === STATUS.active &&
-      (backupConfigId ? config.backupConfigId === backupConfigId : true)
+  const { documents: pageConfigs, nextCursor: rawNextCursor } = await getBackupConfigsWithPagination(
+    {
+      userId,
+      type: 'ARCHIVAL',
+      status: STATUS.active,
+      destinationId,
+      ...(crmId && { crmId }),
+      ...(name && { name }),
+    },
+    { limit, cursor }
   );
 
-  if (archivalConfigs.length === 0) return { entries: [] };
+  if (pageConfigs.length === 0) return { entries: [] };
 
-  const { offset } = (decodeCursor(cursor) as ArchivalCursor | undefined) ?? { offset: 0 };
-  const pageConfigs = archivalConfigs.slice(offset, offset + limit);
+  const filteredConfigs = backupConfigId
+    ? pageConfigs.filter((c) => c.backupConfigId === backupConfigId)
+    : pageConfigs;
 
-  const uniqueCrmIds = [...new Set(pageConfigs.map((c) => c.crmId))];
+  const uniqueCrmIds = [...new Set(filteredConfigs.map((c) => c.crmId))];
   const crmResults = await Promise.all(uniqueCrmIds.map((crmId) => getCrmById(crmId)));
   const crmById = new Map<string, ICrm>(
     crmResults
@@ -377,18 +408,13 @@ const getArchivalSnapshotLogs = async (params: {
       .map((crm) => [crm.crmId, crm])
   );
 
-  const entries = pageConfigs.map((config) => {
+  const entries = filteredConfigs.map((config) => {
     const crm = crmById.get(config.crmId);
     const sourceName = crm?.crmProfile?.name ?? crm?.name ?? crm?.crmName ?? config.crmId;
     return buildArchivalConfigEntry(config, sourceName);
   });
 
-  const nextOffset = offset + limit;
-  const nextCursor = nextOffset < archivalConfigs.length
-    ? encodeCursor({ offset: nextOffset })
-    : undefined;
-
-  return { entries, nextCursor };
+  return { entries, nextCursor: rawNextCursor ?? undefined };
 };
 
 // ---------------------------------------------------------------------------
@@ -406,16 +432,20 @@ const getSnapshotActivityLogs = async (params: {
   snapshotType: SnapshotType;
   scheduleType?: BackupScheduleType;
   backupConfigId?: string;
+  crmId?: string;
+  name?: string;
+  dateFrom?: string;
+  dateTo?: string;
   limit: number;
   cursor?: string;
 }): Promise<{ entries: ISnapshotActivityLogEntry[] | IArchivalConfigEntry[]; nextCursor?: string }> => {
-  const { snapshotType, ...rest } = params;
+  const { snapshotType, dateFrom, dateTo, scheduleType, ...rest } = params;
 
   if (snapshotType === 'ARCHIVAL') {
     return getArchivalSnapshotLogs(rest);
   }
 
-  return getBackupSnapshotLogs(rest);
+  return getBackupSnapshotLogs({ ...rest, scheduleType, dateFrom, dateTo });
 };
 
 // ---------------------------------------------------------------------------
