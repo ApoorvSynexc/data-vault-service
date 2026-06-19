@@ -49,6 +49,7 @@ interface ObjectRecordsBody {
   crmId: string;
   apiName: string;
   fields: string[];
+  referenceName?: string;
   parent?: ParentNode;
   objectConfig?: object;
 }
@@ -71,7 +72,7 @@ const toRelationshipName = (fieldApiName: string): string => {
   return fieldApiName;
 };
 
-const buildWhereClauseFromParentChain = (parent: ParentNode): string | null => {
+const buildWhereClauseFromParentChain = (parent: ParentNode, childReferenceName?: string): string | null => {
   const chain: ParentNode[] = [];
   let node: ParentNode | undefined = parent;
   while (node) {
@@ -79,7 +80,7 @@ const buildWhereClauseFromParentChain = (parent: ParentNode): string | null => {
     node = node.parent;
   }
   // chain[0] = immediate parent (outermost), chain[last] = root (innermost)
-  chain.reverse(); // now root-first: [root, level1, level2, ..., immediate-parent]
+  chain.reverse(); // now root-first: [root, level1, ..., immediate-parent]
 
   const root = chain[0];
   const rootWhereBody = buildOwnWhereBody({
@@ -87,36 +88,43 @@ const buildWhereClauseFromParentChain = (parent: ParentNode): string | null => {
     field: root.filters.fields ?? undefined,
   });
 
-  // Only the root + one child: use buildChildWhereBody directly.
-  // e.g. root WHERE "Id != null", child referenceName "AccountId" → "AccountId != null"
-  if (chain.length === 2) {
-    if (!rootWhereBody) { return `${chain[1].referenceName} != null`; }
-    return buildChildWhereBody(rootWhereBody, chain[1].referenceName);
+  // Direct child of root (chain has only the root as parent):
+  // use buildChildWhereBody to translate root's WHERE into the child's FK field.
+  // e.g. root WHERE "Id != null" + childReferenceName "AccountId" → "AccountId != null"
+  if (chain.length === 1) {
+    if (!childReferenceName) { return rootWhereBody; }
+    if (!rootWhereBody) { return `${childReferenceName} != null`; }
+    return buildChildWhereBody(rootWhereBody, childReferenceName);
   }
 
   // Multiple levels deep: build a dotted SOQL traversal path.
   //
-  // For the deepest child (ContactRequest in the example), the WHERE must traverse
-  // all intermediate relationship names back to the root's immediate child's FK field.
+  // The chain contains only parent nodes (root → ... → immediate parent).
+  // childReferenceName is the FK on the requested object itself (e.g. "WhatId").
   //
-  // Example chain: [Account, Contact, Pok_mon__c, ContactRequest]
-  //   chain[3].referenceName = "WhatId"     → toRelName → "What"       (traversal)
-  //   chain[2].referenceName = "Trainer__c" → toRelName → "Trainer__r" (traversal)
-  //   chain[1].referenceName = "AccountId"                              (terminal field)
+  // Example:
+  //   chain  = [Account, Contact, Pok_mon__c]  (root-first)
+  //   childReferenceName = "WhatId"  (ContactRequest's own FK)
+  //
+  //   childReferenceName "WhatId"     → toRelName → "What"       (outermost traversal)
+  //   chain[2].referenceName "Trainer__c" → toRelName → "Trainer__r" (middle traversal)
+  //   chain[1].referenceName "AccountId"                              (terminal FK field)
   //
   // Result: "What.Trainer__r.AccountId != null"
-  //
-  // The terminal field (chain[1].referenceName) is kept as-is — it's the FK column on
-  // the root's immediate child, not a relationship traversal name.
 
   const traversalParts: string[] = [];
 
-  // chain[last] down to chain[2]: convert each referenceName to a relationship name
+  // Outermost: the requested child object's own FK → relationship name
+  if (childReferenceName) {
+    traversalParts.push(toRelationshipName(childReferenceName));
+  }
+
+  // Intermediate ancestors (chain[last] down to chain[2]): relationship names
   for (let i = chain.length - 1; i >= 2; i--) {
     traversalParts.push(toRelationshipName(chain[i].referenceName));
   }
 
-  // chain[1].referenceName is the terminal FK field — not converted
+  // Terminal: chain[1].referenceName is the FK column on root's immediate child — kept as-is
   traversalParts.push(chain[1].referenceName);
 
   const fieldPath = traversalParts.join('.');
@@ -150,7 +158,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 };
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, apiName, fields, parent, objectConfig } = req.body as ObjectRecordsBody;
+    const { crmId, apiName, fields, referenceName, parent, objectConfig } = req.body as ObjectRecordsBody;
 
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
@@ -164,7 +172,7 @@ const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<v
 
     if (parent) {
         // Child object — derive WHERE clause by transforming the parent chain
-        const whereBody = buildWhereClauseFromParentChain(parent);
+        const whereBody = buildWhereClauseFromParentChain(parent, referenceName);
         if (whereBody) { whereClause = whereBody; }
     } else if (objectConfig) {
         // Root object — build WHERE clause directly from its own condition/fields
