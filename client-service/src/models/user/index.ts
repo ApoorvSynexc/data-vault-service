@@ -15,6 +15,10 @@ export interface IUser {
   firstName?: string;
   lastName?: string;
   crmProfile?: ICrmProfile;
+  crmCredential?: {
+    ciphertext: string;
+    iv: string;
+  }
   contact?: {
     email?: string;
     isEmailVerified?: boolean;
