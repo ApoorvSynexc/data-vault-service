@@ -313,10 +313,10 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
-  filter: { userId?: string; spaceId?: string; type?: string },
+  filter: { userId?: string; spaceId?: string; type?: string; name?: string; status?: string; destinationId?: string; schedule?: string; crmId?: string },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, spaceId, type } = filter;
+  const { userId, spaceId, type, name, status, destinationId, schedule, crmId } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
@@ -329,13 +329,40 @@ const getBackupConfigsWithPagination = async (
   const keyValue = isSpaceQuery ? spaceId : userId;
 
   const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
-  const expressionAttributeNames = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
-  let filterExpression: string | undefined;
+  const expressionAttributeNames: Record<string, string> = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
+  const filterParts: string[] = [];
 
   if (type) {
     expressionAttributeValues[':type'] = type;
-    filterExpression = '#type = :type';
+    filterParts.push('#type = :type');
   }
+
+  if (status) {
+    expressionAttributeValues[':status'] = status;
+    filterParts.push('#status = :status');
+  }
+
+  if (destinationId) {
+    expressionAttributeValues[':destinationId'] = destinationId;
+    filterParts.push('destinationId = :destinationId');
+  }
+
+  if (schedule) {
+    expressionAttributeValues[':schedule'] = schedule;
+    filterParts.push('#schedule = :schedule');
+  }
+
+  if (crmId) {
+    expressionAttributeValues[':crmId'] = crmId;
+    filterParts.push('crmId = :crmId');
+  }
+
+  if (name) {
+    expressionAttributeValues[':name'] = name;
+    filterParts.push('contains(#name, :name)');
+  }
+
+  const filterExpression = filterParts.length > 0 ? filterParts.join(' AND ') : undefined;
 
   const result = await docClient.send(
     new QueryCommand({

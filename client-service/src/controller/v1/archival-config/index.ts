@@ -75,7 +75,7 @@ const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<v
 };
 
 const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { pagination, limit, cursor } = req.query as Record<string, string>;
+    const { pagination, limit, cursor, name } = req.query as Record<string, string>;
     const spaceId = req.user?.spaceId;
     const userId = req.user!.userId;
 
@@ -83,7 +83,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
         const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
         const result = await getBackupConfigsWithPagination(
-            { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL' },
+            { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL', name: name },
             { limit: limitNum, cursor }
         );
 
@@ -109,7 +109,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
     }
 
     const { documents } = await getBackupConfigsWithPagination(
-        { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL' },
+        { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL', name: name },
         { limit: 1000 }
     );
 

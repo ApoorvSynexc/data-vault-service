@@ -118,20 +118,25 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
 };
 
 /**
- * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=&limit=&cursor=&backupConfigId=
+ * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=&limit=&cursor=&backupConfigId=&crmId=&name=&dateFrom=&dateTo=
  *
  * snapshotType=BACKUP   — returns paginated job-level log entries (one row per completed job).
  *                         scheduleType (REALTIME | SCHEDULE) optionally filters by execution mode.
  *                         backupConfigId optionally scopes results to a single config.
+ *                         crmId optionally filters configs by CRM.
+ *                         dateFrom / dateTo (ISO strings) optionally filter jobs by createdAt range.
  *                         Cursor encodes per-config DynamoDB resume keys.
  *
  * snapshotType=ARCHIVAL — returns paginated config-level entries (one row per archival config).
  *                         scheduleType is not accepted for ARCHIVAL (archival has no schedule mode).
  *                         backupConfigId optionally scopes results to a single config.
- *                         Cursor encodes a numeric offset into the in-memory config list.
+ *                         crmId optionally filters configs by CRM.
+ *                         name optionally filters configs by substring match.
+ *                         dateFrom / dateTo are not applicable to ARCHIVAL.
+ *                         Cursor encodes a DynamoDB LastEvaluatedKey.
  */
 const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { snapshotType, destinationId, scheduleType, backupConfigId, limit, cursor } = req.query as Record<string, string>;
+  const { snapshotType, destinationId, scheduleType, backupConfigId, crmId, name, dateFrom, dateTo, limit, cursor } = req.query as Record<string, string>;
   const userId = req.user!.userId;
 
   if (!snapshotType || !VALID_SNAPSHOT_TYPES.includes(snapshotType as SnapshotType)) {
@@ -162,6 +167,10 @@ const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Pr
     snapshotType: snapshotType as SnapshotType,
     scheduleType: scheduleType as BackupScheduleType | undefined,
     backupConfigId,
+    crmId,
+    name,
+    dateFrom,
+    dateTo,
     limit: limitNum,
     cursor,
   });

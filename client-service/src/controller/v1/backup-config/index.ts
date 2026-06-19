@@ -158,7 +158,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 };
 
 const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { pagination, limit, cursor } = req.query as Record<string, string>;
+  const { pagination, limit, cursor, name } = req.query as Record<string, string>;
   const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
 
@@ -166,7 +166,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
     const result = await getBackupConfigsWithPagination(
-      { ...(spaceId ? { spaceId } : { userId }), type: 'NORMAL' },
+      { ...(spaceId ? { spaceId } : { userId }), type: 'NORMAL', name },
       { limit: limitNum, cursor }
     );
 
@@ -198,7 +198,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 
   let configs;
   if (spaceId) {
-    const { documents } = await getBackupConfigsWithPagination({ spaceId, type: 'NORMAL' }, { limit: 1000 });
+    const { documents } = await getBackupConfigsWithPagination({ spaceId, type: 'NORMAL', name: name }, { limit: 1000 });
     configs = documents;
   } else {
     configs = await getBackupConfigsByUser(userId);
