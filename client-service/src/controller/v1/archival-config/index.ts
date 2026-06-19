@@ -27,8 +27,69 @@ import {
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
 import { IObject } from "../../../models";
-import { buildOwnWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
+import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
+import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
+
+// ── Parent chain types ────────────────────────────────────────────────────────
+
+interface ParentFilters {
+  condition: ICondition | null;
+  fields: IFieldFilter[] | null;
+}
+
+interface ParentNode {
+  apiName: string;
+  referenceName: string;
+  filters: ParentFilters;
+  parent?: ParentNode;
+}
+
+interface ObjectRecordsBody {
+  crmId: string;
+  apiName: string;
+  fields: string[];
+  parent?: ParentNode;
+  objectConfig?: object;
+}
+
+// ── WHERE clause builder ──────────────────────────────────────────────────────
+// Flattens the nested parent chain (outermost = immediate parent, innermost = root),
+// reverses it to root-first order, builds the root's own WHERE body, then
+// transforms it outward through each ancestor using buildChildWhereBody.
+//
+// Returns null when the root has no filter conditions (fields is null and condition
+// has no soqlQuery), which signals the caller to omit the whereClause entirely.
+
+const buildWhereClauseFromParentChain = (parent: ParentNode): string | null => {
+  const chain: ParentNode[] = [];
+  let node: ParentNode | undefined = parent;
+  while (node) {
+    chain.push(node);
+    node = node.parent;
+  }
+  // chain[0] = immediate parent (outermost), chain[last] = root (innermost)
+  chain.reverse(); // now root-first
+
+  const root = chain[0];
+  let whereBody = buildOwnWhereBody({
+    condition: root.filters.condition ?? undefined,
+    field: root.filters.fields ?? undefined,
+  });
+
+  // Walk from the root outward, transforming the WHERE body for each child level.
+  for (let i = 1; i < chain.length; i++) {
+    const ancestor = chain[i];
+    if (!whereBody) {
+      // No condition from root — use a simple NOT NULL fallback on the FK
+      whereBody = `${ancestor.referenceName} != null`;
+    } else {
+      whereBody = buildChildWhereBody(whereBody, ancestor.referenceName);
+    }
+  }
+
+  return whereBody;
+};
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -57,20 +118,34 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 };
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, objectConfig, ...body } = req.body;
+    const { crmId, apiName, fields, parent, objectConfig } = req.body as ObjectRecordsBody;
+
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
 
-    // Build WHERE clause from objectConfig if the caller didn't supply one directly
-    if (objectConfig && !body.whereClause) {
-        const whereBody = buildOwnWhereBody(objectConfig);
-        if (whereBody) {
-            body.whereClause = whereBody;
-        }
+    if (!apiName) {
+        return makeResponse(req, res, 400, false, 'params_required');
     }
 
-    const apexResult = await getApexObjectRecords(String(crmId), body);
+    let whereClause: string | undefined;
+
+    if (parent) {
+        // Child object — derive WHERE clause by transforming the parent chain
+        const whereBody = buildWhereClauseFromParentChain(parent);
+        if (whereBody) { whereClause = whereBody; }
+    } else if (objectConfig) {
+        // Root object — build WHERE clause directly from its own condition/fields
+        const whereBody = buildOwnWhereBody(objectConfig as Parameters<typeof buildOwnWhereBody>[0]);
+        if (whereBody) { whereClause = whereBody; }
+    }
+
+    const apexResult = await getApexObjectRecords(crmId, {
+        apiName,
+        fields,
+        ...(whereClause && { whereClause }),
+    });
+
     makeResponse(req, res, 200, true, 'fetch', apexResult);
 };
 
