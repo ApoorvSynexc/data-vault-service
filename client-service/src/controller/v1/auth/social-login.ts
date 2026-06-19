@@ -20,6 +20,7 @@ import {
   updateUser,
   SalesforceEnvironment,
   getCrmByOrgId,
+  getUserByCrmProfileUserId,
 } from '../../../services';
 import { encrypt } from '../../../utils/encryption';
 import {
@@ -134,7 +135,8 @@ const socialLoginCallbackHandler = async (
   }
 
   // Check if user exists by email (only match active users)
-  let user = await getUser({ 'contact.email': sfProfile.email, status: STATUS.active });
+  let user = await getUserByCrmProfileUserId(sfProfile.user_id);
+  console.log({user, sfProfile});
   if (!user) {
     makeResponse(req, res, 401, false, 'unauthorized');
     return;
@@ -150,6 +152,8 @@ const socialLoginCallbackHandler = async (
     access_token: token.access_token,
     refresh_token: token.refresh_token,
   }
+  console.log({crmCredential, user});
+  
   const encrptedCrm = encrypt(JSON.stringify(crmCredential));
   await updateUser(
     { userId: user.userId }, 

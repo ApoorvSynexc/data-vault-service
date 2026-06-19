@@ -15,7 +15,6 @@ import {
   triggerBackupJob,
   getCrmById,
   getDestinationById,
-  deleteTriggers,
   realTimeTriggerManagement,
   computeJobStats,
   getApexObjectsCount,

@@ -3,8 +3,6 @@ import {
   createOAuthState,
   disconnectCrm,
   getCrmById,
-  getCrmTokens,
-  getCrmsByUser,
   getCrmsBySpace,
   getOAuthState,
   getSalesforceLoginUrl,
@@ -184,16 +182,10 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const spaceId = req.user?.spaceId;
-  let crms;
+  const spaceId = req.user?.crmId;
+  const crms = await getCrmById(String(spaceId));
 
-  if (spaceId) {
-    crms = await getCrmsBySpace(spaceId);
-  } else {
-    crms = await getCrmsByUser(req.user!.userId);
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', crms);
+  makeResponse(req, res, 200, true, 'fetch', [crms]);
 };
 
 const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
