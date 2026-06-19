@@ -21,6 +21,7 @@ const fieldFilterSchema = Joi.object({
 
 const objectFieldSchema = Joi.object({
     name: Joi.string().required(),
+    dataType: Joi.string().required(),
     filter: fieldFilterSchema.required(),
 });
 

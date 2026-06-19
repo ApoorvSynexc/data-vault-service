@@ -25,7 +25,7 @@ import {
   syncMetadataAndTriggers,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, STATUS } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from '../../../constant';
 import { IBackupConfig, IScheduleConfig } from '../../../models';
 
 const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
@@ -95,14 +95,14 @@ const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, objectName } = req.query;
+  const { crmId, objectName, mode } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
-  const result = await getApexFields(String(crmId), String(objectName));
+  const result = await getApexFields(String(crmId), String(objectName), mode ? String(mode) : undefined);
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 
@@ -264,7 +264,15 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
   const updated = await updateBackupConfig(String(backupConfigId), req.body);
 
-  if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
+  if (updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig && updated.scheduleConfig.type === SCHEDULE_TYPE.oneTime && !updated.lastBackupAt) {
+    const scheduleConfig = updated.scheduleConfig;
+    const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
+      && !scheduleConfig?.scheduling?.startDate
+      && !scheduleConfig?.scheduling?.startTime;
+    if (isOnceImmediate) {
+      await triggerBackupJob(updated, undefined, 'backup');
+    }
+  } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
   }
 
@@ -341,7 +349,9 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
     return;
   }
   makeResponse(req, res, 201, true, 'create');
-  await initalizePayloadTransform(config.backupConfigId);
+  initalizePayloadTransform(config.backupConfigId).catch((err) => {
+    logger.error('EMR job failed after response sent:', err?.message ?? err);
+  });
 };
 
 const syncMeatadataHandler = async (req: IRequest, res: IResponse): Promise<void> => {

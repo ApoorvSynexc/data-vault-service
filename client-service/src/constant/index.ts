@@ -61,6 +61,11 @@ const SCHEDULE_MODE = {
   schedule: 'SCHEDULE',
 };
 
+const DATASET = {
+  entire: 'ENTIRE',
+  partial: 'PARTIAL',
+};
+
 const SCHEDULE_TYPE = {
   oneTime: 'ONE_TIME',
   incremental: 'INCREMENTAL',
@@ -121,6 +126,7 @@ const BACKUP_STATUS = {
   // resumed: 'RESUMED',
   success: 'SUCCESS',
   failed: 'FAILED',
+  partialFailure: 'PARTIAL_FAILURE',
   pending: 'PENDING',
 };
 const JOB_STATUS = {
@@ -249,6 +255,7 @@ export {
   GENDER,
   OTP_TYPE,
   OTP_STATUS,
+  DATASET,
   OTP_FOR,
   OTP_CHANNEL,
   SESSION_STATUS,
