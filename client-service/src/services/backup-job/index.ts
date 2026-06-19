@@ -107,7 +107,7 @@ const triggerArchivalBackupJob = async (params: {
 };
 
 const triggerBackupJob = async (params: {
-  user: IUser;
+  user?: IUser;
   config: IBackupConfig;
   lastUpdatedAt?: string;
   type?: 'backup' | 'archival';
@@ -127,7 +127,7 @@ const triggerBackupJob = async (params: {
   if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
-  const credentials = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
+  const credentials = user?.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
   const payload = {
     userId: config.userId,
     backupConfigId: config.backupConfigId,
@@ -135,7 +135,7 @@ const triggerBackupJob = async (params: {
       ...credentials,
       crmId: crm.crmId,
       crmName: crm.crmName,
-      instanceUrl: user.crmProfile?.instanceUrl,
+      instanceUrl: user?.crmProfile?.instanceUrl,
       object: getSourceObjects(config?.objects),
     },
     destination: {

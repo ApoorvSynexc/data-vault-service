@@ -48,36 +48,6 @@ const getCrmById = async (crmId: string): Promise<ICrm | null> => {
   return (result.Item as ICrm) ?? null;
 };
 
-const getCrmByUser = async (userId: string, crmName: string): Promise<ICrm | null> => {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: CRM_TABLE,
-      IndexName: 'userId-crmName-index',
-      KeyConditionExpression: 'userId = :uid AND crmName = :crm',
-      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, environment, #status, createdAt, updatedAt',
-      ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
-      ExpressionAttributeValues: { ':uid': userId, ':crm': crmName },
-      Limit: 1,
-    })
-  );
-  return (result.Items?.[0] as ICrm) ?? null;
-};
-
-const getCrmsByUser = async (userId: string): Promise<ICrm[]> => {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: CRM_TABLE,
-      IndexName: 'userId-crmName-index',
-      KeyConditionExpression: 'userId = :uid',
-      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, environment, #status, createdAt, updatedAt',
-      ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
-      ExpressionAttributeValues: { ':uid': userId },
-    })
-  );
-
-  return (result.Items as ICrm[] | undefined) ?? [];
-};
-
 const getCrmsBySpace = async (spaceId: string): Promise<ICrm[]> => {
   const result = await docClient.send(
     new QueryCommand({
@@ -259,9 +229,7 @@ export {
   upsertCrm,
   reconnectCrm,
   getCrmById,
-  getCrmByUser,
   getCrmByOrgId,
-  getCrmsByUser,
   getCrmsBySpace,
   disconnectCrm,
   deleteCrm,

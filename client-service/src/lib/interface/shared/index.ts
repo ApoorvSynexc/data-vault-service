@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { IUser } from '../../../models';
 
 export interface IRequest extends Request {
-  user: IUser;
+  user?: IUser;
   sessionId?: string;
 }
 

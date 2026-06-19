@@ -60,35 +60,6 @@ export class SalesforceAuthExpiredError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Per-crmId refresh deduplication
-//   Prevents thundering herd: if N concurrent requests all get a 401 for the
-//   same CRM, only the first fires a refresh call. The rest await the same
-//   promise. Without this, N parallel refreshes race to write to DynamoDB and
-//   each one invalidates the previous token, causing cascading 401s.
-// ---------------------------------------------------------------------------
-
-const refreshInFlight = new Map<string, Promise<any>>();
-
-const deduplicatedRefresh = (
-  crmId: string,
-  refreshToken: string,
-  environment?: SalesforceEnvironment,
-  customUrl?: string
-): Promise<any> => {
-  const existing = refreshInFlight.get(crmId);
-  if (existing) {
-    return existing;
-  }
-
-  const promise = refreashSalesforceToken(refreshToken, environment, customUrl).finally(() => {
-    refreshInFlight.delete(crmId);
-  });
-
-  refreshInFlight.set(crmId, promise);
-  return promise;
-};
-
-// ---------------------------------------------------------------------------
 // Centralized Salesforce API request
 //   - Injects Authorization header automatically
 //   - On 401 (expired access token) → refreshes token and retries once
