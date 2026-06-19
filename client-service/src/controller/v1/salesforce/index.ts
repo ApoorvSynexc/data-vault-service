@@ -184,7 +184,7 @@ const getRolesHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
   const crm = await getCrmByOrgId(String(organizationId));
   if (!crm) {
-    return makeResponse(req, res, 404, false, 'not_exist');
+    return makeResponse(req, res, 200, true, 'fetch', []);
   }
 
   const roles = await getRolesByCrmId(crm.crmId);
