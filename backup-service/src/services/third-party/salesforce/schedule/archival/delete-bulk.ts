@@ -2,7 +2,7 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
 import { fetchCsvFromS3, listAndDeleteS3Prefix, listS3Objects, uploadToS3 } from '../../../../destination/s3';
-import { parseCSVLine, splitCSVRows } from '../../../../../utils/helper';
+import { parseCSVLine, splitCSVRows, buildErrorLogsS3Prefix } from '../../../../../utils/helper';
 import { SalesforceTokens } from '../../api-request';
 import { logger } from '../../../../../middlewares/logger';
 
@@ -21,6 +21,8 @@ export interface IBulkDeleteJob {
 export interface IBulkDeletePayload {
   backupJobId: string;
   backupConfigId: string;
+  crmId: string;
+  crmName: string;
   instanceUrl: string;
   tokens: SalesforceTokens;
   object: IBackupObject;
@@ -229,16 +231,20 @@ const getJobErrors = async (
 };
 
 // Uploads per-record delete errors to S3.
-// New path: error_logs/{backupJobId}/{objectName}/{objectId}/batch_NNNNN.csv
+// Path: {crmName}/{crmId}/{type}/{backupConfigId}/error_logs/{objectName}/{objectId}/batch_NNNNN.csv
+// (sibling of raw_data within the same config bucket layout).
 // Before uploading, wipes any existing files at that prefix (replace-on-retry).
 const uploadErrorsToS3 = async (
   errors: Array<{ recordId: string; reason: string }>,
   destConfig: IDestinationConfig,
+  crmId: string,
+  crmName: string,
+  backupConfigId: string,
   backupJobId: string,
   objectName: string,
   objectId: string,
 ): Promise<string | null> => {
-  const prefix = `error_logs/${backupJobId}/${objectName}/${objectId}`;
+  const prefix = buildErrorLogsS3Prefix({ crmId, crmName, backupConfigId, backupJobId, objectName, objectId });
 
   if (errors.length === 0) {
     // Clear any stale error files from a previous run that had failures.
@@ -269,11 +275,14 @@ const uploadErrorsToS3 = async (
 // Returns an Id-only CSV string ready to submit to a new Salesforce delete job.
 export const buildFailedRecordsIdCsv = async (
   destConfig: IDestinationConfig,
+  crmId: string,
+  crmName: string,
+  backupConfigId: string,
   backupJobId: string,
   objectName: string,
   objectId: string,
 ): Promise<string> => {
-  const prefix = `error_logs/${backupJobId}/${objectName}/${objectId}`;
+  const prefix = buildErrorLogsS3Prefix({ crmId, crmName, backupConfigId, backupJobId, objectName, objectId });
   const keys = await listS3Objects(destConfig, prefix);
   const ids: string[] = [];
   for (const key of keys) {
@@ -290,7 +299,7 @@ export const buildFailedRecordsIdCsv = async (
 };
 
 export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<string> => {
-  const { backupJobId, instanceUrl, tokens, object, destConfig, s3Urls, failedRecordsIdCsv } = payload;
+  const { backupJobId, backupConfigId, crmId, crmName, instanceUrl, tokens, object, destConfig, s3Urls, failedRecordsIdCsv } = payload;
   const objectName = object.name;
 
   logger.info(`[archival:delete] starting | backupJobId:${backupJobId} objectName:${objectName} mode:${failedRecordsIdCsv !== undefined ? 'failed-records-only' : 'normal'} s3FileCount:${s3Urls?.length ?? 0}`);
@@ -389,7 +398,16 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
   }
 
   // Upload accumulated errors (replace-on-retry handled inside uploadErrorsToS3).
-  const recordErrorsS3Prefix = await uploadErrorsToS3(allErrors, destConfig, backupJobId, objectName, object.id);
+  const recordErrorsS3Prefix = await uploadErrorsToS3(
+    allErrors,
+    destConfig,
+    crmId,
+    crmName,
+    backupConfigId,
+    backupJobId,
+    objectName,
+    object.id,
+  );
 
   logger.info(`[archival:delete] all files processed | backupJobId:${backupJobId} objectName:${objectName} totalDeleted:${totalDeleted} totalFailed:${totalFailed}`);
 

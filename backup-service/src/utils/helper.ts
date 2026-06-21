@@ -121,6 +121,30 @@ const buildSchemaS3Key = ({
   type,
 }: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
 
+interface IErrorLogsS3PrefixParams {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  backupJobId: string;
+  objectName: string;
+  objectId: string;
+  type?: S3KeyType;
+}
+
+// Sibling of raw_data — record-level delete errors live under error_logs at the
+// same level as raw_data so the bucket layout for a config stays consistent.
+// Scoped per backupJobId so errors from concurrent or retried runs never collide.
+const buildErrorLogsS3Prefix = ({
+  crmId,
+  crmName,
+  backupConfigId,
+  backupJobId,
+  objectName,
+  objectId,
+  type = 'archival',
+}: IErrorLogsS3PrefixParams): string =>
+  `${crmName}/${crmId}/${type}/${backupConfigId}/error_logs/${backupJobId}/${objectName}/${objectId}`;
+
 // ---------------------------------------------------------------------------
 // Order-independent schema equality check.
 // Compares two field arrays by stable field identifier (apiName or name) and
@@ -284,6 +308,7 @@ export {
   wrapController,
   buildS3KeyPrefix,
   buildSchemaS3Key,
+  buildErrorLogsS3Prefix,
   toParquetDataType,
   schemasAreEqual,
   splitCSVRows,
