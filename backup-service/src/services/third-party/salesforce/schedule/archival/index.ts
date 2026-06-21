@@ -237,6 +237,8 @@ const CONCURRENCY_LIMIT = 6;
 interface IDeleteNodeParams {
   backupConfigId: string;
   backupJobId: string;
+  crmId: string;
+  crmName: string;
   instanceUrl: string;
   tokens: SalesforceTokens;
   destConfig: IDestinationConfig;
@@ -249,7 +251,7 @@ interface IDeleteNodeParams {
 
 // Returns the final status string of the node so the parent can gate its own delete.
 const deleteNode = async (params: IDeleteNodeParams): Promise<string> => {
-  const { backupConfigId, backupJobId, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, node, skipCompleted } = params;
+  const { backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, node, skipCompleted } = params;
   const children = node.children ?? [];
 
   // 1. Delete all children first (in parallel batches), children-before-parent.
@@ -298,7 +300,7 @@ const deleteNode = async (params: IDeleteNodeParams): Promise<string> => {
 
   // 5. Run this node's delete job and return the status it wrote to DynamoDB.
   logger.info(`[archival:delete] deleting | backupJobId:${backupJobId} objectName:${node.name} s3FileCount:${s3Keys.length}`);
-  const finalStatus = await bulkDeleteRecords({ backupConfigId, backupJobId, instanceUrl, tokens, object: node, destConfig, s3Urls: s3Keys });
+  const finalStatus = await bulkDeleteRecords({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, object: node, destConfig, s3Urls: s3Keys });
   logger.info(`[archival:delete] complete | backupJobId:${backupJobId} objectName:${node.name} finalStatus:${finalStatus}`);
   return finalStatus;
 };
@@ -393,7 +395,7 @@ export const archiveAndHardDelete = async (
         // Fall through to Phase 1+2+3 below.
       } else {
         logger.info(`[archival:orchestrator] failed-records-only retry | backupJobId:${backupJobId} objectName:${objectName}`);
-        await runFailedRecordsPhase({ backupConfigId, backupJobId, instanceUrl, tokens, object, destConfig });
+        await runFailedRecordsPhase({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, object, destConfig });
         logger.info(`[archival:orchestrator] failed-records-only retry complete | backupJobId:${backupJobId} objectName:${objectName}`);
         return;
       }
@@ -426,7 +428,7 @@ export const archiveAndHardDelete = async (
         };
         await rebuildS3Urls(object);
 
-        await deleteNode({ backupConfigId, backupJobId, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds: new Set(), node: object, skipCompleted: true });
+        await deleteNode({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds: new Set(), node: object, skipCompleted: true });
         logger.info(`[archival:orchestrator] delete-only retry complete | backupJobId:${backupJobId} objectName:${objectName}`);
         return;
       }
@@ -596,7 +598,7 @@ export const archiveAndHardDelete = async (
     // DELETION_RECORDS_FAILED does NOT block the parent.
     // -------------------------------------------------------------------------
     logger.info(`[archival:orchestrator] phase 3 starting — post-order delete | backupJobId:${backupJobId} objectName:${objectName}`);
-    await deleteNode({ backupConfigId, backupJobId, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, node: object, skipCompleted: false });
+    await deleteNode({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, node: object, skipCompleted: false });
     logger.info(`[archival:orchestrator] phase 3 complete | backupJobId:${backupJobId} objectName:${objectName}`);
 
     const schemaWithParquet = schema.map((field: { dataType: string }) => ({ ...field, parquetDataType: toParquetDataType(field.dataType) }));
@@ -618,12 +620,14 @@ export const archiveAndHardDelete = async (
 const runFailedRecordsPhase = async (params: {
   backupConfigId: string;
   backupJobId: string;
+  crmId: string;
+  crmName: string;
   instanceUrl: string;
   tokens: SalesforceTokens;
   object: IBackupObject;
   destConfig: IDestinationConfig;
 }): Promise<void> => {
-  const { backupConfigId, backupJobId, instanceUrl, tokens, object, destConfig } = params;
+  const { backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, object, destConfig } = params;
 
   const processNode = async (node: IBackupObject) => {
     // Children first (bottom-up) — child records must be deleted before parent.
@@ -633,8 +637,8 @@ const runFailedRecordsPhase = async (params: {
 
     if (node.status === OBJECT_STATUS.deletionRecordsFailed) {
       logger.info(`[archival:orchestrator] failed-records retry | backupJobId:${backupJobId} objectName:${node.name} objectId:${node.id}`);
-      const failedRecordsIdCsv = await buildFailedRecordsIdCsv(destConfig, backupJobId, node.name, node.id);
-      await bulkDeleteRecords({ backupConfigId, backupJobId, instanceUrl, tokens, object: node, destConfig, failedRecordsIdCsv });
+      const failedRecordsIdCsv = await buildFailedRecordsIdCsv(destConfig, crmId, crmName, backupConfigId, backupJobId, node.name, node.id);
+      await bulkDeleteRecords({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, object: node, destConfig, failedRecordsIdCsv });
     } else if (node.status !== OBJECT_STATUS.completed) {
       logger.info(`[archival:orchestrator] failed-records retry skip | backupJobId:${backupJobId} objectName:${node.name} status:${node.status}`);
     }
