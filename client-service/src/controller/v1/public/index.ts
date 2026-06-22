@@ -22,6 +22,8 @@ import { logger } from '../../../middlewares';
 
 const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
   const { orgId } = decryptedBody;
+  console.log(JSON.stringify({decryptedBody}));
+  
 
   const crm = await getCrmByOrgId(orgId);
   if (!crm) {
@@ -29,10 +31,12 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
   }
 
   const backupConfigs = await getBackupConfigsByCrm(crm.crmId);
-  const filteredBackupConfigs = backupConfigs.filter((c) => c.schedule === SCHEDULE_MODE.realtime);
+  let filteredBackupConfigs = backupConfigs.filter((c) => c.schedule === SCHEDULE_MODE.realtime);
   if (!filteredBackupConfigs.length) {
     return;
   }
+
+  // todo: filter on trigger name
 
   logger.info(`Found ${filteredBackupConfigs.length} real-time backup config(s) for orgId: ${orgId}`);
   for (let index = 0; index < filteredBackupConfigs.length; index++) {
@@ -47,7 +51,7 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
       url: `${BACKUP_SERVICE}/v1/realtime-backup`,
       method: 'POST',
       body: JSON.stringify({
-        userId: crm.userId,
+        userId: config.userId,
         backupConfigId: config.backupConfigId,
         crmId: crm.crmId,
         crmName: crm.crmName,

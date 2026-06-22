@@ -12,7 +12,7 @@ import { ICrm } from '../../models';
 
 interface UpsertCrmParams {
   crmId?: string;
-  userId: string;
+  userId?: string;
   crmName: string;
   organizationId: string;
   environment?: 'production' | 'sandbox';
@@ -20,7 +20,7 @@ interface UpsertCrmParams {
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
-  const { crmId, crmName, organizationId, environment, name } = params;
+  const { crmId, userId, crmName, organizationId, environment, name } = params;
   const now = new Date().toISOString();
 
   const crm: ICrm = {
@@ -30,6 +30,7 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     environment: environment ?? 'production',
     status: STATUS.active,
     ...(name && { name }),
+    ...(userId && { userId }),
     createdAt: now,
     updatedAt: now,
   };
