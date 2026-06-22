@@ -10,6 +10,7 @@ import { getCrmById, getCrmTokens } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { incrementTableCounter } from '../counter';
 import { flattenBackupObjects } from '../../utils/helper';
+import { logger } from '../../middlewares';
 
 const getSourceObjects = (objects?: IObject[]) => {
   if (objects?.length) {
@@ -26,6 +27,7 @@ const getSourceObjects = (objects?: IObject[]) => {
 // Returns true if a PENDING or RUNNING job already exists for this config.
 // Used to prevent duplicate concurrent backup jobs on the same config.
 const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
+  const startedAt = Date.now();
   const result = await docClient.send(
     new QueryCommand({
       TableName: BACKUP_JOB_TABLE,
@@ -41,25 +43,44 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
       Limit: 1,
     })
   );
-  return (result.Count ?? 0) > 0;
+  const active = (result.Count ?? 0) > 0;
+  logger.info(`[ARCH-DEDUP] hasActiveBackupJob | configId=${backupConfigId} active=${active} count=${result.Count ?? 0} durationMs=${Date.now() - startedAt}`);
+  return active;
 };
 
 const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject[], lastUpdatedAt?: string, bypassDedup?: boolean) => {
+  const triggerStart = Date.now();
+  const objectNames = (objects ?? []).map(o => o.name).join(',') || 'none';
+  logger.info(`[ARCH-TRIG] ENTER | configId=${config.backupConfigId} objects=[${objectNames}] lastUpdatedAt=${lastUpdatedAt ?? 'none'} bypassDedup=${!!bypassDedup}`);
+
   if (!bypassDedup) {
+    logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} dedup check (bypassDedup=false)`);
     const active = await hasActiveBackupJob(config.backupConfigId);
     if (active) {
+      logger.warn(`[ARCH-TRIG] EXIT short-circuit | configId=${config.backupConfigId} reason=already_active durationMs=${Date.now() - triggerStart}`);
       return null;
     }
+  } else {
+    logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} dedup BYPASSED`);
   }
 
+  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} fetching CRM + destination | crmId=${config.crmId} destinationId=${config.destinationId}`);
   const [crm, destination] = await Promise.all([
     getCrmById(config.crmId),
     getDestinationById(config.destinationId),
   ]);
 
-  if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
-  if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
+  if (!crm) {
+    logger.error(`[ARCH-TRIG] configId=${config.backupConfigId} CRM not found | crmId=${config.crmId}`);
+    throw new Error(`crm_not_found:${config.crmId}`);
+  }
+  if (!destination) {
+    logger.error(`[ARCH-TRIG] configId=${config.backupConfigId} destination not found | destinationId=${config.destinationId}`);
+    throw new Error(`destination_not_found:${config.destinationId}`);
+  }
+  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} CRM=${crm.crmName} destinationType=${destination.type}`);
 
+  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=PENDING`);
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
 
   const credentials = getCrmTokens(crm);
@@ -81,20 +102,32 @@ const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject
     ...(config.spaceId && { spaceId: config.spaceId }),
   };
 
-  const endpoint ='/archival';
+  const endpoint = '/archival';
+  const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}`;
+  const bodyStr = JSON.stringify(payload);
+  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ${url} | payloadBytes=${bodyStr.length} objects=[${objectNames}]`);
+
   let result;
+  const postStart = Date.now();
   try {
     result = await httpRequest({
-      url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
+      url,
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: bodyStr,
     });
+    logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ok | durationMs=${Date.now() - postStart}`);
   } catch (error) {
+    logger.error(`[ARCH-TRIG] configId=${config.backupConfigId} POST FAILED | durationMs=${Date.now() - postStart} error=${(error as Error)?.message ?? String(error)}`);
+    logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=FAILED`);
     await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
     throw error;
   }
 
-  await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
+  const newLastBackupAt = new Date().toISOString();
+  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set lastBackupAt=${newLastBackupAt}`);
+  await updateBackupConfig(config.backupConfigId, { lastBackupAt: newLastBackupAt });
+
+  logger.info(`[ARCH-TRIG] EXIT ok | configId=${config.backupConfigId} totalDurationMs=${Date.now() - triggerStart}`);
   return result;
 };
 
