@@ -1,5 +1,7 @@
 // ── Payload types ─────────────────────────────────────────────────────────────
 
+import { IUser } from "../../../../models";
+
 export type SalesforceObjectType = 'CUSTOM' | 'STANDARD';
 
 export type FilterOperator = '=' | '!=' | 'LIKE' | 'IN';
@@ -30,7 +32,7 @@ export interface ISalesforceObject {
 }
 
 export interface IDryRunPayload {
-  crmId: string;
+  user: IUser;
   objects: ISalesforceObject[];
 }
 
@@ -74,7 +76,7 @@ export interface IValidateSoqlObject {
 }
 
 export interface IValidateSoqlPayload {
-  crmId: string;
+  user?: IUser
   object: IValidateSoqlObject;
   isParent: boolean;
 }

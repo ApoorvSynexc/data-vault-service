@@ -46,13 +46,15 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
 };
 
 const triggerArchivalBackupJob = async (params: {
-  user: IUser;
+  user?: IUser;
   config: IBackupConfig;
   objects?: IObject[];
   lastUpdatedAt?: string;
   bypassDedup?: boolean;
 }) => {
   const { config, objects, lastUpdatedAt, bypassDedup, user } = params;
+
+  if(!user) return null;
 
   if (!bypassDedup) {
     const active = await hasActiveBackupJob(config.backupConfigId);

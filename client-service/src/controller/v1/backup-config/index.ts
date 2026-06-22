@@ -59,7 +59,7 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
   }
 
   const [apexResult, backupConfigs] = await Promise.all([
-    getApexObjects(user, mode ? String(mode) : undefined),
+    getApexObjects({ user, mode: mode ? String(mode) : undefined }),
     getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
   ]);
 
@@ -89,7 +89,7 @@ const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<vo
   }
 
   const [apexResult] = await Promise.all([
-    getApexObjectsCount(user, body),
+    getApexObjectsCount({ user, body }),
   ]);
 
   makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
@@ -104,7 +104,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
-  const result = await getApexFields(user, String(objectName), mode ? String(mode) : undefined);
+  const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 

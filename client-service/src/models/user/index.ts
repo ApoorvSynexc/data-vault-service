@@ -2,6 +2,7 @@ import { IMedia, IPhone } from '../shared';
 
 export interface ICrmProfile {
   instanceUrl: string;
+  organizationId: string;
   userId: string;
   username: string;
   email: string;
