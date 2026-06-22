@@ -274,7 +274,9 @@ async function uploadSingleObject(
   logger.info(`[archival:child] WHERE build | objectName:${object.name} parentWhereBody:"${parentWhereBody || '(none)'}" → effectiveWhereBody:"${effectiveWhereBody}"`);
 
   const { fieldNames, schema } = await getObjectMetadata(ctx.tokens.crmId, object.name);
-  const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE ${effectiveWhereBody} ORDER BY Id ASC`;
+  // Exclude soft-deleted records from every level of the archival query — see
+  // the matching comment in archival/index.ts for the rationale.
+  const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE IsDeleted = false AND (${effectiveWhereBody}) ORDER BY Id ASC`;
 
   logger.info(`[archival:child] SOQL | objectName:${object.name} soql:${soql}`);
 

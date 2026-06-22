@@ -199,8 +199,8 @@ const buildWhereClause = (object: IBackupObject): string => {
 // Tree helpers
 // ---------------------------------------------------------------------------
 
-// When a root object has 0 records there is nothing to upload or delete for
-// any descendant either — mark the entire subtree COMPLETED immediately so
+// When a node has 0 records there is nothing to upload or delete for any
+// descendant either — mark the entire subtree COMPLETED immediately so
 // children never stay stuck in PENDING/CREATED.
 const markSubtreeCompleted = async (backupJobId: string, node: IBackupObject): Promise<void> => {
   for (const child of node.children ?? []) {
@@ -209,6 +209,26 @@ const markSubtreeCompleted = async (backupJobId: string, node: IBackupObject): P
       object: { id: child.id, status: OBJECT_STATUS.completed, completedRecordCount: 0, errorMessage: '' },
     });
     await markSubtreeCompleted(backupJobId, child);
+  }
+};
+
+// When a node's upload fails, every descendant becomes unreachable too — there
+// is no parent data in S3 to derive child queries from. Cascade FAILED down the
+// subtree and collect ids so deleteNode can short-circuit them in Phase 3
+// (otherwise deleteNode would overwrite FAILED with COMPLETED / DELETION_JOB_FAILED).
+const cascadeFailureToSubtree = async (
+  backupJobId: string,
+  node: IBackupObject,
+  failedIds: Set<string>,
+  errorMessage: string,
+): Promise<void> => {
+  for (const child of node.children ?? []) {
+    failedIds.add(child.id);
+    await updateArchivalObject({
+      backupJobId,
+      object: { id: child.id, status: OBJECT_STATUS.failed, errorMessage },
+    });
+    await cascadeFailureToSubtree(backupJobId, child, failedIds, errorMessage);
   }
 };
 
@@ -245,14 +265,25 @@ interface IDeleteNodeParams {
   s3UrlsById: Map<string, string[]>;
   // IDs of nodes whose upload failed during Phase 2 — used to block parent deletes.
   uploadFailedIds: Set<string>;
+  // IDs of descendants under a failed upload — Phase 2 already wrote FAILED to
+  // DynamoDB; deleteNode must skip them so it doesn't overwrite with COMPLETED.
+  failedSubtreeIds: Set<string>;
   node: IBackupObject;
   skipCompleted: boolean;
 }
 
 // Returns the final status string of the node so the parent can gate its own delete.
 const deleteNode = async (params: IDeleteNodeParams): Promise<string> => {
-  const { backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, node, skipCompleted } = params;
+  const { backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, failedSubtreeIds, node, skipCompleted } = params;
   const children = node.children ?? [];
+
+  // 0. Short-circuit nodes already cascaded to FAILED during Phase 2. Returning
+  //    DELETION_JOB_FAILED propagates the block upward without touching DynamoDB,
+  //    preserving the FAILED status the cascade wrote.
+  if (failedSubtreeIds.has(node.id)) {
+    logger.warn(`[archival:delete] skip — node already FAILED (cascaded from ancestor upload failure) | backupJobId:${backupJobId} objectName:${node.name}`);
+    return OBJECT_STATUS.deletionJobFailed;
+  }
 
   // 1. Delete all children first (in parallel batches), children-before-parent.
   //    Collect the final status each child resolves to.
@@ -428,7 +459,7 @@ export const archiveAndHardDelete = async (
         };
         await rebuildS3Urls(object);
 
-        await deleteNode({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds: new Set(), node: object, skipCompleted: true });
+        await deleteNode({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds: new Set(), failedSubtreeIds: new Set(), node: object, skipCompleted: true });
         logger.info(`[archival:orchestrator] delete-only retry complete | backupJobId:${backupJobId} objectName:${objectName}`);
         return;
       }
@@ -449,7 +480,14 @@ export const archiveAndHardDelete = async (
     } else {
       await updateArchivalObject({ backupJobId, object: { id: object.id, salesforceApiCount: 1, status: OBJECT_STATUS.bulkQueryInProgress } });
 
-      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
+      // Archival must NEVER pick up soft-deleted records — they're either already
+      // gone from prod or will be hard-deleted in Phase 3 anyway. Bulk API
+      // `operation: 'query'` already excludes them, but we add IsDeleted = false
+      // explicitly so the SOQL is self-documenting and safe if anyone switches
+      // to queryAll later.
+      const whereBody = whereClause.replace(/^WHERE\s+/i, '').trim();
+      const archivalWhere = whereBody ? `WHERE IsDeleted = false AND (${whereBody})` : 'WHERE IsDeleted = false';
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${archivalWhere} ORDER BY Id ASC`;
       logger.info(`[archival:orchestrator] SOQL | backupJobId:${backupJobId} objectName:${objectName} soql:${soql}`);
 
       try {
@@ -534,6 +572,9 @@ export const archiveAndHardDelete = async (
     // Tracks node IDs whose upload failed — used by deleteNode to block parent deletes.
     // node.status is stale (in-memory) so we can't rely on it in Phase 3.
     const uploadFailedIds = new Set<string>();
+    // Descendants of failed uploads, pre-marked FAILED in DynamoDB. deleteNode
+    // short-circuits these so the cascaded status isn't overwritten in Phase 3.
+    const failedSubtreeIds = new Set<string>();
 
     while (currentLevel.length > 0) {
       const nextLevel: NodeWithContext[] = [];
@@ -558,7 +599,6 @@ export const archiveAndHardDelete = async (
           const result = results[j];
           if (result.status === 'fulfilled') {
             const { node, effectiveWhereBody, s3Keys } = result.value;
-            // Only enqueue children if this node had records (0 records = COMPLETED, subtree skipped).
             // Pass effectiveWhereBody as the grandchild's parentWhereBody — uploadSingleObject already
             // applied transformWhereBodyForChild once; grandchildren need the already-transformed WHERE.
             if (s3Keys.length > 0) {
@@ -568,11 +608,20 @@ export const archiveAndHardDelete = async (
                   parentWhereBody: effectiveWhereBody,
                 });
               }
+            } else {
+              // 0 records → no child can have records either. Cascade COMPLETED down
+              // the subtree so descendants don't sit at CREATED/PENDING forever.
+              logger.info(`[archival:upload] 0 records — cascading COMPLETED to subtree | backupJobId:${backupJobId} objectName:${node.name}`);
+              await markSubtreeCompleted(backupJobId, node);
             }
           } else {
-            // Upload failed — record the node ID so deleteNode can block the parent's delete.
+            // Upload failed — block parent deletes AND mark every descendant FAILED,
+            // since children inherit the parent's WHERE clause and become un-queryable.
             const failedNode = batch[j];
             uploadFailedIds.add(failedNode.object.id);
+            const errMsg = (result.reason as any)?.message ?? String(result.reason ?? 'parent upload failed');
+            logger.warn(`[archival:upload] upload failed — cascading FAILED to subtree | backupJobId:${backupJobId} objectName:${failedNode.object.name} error:${errMsg}`);
+            await cascadeFailureToSubtree(backupJobId, failedNode.object, failedSubtreeIds, `Parent ${failedNode.object.name} upload failed: ${errMsg}`);
           }
         }
       }
@@ -598,7 +647,7 @@ export const archiveAndHardDelete = async (
     // DELETION_RECORDS_FAILED does NOT block the parent.
     // -------------------------------------------------------------------------
     logger.info(`[archival:orchestrator] phase 3 starting — post-order delete | backupJobId:${backupJobId} objectName:${objectName}`);
-    await deleteNode({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, node: object, skipCompleted: false });
+    await deleteNode({ backupConfigId, backupJobId, crmId, crmName, instanceUrl, tokens, destConfig, s3UrlsById, uploadFailedIds, failedSubtreeIds, node: object, skipCompleted: false });
     logger.info(`[archival:orchestrator] phase 3 complete | backupJobId:${backupJobId} objectName:${objectName}`);
 
     const schemaWithParquet = schema.map((field: { dataType: string }) => ({ ...field, parquetDataType: toParquetDataType(field.dataType) }));
