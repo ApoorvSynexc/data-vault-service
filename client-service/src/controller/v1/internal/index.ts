@@ -1,10 +1,10 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   getCrmById,
-  getCrmTokens,
   getApexFields,
   updateBackupConfig,
   getBackupConfigById,
+  getUser,
 } from '../../../services';
 import { BACKUP_STATUS, STATUS } from '../../../constant';
 import {
@@ -12,6 +12,7 @@ import {
   SalesforceAuthExpiredError,
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
+import { decrypt } from '../../../utils/encryption';
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -27,21 +28,31 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 };
 
 const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId } = req.query;
+  const { backupConfigId } = req.query;
 
-  if (!crmId) {
-    makeResponse(req, res, 400, false, 'crm_id_required');
+  if (!backupConfigId) {
+    makeResponse(req, res, 400, false, 'id_required');
     return;
   }
 
-  const crm = await getCrmById(String(crmId));
+  const backupConfig = await getBackupConfigById(String(backupConfigId));
+  if (!backupConfig) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  const crm = await getCrmById(String(backupConfig.crmId));
   if (!crm) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
-  const tokens = getCrmTokens(crm);
-
+  const user = await getUser({ userId: backupConfig.userId });
+  if (!user) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+  const tokens = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   let refreshed: any;
   try {
     refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);
