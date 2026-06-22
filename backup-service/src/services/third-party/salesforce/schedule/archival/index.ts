@@ -468,7 +468,7 @@ export const archiveAndHardDelete = async (
     // -------------------------------------------------------------------------
     // Phase 1 — Bulk Query for root object (create or resume)
     // -------------------------------------------------------------------------
-    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
+    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName, 'archival');
 
     let jobId: string;
     let totalRecordCount: number;

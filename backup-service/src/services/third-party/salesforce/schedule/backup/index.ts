@@ -114,7 +114,7 @@ export const exportFirstTime = async (
   let jobId: string;
 
   try {
-    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName);
+    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName, 'schedule');
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
@@ -261,7 +261,8 @@ export const exportIncremental = async (
   try {
     const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
       crmId,
-      objectName
+      objectName,
+      'schedule'
     );
 
     // ── Phase 1: query new + updated + deleted records in one queryAll job ────
