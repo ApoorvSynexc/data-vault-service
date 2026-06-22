@@ -5,6 +5,7 @@ import { wrapController } from '../../../utils/helper';
 import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrmProfile, IRole, IUser } from '../../../models';
+import { encrypt } from '../../../utils/encryption';
 
 interface IUpsertUsersRequest {
   organizationId: string;
@@ -198,7 +199,7 @@ const getRolesHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   }
 
   const roles = await getRolesByCrmId(crm.crmId);
-  makeResponse(req, res, 200, true, 'fetch', roles);
+  makeResponse(req, res, 200, true, 'fetch', encrypt(JSON.stringify(roles)));
 };
 
 export const salesofrceController = wrapController({
