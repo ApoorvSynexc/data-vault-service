@@ -16,6 +16,7 @@ import {
   createUser,
   getUser,
   getCrmByOrgId,
+  updateUser,
 } from '../../../services';
 import {
   refreashSalesforceToken,
@@ -25,6 +26,7 @@ import {
 import { AUTH_PROVIDER, STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { defaultRoles } from '../../../assets';
+import { decrypt, encrypt } from '../../../utils/encryption';
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
 // e.g. "HTTP Error 400: {"error":"invalid_grant",...}" → "invalid_grant"
@@ -91,6 +93,7 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
 };
 
 const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { crmName, code, state } = req.query;
 
   const oauthState = await getOAuthState(String(state));
@@ -130,53 +133,23 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   );
 
   const existingCrms = await getCrmByOrgId(sfProfile.organization_id);
-  if (existingCrms && existingCrms.crmId !== oauthState.crmId ) {
-    makeResponse(req, res, 409, false, 'organization_already_exist');
+  if (!existingCrms) {
+    makeResponse(req, res, 409, false, 'not_exist');
     return;
   }
 
-  if (oauthState.crmId) {
-    const reconnected = await reconnectCrm({
-      crmId: oauthState.crmId,
-      organizationId: sfProfile.organization_id,
-      environment: oauthState.environment,
-      name: oauthState.name,
-    });
-
-    if (!reconnected) {
-      makeResponse(req, res, 400, false, 'not_exist');
-      return;
-    }
-  } else {
-    // Create user account with Salesforce profile data if user doesn't exist
-    const existingUser = await getUser({ 'contact.email': sfProfile.email, status: STATUS.active });
-
-    if (existingUser) {
-      return makeResponse(req, res, 400, false, 'email_exit');
-    }
-
-    const nameParts = sfProfile.name?.split(' ') ?? [];
-    const userRole = defaultRoles.find((r) => r.name === 'user')!;
-
-    await createUser({
-      authProvider: AUTH_PROVIDER.email,
-      firstName: nameParts[0] ?? '',
-      lastName: nameParts.slice(1).join(' ') ?? '',
-      contact: {
-        email: sfProfile.email,
-        isEmailVerified: true,
-      },
-      role: { name: userRole.name, roleId: userRole.roleId },
-    });
-
-    await upsertCrm({
-      userId: oauthState.userId,
-      crmName: oauthState.crmName,
-      organizationId: sfProfile.organization_id,
-      environment: oauthState.environment,
-      ...(oauthState.name && { name: oauthState.name }),
-    });
+  const crmCredential = {
+    access_token: token.access_token,
+    refresh_token: token.refresh_token,
   }
+  const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+  await updateUser(
+    { userId: user?.userId },
+    {
+      crmCredential: encrptedCrm,
+      ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {})
+    }
+  );
 
   makeResponse(req, res, 200, true, 'fetch');
 };
@@ -207,10 +180,16 @@ const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void
 };
 
 const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { crmId } = req.query;
 
   if (!crmId) {
     makeResponse(req, res, 400, false, 'crm_id_required');
+    return;
+  }
+
+  if (!user) {
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
@@ -220,8 +199,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
 
-  const tokens = getCrmTokens(crm);
-
+  const tokens = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   let refreshed: any;
   try {
     refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);
