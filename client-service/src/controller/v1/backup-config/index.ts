@@ -52,13 +52,14 @@ import { logger } from '../../../middlewares';
 import { decrypt } from '../../../utils/encryption';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { crmId, mode } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
   const [apexResult, backupConfigs] = await Promise.all([
-    getApexObjects(String(crmId), mode ? String(mode) : undefined),
+    getApexObjects(user, mode ? String(mode) : undefined),
     getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
   ]);
 
@@ -81,19 +82,21 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
 };
 
 const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { crmId, ...body } = req.body;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
   const [apexResult] = await Promise.all([
-    getApexObjectsCount(String(crmId), body),
+    getApexObjectsCount(user, body),
   ]);
 
   makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { crmId, objectName, mode } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
@@ -101,7 +104,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
-  const result = await getApexFields(String(crmId), String(objectName), mode ? String(mode) : undefined);
+  const result = await getApexFields(user, String(objectName), mode ? String(mode) : undefined);
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 
