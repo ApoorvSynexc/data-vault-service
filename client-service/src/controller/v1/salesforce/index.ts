@@ -9,6 +9,7 @@ import { encrypt } from '../../../utils/encryption';
 
 interface IUpsertUsersRequest {
   organizationId: string;
+  environment?: 'production' | 'sandbox';
   users: Array<{
     firstName: string;
     lastName: string;
@@ -42,7 +43,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const body = req.body as IUpsertUsersRequest;
-  const { users, organizationId } = body;
+  const { users, environment, organizationId } = body;
 
   if (!users?.length) {
     makeResponse(req, res, 400, false, 'id_required');
@@ -101,6 +102,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           await upsertCrm({
             userId,
             crmId,
+            environment,
             organizationId: orgId,
             crmName: 'salesforce',
           });
@@ -128,7 +130,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
 };
 
 const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { organizationId, ...body } = req.body;
+  const { organizationId, environment, ...body } = req.body;
 
   let crm = await getCrmByOrgId(String(organizationId));
   if (!crm) {
@@ -136,12 +138,13 @@ const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
     await upsertCrm({
       crmId,
       organizationId,
+      environment,
       crmName: 'salesforce',
     });
     crm = await getCrmByOrgId(String(organizationId));
   }
 
-  if(!crm) {
+  if (!crm) {
     return makeResponse(req, res, 400, false, 'id_required');
   }
 

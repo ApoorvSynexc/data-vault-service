@@ -10,9 +10,9 @@ class SalesforceAuthExpiredError extends Error {
   }
 }
 
-const refreshSalesforceToken = async (crmId: string): Promise<any> => {
+const refreshSalesforceToken = async (backupConfigId: string): Promise<any> => {
   return httpRequest({
-    url: `${CORE_SERVICE}/v1/internal/refresh-token?crmId=${crmId}`,
+    url: `${CORE_SERVICE}/v1/internal/refresh-token?backupConfigId=${backupConfigId}`,
     method: 'GET',
     headers: {
       'x-internal-secret': INTERNAL_SECRET,
@@ -36,6 +36,7 @@ export interface SalesforceTokens {
   accessToken: string;
   refreshToken: string;
   crmId: string;
+  backupConfigId: string;
 }
 
 const salesforceRequest = async <T = any>(
@@ -57,7 +58,7 @@ const salesforceRequest = async <T = any>(
 
     // Access token expired — refresh and retry once
     try {
-      const refreshed = await refreshSalesforceToken(tokens.crmId);
+      const refreshed = await refreshSalesforceToken(tokens.backupConfigId);
       tokens.accessToken = refreshed.access_token; // mutate shared ref
     } catch {
       throw new SalesforceAuthExpiredError();
@@ -81,7 +82,7 @@ const makePageFetcher =
     });
     if (response.status === 401) {
       try {
-        const refreshed = await refreshSalesforceToken(tokens.crmId);
+        const refreshed = await refreshSalesforceToken(tokens.backupConfigId);
         tokens.accessToken = refreshed.access_token;
       } catch {
         throw new SalesforceAuthExpiredError();
