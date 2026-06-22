@@ -29,6 +29,7 @@ const userSchema = Joi.object({
 export const upsertUsersValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     organizationId: Joi.string().required(),
+    environment: Joi.string().optional(),
     users: Joi.array()
       .items(userSchema)
       .min(1)
@@ -47,12 +48,14 @@ export const upsertUsersValidation = (req: Request, res: Response, next: NextFun
 
 export const createRoleValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    organizationId: Joi.string().required(),
-    name: Joi.string().trim().required(),
+    ciphertext: Joi.string().optional(),
+    iv: Joi.string().optional(),
+    organizationId: Joi.string().optional(),
+    name: Joi.string().trim().optional(),
     description: Joi.string().trim().optional(),
     permissions: Joi.array()
       .items(Joi.string())
-      .required(),
+      .optional(),
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });

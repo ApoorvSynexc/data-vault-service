@@ -5,7 +5,7 @@ import { wrapController } from '../../../utils/helper';
 import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrmProfile, IRole, IUser } from '../../../models';
-import { encrypt } from '../../../utils/encryption';
+import { decrypt, encrypt } from '../../../utils/encryption';
 
 interface IUpsertUsersRequest {
   organizationId: string;
@@ -130,7 +130,8 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
 };
 
 const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { organizationId, environment, ...body } = req.body;
+  const decryptedBody = JSON.parse(decrypt({ ciphertext: req.body.ciphertext, iv: req.body.iv }));
+  const { organizationId, environment, ...body } = decryptedBody;
 
   let crm = await getCrmByOrgId(String(organizationId));
   if (!crm) {
