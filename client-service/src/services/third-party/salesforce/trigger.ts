@@ -1,8 +1,10 @@
 import JSZip from 'jszip';
 import { createApexSecret, salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig } from '../../../models';
-import { getCrmById, getCrmTokens } from '../../crm';
+import { getCrmById } from '../../crm';
+import { getUser } from '../../user';
 import { timer } from '../../../utils/helper';
+import { decrypt } from '../../../utils/encryption';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
 const NAMESPACE_PREFIX = 'SYX_DVV';
@@ -429,7 +431,7 @@ const createTriggers = async (
   for (let i = 0; i < objectApiNames.length; i++) {
     let objectApiName = objectApiNames[i];
     let triggerName = `DataVault_${objectApiName}_Trigger`;
-    if(triggerName.includes("__c")) {
+    if (triggerName.includes("__c")) {
       triggerName = triggerName.replace('__c', '');
     }
     try {
@@ -692,26 +694,31 @@ const realTimeTriggerManagement = async (
   config: IBackupConfig
 ): Promise<ITriggerResult[]> => {
   try {
-    const crm = await getCrmById(config.crmId);
+
+    const user = await getUser({ userId: config.userId });
+    if (!user || !user.crmId) {
+      throw new Error('User not found');
+    }
+
+    const crm = await getCrmById(user.crmId);
     if (!crm) { throw new Error(`crm_not_found:${config.crmId}`); }
 
-    const instanceUrl = crm.crmProfile?.instanceUrl;
+    const instanceUrl = user.crmProfile?.instanceUrl;
     if (!instanceUrl) { throw new Error(`instance_url_missing:${config.crmId}`); }
 
-    const credentials = getCrmTokens(crm);
+  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
     const tokens: SalesforceTokens = {
-      accessToken: credentials.access_token,
-      refreshToken: credentials.refresh_token,
-      crmId: crm.crmId,
-      userId: crm.userId,
+      accessToken: access_token,
+      refreshToken: refresh_token,
+      userId: user.userId,
       environment: crm.environment,
-      customUrl: crm.customUrl,
+      customUrl: user.customUrl,
     };
 
     const objectApiNames = config.objectNames;
 
     if (operation === 'create') {
-      await createApexSecret(crm.crmId, { webhookSecret: config.backupConfigId });
+      await createApexSecret({ user, body: { webhookSecret: config.backupConfigId } });
       return createTriggers(instanceUrl, tokens, objectApiNames);
     }
     if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }

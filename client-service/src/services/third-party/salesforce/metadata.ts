@@ -1,8 +1,10 @@
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
-import { getCrmById, getCrmTokens } from '../../crm';
+import { getCrmById } from '../../crm';
+import { getUser } from '../../user';
 import { logger } from '../../../middlewares';
 import { getApexObjects, createTriggers } from './index';
 import { IObject } from '../../../models/backup-config';
+import { decrypt } from '../../../utils/encryption';
 
 // ─── Compare Salesforce objects with backup-config objects ────────────────────
 
@@ -95,8 +97,13 @@ async function syncMetadataAndTriggers(
       throw new Error('CRM not found');
     }
 
+    const user = await getUser({ userId: backupConfig.userId });
+    if (!user) {
+      throw new Error('User not found');
+    }
+
     // Fetch Salesforce objects using existing apex service
-    const salesforceObjects = await getApexObjects(backupConfig.crmId, backupConfig.schedule);
+    const salesforceObjects = await getApexObjects({ user, mode: backupConfig.schedule });
 
 
     // Compare and find extra objects
@@ -108,20 +115,19 @@ async function syncMetadataAndTriggers(
     // Add extra objects to backup config
     await addExtraObjectsToBackupConfig(backupConfigId, extraObjects);
 
-    if(backupConfig.schedule !== 'REALTIME') return { extraObjects, triggerResults: [] };
+    if (backupConfig.schedule !== 'REALTIME') return { extraObjects, triggerResults: [] };
 
     // Create triggers for extra objects using existing trigger service
     const extraObjectNames = extraObjects.map((obj) => obj.apiName);
-    const { access_token, refresh_token } = getCrmTokens(crm);
+    const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
     const triggerCreate = await createTriggers(
-      crm.crmProfile?.instanceUrl || '',
+      user.crmProfile?.instanceUrl || '',
       {
         accessToken: access_token,
         refreshToken: refresh_token,
-        crmId: crm.crmId,
-        userId: crm.userId,
+        userId: user.userId,
         environment: crm.environment,
-        customUrl: crm.customUrl,
+        customUrl: user.customUrl,
       },
       extraObjectNames
     );

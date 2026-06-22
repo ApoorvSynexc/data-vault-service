@@ -6,7 +6,7 @@ import type { ICountItem, ICountResult } from './dry-run/types';
 
 const salesforceNamespace = '';
 
-const getApexObjects = async (user?: IUser, mode?: string) => {
+const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -34,7 +34,7 @@ const getApexObjects = async (user?: IUser, mode?: string) => {
   return encryptedResult.data;
 };
 
-const getApexObjectRecords = async (user?: IUser, body?: object) => {
+const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: object } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -56,7 +56,7 @@ const getApexObjectRecords = async (user?: IUser, body?: object) => {
   return encryptedResult.data;
 };
 
-const getApexObjectsCount = async (user?: IUser, body?: object) => {
+const getApexObjectsCount = async ({ user, body }: { user?: IUser; body?: object } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -78,7 +78,7 @@ const getApexObjectsCount = async (user?: IUser, body?: object) => {
   return encryptedResult.data;
 };
 
-const getApexObjectChilds = async (user?: IUser, objectName?: string, mode?: string) => {
+const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -103,7 +103,7 @@ const getApexObjectChilds = async (user?: IUser, objectName?: string, mode?: str
   return encryptedResult.data;
 };
 
-const getApexFields = async (user?: IUser, objectName?: string, mode?: string) => {
+const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -125,7 +125,7 @@ const getApexFields = async (user?: IUser, objectName?: string, mode?: string) =
   return encryptedResult.data;
 };
 
-const createApexSecret = async (user?: IUser, body?: { webhookSecret: string }) => {
+const createApexSecret = async ({ user, body }: { user?: IUser; body?: { webhookSecret: string } } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }

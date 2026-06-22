@@ -1,12 +1,3 @@
-export interface ICrmProfile {
-  instanceUrl: string;
-  organizationId: string;
-  userId: string;
-  name: string;
-  email: string;
-  username: string;
-  photoUrl?: string;
-}
 
 export interface ICrm {
   crmId: string; // PK
