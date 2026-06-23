@@ -1,6 +1,7 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
+import { decrypt } from '../../../utils/encryption';
 
 const profileSchema = Joi.object({
   organizationId: Joi.string().required(),
@@ -36,10 +37,9 @@ export const upsertUsersValidation = (req: Request, res: Response, next: NextFun
       .required(),
   });
 
-  const { error } = schema.validate(req.body, { abortEarly: false });
+  const body = JSON.parse(decrypt({ ciphertext: String(req.body.ciphertext), iv: String(req.body.iv) }));
+  const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
-    console.log(error);
-
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }
@@ -48,9 +48,8 @@ export const upsertUsersValidation = (req: Request, res: Response, next: NextFun
 
 export const createRoleValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    ciphertext: Joi.string().optional(),
-    iv: Joi.string().optional(),
     organizationId: Joi.string().optional(),
+    environment: Joi.string().trim().optional(),
     name: Joi.string().trim().optional(),
     description: Joi.string().trim().optional(),
     permissions: Joi.array()
@@ -58,9 +57,10 @@ export const createRoleValidation = (req: Request, res: Response, next: NextFunc
       .optional(),
   });
 
-  const { error } = schema.validate(req.body, { abortEarly: false });
+  const body = JSON.parse(decrypt({ ciphertext: String(req.body.ciphertext), iv: String(req.body.iv) }));
+  const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
-    console.log({Error: error});
+    console.log({ Error: error });
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }
@@ -72,14 +72,17 @@ export const updateRoleValidation = (req: Request, res: Response, next: NextFunc
     organizationId: Joi.string().required(),
     roleId: Joi.string().required(),
     name: Joi.string().trim().optional(),
+    environment: Joi.string().trim().optional(),
     description: Joi.string().trim().optional(),
     permissions: Joi.array()
       .items(Joi.string())
       .optional(),
   }).min(1);
 
-  const { error } = schema.validate(req.body, { abortEarly: false });
+  const body = JSON.parse(decrypt({ ciphertext: String(req.body.ciphertext), iv: String(req.body.iv) }));
+  const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
+    console.log({error});
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;
   }
