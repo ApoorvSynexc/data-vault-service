@@ -626,9 +626,8 @@ const uploadBulkResultsByPageArchival = async (
       const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
 
       // Read the full CSV text and upload to S3.
-      const csvText = await response.text();
       const parentS3Key = `${s3KeyPrefix}_${randomUUID()}`;
-      const csvBuffer = Buffer.from(csvText, 'utf-8');
+      const csvBuffer = Buffer.from(await response.arrayBuffer());
       await uploadToS3(destConfig, parentS3Key, csvBuffer);
       totalSizeInBytes += csvBuffer.byteLength;
       const parentKeys = s3UrlsPerObject.get(object.name) ?? [];
