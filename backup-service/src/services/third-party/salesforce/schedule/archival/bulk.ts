@@ -46,7 +46,7 @@ const INITIAL_PAGE_KEY = 'initial';
 
 // Salesforce Bulk API v2 returns at most this many records per result page.
 // We request the maximum each time and loop via the sforce-locator header.
-const MAX_RECORDS_PER_PAGE = 50000;
+const MAX_RECORDS_PER_PAGE = 10000;
 
 // ---------------------------------------------------------------------------
 // Types
