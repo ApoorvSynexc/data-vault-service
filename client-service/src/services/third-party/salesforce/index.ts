@@ -99,6 +99,7 @@ interface SalesforceRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: any;
   query?: Record<string, string | number | boolean>;
+  timeoutMs?: number;
 }
 
 interface SalesforceTokens {
