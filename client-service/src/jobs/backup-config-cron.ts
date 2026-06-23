@@ -1,4 +1,7 @@
 import cron from 'node-cron';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
 import {
   getScheduledIncrementalBackupConfigs,
   triggerArchivalBackupJob,
@@ -10,6 +13,9 @@ import { logger } from '../middlewares';
 import { filtereObjects } from '../utils/helper';
 import { IBackupConfig, IObject, IScheduling } from '../models';
 
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -19,12 +25,22 @@ const DAY_MS = 24 * HOUR_MS;
 // object's most recent run.
 const RECENT_JOB_LOOKBACK = 50;
 
-const hasScheduledStartPassed = (startDate?: string, startTime?: string): boolean => {
+// Parse startDate/startTime in the config's own timeZone (e.g. "Asia/Kolkata"),
+// not the server's local TZ. Without this, ECS in us-east-2 parses "12:00" as
+// 12:00 EDT instead of 12:00 IST, delaying the gate by hours.
+const hasScheduledStartPassed = (
+  startDate?: string,
+  startTime?: string,
+  tz?: string,
+): boolean => {
   if (!startDate) {
     return true;
   }
-  const iso = startTime ? `${startDate}T${startTime}:00` : `${startDate}T00:00:00`;
-  const scheduledAt = new Date(iso).getTime();
+  const time = startTime ?? '00:00';
+  const local = `${startDate}T${time}:00`;
+  const scheduledAt = tz
+    ? dayjs.tz(local, tz).valueOf()
+    : new Date(local).getTime();
   if (Number.isNaN(scheduledAt)) {
     return true;
   }
@@ -37,8 +53,9 @@ const isDueByScheduling = (
   scheduling: IScheduling | undefined,
   lastRunAt: string | undefined,
   label: string,
+  timeZone?: string,
 ): boolean => {
-  logger.info(`[ARCH-CRON] gate check | ${label} lastRunAt=${lastRunAt ?? 'never'} scheduling=${JSON.stringify(scheduling ?? null)}`);
+  logger.info(`[ARCH-CRON] gate check | ${label} tz=${timeZone ?? 'server-local'} lastRunAt=${lastRunAt ?? 'never'} scheduling=${JSON.stringify(scheduling ?? null)}`);
 
   if (!scheduling) {
     logger.warn(`[ARCH-CRON] gate SKIP | ${label} reason=scheduling_block_missing`);
@@ -46,8 +63,8 @@ const isDueByScheduling = (
   }
 
   if (!lastRunAt) {
-    const passed = hasScheduledStartPassed(scheduling.startDate, scheduling.startTime);
-    logger.info(`[ARCH-CRON] gate ${passed ? 'ALLOW' : 'SKIP'} | ${label} reason=first_run freq=${scheduling.frequency} startDate=${scheduling.startDate ?? 'none'} startTime=${scheduling.startTime ?? 'none'} startPassed=${passed}`);
+    const passed = hasScheduledStartPassed(scheduling.startDate, scheduling.startTime, timeZone);
+    logger.info(`[ARCH-CRON] gate ${passed ? 'ALLOW' : 'SKIP'} | ${label} reason=first_run freq=${scheduling.frequency} startDate=${scheduling.startDate ?? 'none'} startTime=${scheduling.startTime ?? 'none'} tz=${timeZone ?? 'server-local'} startPassed=${passed}`);
     return passed;
   }
 
@@ -106,7 +123,12 @@ const runArchivalConfig = async (config: IBackupConfig): Promise<number> => {
   const dueObjects: IObject[] = [];
   for (const obj of scheduledObjects) {
     const label = `${config.backupConfigId}/${obj.name}`;
-    if (isDueByScheduling(obj.scheduleConfig?.scheduling, lastRunByObject.get(obj.name), label)) {
+    if (isDueByScheduling(
+      obj.scheduleConfig?.scheduling,
+      lastRunByObject.get(obj.name),
+      label,
+      obj.scheduleConfig?.timeZone,
+    )) {
       dueObjects.push(obj);
     }
   }
@@ -136,6 +158,7 @@ const runNormalConfig = async (config: IBackupConfig): Promise<number> => {
     config.scheduleConfig?.scheduling,
     config.lastBackupAt,
     config.backupConfigId,
+    config.scheduleConfig?.timeZone,
   );
   if (!due) {
     return 0;
