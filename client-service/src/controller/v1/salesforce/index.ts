@@ -24,7 +24,8 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 };
 
 const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { organizationId } = req.query;
+  const organizationId = (decrypt({ ciphertext: String(req.query.ciphertext), iv: String(req.query.iv) }));
+
   const crm = await getCrmByOrgId(String(organizationId));
   if (!crm) {
     return makeResponse(req, res, 200, true, 'fetch', []);
@@ -38,18 +39,17 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
       filteredUsers.push({ ...element, role: { ...element.role, permissions: role.permissions } });
     }
   }
-  makeResponse(req, res, 200, true, 'fetch', filteredUsers);
+  makeResponse(req, res, 200, true, 'fetch', encrypt(JSON.stringify(filteredUsers)));
 };
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const body = req.body as IUpsertUsersRequest;
-  const { users, environment, organizationId } = body;
+  const decryptedBody = JSON.parse(decrypt({ ciphertext: req.body.ciphertext, iv: req.body.iv }));
+  const { users, environment, organizationId } = decryptedBody;
 
   if (!users?.length) {
     makeResponse(req, res, 400, false, 'id_required');
     return;
   }
-
 
   const result = [];
   for await (const user of users) {
@@ -125,8 +125,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
   //   }
   // }
 
-  console.log(JSON.stringify({ result }));
-  makeResponse(req, res, 201, true, 'update', result);
+  makeResponse(req, res, 201, true, 'update', encrypt(JSON.stringify(result)));
 };
 
 const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -156,11 +155,12 @@ const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
     ...body
   });
 
-  makeResponse(req, res, 201, true, 'create', { roleId });
+  makeResponse(req, res, 201, true, 'create', encrypt(JSON.stringify({ roleId })));
 };
 
 const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { roleId, ...body } = req.body;
+  const decryptedBody = JSON.parse(decrypt({ ciphertext: req.body.ciphertext, iv: req.body.iv }));
+  const { roleId, ...body } = decryptedBody;
 
   const existingRole = await getRole({ roleId: String(roleId) });
   if (!existingRole) {
@@ -172,11 +172,11 @@ const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
     body
   );
 
-  makeResponse(req, res, 200, true, 'update', updatedRole);
+  makeResponse(req, res, 200, true, 'update', encrypt(JSON.stringify(updatedRole)));
 };
 
 const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { roleId } = req.query;
+  const roleId = (decrypt({ ciphertext: String(req.query.ciphertext), iv: String(req.query.iv) }));
 
   if (!roleId) {
     return makeResponse(req, res, 400, false, 'id_required');
@@ -191,7 +191,7 @@ const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
 };
 
 const getRolesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { organizationId } = req.query;
+  const organizationId = (decrypt({ ciphertext: String(req.query.ciphertext), iv: String(req.query.iv) }));
 
   if (!organizationId) {
     return makeResponse(req, res, 400, false, 'id_required');
