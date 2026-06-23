@@ -189,6 +189,31 @@ const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<v
     makeResponse(req, res, 200, true, 'fetch', apexResult);
 };
 
+// Computes per-row aggregate stats (records archived, bytes archived) by
+// walking that config's archival job history. Adds `archivedRecordsCount` +
+// `archivedSizeInBytes` to each row in place. Runs in parallel across rows
+// so list latency is bounded by the slowest single config, not the sum.
+const attachArchivalStatsToRows = async (documents: any[]): Promise<void> => {
+    await Promise.all(
+        documents.map(async (document) => {
+            try {
+                const stats = await computeArchivalJobStats({
+                    indexName: 'backupConfigId-index',
+                    keyName: 'backupConfigId',
+                    keyValue: document.backupConfigId,
+                });
+                document.archivedRecordsCount = stats.totalRecords;
+                document.archivedSizeInBytes = stats.totalSize;
+            } catch (err: any) {
+                // Don't fail the whole list if one config's stats query throws.
+                logger.warn(`Failed to compute archival stats for ${document.backupConfigId}: ${err?.message ?? err}`);
+                document.archivedRecordsCount = 0;
+                document.archivedSizeInBytes = 0;
+            }
+        })
+    );
+};
+
 const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const { pagination, limit, cursor } = req.query as Record<string, string>;
     const spaceId = req.user?.spaceId;
@@ -213,6 +238,8 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
             }
         }
 
+        await attachArchivalStatsToRows(documents);
+
         const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, userId);
 
         return makeResponse(req, res, 200, true, 'fetch', documents, {
@@ -227,6 +254,8 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
         { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL' },
         { limit: 1000 }
     );
+
+    await attachArchivalStatsToRows(documents);
 
     makeResponse(req, res, 200, true, 'fetch', documents);
 };
