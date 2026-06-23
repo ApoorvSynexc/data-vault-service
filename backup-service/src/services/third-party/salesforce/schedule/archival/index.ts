@@ -740,7 +740,9 @@ export const archiveAndHardDelete = async (
       // uploadBulkResultsByPageArchival keys by object.name; remap to object.id
       for (const [name, keys] of rootS3Map) {
         const found = findObjectInTree(object, name);
-        if (found) {s3UrlsById.set(found.id, keys);}
+        if (found) {
+          s3UrlsById.set(found.id, keys);
+        }
       }
     }
     logger.info(

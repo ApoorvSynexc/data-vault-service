@@ -337,7 +337,9 @@ export const buildFailedRecordsIdCsv = async (
     for (const row of rows.slice(1)) {
       const commaIdx = row.indexOf(',');
       const recordId = commaIdx >= 0 ? row.slice(0, commaIdx).trim() : row.trim();
-      if (recordId) {ids.push(recordId);}
+      if (recordId) {
+        ids.push(recordId);
+      }
     }
   }
   return ['Id', ...ids].join('\n');
