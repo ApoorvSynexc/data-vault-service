@@ -114,7 +114,11 @@ export const exportFirstTime = async (
   let jobId: string;
 
   try {
-    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(crmId, objectName, 'schedule');
+    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(
+      crmId,
+      objectName,
+      'schedule'
+    );
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
