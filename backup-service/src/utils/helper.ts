@@ -95,7 +95,8 @@ const buildS3KeyPrefix = ({
   objectName,
   operation,
   type,
-}: IS3KeyPrefixParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/raw_data/${objectName}/${operation}`;
+}: IS3KeyPrefixParams): string =>
+  `${crmName}/${crmId}/${type}/${backupConfigId}/raw_data/${objectName}/${operation}`;
 
 interface ISchemaS3KeyParams {
   crmId: string;
@@ -111,7 +112,8 @@ const buildSchemaS3Key = ({
   backupConfigId,
   objectName,
   type,
-}: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
+}: ISchemaS3KeyParams): string =>
+  `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
 
 interface IErrorLogsS3PrefixParams {
   crmId: string;
@@ -175,14 +177,14 @@ const splitCSVRows = (csv: string): string[] => {
         current += char;
       }
     } else if ((char === '\n' || (char === '\r' && next === '\n')) && !inQuotes) {
-      if (char === '\r') i++; // skip the \n of \r\n
-      if (current.trim()) rows.push(current);
+      if (char === '\r') {i++;} // skip the \n of \r\n
+      if (current.trim()) {rows.push(current);}
       current = '';
     } else {
       current += char;
     }
   }
-  if (current.trim()) rows.push(current);
+  if (current.trim()) {rows.push(current);}
   return rows;
 };
 
@@ -216,7 +218,7 @@ const parseCSVLine = (line: string): string[] => {
 };
 
 const formatFieldValuesForSOQL = (fields: any[]): any[] => {
-  return fields.map(field => {
+  return fields.map((field) => {
     if (!field.filter) {
       return field;
     }
@@ -227,14 +229,14 @@ const formatFieldValuesForSOQL = (fields: any[]): any[] => {
       ...field,
       filter: {
         ...field.filter,
-        value: formattedValue
-      }
+        value: formattedValue,
+      },
     };
   });
 };
 
 const formatValueByDataType = (value: string, dataType: string): string => {
-  if (!value && value !== '0' && value !== 'false') return value;
+  if (!value && value !== '0' && value !== 'false') {return value;}
 
   const lowerDataType = dataType.toLowerCase();
 
@@ -272,7 +274,7 @@ const formatValueByDataType = (value: string, dataType: string): string => {
 };
 
 const isTruthy = (value: string | boolean): boolean => {
-  if (typeof value === 'boolean') return value;
+  if (typeof value === 'boolean') {return value;}
   if (typeof value === 'string') {
     const normalized = String(value).toLowerCase().trim();
     return normalized === 'true' || normalized === '1' || normalized === 'yes';

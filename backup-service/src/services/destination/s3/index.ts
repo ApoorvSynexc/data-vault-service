@@ -106,7 +106,7 @@ export const deleteS3Objects = async (
   config: IDestinationConfig,
   keys: string[]
 ): Promise<void> => {
-  if (!keys.length) return;
+  if (!keys.length) {return;}
   const client = getS3Client(config);
   for (let i = 0; i < keys.length; i += 1000) {
     const batch = keys.slice(i, i + 1000);

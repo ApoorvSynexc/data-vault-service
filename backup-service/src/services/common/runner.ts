@@ -188,9 +188,8 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       job.lastUpdatedAt
     );
 
-    const finalJobStatus = archivalResult === 'PARTIAL_FAILURE'
-      ? JOB_STATUS.partialFailure
-      : JOB_STATUS.success;
+    const finalJobStatus =
+      archivalResult === 'PARTIAL_FAILURE' ? JOB_STATUS.partialFailure : JOB_STATUS.success;
 
     await updateJobStatus({
       backupJobId,
