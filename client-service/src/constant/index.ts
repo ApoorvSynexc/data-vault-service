@@ -30,6 +30,9 @@ const AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 
 // IAM Role ARN that Athena/Glue assumes when reading from client S3 buckets.
 // The client's bucket policy must grant this ARN s3:GetObject + s3:ListBucket.
 const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN);
+// S3 location where Athena writes query result files (required by StartQueryExecution).
+// e.g. s3://datavault-athena-results/
+const AWS_ATHENA_OUTPUT_LOCATION = String(process.env.AWS_ATHENA_OUTPUT_LOCATION);
 
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
@@ -230,6 +233,7 @@ export {
   // AWS Glue / Athena
   AWS_GLUE_DATABASE_PREFIX,
   AWS_ATHENA_ROLE_ARN,
+  AWS_ATHENA_OUTPUT_LOCATION,
 
   // JWT Config
   JWT_ACCESS_SECRET,
