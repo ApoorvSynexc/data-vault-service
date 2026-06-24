@@ -226,6 +226,75 @@ async function initalizePayloadTransform(
         console.log('Destination     :', payload.details.destinationConfigs.destinationName);
         console.log('──────────────────────────────────────────');
 
+        // Spark submit parameters — tuned for 100 GB / 200 objects in 5 minutes.
+        // Kept as an array + .join(' ') so each setting is reviewable in isolation;
+        // EMR receives the joined single-line string at submit time.
+        const sparkSubmitParameters = [
+            '--class com.example.Main',
+
+            // Serialization
+            '--conf spark.serializer=org.apache.spark.serializer.KryoSerializer',
+            '--conf spark.kryo.registrator=org.apache.spark.HoodieSparkKryoRegistrar',
+
+            // S3A filesystem + throughput
+            '--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
+            '--conf spark.hadoop.fs.s3a.connection.maximum=1000',
+            '--conf spark.hadoop.fs.s3a.threads.max=500',
+            '--conf spark.hadoop.fs.s3a.threads.keepalivetime=60',
+            '--conf spark.hadoop.fs.s3a.connection.timeout=60000',
+            '--conf spark.hadoop.fs.s3a.connection.establish.timeout=15000',
+            '--conf spark.hadoop.fs.s3a.attempts.maximum=5',
+            '--conf spark.hadoop.fs.s3a.retry.limit=5',
+            '--conf spark.hadoop.fs.s3a.retry.throttle.limit=20',
+            '--conf spark.hadoop.fs.s3a.paging.maximum=1000',
+            '--conf spark.hadoop.fs.s3a.multipart.size=134217728',
+            '--conf spark.hadoop.fs.s3a.block.size=134217728',
+            '--conf spark.hadoop.fs.s3a.multipart.threshold=134217728',
+            '--conf spark.hadoop.fs.s3a.fast.upload=true',
+            '--conf spark.hadoop.fs.s3a.fast.upload.buffer=bytebuffer',
+            '--conf spark.hadoop.fs.s3a.fast.upload.active.blocks=8',
+            '--conf spark.hadoop.fs.s3a.readahead.range=4194304',
+
+            // Network / heartbeats
+            '--conf spark.network.timeout=600s',
+            '--conf spark.executor.heartbeatInterval=60s',
+
+            // Dynamic allocation — 200 executors needed for parallel object dispatch
+            '--conf spark.dynamicAllocation.minExecutors=20',
+            '--conf spark.dynamicAllocation.initialExecutors=50',
+            '--conf spark.dynamicAllocation.maxExecutors=200',
+            '--conf spark.dynamicAllocation.executorIdleTimeout=60s',
+            '--conf spark.dynamicAllocation.schedulerBacklogTimeout=1s',
+            '--conf spark.dynamicAllocation.sustainedSchedulerBacklogTimeout=1s',
+
+            // Driver — coordinates 200 objects + holds metadata
+            '--conf spark.driver.memory=16g',
+            '--conf spark.driver.cores=8',
+            '--conf spark.driver.maxResultSize=4g',
+
+            // Executor sizing
+            '--conf spark.executor.memory=16g',
+            '--conf spark.executor.cores=4',
+            '--conf spark.executor.memoryOverhead=4g',
+            '--conf spark.memory.fraction=0.8',
+            '--conf spark.memory.storageFraction=0.3',
+
+            // Spark SQL / shuffle
+            '--conf spark.sql.shuffle.partitions=800',
+            '--conf spark.sql.adaptive.enabled=true',
+            '--conf spark.sql.adaptive.coalescePartitions.enabled=true',
+            '--conf spark.sql.adaptive.coalescePartitions.minPartitionNum=1',
+            '--conf spark.sql.adaptive.skewJoin.enabled=true',
+            '--conf spark.sql.adaptive.localShuffleReader.enabled=true',
+            '--conf spark.sql.files.maxPartitionBytes=134217728',
+            '--conf spark.sql.files.openCostInBytes=4194304',
+
+            // Scheduler — FAIR is required for concurrent object dispatch from the driver
+            '--conf spark.scheduler.mode=FAIR',
+            '--conf spark.task.cpus=1',
+            '--conf spark.locality.wait=0s',
+            '--conf spark.speculation=false',
+        ].join(' ');
 
         const command = new StartJobRunCommand({
             applicationId: AWS_EMR_APPLICATION_ID,
@@ -234,30 +303,28 @@ async function initalizePayloadTransform(
                 sparkSubmit: {
                     entryPoint: "s3://jar-files-360datavault/JAR/DEV/latest/datavault-1.0.0.jar",
                     entryPointArguments: [payloadB64],
-                    sparkSubmitParameters: "--class com.example.Main --conf spark.serializer=org.apache.spark.serializer.KryoSerializer --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem --conf spark.hadoop.fs.s3a.connection.maximum=50 --conf spark.hadoop.fs.s3a.connection.timeout=60000 --conf spark.hadoop.fs.s3a.connection.establish.timeout=15000 --conf spark.hadoop.fs.s3a.attempts.maximum=3 --conf spark.hadoop.fs.s3a.retry.limit=3 --conf spark.hadoop.fs.s3a.retry.throttle.limit=5 --conf spark.hadoop.fs.s3a.paging.maximum=1000 --conf spark.network.timeout=600s --conf spark.executor.heartbeatInterval=60s --conf spark.hadoop.fs.s3a.fast.upload=true --conf spark.dynamicAllocation.executorIdleTimeout=600s --conf spark.driver.memory=4g --conf spark.driver.cores=2 --conf spark.executor.memory=8g --conf spark.executor.cores=4 --conf spark.dynamicAllocation.minExecutors=1 --conf spark.dynamicAllocation.initialExecutors=2 --conf spark.dynamicAllocation.maxExecutors=4",
+                    sparkSubmitParameters,
                 },
             },
             configurationOverrides: {
-                "applicationConfiguration": [
+                applicationConfiguration: [
                     {
-                        "classification": "spark-defaults",
-                        "properties": {
+                        classification: "spark-defaults",
+                        properties: {
                             "spark.executorEnv.ENCRYPTION_KEY": AWS_EMR_ENCRYPTION_KEY,
                             "spark.yarn.appMasterEnv.ENCRYPTION_KEY": AWS_EMR_ENCRYPTION_KEY,
                             "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${AWS_EMR_ENCRYPTION_KEY}`,
-                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${AWS_EMR_ENCRYPTION_KEY}`
-                        }
-                    }
-                ],
-                "monitoringConfiguration": {
-                    "managedPersistenceMonitoringConfiguration": {
-                        "enabled": true
+                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${AWS_EMR_ENCRYPTION_KEY}`,
+                        },
                     },
-                    "cloudWatchLoggingConfiguration": {
-                        "enabled": true,
-                        "logGroupName": "/aws/emr-serverless"
-                    }
-                }
+                ],
+                monitoringConfiguration: {
+                    managedPersistenceMonitoringConfiguration: { enabled: true },
+                    cloudWatchLoggingConfiguration: {
+                        enabled: true,
+                        logGroupName: "/aws/emr-serverless",
+                    },
+                },
             },
         });
 
@@ -269,6 +336,7 @@ async function initalizePayloadTransform(
         throw error;
     }
 }
+
 
 export {
     initalizePayloadTransform,
