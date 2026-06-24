@@ -11,6 +11,7 @@
 
 import { OBJECT_STATUS } from '../../../../../constant';
 import { updateArchivalObject } from '../../../../backup-job';
+import { incrementBackupConfigCounters } from '../../../../backup-config';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import {
@@ -417,6 +418,9 @@ async function uploadSingleObject(
 
       await uploadToS3(ctx.destConfig, s3Key, csvBuffer);
       totalSizeInBytes += csvBuffer.byteLength;
+      await incrementBackupConfigCounters(ctx.backupConfigId, {
+        sizeInBytes: csvBuffer.byteLength,
+      });
 
       const existingKeys = s3UrlsMap.get(object.name) ?? [];
       existingKeys.push(s3Key);
@@ -636,6 +640,9 @@ const uploadBulkResultsByPageArchival = async (
       const csvBuffer = Buffer.from(await response.arrayBuffer());
       await uploadToS3(destConfig, parentS3Key, csvBuffer);
       totalSizeInBytes += csvBuffer.byteLength;
+      await incrementBackupConfigCounters(backupConfigId, {
+        sizeInBytes: csvBuffer.byteLength,
+      });
       const parentKeys = s3UrlsPerObject.get(object.name) ?? [];
       parentKeys.push(parentS3Key);
       s3UrlsPerObject.set(object.name, parentKeys);

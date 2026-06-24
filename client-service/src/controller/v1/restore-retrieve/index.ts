@@ -6,6 +6,7 @@ import {
   getJobActivityLogs,
   getSnapshotActivityLogs,
   getObjectListByConfigId,
+  getObjectListByBackupJobIds,
   getBackupConfigNamesByDestination,
   getTableCounter,
   ConfigType,
@@ -214,6 +215,41 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
 };
 
 /**
+ * GET /get-objectlist-by-backup-jobids?backupJobIds=
+ * Accepts a comma-separated list of backup job IDs (SCHEDULE/BULK or REALTIME) and
+ * returns { [backupJobId]: string[] } of the object names recorded on each job.
+ *
+ * Each job is fetched with a projected GetCommand (userId, type, jobType, object,
+ * objectApiName only) so encrypted source/destination payloads never leave the
+ * database. Jobs that don't exist, aren't owned by the requester, or aren't backup
+ * jobs (type=NORMAL with jobType ∈ BULK | REALTIME) are silently skipped — a single
+ * bad ID can't fail the whole request.
+ *
+ * REALTIME jobs surface their single root-level `objectApiName`; BULK jobs flatten
+ * the selected-objects tree stored under `object[]`.
+ */
+const getObjectListByBackupJobIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupJobIds } = req.query as Record<string, string>;
+  const userId = req.user!.userId;
+
+  if (!backupJobIds) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const ids = [...new Set(backupJobIds.split(',').map((id) => id.trim()).filter(Boolean))];
+
+  if (ids.length === 0) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const objectsByJobId = await getObjectListByBackupJobIds(ids, userId);
+
+  makeResponse(req, res, 200, true, 'fetch', objectsByJobId);
+};
+
+/**
  * GET /get-backup-configs-name?destinationId=
  * Returns a lightweight list of { backupConfigId, name } for all configs
  * belonging to the authenticated user that are tied to the given destination.
@@ -239,5 +275,6 @@ export const restoreRetrieveJobController = wrapController({
   getRestoreRetrieveJobHandler,
   getSnapshotActivityLogsHandler,
   getObjectListByConfigIdHandler,
+  getObjectListByBackupJobIdsHandler,
   getBackupConfigsNameHandler,
 });

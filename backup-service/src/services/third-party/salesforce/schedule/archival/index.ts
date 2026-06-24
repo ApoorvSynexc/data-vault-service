@@ -26,7 +26,7 @@
 import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupField, IBackupObject, IDestinationConfig } from '../../../../../models';
-import { recursivelyUpdateObjects, updateArchivalObject } from '../../../../backup-job';
+import { updateArchivalObject } from '../../../../backup-job';
 import {
   buildS3KeyPrefix,
   buildSchemaS3Key,
@@ -37,7 +37,6 @@ import {
 import { listS3Objects, uploadToS3 } from '../../../../destination/s3';
 import { uploadSingleObject, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
-import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 import { buildFailedRecordsIdCsv, bulkDeleteRecords } from './delete-bulk';
 
 // Statuses that mean Phase 2 (upload) already completed — retry skips to Phase 3 (delete all from S3).
@@ -856,18 +855,6 @@ export const archiveAndHardDelete = async (
     logger.info(
       `[archival:orchestrator] phase 2 complete (all levels) | backupJobId:${backupJobId} objectName:${objectName}`
     );
-
-    const backupConfig = await getBackupConfigById(backupConfigId);
-    if (backupConfig?.objects) {
-      const updatedObjects = await recursivelyUpdateObjects(backupConfig.objects, {
-        id: object.id,
-        sizeInBytes: 0,
-      });
-      await updateBackupConfig(backupConfigId, {
-        sizeInBytes: backupConfig.sizeInBytes ?? 0,
-        objects: updatedObjects,
-      });
-    }
 
     // -------------------------------------------------------------------------
     // Phase 3 — recursive post-order delete (bottom-up, parent-gated)

@@ -20,6 +20,14 @@ interface UpdateBackupConfigParams {
   type?: string;
 }
 
+// Deltas applied atomically via DynamoDB ADD so concurrent archival upload pages
+// (CONCURRENCY_LIMIT = 6) and parallel delete batches don't lose increments
+// through read-then-write races.
+interface IncrementBackupConfigParams {
+  sizeInBytes?: number;
+  successRecordCount?: number;
+}
+
 const getBackupConfigById = async (backupConfigId: string): Promise<IBackupConfig | null> => {
   const result = await docClient.send(
     new GetCommand({
@@ -120,4 +128,41 @@ const updateBackupConfig = async (
   return { ...existing, ...updates };
 };
 
-export { updateBackupConfig, getBackupConfigById };
+const incrementBackupConfigCounters = async (
+  backupConfigId: string,
+  deltas: IncrementBackupConfigParams
+): Promise<void> => {
+  const addParts: string[] = [];
+  const names: Record<string, string> = {};
+  const values: Record<string, any> = {};
+
+  if (deltas.sizeInBytes && deltas.sizeInBytes !== 0) {
+    names['#sizeInBytes'] = 'sizeInBytes';
+    values[':sizeInBytes'] = deltas.sizeInBytes;
+    addParts.push('#sizeInBytes :sizeInBytes');
+  }
+  if (deltas.successRecordCount && deltas.successRecordCount !== 0) {
+    names['#successRecordCount'] = 'successRecordCount';
+    values[':successRecordCount'] = deltas.successRecordCount;
+    addParts.push('#successRecordCount :successRecordCount');
+  }
+
+  if (!addParts.length) {
+    return;
+  }
+
+  names['#updatedAt'] = 'updatedAt';
+  values[':updatedAt'] = new Date().toISOString();
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_CONFIG_TABLE,
+      Key: { backupConfigId },
+      UpdateExpression: `ADD ${addParts.join(', ')} SET #updatedAt = :updatedAt`,
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    })
+  );
+};
+
+export { updateBackupConfig, getBackupConfigById, incrementBackupConfigCounters };

@@ -113,7 +113,7 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' },
       ExpressionAttributeValues: { ':uid': userId },
     })
@@ -132,7 +132,7 @@ const getBackupConfigsByUserAndCrm = async (
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
       FilterExpression: 'crmId = :crmId',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' },
       ExpressionAttributeValues: { ':uid': userId, ':crmId': crmId },
       ...(limit && { Limit: limit }),
@@ -177,7 +177,7 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
       TableName: BACKUP_CONFIG_TABLE,
       FilterExpression:
         '(#status = :active OR #status = :backupResume) AND #schedule = :schedule AND (#scheduleConfig.#scheduleType = :scheduleType OR #configType = :archivalType) AND (#backupStatus = :backupSuccess OR #backupStatus = :backupFailed OR #backupStatus = :backupPartialFailure OR attribute_not_exists(#backupStatus))',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #configType, objectNames, #objects, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #configType, objectNames, #objects, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: {
         '#status': 'status',
         '#schedule': 'schedule',
@@ -369,7 +369,7 @@ const getBackupConfigsWithPagination = async (
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: indexName,
       KeyConditionExpression: isSpaceQuery ? 'spaceId = :key' : 'userId = :key',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
       Limit: limit,

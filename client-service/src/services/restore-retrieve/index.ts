@@ -8,6 +8,7 @@ import { getBackupJobsByConfig } from '../backup-job';
 import { getCrmById } from '../crm';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
+const BACKUP_JOB_TYPE = 'NORMAL';
 const BACKUP_JOB_CONCURRENCY = 5;
 
 // Runs an async task for each item with at most `concurrency` tasks in-flight at once.
@@ -454,7 +455,14 @@ const getSnapshotActivityLogs = async (params: {
 
 export type ConfigType = 'NORMAL' | 'ARCHIVAL';
 
-const flattenObjectNames = (objects: IObject[]): string[] => {
+// Minimal shape covering both IObject (config-level) and IBackupObject (job-level)
+// so the same walker can flatten either tree.
+interface INamedTreeNode {
+  name: string;
+  children?: INamedTreeNode[];
+}
+
+const flattenObjectNames = (objects: INamedTreeNode[]): string[] => {
   const names: string[] = [];
   for (const obj of objects) {
     names.push(obj.name);
@@ -474,9 +482,65 @@ const getObjectListByConfigId = async (
     return { objects: [], found: false };
   }
 
-  const allNames = flattenObjectNames(config.objects ?? []);
+  const allNames = flattenObjectNames((config.objects ?? []) as IObject[]);
   const uniqueNames = [...new Set(allNames)];
   return { objects: uniqueNames, found: true };
+};
+
+// Fetches one backup job's object names using a projection that excludes encrypted
+// source/destination payloads — only the fields needed to validate ownership and
+// extract object names are read. Ownership, job kind (type=NORMAL), and execution
+// mode (jobType ∈ BULK | REALTIME) are validated here so the caller can treat the
+// result as authoritative.
+//
+// BULK jobs store the user's selection as a tree under `object[]`; REALTIME jobs
+// instead record a single `objectApiName` at the root (one object changed per job),
+// so both shapes are normalised into a flat string[] here.
+const getBackupJobObjectNames = async (
+  backupJobId: string,
+  userId: string
+): Promise<{ objects: string[]; found: boolean }> => {
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId },
+      ProjectionExpression: 'userId, #type, jobType, #object, objectApiName',
+      ExpressionAttributeNames: { '#type': 'type', '#object': 'object' },
+    })
+  );
+
+  const item = result.Item as
+    | Pick<IBackupJob, 'userId' | 'type' | 'jobType' | 'object' | 'objectApiName'>
+    | undefined;
+
+  if (!item || item.userId !== userId || item.type !== BACKUP_JOB_TYPE) {
+    return { objects: [], found: false };
+  }
+
+  const names = item.jobType === 'REALTIME'
+    ? (item.objectApiName ? [item.objectApiName] : [])
+    : flattenObjectNames(item.object ?? []);
+
+  return { objects: [...new Set(names)], found: true };
+};
+
+const getObjectListByBackupJobIds = async (
+  backupJobIds: string[],
+  userId: string
+): Promise<Record<string, string[]>> => {
+  const results = await runWithConcurrency(
+    backupJobIds,
+    BACKUP_JOB_CONCURRENCY,
+    async (id) => {
+      const { objects, found } = await getBackupJobObjectNames(id, userId);
+      return { id, objects, found };
+    }
+  );
+
+  return results.reduce<Record<string, string[]>>((acc, { id, objects, found }) => {
+    if (found) acc[id] = objects;
+    return acc;
+  }, {});
 };
 
 export {
@@ -486,4 +550,5 @@ export {
   getJobActivityLogs,
   getSnapshotActivityLogs,
   getObjectListByConfigId,
+  getObjectListByBackupJobIds,
 };
