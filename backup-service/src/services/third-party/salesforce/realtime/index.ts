@@ -5,6 +5,7 @@ import { CORE_SERVICE, INTERNAL_SECRET } from '../../../../constant';
 import { buildSchemaS3Key, toParquetDataType, schemasAreEqual } from '../../../../utils/helper';
 import { downloadFromS3, uploadToS3, listS3Objects } from '../../../destination/s3';
 import { ICrmRealtimeHandler } from '../../types';
+import { createCsvGlueTable, registerBackupJobPartition, updateGlueTableSchema } from '../../glue';
 
 // ---------------------------------------------------------------------------
 // Map Salesforce CDC operation to the S3 folder convention used by bulk jobs
@@ -149,6 +150,21 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
       `Realtime job ${realtimeJobId}: uploaded ${records.length} ${operation} record(s) for ${objectApiName} → ${s3Path}`
     );
 
+    // Register the Glue partition for this job's first CSV upload — idempotent.
+    registerBackupJobPartition({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName: objectApiName,
+      backupJobId: realtimeJobId,
+      type: 'backup',
+      destConfig,
+    }).catch((err) =>
+      logger.error(
+        `[glue] failed to register partition | realtimeJobId:${realtimeJobId} objectApiName:${objectApiName} err:${err?.message ?? err}`
+      )
+    );
+
     // ── Real-time schema comparison using payload schema ────────────────────
     let schemaChanged = false;
 
@@ -164,6 +180,26 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
 
       schemaChanged = schemaComparison.schemaChanged;
 
+      // Ensure the Glue table exists on every invocation — createCsvGlueTable is
+      // idempotent (skips silently if already created). This handles first-time
+      // table creation without a separate first-hit detection branch.
+      createCsvGlueTable({
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName: objectApiName,
+        type: 'backup',
+        destConfig,
+        columns: schemaComparison.latestSchema.map((f: { apiName: string }) => ({
+          name: f.apiName,
+          type: 'string',
+        })),
+      }).catch((err) =>
+        logger.error(
+          `[glue] failed to create table | realtimeJobId:${realtimeJobId} objectApiName:${objectApiName} err:${err?.message ?? err}`
+        )
+      );
+
       if (schemaChanged) {
         const schemaKey = buildSchemaS3Key({
           crmId,
@@ -178,6 +214,20 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
 
         logger.info(
           `Realtime job ${realtimeJobId}: schema changed for ${objectApiName}, uploaded to ${versionedKey}`
+        );
+
+        updateGlueTableSchema({
+          crmId,
+          backupConfigId,
+          objectName: objectApiName,
+          columns: schemaComparison.latestSchema.map((f: { apiName: string }) => ({
+            name: f.apiName,
+            type: 'string',
+          })),
+        }).catch((err) =>
+          logger.error(
+            `[glue] failed to update table schema | realtimeJobId:${realtimeJobId} objectApiName:${objectApiName} err:${err?.message ?? err}`
+          )
         );
 
         await httpRequest({

@@ -3,10 +3,15 @@ const PORT = Number(process.env.PORT) || 3000;
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
+const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
+const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
 const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
 const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
+
+// AWS Glue / Athena
+const AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 'datavault');
 
 // Salesforce Config
 const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
@@ -97,7 +102,12 @@ export {
 
   // Aws Config
   AWS_REGION,
+  AWS_ACCESS_KEY_ID,
+  AWS_SECRET_ACCESS_KEY,
   DYNAMODB_ENDPOINT,
+
+  // AWS Glue / Athena
+  AWS_GLUE_DATABASE_PREFIX,
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
   TABLE_COUNTER_TABLE,

@@ -12,6 +12,11 @@ import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destinati
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
+import {
+  createCsvGlueTable,
+  registerBackupJobPartition,
+  updateGlueTableSchema,
+} from '../../../glue';
 
 // SOQL injection guards.
 // Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")
@@ -218,6 +223,35 @@ export const exportFirstTime = async (
       schemaKey,
       Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
     );
+
+    createCsvGlueTable({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+      destConfig,
+      columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
+    }).catch((err) =>
+      logger.error(
+        `[glue] failed to create table | backupJobId:${backupJobId} objectName:${objectName} err:${err?.message ?? err}`
+      )
+    );
+
+    registerBackupJobPartition({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      backupJobId,
+      type: 'backup',
+      destConfig,
+    }).catch((err) =>
+      logger.error(
+        `[glue] failed to register partition | backupJobId:${backupJobId} objectName:${objectName} err:${err?.message ?? err}`
+      )
+    );
+
     logger.info(`Object first-time backup complete`, {
       backupConfigId,
       backupJobId,
@@ -443,12 +477,41 @@ export const exportIncremental = async (
         );
         await updateBackupConfig(backupConfigId, { objects: updatedObjects });
       }
+
+      updateGlueTableSchema({
+        crmId,
+        backupConfigId,
+        objectName,
+        columns: latestSchema.map((f: { apiName: string }) => ({
+          name: f.apiName,
+          type: 'string',
+        })),
+      }).catch((err) =>
+        logger.error(
+          `[glue] failed to update table schema | backupJobId:${backupJobId} objectName:${objectName} err:${err?.message ?? err}`
+        )
+      );
+
       logger.info(`Object schema change detected`, {
         backupConfigId,
         backupJobId,
         objectName,
       });
     }
+
+    registerBackupJobPartition({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      backupJobId,
+      type: 'backup',
+      destConfig,
+    }).catch((err) =>
+      logger.error(
+        `[glue] failed to register partition | backupJobId:${backupJobId} objectName:${objectName} err:${err?.message ?? err}`
+      )
+    );
 
     logger.info(`Object incremental backup complete`, {
       backupConfigId,

@@ -299,7 +299,7 @@ const getBackupSnapshotLogs = async (params: {
 
       const crm = crmById.get(config.crmId);
       const configName = config.name ?? config.backupConfigId;
-      const sourceName = crm?.crmProfile?.name ?? crm?.name ?? crm?.crmName ?? config.crmId;
+      const sourceName = crm?.name ?? crm?.crmName ?? config.crmId;
 
       return {
         entries: items.map((job) => buildBackupJobLogEntry(job, configName, sourceName)),
@@ -411,7 +411,7 @@ const getArchivalSnapshotLogs = async (params: {
 
   const entries = filteredConfigs.map((config) => {
     const crm = crmById.get(config.crmId);
-    const sourceName = crm?.crmProfile?.name ?? crm?.name ?? crm?.crmName ?? config.crmId;
+    const sourceName = crm?.name ?? crm?.crmName ?? config.crmId;
     return buildArchivalConfigEntry(config, sourceName);
   });
 
