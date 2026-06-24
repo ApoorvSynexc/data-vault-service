@@ -3,8 +3,10 @@ import {
   CreateDatabaseCommand,
   CreateTableCommand,
   GetTableCommand,
+  BatchCreatePartitionCommand,
   EntityNotFoundException,
   Column,
+  PartitionInput,
 } from '@aws-sdk/client-glue';
 import {
   S3Client,
@@ -193,28 +195,46 @@ export interface ICreateCsvGlueTableParams {
   crmId: string;
   backupConfigId: string;
   objectApiName: string;
-  // S3 location on the client's destination bucket where the CSV files live.
-  // e.g. s3://<clientBucket>/<crmName>/<crmId>/<type>/<backupConfigId>/raw_data/<backupJobId>/<objectApiName>/
-  s3Location: string;
+  // Root S3 location above all backupJobId folders on the client's destination bucket.
+  // e.g. s3://<clientBucket>/<crmName>/<crmId>/<type>/<backupConfigId>/raw_data/
+  // Individual job partitions are registered separately via registerBackupJobPartition.
+  s3RootLocation: string;
   // Column definitions derived from the CSV header — crmId / backupConfigId /
-  // objectApiName are NOT columns in the CSV and must NOT appear here.
+  // objectApiName / backupJobId are NOT data columns and must NOT appear here.
   columns: IGlueColumnDef[];
 }
 
-// Creates a Glue Catalog table for a CSV that lives on the client's S3 bucket.
+export interface IRegisterBackupJobPartitionParams {
+  crmId: string;
+  backupConfigId: string;
+  objectApiName: string;
+  backupJobId: string;
+  // Full S3 location for this specific job's CSV files.
+  // e.g. s3://<clientBucket>/<crmName>/<crmId>/<type>/<backupConfigId>/raw_data/<backupJobId>/<objectName>/
+  s3PartitionLocation: string;
+}
+
+// Creates a Glue Catalog table for CSVs that live on the client's S3 bucket.
 // Skips creation silently when the table already exists so retries are safe.
+//
+// Partitioning strategy:
+//   The table root points to raw_data/ (above all backupJobId folders).
+//   backupJobId is declared as the sole partition key so Athena can prune reads
+//   to only the job(s) a query cares about — queries use WHERE backup_job_id = '...'
+//   and Athena skips every other job's S3 prefix entirely.
+//   New partitions are registered explicitly via registerBackupJobPartition after
+//   each upload completes — no MSCK REPAIR TABLE needed.
 //
 // Multi-tenancy isolation:
 //   - Database: datavault_<crmId>                    (one per tenant CRM)
 //   - Table:    cfg_<backupConfigId>_<objectApiName> (one per config × object)
-//   - S3 path:  supplied by caller from the client's destination bucket config
 //
 // CSV SerDe:
 //   - quoteChar '"'  — standard quoted-field handling
 //   - escapeChar '\' — backslash escaping inside quoted fields
 //   - skip.header.line.count 1 — Glue ignores the CSV header row on read
 export const createCsvGlueTable = async (params: ICreateCsvGlueTableParams): Promise<void> => {
-  const { crmId, backupConfigId, objectApiName, s3Location, columns } = params;
+  const { crmId, backupConfigId, objectApiName, s3RootLocation, columns } = params;
 
   const databaseName = buildDatabaseName(crmId);
   const tableName = buildTableName(backupConfigId, objectApiName);
@@ -237,9 +257,12 @@ export const createCsvGlueTable = async (params: ICreateCsvGlueTableParams): Pro
       DatabaseName: databaseName,
       TableInput: {
         Name: tableName,
+        // backupJobId is the partition key — not a data column.
+        // Athena uses it to restrict S3 reads to the relevant job prefix.
+        PartitionKeys: [{ Name: 'backup_job_id', Type: 'string' }],
         StorageDescriptor: {
           Columns: glueColumns,
-          Location: s3Location,
+          Location: s3RootLocation,
           InputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
           OutputFormat: 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat',
           SerdeInfo: {
@@ -262,4 +285,55 @@ export const createCsvGlueTable = async (params: ICreateCsvGlueTableParams): Pro
       },
     })
   );
+};
+
+// Registers a new backupJobId partition in the Glue Catalog after a backup job
+// finishes uploading its CSVs. This tells Athena exactly which S3 prefix to read
+// for that job — no MSCK REPAIR TABLE needed.
+//
+// Idempotent: AlreadyExistsException is swallowed so retries are safe.
+export const registerBackupJobPartition = async (
+  params: IRegisterBackupJobPartitionParams
+): Promise<void> => {
+  const { crmId, backupConfigId, objectApiName, backupJobId, s3PartitionLocation } = params;
+
+  const databaseName = buildDatabaseName(crmId);
+  const tableName = buildTableName(backupConfigId, objectApiName);
+
+  const partitionInput: PartitionInput = {
+    Values: [backupJobId],
+    StorageDescriptor: {
+      Location: s3PartitionLocation,
+      InputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
+      OutputFormat: 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat',
+      SerdeInfo: {
+        SerializationLibrary: 'org.apache.hadoop.hive.serde2.OpenCSVSerde',
+        Parameters: {
+          separatorChar: ',',
+          quoteChar: '"',
+          escapeChar: '\\',
+        },
+      },
+      Compressed: false,
+      NumberOfBuckets: -1,
+    },
+  };
+
+  try {
+    await glue.send(
+      new BatchCreatePartitionCommand({
+        DatabaseName: databaseName,
+        TableName: tableName,
+        PartitionInputList: [partitionInput],
+      })
+    );
+    logger.info(`[athena] registered partition | table:${tableName} backupJobId:${backupJobId}`);
+  } catch (err: any) {
+    // AlreadyExistsException from BatchCreatePartition surfaces inside the response
+    // errors array, not as a thrown exception — but guard the thrown path too.
+    if (err.name === 'AlreadyExistsException') {
+      return;
+    }
+    throw err;
+  }
 };
