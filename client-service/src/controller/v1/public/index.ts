@@ -102,7 +102,7 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
       url: `${BACKUP_SERVICE}/v1/realtime-backup`,
       method: 'POST',
       body: JSON.stringify({
-        userId: crm.userId,
+        userId: config.userId,
         backupConfigId: config.backupConfigId,
         crmId: crm.crmId,
         crmName: crm.crmName,

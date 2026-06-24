@@ -8,4 +8,5 @@ export * from './destination';
 export * from './crm';
 export * from './internal';
 export * from './public';
+export * from './salesforce';
 export * from './user';

@@ -13,10 +13,10 @@ export const defaultAdmin = {
     isMobileVerified: false,
   },
   password: process.env.DEFAULT_ADMIN_PASSWORD ?? 'Admin@1234',
-  role: {
+  ...(adminRole && {role: {
     name: adminRole.name,
     roleId: adminRole.roleId,
-  },
+  }}),
   authProvider: 'EMAIL',
   status: 'ACTIVE',
 };

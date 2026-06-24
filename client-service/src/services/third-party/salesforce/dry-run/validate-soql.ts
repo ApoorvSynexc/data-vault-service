@@ -4,7 +4,7 @@ import { buildOwnWhereBody, getMaxRelationshipDepth } from './soql-builder';
 import type { IValidateSoqlPayload, IValidateSoqlItem } from './types';
 
 export async function validateSoql(payload: IValidateSoqlPayload): Promise<IValidateSoqlItem> {
-  const { crmId, object, isParent } = payload;
+  const { user, object, isParent } = payload;
   const whereClause = buildOwnWhereBody(object);
 
   // Children cannot have any filter conditions
@@ -37,7 +37,7 @@ export async function validateSoql(payload: IValidateSoqlPayload): Promise<IVali
 
   // ── Apex validation ───────────────────────────────────────────────────────
 
-  const response = await apexValidateSoql(crmId, object.name, whereClause);
+  const response = await apexValidateSoql(user, object.name, whereClause);
 
   if (!response.isValid) {
     return {

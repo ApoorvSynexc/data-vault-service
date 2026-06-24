@@ -1,11 +1,12 @@
 import crypto from 'crypto';
-import { updateCrmCredentials } from '../../crm';
 import { httpRequest } from '../../../utils/http-request';
 import {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
 } from '../../../constant';
+import { encrypt } from '../../../utils/encryption';
+import { updateUser } from '../../user';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -59,35 +60,6 @@ export class SalesforceAuthExpiredError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Per-crmId refresh deduplication
-//   Prevents thundering herd: if N concurrent requests all get a 401 for the
-//   same CRM, only the first fires a refresh call. The rest await the same
-//   promise. Without this, N parallel refreshes race to write to DynamoDB and
-//   each one invalidates the previous token, causing cascading 401s.
-// ---------------------------------------------------------------------------
-
-const refreshInFlight = new Map<string, Promise<any>>();
-
-const deduplicatedRefresh = (
-  crmId: string,
-  refreshToken: string,
-  environment?: SalesforceEnvironment,
-  customUrl?: string
-): Promise<any> => {
-  const existing = refreshInFlight.get(crmId);
-  if (existing) {
-    return existing;
-  }
-
-  const promise = refreashSalesforceToken(refreshToken, environment, customUrl).finally(() => {
-    refreshInFlight.delete(crmId);
-  });
-
-  refreshInFlight.set(crmId, promise);
-  return promise;
-};
-
-// ---------------------------------------------------------------------------
 // Centralized Salesforce API request
 //   - Injects Authorization header automatically
 //   - On 401 (expired access token) → refreshes token and retries once
@@ -105,7 +77,6 @@ interface SalesforceRequestOptions {
 interface SalesforceTokens {
   accessToken: string;
   refreshToken: string;
-  crmId?: string;
   userId?: string;
   environment?: SalesforceEnvironment;
   customUrl?: string;
@@ -140,9 +111,7 @@ const salesforceRequest = async <T = any>(
     let refreshed: any;
     try {
       console.log('Refreshing Token');
-      refreshed = tokens.crmId
-        ? await deduplicatedRefresh(tokens.crmId, tokens.refreshToken, tokens.environment, tokens.customUrl)
-        : await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
+      refreshed = await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
       console.log('Refreshing Token success');
     } catch (e: any) {
       console.log('Refreshing Token failed', e?.message);
@@ -151,17 +120,14 @@ const salesforceRequest = async <T = any>(
     }
 
     const newAccessToken: string = refreshed.access_token;
-    const newRefreshToken: string = refreshed.refresh_token ?? tokens.refreshToken;
 
-    if (tokens.crmId) {
-      await updateCrmCredentials(
-        tokens.crmId,
-        {
-          access_token: newAccessToken,
-          refresh_token: newRefreshToken,
-        },
-        tokens.userId!
-      );
+    if (tokens.userId) {
+      const crmCredential = {
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+      }
+      const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+      await updateUser({ userId: tokens.userId }, { crmCredential: encrptedCrm });
     }
 
     const data = await makeCall(newAccessToken);
@@ -204,14 +170,14 @@ const getSalesforceToken = async (
   customUrl?: string
 ) => {
   const { tokenUrl } = getSalesforceUrls(environment, customUrl);
-  console.log({tokenUrl, environment, customUrl,code, code_verifier});
+  console.log({ tokenUrl, environment, customUrl, code, code_verifier });
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     client_id: String(SALESFORCE_CLIENT_ID),
     client_secret: String(SALESFORCE_CLIENT_SECRET),
     redirect_uri: String(SALESFORCE_REDIRECT_URI),
-    code_verifier,   
+    code_verifier,
   }).toString();
 
   return httpRequest({
@@ -252,7 +218,6 @@ const getSalesforceProfile = async (
 ) => {
   const { profileUrl } = getSalesforceUrls(environment, customUrl);
   const url = profileUrl;
-  console.log({url})
   return salesforceRequest({ url, method: 'GET' }, tokens);
 };
 
