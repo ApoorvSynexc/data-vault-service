@@ -1,4 +1,3 @@
-import { access } from 'node:fs';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   createDestination,
@@ -10,6 +9,8 @@ import {
   updateDestination,
 } from '../../../services';
 import { wrapController } from '../../../utils/helper';
+import { grantAthenaRoleS3Access } from '../../../services/third-party/athena';
+import { logger } from '../../../middlewares';
 
 const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { name, provider, type, config } = req.body;
@@ -23,6 +24,20 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
     config,
     ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
   });
+
+  // Grant our Athena Role ARN read access to the client's S3 bucket so Athena
+  // can query their data. Non-fatal — destination is already saved, policy can
+  // be retried. Only applies to S3 destinations that carry bucket credentials.
+  if (type === 'S3' && config?.bucketName && config?.region && config?.accessKeyId && config?.secretAccessKey) {
+    grantAthenaRoleS3Access({
+      bucketName: config.bucketName,
+      region: config.region,
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    }).catch((err) =>
+      logger.error(`[destination] failed to grant Athena role S3 access | destinationId:${destination.destinationId} err:${err?.message ?? err}`)
+    );
+  }
 
   makeResponse(req, res, 201, true, 'create', {
     ...destination,
