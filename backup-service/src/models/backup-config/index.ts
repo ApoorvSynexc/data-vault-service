@@ -36,6 +36,7 @@ export interface IBackupConfig {
   lastEventId?: string;
   schemaChange?: boolean;
   sizeInBytes?: number;
+  successRecordCount?: number;
   triggerResults?: ITriggerResult[];
   spaceId?: string;
   crm?: any;

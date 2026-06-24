@@ -1,6 +1,7 @@
 import { OBJECT_STATUS } from '../../../../../constant';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
+import { incrementBackupConfigCounters } from '../../../../backup-config';
 import {
   fetchCsvFromS3,
   listAndDeleteS3Prefix,
@@ -411,6 +412,11 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
           salesforceApiCount: 3,
         },
       });
+      if (jobResults.successCount) {
+        await incrementBackupConfigCounters(backupConfigId, {
+          successRecordCount: jobResults.successCount,
+        });
+      }
     } else {
       // Normal mode: iterate over S3 data files.
       for (let i = 0; i < (s3Urls ?? []).length; i++) {
@@ -487,6 +493,11 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
             salesforceApiCount: 3,
           },
         });
+        if (jobResults.successCount) {
+          await incrementBackupConfigCounters(backupConfigId, {
+            successRecordCount: jobResults.successCount,
+          });
+        }
       }
     }
   } catch (err: any) {
