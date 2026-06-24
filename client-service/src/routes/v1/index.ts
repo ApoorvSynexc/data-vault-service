@@ -12,6 +12,7 @@ import { internalRouter } from './internal.route';
 import { publicRouter } from './public.routes';
 import { archivalRouter } from './archival-config.routes';
 import { salesforceRouter } from './salesforce.route';
+import { aclGateway } from '../../middlewares/gateway';
 
 const router = Router();
 
@@ -22,13 +23,15 @@ router.use('/public', publicRouter);
 router.use('/salesforce', salesforceRouter);
 
 // Private routes
-router.use('/user', authenticate, userRouter);
-router.use('/crm', authenticate, crmRouter);
-router.use('/backup-config', authenticate, backupRouter);
-router.use('/archival-config', authenticate, archivalRouter);
-router.use('/backup-job', authenticate, backupJobRouter);
+router.use(authenticate);
+router.use(aclGateway);
+router.use('/user', userRouter);
+router.use('/crm', crmRouter);
+router.use('/backup-config', backupRouter);
+router.use('/archival-config', archivalRouter);
+router.use('/backup-job', backupJobRouter);
+router.use('/dashboard', dashboardRouter);
+router.use('/destination', destinationRouter);
 router.use('/restore-retrieve', authenticate, restoreRetrieveRouter);
-router.use('/dashboard', authenticate, dashboardRouter);
-router.use('/destination', authenticate, destinationRouter);
 
 export const v1Routers = router;
