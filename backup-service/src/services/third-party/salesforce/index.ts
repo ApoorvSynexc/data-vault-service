@@ -68,11 +68,15 @@ const exportObjectToDestinationArchival = async (
   destinationType: string,
   destConfig: IDestinationConfig
 ): Promise<void> => {
-  logger.info(`[archival:payload] received | backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${object.name} status:${object.status ?? 'none'}`);
+  logger.info(
+    `[archival:payload] received | backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${object.name} status:${object.status ?? 'none'}`
+  );
   logger.info(`[archival:payload] full object | ${JSON.stringify(object, null, 2)}`);
 
   if (object.status === OBJECT_STATUS.completed) {
-    logger.info(`[archival:payload] skipping — already completed | backupJobId:${backupJobId} objectName:${object.name}`);
+    logger.info(
+      `[archival:payload] skipping — already completed | backupJobId:${backupJobId} objectName:${object.name}`
+    );
     return;
   }
 
@@ -229,7 +233,9 @@ const salesforceHandler: ICrmBackupHandler = {
           ).catch((err: any) => {
             // Object already marked FAILED + errorMessage inside archiveAndHardDelete.
             // Log and continue so remaining objects are not skipped.
-            logger.error(`[archival] object failed — continuing with remaining objects | backupJobId:${backupJobId} objectName:${item.name} error:${err?.message}`);
+            logger.error(
+              `[archival] object failed — continuing with remaining objects | backupJobId:${backupJobId} objectName:${item.name} error:${err?.message}`
+            );
           })
         )
       );
@@ -248,17 +254,20 @@ const salesforceHandler: ICrmBackupHandler = {
       OBJECT_STATUS.deletionJobFailed,
       OBJECT_STATUS.deletionRecordsFailed,
     ]);
-    const hasAnyFailure  = allObjects.some((o) => FAILURE_STATUSES.has(o.status ?? ''));
-    const hasAnySuccess  = allObjects.some((o) => o.status === OBJECT_STATUS.completed);
+    const hasAnyFailure = allObjects.some((o) => FAILURE_STATUSES.has(o.status ?? ''));
+    const hasAnySuccess = allObjects.some((o) => o.status === OBJECT_STATUS.completed);
 
-    const finalStatus = hasAnyFailure && hasAnySuccess
-      ? BACKUP_STATUS.partialFailure
-      : hasAnyFailure
-      ? BACKUP_STATUS.failed
-      : BACKUP_STATUS.success;
+    const finalStatus =
+      hasAnyFailure && hasAnySuccess
+        ? BACKUP_STATUS.partialFailure
+        : hasAnyFailure
+          ? BACKUP_STATUS.failed
+          : BACKUP_STATUS.success;
 
     await updateBackupConfig(backupConfigId, { backupStatus: finalStatus });
-    logger.info(`Archival job completed | backupJobId:${backupJobId} hasAnyFailure:${hasAnyFailure} hasAnySuccess:${hasAnySuccess} finalStatus:${finalStatus}`);
+    logger.info(
+      `Archival job completed | backupJobId:${backupJobId} hasAnyFailure:${hasAnyFailure} hasAnySuccess:${hasAnySuccess} finalStatus:${finalStatus}`
+    );
 
     return hasAnyFailure ? 'PARTIAL_FAILURE' : 'SUCCESS';
   },

@@ -222,9 +222,11 @@ export const apexCountOne = async (
 
   const result = await salesforceRequest(
     {
-      url:    `${APEX_BASE(instanceUrl)}/object-record-count`,
-      method: 'POST',
-      body:   JSON.stringify({ items: [item] }),
+      url:       `${APEX_BASE(instanceUrl)}/object-record-count`,
+      method:    'POST',
+      body:      JSON.stringify({ items: [item] }),
+      // Dry-run counts can hit large filtered tables — 30s default is too tight.
+      timeoutMs: 60_000,
     },
     { accessToken: access_token, refreshToken: refresh_token, crmId, userId: crm.userId, environment: crm.environment, customUrl: crm.customUrl }
   );

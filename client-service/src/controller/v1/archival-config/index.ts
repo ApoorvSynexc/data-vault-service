@@ -27,8 +27,109 @@ import {
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
 import { IObject } from "../../../models";
-import { buildOwnWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
+import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
+import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
+
+// ── Parent chain types ────────────────────────────────────────────────────────
+
+interface ParentFilters {
+  condition: ICondition | null;
+  fields: IFieldFilter[] | null;
+}
+
+interface ParentNode {
+  apiName: string;
+  referenceName: string;
+  filters: ParentFilters;
+  parent?: ParentNode;
+}
+
+interface ObjectRecordsBody {
+  crmId: string;
+  apiName: string;
+  fields: string[];
+  referenceName?: string;
+  parent?: ParentNode;
+  objectConfig?: object;
+}
+
+// ── WHERE clause builder ──────────────────────────────────────────────────────
+// Flattens the nested parent chain (outermost = immediate parent, innermost = root),
+// reverses it to root-first order, builds the root's own WHERE body, then
+// transforms it outward through each ancestor using buildChildWhereBody.
+//
+// Returns null when the root has no filter conditions (fields is null and condition
+// has no soqlQuery), which signals the caller to omit the whereClause entirely.
+
+// Converts a FK field name to its SOQL relationship traversal name.
+// "AccountId"  → "Account"   (strip trailing "Id")
+// "Trainer__c" → "Trainer__r" (replace "__c" with "__r")
+// "WhatId"     → "What"      (strip trailing "Id")
+const toRelationshipName = (fieldApiName: string): string => {
+  if (fieldApiName.endsWith('__c')) return `${fieldApiName.slice(0, -3)}__r`;
+  if (fieldApiName.endsWith('Id')) return fieldApiName.slice(0, -2);
+  return fieldApiName;
+};
+
+const buildWhereClauseFromParentChain = (parent: ParentNode, childReferenceName?: string): string | null => {
+  const chain: ParentNode[] = [];
+  let node: ParentNode | undefined = parent;
+  while (node) {
+    chain.push(node);
+    node = node.parent;
+  }
+  // chain[0] = immediate parent (outermost), chain[last] = root (innermost)
+  chain.reverse(); // now root-first: [root, level1, ..., immediate-parent]
+
+  const root = chain[0];
+  const rootWhereBody = buildOwnWhereBody({
+    condition: root.filters.condition ?? undefined,
+    field: root.filters.fields ?? undefined,
+  });
+
+  // Direct child of root (chain has only the root as parent):
+  // use buildChildWhereBody to translate root's WHERE into the child's FK field.
+  // e.g. root WHERE "Id != null" + childReferenceName "AccountId" → "AccountId != null"
+  if (chain.length === 1) {
+    if (!childReferenceName) { return rootWhereBody; }
+    if (!rootWhereBody) { return `${childReferenceName} != null`; }
+    return buildChildWhereBody(rootWhereBody, childReferenceName);
+  }
+
+  // Multiple levels deep: build a dotted SOQL traversal path.
+  //
+  // The chain contains only parent nodes (root → ... → immediate parent).
+  // childReferenceName is the FK on the requested object itself (e.g. "WhatId").
+  //
+  // Example:
+  //   chain  = [Account, Contact, Pok_mon__c]  (root-first)
+  //   childReferenceName = "WhatId"  (ContactRequest's own FK)
+  //
+  //   childReferenceName "WhatId"     → toRelName → "What"       (outermost traversal)
+  //   chain[2].referenceName "Trainer__c" → toRelName → "Trainer__r" (middle traversal)
+  //   chain[1].referenceName "AccountId"                              (terminal FK field)
+  //
+  // Result: "What.Trainer__r.AccountId != null"
+
+  const traversalParts: string[] = [];
+
+  // Outermost: the requested child object's own FK → relationship name
+  if (childReferenceName) {
+    traversalParts.push(toRelationshipName(childReferenceName));
+  }
+
+  // Intermediate ancestors (chain[last] down to chain[2]): relationship names
+  for (let i = chain.length - 1; i >= 2; i--) {
+    traversalParts.push(toRelationshipName(chain[i].referenceName));
+  }
+
+  // Terminal: chain[1].referenceName is the FK column on root's immediate child — kept as-is
+  traversalParts.push(chain[1].referenceName);
+
+  const fieldPath = traversalParts.join('.');
+  return `${fieldPath} != null`;
+};
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -57,21 +158,60 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 };
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, objectConfig, ...body } = req.body;
+    const { crmId, apiName, fields, referenceName, parent, objectConfig } = req.body as ObjectRecordsBody;
+
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
 
-    // Build WHERE clause from objectConfig if the caller didn't supply one directly
-    if (objectConfig && !body.whereClause) {
-        const whereBody = buildOwnWhereBody(objectConfig);
-        if (whereBody) {
-            body.whereClause = whereBody;
-        }
+    if (!apiName) {
+        return makeResponse(req, res, 400, false, 'params_required');
     }
 
-    const apexResult = await getApexObjectRecords(String(crmId), body);
+    let whereClause: string | undefined;
+
+    if (parent) {
+        // Child object — derive WHERE clause by transforming the parent chain
+        const whereBody = buildWhereClauseFromParentChain(parent, referenceName);
+        if (whereBody) { whereClause = whereBody; }
+    } else if (objectConfig) {
+        // Root object — build WHERE clause directly from its own condition/fields
+        const whereBody = buildOwnWhereBody(objectConfig as Parameters<typeof buildOwnWhereBody>[0]);
+        if (whereBody) { whereClause = whereBody; }
+    }
+
+    const apexResult = await getApexObjectRecords(crmId, {
+        apiName,
+        fields,
+        ...(whereClause && { whereClause }),
+    });
+
     makeResponse(req, res, 200, true, 'fetch', apexResult);
+};
+
+// Computes per-row aggregate stats (records archived, bytes archived) by
+// walking that config's archival job history. Adds `archivedRecordsCount` +
+// `archivedSizeInBytes` to each row in place. Runs in parallel across rows
+// so list latency is bounded by the slowest single config, not the sum.
+const attachArchivalStatsToRows = async (documents: any[]): Promise<void> => {
+    await Promise.all(
+        documents.map(async (document) => {
+            try {
+                const stats = await computeArchivalJobStats({
+                    indexName: 'backupConfigId-index',
+                    keyName: 'backupConfigId',
+                    keyValue: document.backupConfigId,
+                });
+                document.archivedRecordsCount = stats.totalRecords;
+                document.archivedSizeInBytes = stats.totalSize;
+            } catch (err: any) {
+                // Don't fail the whole list if one config's stats query throws.
+                logger.warn(`Failed to compute archival stats for ${document.backupConfigId}: ${err?.message ?? err}`);
+                document.archivedRecordsCount = 0;
+                document.archivedSizeInBytes = 0;
+            }
+        })
+    );
 };
 
 const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -98,6 +238,8 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
             }
         }
 
+        await attachArchivalStatsToRows(documents);
+
         const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, userId);
 
         return makeResponse(req, res, 200, true, 'fetch', documents, {
@@ -112,6 +254,8 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
         { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL', name: name },
         { limit: 1000 }
     );
+
+    await attachArchivalStatsToRows(documents);
 
     makeResponse(req, res, 200, true, 'fetch', documents);
 };

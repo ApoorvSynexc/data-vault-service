@@ -57,7 +57,7 @@ const INITIAL_PAGE_KEY = 'initial';
 
 // Salesforce Bulk API v2 returns at most this many records per result page.
 // We request the maximum each time and loop via the sforce-locator header.
-const MAX_RECORDS_PER_PAGE = 50000;
+const MAX_RECORDS_PER_PAGE = 10000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -149,9 +149,9 @@ interface IFetchContext {
  */
 const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<number> => {
   const { instanceUrl, tokens, jobId, backupJobId, object } = payload;
-  let salesforceApiCount = 0;
-
-  logger.info(`[archival:poll] started | jobId:${jobId} objectName:${object.name} backupJobId:${backupJobId ?? 'n/a'}`);
+  logger.info(
+    `[archival:poll] started | jobId:${jobId} objectName:${object.name} backupJobId:${backupJobId ?? 'n/a'}`
+  );
 
   // Absolute deadline prevents an infinite loop if Salesforce gets stuck.
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
@@ -163,7 +163,9 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 
     if (Date.now() >= deadline) {
-      logger.error(`[archival:poll] timeout | jobId:${jobId} objectName:${object.name} pollCount:${pollCount}`);
+      logger.error(
+        `[archival:poll] timeout | jobId:${jobId} objectName:${object.name} pollCount:${pollCount}`
+      );
       throw new Error(
         `Bulk job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`
       );
@@ -178,7 +180,9 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
       numberRecordsProcessed?: number;
     }>({ url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}` }, tokens);
 
-    logger.info(`[archival:poll] tick #${pollCount} | jobId:${jobId} objectName:${object.name} state:${res.state} recordsProcessed:${res.numberRecordsProcessed ?? 0}`);
+    logger.info(
+      `[archival:poll] tick #${pollCount} | jobId:${jobId} objectName:${object.name} state:${res.state} recordsProcessed:${res.numberRecordsProcessed ?? 0}`
+    );
 
     // Persist the live record count so the dashboard can show progress
     // while Salesforce is still processing the query in the background.
@@ -186,17 +190,25 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
       latestObjects = await updateArchivalObject({
         backupJobId,
         ...(latestObjects.length ? { objects: latestObjects } : {}),
-        object: { id: object.id, salesforceApiCount: 1, totalRecordCount: res.numberRecordsProcessed },
+        object: {
+          id: object.id,
+          salesforceApiCount: 1,
+          totalRecordCount: res.numberRecordsProcessed,
+        },
       });
     }
 
     if (res.state === 'JobComplete') {
-      logger.info(`[archival:poll] complete | jobId:${jobId} objectName:${object.name} totalRecords:${res.numberRecordsProcessed ?? 0} pollCount:${pollCount}`);
+      logger.info(
+        `[archival:poll] complete | jobId:${jobId} objectName:${object.name} totalRecords:${res.numberRecordsProcessed ?? 0} pollCount:${pollCount}`
+      );
       return res.numberRecordsProcessed ?? 0;
     }
 
     if (res.state === 'Failed' || res.state === 'Aborted') {
-      logger.error(`[archival:poll] job ${res.state} | jobId:${jobId} objectName:${object.name} error:${res.errorMessage ?? 'unknown'}`);
+      logger.error(
+        `[archival:poll] job ${res.state} | jobId:${jobId} objectName:${object.name} error:${res.errorMessage ?? 'unknown'}`
+      );
       throw new Error(`Bulk job ${jobId} ${res.state}: ${res.errorMessage ?? 'unknown'}`);
     }
 
@@ -213,8 +225,12 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
 //   AccountId  →  Account     (standard lookup: strip trailing Id)
 //   OwnerId    →  Owner
 function fkToRelationshipName(fieldApiName: string): string {
-  if (fieldApiName.endsWith('__c')) { return `${fieldApiName.slice(0, -3)}__r`; }
-  if (fieldApiName.endsWith('Id'))  { return fieldApiName.slice(0, -2); }
+  if (fieldApiName.endsWith('__c')) {
+    return `${fieldApiName.slice(0, -3)}__r`;
+  }
+  if (fieldApiName.endsWith('Id')) {
+    return fieldApiName.slice(0, -2);
+  }
   return fieldApiName;
 }
 
@@ -236,7 +252,9 @@ function transformWhereBodyForChild(whereBody: string, fkFieldName: string): str
   return whereBody.replace(
     /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)(\s*(?:!=|>=|<=|=|>|<)|\s+(?:NOT\s+IN|IN|LIKE)\s)/gi,
     (_match, field, op) => {
-      if (field === 'Id') { return `${fkFieldName}${op}`; }
+      if (field === 'Id') {
+        return `${fkFieldName}${op}`;
+      }
       return `${relName}.${field}${op}`;
     }
   );
@@ -263,7 +281,9 @@ async function uploadSingleObject(
   const fieldApiName = (object as any).fieldApiName as string | undefined;
 
   if (!fieldApiName) {
-    logger.error(`[archival:child] fieldApiName missing | backupJobId:${backupJobId} objectName:${object.name}`);
+    logger.error(
+      `[archival:child] fieldApiName missing | backupJobId:${backupJobId} objectName:${object.name}`
+    );
     await updateArchivalObject({
       backupJobId,
       object: { id: object.id, status: OBJECT_STATUS.failed, errorMessage: 'fieldApiName missing' },
@@ -276,16 +296,27 @@ async function uploadSingleObject(
   const effectiveWhereBody = transformWhereBodyForChild(parentWhereBody, fieldApiName);
 
   // Skip re-upload for nodes that already completed Phase 2 on a previous run.
-  if (object.status === OBJECT_STATUS.uploadCompleted || object.status === OBJECT_STATUS.completed) {
-    logger.info(`[archival:child] skip (already uploaded) | backupJobId:${backupJobId} objectName:${object.name} status:${object.status}`);
+  if (
+    object.status === OBJECT_STATUS.uploadCompleted ||
+    object.status === OBJECT_STATUS.completed
+  ) {
+    logger.info(
+      `[archival:child] skip (already uploaded) | backupJobId:${backupJobId} objectName:${object.name} status:${object.status}`
+    );
     return { s3UrlsMap, effectiveWhereBody };
   }
 
-  logger.info(`[archival:child] starting | backupJobId:${backupJobId} objectName:${object.name} fieldApiName:${fieldApiName}`);
-  logger.info(`[archival:child] WHERE build | objectName:${object.name} parentWhereBody:"${parentWhereBody || '(none)'}" → effectiveWhereBody:"${effectiveWhereBody}"`);
+  logger.info(
+    `[archival:child] starting | backupJobId:${backupJobId} objectName:${object.name} fieldApiName:${fieldApiName}`
+  );
+  logger.info(
+    `[archival:child] WHERE build | objectName:${object.name} parentWhereBody:"${parentWhereBody || '(none)'}" → effectiveWhereBody:"${effectiveWhereBody}"`
+  );
 
-  const { fieldNames, schema } = await getObjectMetadata(ctx.tokens.crmId, object.name);
-  const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE ${effectiveWhereBody} ORDER BY Id ASC`;
+  const { fieldNames, schema } = await getObjectMetadata(ctx.tokens.crmId, object.name, 'archival');
+  // Exclude soft-deleted records from every level of the archival query — see
+  // the matching comment in archival/index.ts for the rationale.
+  const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE IsDeleted = false AND (${effectiveWhereBody}) ORDER BY Id ASC`;
 
   logger.info(`[archival:child] SOQL | objectName:${object.name} soql:${soql}`);
 
@@ -299,9 +330,16 @@ async function uploadSingleObject(
       object: { id: object.id, status: OBJECT_STATUS.bulkQueryInProgress, salesforceApiCount: 1 },
     });
 
-    const jobId = await createBulkQueryJob({ instanceUrl: ctx.instanceUrl, tokens: ctx.tokens, soql, operation: 'query' });
+    const jobId = await createBulkQueryJob({
+      instanceUrl: ctx.instanceUrl,
+      tokens: ctx.tokens,
+      soql,
+      operation: 'query',
+    });
     salesforceApiCount += 1;
-    logger.info(`[archival:child] bulk job created | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId}`);
+    logger.info(
+      `[archival:child] bulk job created | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId}`
+    );
 
     const totalRecordCount = await pollBulkJobArchival({
       instanceUrl: ctx.instanceUrl,
@@ -311,23 +349,39 @@ async function uploadSingleObject(
       object,
     });
 
-    logger.info(`[archival:child] bulk job complete | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId} totalRecords:${totalRecordCount}`);
+    logger.info(
+      `[archival:child] bulk job complete | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId} totalRecords:${totalRecordCount}`
+    );
 
     await updateArchivalObject({
       backupJobId,
-      object: { id: object.id, status: OBJECT_STATUS.bulkQueryCompleted, totalRecordCount, salesforceApiCount },
+      object: {
+        id: object.id,
+        status: OBJECT_STATUS.bulkQueryCompleted,
+        totalRecordCount,
+        salesforceApiCount,
+      },
     });
 
     if (!totalRecordCount) {
-      logger.info(`[archival:child] no records — skipping upload | backupJobId:${backupJobId} objectName:${object.name}`);
+      logger.info(
+        `[archival:child] no records — skipping upload | backupJobId:${backupJobId} objectName:${object.name}`
+      );
       await updateArchivalObject({
         backupJobId,
-        object: { id: object.id, status: OBJECT_STATUS.completed, completedRecordCount: 0, errorMessage: '' },
+        object: {
+          id: object.id,
+          status: OBJECT_STATUS.completed,
+          completedRecordCount: 0,
+          errorMessage: '',
+        },
       });
       return { s3UrlsMap, effectiveWhereBody };
     }
 
-    logger.info(`[archival:child] upload starting | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${totalRecordCount}`);
+    logger.info(
+      `[archival:child] upload starting | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${totalRecordCount}`
+    );
     await updateArchivalObject({
       backupJobId,
       object: { id: object.id, status: OBJECT_STATUS.transferInProgress },
@@ -342,7 +396,9 @@ async function uploadSingleObject(
         ? `${ctx.instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${MAX_RECORDS_PER_PAGE}`
         : `${ctx.instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${MAX_RECORDS_PER_PAGE}`;
 
-      logger.info(`[archival:child] fetching page ${pageCount + 1} | backupJobId:${backupJobId} objectName:${object.name} locator:${locator ?? 'initial'}`);
+      logger.info(
+        `[archival:child] fetching page ${pageCount + 1} | backupJobId:${backupJobId} objectName:${object.name} locator:${locator ?? 'initial'}`
+      );
 
       const response = await fetchPage(url);
       salesforceApiCount += 1;
@@ -369,7 +425,9 @@ async function uploadSingleObject(
       const pageRecords = parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
       completedRecordCount += pageRecords;
 
-      logger.info(`[archival:child] page ${pageCount} uploaded | backupJobId:${backupJobId} objectName:${object.name} pageRecords:${pageRecords} totalSoFar:${completedRecordCount} sizeBytes:${csvBuffer.byteLength} s3Key:${s3Key} hasMore:${!!locator}`);
+      logger.info(
+        `[archival:child] page ${pageCount} uploaded | backupJobId:${backupJobId} objectName:${object.name} pageRecords:${pageRecords} totalSoFar:${completedRecordCount} sizeBytes:${csvBuffer.byteLength} s3Key:${s3Key} hasMore:${!!locator}`
+      );
 
       await updateArchivalObject({
         backupJobId,
@@ -383,46 +441,90 @@ async function uploadSingleObject(
       });
     } while (locator !== null);
 
-    logger.info(`[archival:child] all pages uploaded | backupJobId:${backupJobId} objectName:${object.name} totalPages:${pageCount} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`);
+    logger.info(
+      `[archival:child] all pages uploaded | backupJobId:${backupJobId} objectName:${object.name} totalPages:${pageCount} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`
+    );
 
     // Schema comparison — versioned upload when schema changes.
-    logger.info(`[archival:child] checking schema | backupJobId:${backupJobId} objectName:${object.name}`);
+    logger.info(
+      `[archival:child] checking schema | backupJobId:${backupJobId} objectName:${object.name}`
+    );
     try {
-      const schemaKey = buildSchemaS3Key({ crmId: ctx.crmId, crmName: ctx.crmName, backupConfigId: ctx.backupConfigId, objectName: object.name, type: 'archival' });
+      const schemaKey = buildSchemaS3Key({
+        crmId: ctx.crmId,
+        crmName: ctx.crmName,
+        backupConfigId: ctx.backupConfigId,
+        objectName: object.name,
+        type: 'archival',
+      });
       const schemaFolder = schemaKey.replace('/fields.json', '/');
       const allSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
       const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
-      const latestSchemaWithParquet = schema.map((field: { dataType: string }) => ({ ...field, parquetDataType: toParquetDataType(field.dataType) }));
+      const latestSchemaWithParquet = schema.map((field: { dataType: string }) => ({
+        ...field,
+        parquetDataType: toParquetDataType(field.dataType),
+      }));
 
       if (!allSchemaKeys.length) {
-        await uploadToS3(ctx.destConfig, schemaKey, Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2)));
-        logger.info(`[archival:child] schema uploaded (first time) | backupJobId:${backupJobId} objectName:${object.name} key:${schemaKey}`);
+        await uploadToS3(
+          ctx.destConfig,
+          schemaKey,
+          Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2))
+        );
+        logger.info(
+          `[archival:child] schema uploaded (first time) | backupJobId:${backupJobId} objectName:${object.name} key:${schemaKey}`
+        );
       } else {
-        const currentKey = versionedKeys.length ? versionedKeys[versionedKeys.length - 1] : schemaKey;
+        const currentKey = versionedKeys.length
+          ? versionedKeys[versionedKeys.length - 1]
+          : schemaKey;
         let changed = false;
         try {
           const existing = await downloadFromS3(ctx.destConfig, currentKey);
-          changed = !existing || !schemasAreEqual(JSON.parse(existing.toString()), latestSchemaWithParquet);
-        } catch { changed = true; }
+          changed =
+            !existing || !schemasAreEqual(JSON.parse(existing.toString()), latestSchemaWithParquet);
+        } catch {
+          changed = true;
+        }
         if (changed) {
           const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
-          await uploadToS3(ctx.destConfig, versionedKey, Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2)));
-          logger.info(`[archival:child] schema change detected — versioned upload | backupJobId:${backupJobId} objectName:${object.name} key:${versionedKey}`);
-          await updateArchivalObject({ backupJobId, object: { id: object.id, schemaChange: true } });
+          await uploadToS3(
+            ctx.destConfig,
+            versionedKey,
+            Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2))
+          );
+          logger.info(
+            `[archival:child] schema change detected — versioned upload | backupJobId:${backupJobId} objectName:${object.name} key:${versionedKey}`
+          );
+          await updateArchivalObject({
+            backupJobId,
+            object: { id: object.id, schemaChange: true },
+          });
         } else {
-          logger.info(`[archival:child] schema unchanged | backupJobId:${backupJobId} objectName:${object.name}`);
+          logger.info(
+            `[archival:child] schema unchanged | backupJobId:${backupJobId} objectName:${object.name}`
+          );
         }
       }
     } catch (err: any) {
-      logger.error(`[archival:child] schema comparison failed | backupJobId:${backupJobId} objectName:${object.name} error:${err?.message ?? err}`);
+      logger.error(
+        `[archival:child] schema comparison failed | backupJobId:${backupJobId} objectName:${object.name} error:${err?.message ?? err}`
+      );
     }
 
-    logger.info(`[archival:child] completed | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`);
+    logger.info(
+      `[archival:child] completed | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`
+    );
     return { s3UrlsMap, effectiveWhereBody };
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
-    logger.error(`[archival:child] failed | backupJobId:${backupJobId} objectName:${object.name} error:${errorMsg}`);
-    await updateArchivalObject({ backupJobId, object: { id: object.id, status: OBJECT_STATUS.failed, errorMessage: errorMsg } });
+    logger.error(
+      `[archival:child] failed | backupJobId:${backupJobId} objectName:${object.name} error:${errorMsg}`
+    );
+    await updateArchivalObject({
+      backupJobId,
+      object: { id: object.id, status: OBJECT_STATUS.failed, errorMessage: errorMsg },
+    });
     throw err;
   }
 }
@@ -492,7 +594,9 @@ const uploadBulkResultsByPageArchival = async (
   let locator: string | null = startLocator;
   const fetchPage = makePageFetcher(tokens);
 
-  logger.info(`[archival:parent] upload starting | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId} parentWhereBody:"${parentWhereBody || '(none)'}" resumeLocator:${startLocator ?? 'none'} resumeCount:${startCompletedRecordCount}`);
+  logger.info(
+    `[archival:parent] upload starting | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId} parentWhereBody:"${parentWhereBody || '(none)'}" resumeLocator:${startLocator ?? 'none'} resumeCount:${startCompletedRecordCount}`
+  );
 
   let pageCount = 0;
 
@@ -510,7 +614,9 @@ const uploadBulkResultsByPageArchival = async (
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
         : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
 
-      logger.info(`[archival:parent] fetching page ${pageCount + 1} | backupJobId:${backupJobId} objectName:${object.name} locator:${locator ?? 'initial'}`);
+      logger.info(
+        `[archival:parent] fetching page ${pageCount + 1} | backupJobId:${backupJobId} objectName:${object.name} locator:${locator ?? 'initial'}`
+      );
 
       const response = await fetchPage(url);
       salesforceApiCount += 1;
@@ -526,9 +632,8 @@ const uploadBulkResultsByPageArchival = async (
       const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
 
       // Read the full CSV text and upload to S3.
-      const csvText = await response.text();
       const parentS3Key = buildArchivalFileS3Key(crmId, crmName, backupConfigId, backupJobId, object.name);
-      const csvBuffer = Buffer.from(csvText, 'utf-8');
+      const csvBuffer = Buffer.from(await response.arrayBuffer());
       await uploadToS3(destConfig, parentS3Key, csvBuffer);
       totalSizeInBytes += csvBuffer.byteLength;
       const parentKeys = s3UrlsPerObject.get(object.name) ?? [];
@@ -539,7 +644,9 @@ const uploadBulkResultsByPageArchival = async (
       completedRecordCount += pageRecords;
       locator = nextLocator;
 
-      logger.info(`[archival:parent] page ${pageCount} uploaded | backupJobId:${backupJobId} objectName:${object.name} pageRecords:${pageRecords} totalSoFar:${completedRecordCount} sizeBytes:${csvBuffer.byteLength} s3Key:${parentS3Key} hasMore:${!!locator}`);
+      logger.info(
+        `[archival:parent] page ${pageCount} uploaded | backupJobId:${backupJobId} objectName:${object.name} pageRecords:${pageRecords} totalSoFar:${completedRecordCount} sizeBytes:${csvBuffer.byteLength} s3Key:${parentS3Key} hasMore:${!!locator}`
+      );
 
       // Persist locator and counts after every page so a crash can resume.
       await updateArchivalObject({
@@ -556,12 +663,15 @@ const uploadBulkResultsByPageArchival = async (
       });
     } while (locator !== null);
 
-    logger.info(`[archival:parent] all pages uploaded | backupJobId:${backupJobId} objectName:${object.name} totalPages:${pageCount} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`);
-
+    logger.info(
+      `[archival:parent] all pages uploaded | backupJobId:${backupJobId} objectName:${object.name} totalPages:${pageCount} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`
+    );
   } catch (err: any) {
     const failedAt = locator ?? INITIAL_PAGE_KEY;
     const errorMessage = `archival failed at locator [${failedAt}]: ${err?.message ?? err}`;
-    logger.error(`[archival:parent] failed | backupJobId:${backupJobId} objectName:${object.name} — ${errorMessage}`);
+    logger.error(
+      `[archival:parent] failed | backupJobId:${backupJobId} objectName:${object.name} — ${errorMessage}`
+    );
     await updateArchivalObject({
       backupJobId,
       object: { id: object.id, status: OBJECT_STATUS.failed, errorMessage },
@@ -569,8 +679,15 @@ const uploadBulkResultsByPageArchival = async (
     throw new Error(errorMessage, { cause: err });
   }
 
-  logger.info(`[archival:parent] completed | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`);
+  logger.info(
+    `[archival:parent] completed | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`
+  );
   return { s3UrlsPerObject };
 };
 
-export { pollBulkJobArchival, uploadBulkResultsByPageArchival, uploadSingleObject, transformWhereBodyForChild };
+export {
+  pollBulkJobArchival,
+  uploadBulkResultsByPageArchival,
+  uploadSingleObject,
+  transformWhereBodyForChild,
+};

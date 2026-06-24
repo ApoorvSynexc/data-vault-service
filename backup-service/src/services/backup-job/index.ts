@@ -334,7 +334,9 @@ const recursivelyUpdateObjects = async (
           ...obj,
           ...object,
           // Clear stale error fields when the object is reset for a retry run.
-          ...(isReset ? { errorMessage: '', deletedfailedRecordCount: 0, deletedSuccessRecordCount: 0 } : {}),
+          ...(isReset
+            ? { errorMessage: '', deletedfailedRecordCount: 0, deletedSuccessRecordCount: 0 }
+            : {}),
           ...(!isReset && (object as any)?.salesforceApiCount
             ? {
                 salesforceApiCount:

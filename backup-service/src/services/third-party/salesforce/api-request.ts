@@ -96,12 +96,21 @@ const makePageFetcher =
 // Single call returning both field names (for SOQL) and full schema (for
 // schema comparison / upload). Replaces the former getObjectFields +
 // getObjectSchema pair that hit the same endpoint twice per object per job.
+//
+// `mode` is required — the Apex layer defaults missing mode to "archival"
+// and then rejects non-deletable objects. Callers must declare their flow
+// explicitly: schedule (bulk backup), realtime (event-driven backup), or
+// archival (backup + hard-delete).
+type ApexMode = 'schedule' | 'realtime' | 'archival';
+
 const getObjectMetadata = async (
   crmId: string,
-  objectName: string
+  objectName: string,
+  mode: ApexMode
 ): Promise<{ fieldNames: string[]; schema: any[] }> => {
+  const params = new URLSearchParams({ crmId, objectName, mode });
   const res = await httpRequest({
-    url: `${CORE_SERVICE}/v1/internal/fields?crmId=${crmId}&objectName=${objectName}`,
+    url: `${CORE_SERVICE}/v1/internal/fields?${params.toString()}`,
     headers: { 'x-internal-secret': INTERNAL_SECRET },
   });
   const fields: any[] = res?.data?.fields ?? [];
