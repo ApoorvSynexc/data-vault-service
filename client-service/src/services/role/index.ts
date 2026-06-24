@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { ROLE_TABLE, STATUS } from '../../constant';
@@ -8,6 +8,7 @@ import { IRole } from '../../models';
 // DynamoDB table layout
 //   PK:  roleId        (UUID)
 //   GSI: name-index    PK = name
+//   GSI: crmId-index   PK = crmId
 // ---------------------------------------------------------------------------
 
 const createRole = async (data: Partial<IRole>): Promise<void> => {
@@ -61,4 +62,86 @@ const getRoles = async (): Promise<IRole[]> => {
   return (result.Items ?? []) as IRole[];
 };
 
-export { createRole, getRole, getRoles };
+const updateRole = async (filter: Record<string, any>, payload: Partial<IRole>): Promise<IRole | null> => {
+  const existing = await getRole(filter);
+  if (!existing) {
+    return null;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const updateExpressionParts: string[] = [];
+  const expressionAttributeNames: Record<string, string> = {};
+  const expressionAttributeValues: Record<string, any> = {
+    ':updatedAt': updatedAt,
+  };
+
+  let partIndex = 0;
+  for (const [key, value] of Object.entries(payload)) {
+    if (value !== undefined && value !== null) {
+      const placeholder = `:val${partIndex}`;
+      const nameKey = `#attr${partIndex}`;
+
+      expressionAttributeNames[nameKey] = key;
+      expressionAttributeValues[placeholder] = value;
+      updateExpressionParts.push(`${nameKey} = ${placeholder}`);
+      partIndex++;
+    }
+  }
+
+  if (updateExpressionParts.length === 0) {
+    return existing;
+  }
+
+  const updateExpression = `SET ${updateExpressionParts.join(', ')}, updatedAt = :updatedAt`;
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: ROLE_TABLE,
+      Key: { roleId: existing.roleId },
+      UpdateExpression: updateExpression,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
+    })
+  );
+
+  return {
+    ...existing,
+    ...payload,
+    updatedAt,
+  };
+};
+
+const deleteRole = async (filter: Record<string, any>): Promise<boolean> => {
+  const existing = await getRole(filter);
+  if (!existing) {
+    return false;
+  }
+
+  await docClient.send(
+    new DeleteCommand({
+      TableName: ROLE_TABLE,
+      Key: { roleId: existing.roleId },
+    })
+  );
+
+  return true;
+};
+
+const getRolesByCrmId = async (crmId: string): Promise<IRole[]> => {
+  if (!crmId) {
+    return [];
+  }
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: ROLE_TABLE,
+      IndexName: 'crmId-index',
+      KeyConditionExpression: 'crmId = :crmId',
+      ExpressionAttributeValues: { ':crmId': crmId },
+    })
+  );
+
+  return (result.Items ?? []) as IRole[];
+};
+
+export { createRole, getRole, getRoles, getRolesByCrmId, updateRole, deleteRole };

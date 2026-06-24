@@ -163,6 +163,7 @@ const salesforceHandler: ICrmBackupHandler = {
       accessToken: access_token,
       refreshToken: refresh_token,
       crmId,
+      backupConfigId
     };
 
     logger.info(
@@ -215,6 +216,7 @@ const salesforceHandler: ICrmBackupHandler = {
       accessToken: access_token,
       refreshToken: refresh_token,
       crmId,
+      backupConfigId
     };
 
     for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {

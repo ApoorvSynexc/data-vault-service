@@ -8,6 +8,7 @@ import {
   triggerBackupJob,
   hasActiveBackupJob,
   getBackupJobsByConfig,
+  getUser
 } from '../services';
 import { logger } from '../middlewares';
 import { filtereObjects } from '../utils/helper';
@@ -187,14 +188,21 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
 
     for (const config of configs) {
       try {
-        const firedHere = config.type === 'ARCHIVAL'
-          ? await runArchivalConfig(config)
-          : await runNormalConfig(config);
-
-        if (firedHere > 0) {
-          fired += firedHere;
+        const user = await getUser({ userId: config.userId });
+        if (!user) continue;
+        if (config.type === "ARCHIVAL") {
+          const { scheduledObjects } = filtereObjects(config.objects || []);
+          if (scheduledObjects.length) {
+            const active = await hasActiveBackupJob(config.backupConfigId);
+            if (!active) {
+              // One job log per scheduled object — bypassDedup because we already checked above
+              await Promise.all(
+                scheduledObjects.map(obj => triggerArchivalBackupJob({ user, config, objects: [obj], lastUpdatedAt: config.lastBackupAt, bypassDedup: true }))
+              );
+            }
+          }
         } else {
-          skipped++;
+          await triggerBackupJob({ user, config, lastUpdatedAt: config.lastBackupAt });
         }
       } catch (error) {
         logger.error(`[ARCH-CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);

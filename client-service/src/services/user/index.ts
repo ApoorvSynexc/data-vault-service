@@ -1,4 +1,5 @@
 import {
+  DeleteCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -32,6 +33,7 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
     userId: data.userId ?? uuidv4(),
     contactEmail: data.contact?.email ?? undefined,
     contactMobileKey: data.contact?.mobile ? buildMobileKey(data.contact.mobile) : undefined,
+    crmProfileUserId: data.crmProfile?.userId ?? undefined,
     status: data.status ?? STATUS.active,
     createdAt: now,
     updatedAt: now,
@@ -142,6 +144,11 @@ const updateUser = async (
 
   const $set: Record<string, any> = (payload as any).$set ?? payload;
   const now = new Date().toISOString();
+
+  // Extract crmProfileUserId from crmProfile if present
+  if ($set.crmProfile?.userId) {
+    $set.crmProfileUserId = $set.crmProfile.userId;
+  }
 
   const names: Record<string, string> = { '#updatedAt': 'updatedAt' };
   const values: Record<string, any> = { ':updatedAt': now };
@@ -391,4 +398,52 @@ const getUsersWithPagination = async (
   };
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersWithPagination };
+const getUserByCrmProfileUserId = async (crmProfileUserId: string): Promise<IUser | null> => {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: USER_TABLE,
+      IndexName: 'crmProfileUserId-index',
+      KeyConditionExpression: 'crmProfileUserId = :crmProfileUserId',
+      ExpressionAttributeValues: {
+        ':crmProfileUserId': crmProfileUserId,
+      },
+      Limit: 1,
+    })
+  );
+  return (result.Items?.[0] as IUser) ?? null;
+};
+
+const getUsersByCrmId = async (crmId: string): Promise<IUser[]> => {
+  if (!crmId) {
+    return [];
+  }
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: USER_TABLE,
+      IndexName: 'crmId-index',
+      KeyConditionExpression: 'crmId = :crmId',
+      ExpressionAttributeValues: { ':crmId': crmId },
+    })
+  );
+
+  return (result.Items ?? []) as IUser[];
+};
+
+const deleteUser = async (userId: string): Promise<boolean> => {
+  const existing = await getUser({ userId });
+  if (!existing) {
+    return false;
+  }
+
+  await docClient.send(
+    new DeleteCommand({
+      TableName: USER_TABLE,
+      Key: { userId },
+    })
+  );
+
+  return true;
+};
+
+export { createUser, getUser, updateUser, getUsers, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser };

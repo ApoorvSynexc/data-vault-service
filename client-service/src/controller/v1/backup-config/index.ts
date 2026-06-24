@@ -15,9 +15,7 @@ import {
   getTableCounter,
   triggerBackupJob,
   getCrmById,
-  getCrmTokens,
   getDestinationById,
-  deleteTriggers,
   realTimeTriggerManagement,
   computeJobStats,
   getApexObjectsCount,
@@ -52,15 +50,17 @@ const buildEventScheduleInput = (config: IBackupConfig) => ({
 });
 import { wrapController, isOwner } from '../../../utils/helper';
 import { logger } from '../../../middlewares';
+import { decrypt } from '../../../utils/encryption';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { crmId, mode } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
   const [apexResult, backupConfigs] = await Promise.all([
-    getApexObjects(String(crmId), mode ? String(mode) : undefined),
+    getApexObjects({ user, mode: mode ? String(mode) : undefined }),
     getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
   ]);
 
@@ -83,19 +83,21 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
 };
 
 const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { crmId, ...body } = req.body;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
   const [apexResult] = await Promise.all([
-    getApexObjectsCount(String(crmId), body),
+    getApexObjectsCount({ user, body }),
   ]);
 
   makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { crmId, objectName, mode } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
@@ -103,11 +105,12 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
-  const result = await getApexFields(String(crmId), String(objectName), mode ? String(mode) : undefined);
+  const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const destination = await getDestinationById(String(req.body.destinationId));
   const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
 
@@ -131,14 +134,14 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      await triggerBackupJob(config, undefined, 'backup');
+      await triggerBackupJob({ user, config, type: 'backup' });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
       const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
-        await triggerBackupJob(config, undefined, 'backup');
+        await triggerBackupJob({ user, config, type: 'backup' });
       } else {
         // await createAwsEventScheduler(buildEventScheduleInput(config));
       }
@@ -241,7 +244,6 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     name: crmPayload.name,
     slug: crmPayload.slug,
     environment: crmPayload.environment,
-    isConnected: crmPayload.isConnected,
   };
   const destinationDetail = {
     destinationId: destination.destinationId,
@@ -252,6 +254,7 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { backupConfigId } = req.query;
   if (!backupConfigId) {
     return makeResponse(req, res, 400, false, 'id_required');
@@ -271,7 +274,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       && !scheduleConfig?.scheduling?.startDate
       && !scheduleConfig?.scheduling?.startTime;
     if (isOnceImmediate) {
-      await triggerBackupJob(updated, undefined, 'backup');
+      await triggerBackupJob({ user, config: updated, type: 'backup' });
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
@@ -286,9 +289,10 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const existing = await getBackupConfigById(String(backupConfigId));
   const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
+  const crmCredential = req.user!.crmCredential;
+  const existing = await getBackupConfigById(String(backupConfigId));
 
   const isConfigOwner = spaceId ? existing?.spaceId === spaceId : existing?.userId === userId;
   if (!isConfigOwner) {
@@ -305,13 +309,13 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   try {
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const crm = await getCrmById(config.crmId);
-      if (crm) {
-        const tokens = getCrmTokens(crm) as any;
+      if (crm && crmCredential) {
+        const tokens = JSON.parse(decrypt(crmCredential));
         await getSalesforceProfile(
           {
+            userId,
             accessToken: tokens.access_token,
             refreshToken: tokens.refresh_token,
-            userId: crm.userId,
           },
           crm.environment
         );

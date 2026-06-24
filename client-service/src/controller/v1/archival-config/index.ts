@@ -13,7 +13,6 @@ import {
     getBackupConfigBySlug,
     getBackupConfigById,
     updateBackupConfig,
-    getCrmTokens,
     getSalesforceProfile,
     deleteBackupJobsByConfig,
     realTimeTriggerManagement,
@@ -30,6 +29,7 @@ import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
+import { decrypt } from "../../../utils/encryption";
 
 // ── Parent chain types ────────────────────────────────────────────────────────
 
@@ -133,19 +133,21 @@ const buildWhereClauseFromParentChain = (parent: ParentNode, childReferenceName?
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
     const { crmId, objectName, mode } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
 
     const [apexResult] = await Promise.all([
-        getApexObjectChilds(String(crmId), String(objectName), mode ? String(mode) : undefined),
+        getApexObjectChilds({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined }),
     ]);
 
     makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
     const { crmId, objectName, mode } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
@@ -153,13 +155,14 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
     if (!objectName) {
         return makeResponse(req, res, 400, false, 'object_name_required');
     }
-    const result = await getApexFields(String(crmId), String(objectName), mode ? String(mode) : undefined);
+    const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
     makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const { crmId, apiName, fields, referenceName, parent, objectConfig } = req.body as ObjectRecordsBody;
 
+    const user = req.user;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
@@ -180,12 +183,12 @@ const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<v
         if (whereBody) { whereClause = whereBody; }
     }
 
-    const apexResult = await getApexObjectRecords(crmId, {
-        apiName,
+    const apexResult = await getApexObjectRecords({ 
+        user, 
+        body: {apiName,
         fields,
-        ...(whereClause && { whereClause }),
-    });
-
+        ...(whereClause && { whereClause }) }}
+    );
     makeResponse(req, res, 200, true, 'fetch', apexResult);
 };
 
@@ -261,6 +264,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
 };
 
 const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
     const destination = await getDestinationById(String(req.body.destinationId));
     const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
 
@@ -286,7 +290,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
         const { immediateObjects } = filtereObjects(req.body?.objects || []);
         if (immediateObjects.length > 0) {
-            await triggerArchivalBackupJob(config, immediateObjects);
+            await triggerArchivalBackupJob({ user, config, objects: immediateObjects });
         } else {
             // await createAwsEventScheduler(buildEventScheduleInput(config));
         }
@@ -300,8 +304,9 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 };
 
 const dryRunArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
     try {
-        const result = await dryRun(req.body);
+        const result = await dryRun({...req.body, user});
         makeResponse(req, res, 201, true, 'create', result);
     } catch (error) {
         logger.error('Error creating backup config, Deleting backup config: ', error);
@@ -310,8 +315,8 @@ const dryRunArchivalHandler = async (req: IRequest, res: IResponse): Promise<voi
 };
 
 const validateSoqlArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const result = await validateSoql(req.body);
-    makeResponse(req, res, 200, true, 'fetch', result);
+    const user = req.user;
+    const result = await validateSoql({...req.body, user});    makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 
@@ -349,7 +354,6 @@ const getArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<
         name: crmPayload.name,
         slug: crmPayload.slug,
         environment: crmPayload.environment,
-        isConnected: crmPayload.isConnected,
     };
     const destinationDetail = {
         destinationId: destination.destinationId,
@@ -360,6 +364,7 @@ const getArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<
 };
 
 const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
     const { backupConfigId } = req.query;
     if (!backupConfigId) {
         return makeResponse(req, res, 400, false, 'id_required');
@@ -375,7 +380,7 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     if (updated && !updated.lastBackupAt) {
         const { immediateObjects } = filtereObjects(req.body?.objects || []);
         if (immediateObjects.length > 0) {
-            await triggerArchivalBackupJob(updated, immediateObjects);
+            await triggerArchivalBackupJob({ user, config: updated, objects: immediateObjects });
         }
     }
 
@@ -387,9 +392,14 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 };
 
 const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
     const { backupConfigId } = req.query;
     if (!backupConfigId) {
         return makeResponse(req, res, 400, false, 'id_required');
+    }
+
+    if(!user) {
+        return makeResponse(req, res, 400, false, 'not_exist');
     }
 
     const existing = await getBackupConfigById(String(backupConfigId));
@@ -412,12 +422,12 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         if (config.schedule === SCHEDULE_MODE.realtime) {
             const crm = await getCrmById(config.crmId);
             if (crm) {
-                const tokens = getCrmTokens(crm) as any;
+                const credentials = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
                 await getSalesforceProfile(
                     {
-                        accessToken: tokens.access_token,
-                        refreshToken: tokens.refresh_token,
-                        userId: crm.userId,
+                        accessToken: credentials.access_token,
+                        refreshToken: credentials.refresh_token,
+                        userId: user.userId,
                     },
                     crm.environment
                 );

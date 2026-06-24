@@ -3,14 +3,15 @@ import { BatchWriteCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamo
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, JOB_STATUS } from '../../constant';
-import { IBackupConfig, IBackupJob, IObject } from '../../models';
+import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
-import { getCrmById, getCrmTokens } from '../crm';
+import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { incrementTableCounter } from '../counter';
 import { flattenBackupObjects } from '../../utils/helper';
 import { logger } from '../../middlewares';
+import { decrypt } from '../../utils/encryption';
 
 const getSourceObjects = (objects?: IObject[]) => {
   if (objects?.length) {
@@ -48,10 +49,18 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
   return active;
 };
 
-const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject[], lastUpdatedAt?: string, bypassDedup?: boolean) => {
+const triggerArchivalBackupJob = async (params: {
+  user?: IUser;
+  config: IBackupConfig;
+  objects?: IObject[];
+  lastUpdatedAt?: string;
+  bypassDedup?: boolean;
+}) => {
   const triggerStart = Date.now();
+  const { config, objects, lastUpdatedAt, bypassDedup, user } = params;
   const objectNames = (objects ?? []).map(o => o.name).join(',') || 'none';
-  logger.info(`[ARCH-TRIG] ENTER | configId=${config.backupConfigId} objects=[${objectNames}] lastUpdatedAt=${lastUpdatedAt ?? 'none'} bypassDedup=${!!bypassDedup}`);
+
+  if(!user) return null;
 
   if (!bypassDedup) {
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} dedup check (bypassDedup=false)`);
@@ -82,8 +91,7 @@ const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject
 
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=PENDING`);
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
-
-  const credentials = getCrmTokens(crm);
+  const credentials = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
   const payload = {
     userId: config.userId,
     backupConfigId: config.backupConfigId,
@@ -91,7 +99,7 @@ const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject
       ...credentials,
       crmId: crm.crmId,
       crmName: crm.crmName,
-      instanceUrl: crm.crmProfile?.instanceUrl,
+      instanceUrl: user.crmProfile?.instanceUrl,
       object: getSourceObjects(objects),
     },
     destination: {
@@ -131,7 +139,13 @@ const triggerArchivalBackupJob = async (config: IBackupConfig, objects?: IObject
   return result;
 };
 
-const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string, type: 'backup' | 'archival' = 'backup') => {
+const triggerBackupJob = async (params: {
+  user?: IUser;
+  config: IBackupConfig;
+  lastUpdatedAt?: string;
+  type?: 'backup' | 'archival';
+}) => {
+  const { config, lastUpdatedAt, type = 'backup', user } = params;
   const active = await hasActiveBackupJob(config.backupConfigId);
   if (active) {
     return null;
@@ -146,8 +160,7 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string, t
   if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
-
-  const credentials = getCrmTokens(crm);
+  const credentials = user?.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
   const payload = {
     userId: config.userId,
     backupConfigId: config.backupConfigId,
@@ -155,7 +168,7 @@ const triggerBackupJob = async (config: IBackupConfig, lastUpdatedAt?: string, t
       ...credentials,
       crmId: crm.crmId,
       crmName: crm.crmName,
-      instanceUrl: crm.crmProfile?.instanceUrl,
+      instanceUrl: user?.crmProfile?.instanceUrl,
       object: getSourceObjects(config?.objects),
     },
     destination: {
@@ -291,8 +304,8 @@ const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type:
 
   const endpoint = config.type === 'ARCHIVAL' ? '/archival/resume' : '/resume';
   const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`
-  console.log({url});
-  
+  console.log({ url });
+
   return httpRequest({
     url,
     method: 'GET',

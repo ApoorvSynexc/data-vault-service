@@ -2,6 +2,7 @@ import { apexCountOne } from '../apex';
 import { buildOwnWhereBody, buildChildWhereBody } from './soql-builder';
 import { logger } from '../../../../middlewares';
 import type { IDryRunPayload, IDryRunResult, IDryRunObjectResult, ISalesforceObject } from './types';
+import { IUser } from '../../../../models';
 
 type Counter = { apiCallCount: number };
 
@@ -35,13 +36,13 @@ function getEffectiveWhereBody(obj: ISalesforceObject, parentEffectiveWhere: str
 export async function executeDryRun(payload: IDryRunPayload): Promise<IDryRunResult> {
   const counter: Counter = { apiCallCount: 0 };
   const objects = await Promise.all(
-    payload.objects.map(obj => processNode(payload.crmId, obj, null, counter))
+    payload.objects.map(obj => processNode(payload.user, obj, null, counter))
   );
   return { objects, apiCallCount: counter.apiCallCount };
 }
 
 async function processNode(
-  crmId: string,
+  user: IUser,
   obj: ISalesforceObject,
   parentEffectiveWhere: string | null,
   counter: Counter
@@ -58,7 +59,7 @@ async function processNode(
   logger.info(`[dry-run] processNode — object: "${obj.name}" | fieldApiName: "${obj.fieldApiName ?? 'none'}" | parentEffectiveWhere: ${parentEffectiveWhere ?? 'null'} | effectiveWhere: ${effectiveWhere ?? 'null'}`);
 
   try {
-    const r = await apexCountOne(crmId, obj.name, { whereClause: effectiveWhere ?? undefined });
+    const r = await apexCountOne(user, obj.name, { whereClause: effectiveWhere ?? undefined });
     counter.apiCallCount += 1;
 
     logger.info(`[dry-run] apexCountOne response — object: "${obj.name}" | success: ${r.success} | count: ${r.count ?? 'null'} | errorCode: ${r.errorCode ?? 'none'} | errorMessage: ${r.errorMessage ?? 'none'}`);
@@ -80,7 +81,7 @@ async function processNode(
         result.children = obj.children.map(buildZeroResult);
       } else {
         result.children = await Promise.all(
-          obj.children.map(child => processNode(crmId, child, effectiveWhere, counter))
+          obj.children.map(child => processNode(user, child, effectiveWhere, counter))
         );
       }
     }
