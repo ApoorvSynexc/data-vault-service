@@ -129,12 +129,17 @@ const findActiveJobByTransaction = async (
  *   Initializing to 0 makes the runner the single source of truth for all accumulation —
  *   every hit, including the first, goes through the same ADD path.
  */
-const createRealtimeJob = async (
-  params: UpsertRealtimeBackupJobParams
-): Promise<IBackupJob> => {
+const createRealtimeJob = async (params: UpsertRealtimeBackupJobParams): Promise<IBackupJob> => {
   const {
-    userId, backupConfigId, crmId, crmName, destination,
-    objectApiName, operation, transactionId, spaceId,
+    userId,
+    backupConfigId,
+    crmId,
+    crmName,
+    destination,
+    objectApiName,
+    operation,
+    transactionId,
+    spaceId,
   } = params;
 
   const now = new Date().toISOString();
@@ -219,7 +224,12 @@ const upsertRealtimeBackupJob = async (
 ): Promise<IBackupJob> => {
   const { backupConfigId, transactionId, objectApiName, operation } = params;
 
-  const existingJob = await findActiveJobByTransaction(backupConfigId, transactionId, objectApiName, operation);
+  const existingJob = await findActiveJobByTransaction(
+    backupConfigId,
+    transactionId,
+    objectApiName,
+    operation
+  );
   if (existingJob) {
     return existingJob;
   }
@@ -233,7 +243,12 @@ const upsertRealtimeBackupJob = async (
      * the job that won the race instead of propagating a misleading error.
      */
     if (err.name === 'ConditionalCheckFailedException') {
-      const racedJob = await findActiveJobByTransaction(backupConfigId, transactionId, objectApiName, operation);
+      const racedJob = await findActiveJobByTransaction(
+        backupConfigId,
+        transactionId,
+        objectApiName,
+        operation
+      );
       if (racedJob) {
         return racedJob;
       }
@@ -286,8 +301,15 @@ interface UpdateRealtimeJobParams {
  */
 const updateRealtimeJob = async (params: UpdateRealtimeJobParams): Promise<void> => {
   const {
-    backupJobId, status, sizeInBytesIncrement, recordCountIncrement,
-    startedAt, lastCompletedAt, s3Path, schemaChanged, errorMessage,
+    backupJobId,
+    status,
+    sizeInBytesIncrement,
+    recordCountIncrement,
+    startedAt,
+    lastCompletedAt,
+    s3Path,
+    schemaChanged,
+    errorMessage,
   } = params;
 
   const now = new Date().toISOString();

@@ -349,7 +349,10 @@ export const buildFailedRecordsIdCsv = async (
 export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<string> => {
   const {
     backupJobId,
-    backupConfigId, crmId, crmName, instanceUrl,
+    backupConfigId,
+    crmId,
+    crmName,
+    instanceUrl,
     tokens,
     object,
     destConfig,

@@ -100,8 +100,7 @@ const buildS3KeyPrefix = ({
   objectName,
   type,
   operation,
-}: IS3KeyPrefixParams): string =>
-  {
+}: IS3KeyPrefixParams): string => {
   const base = `${crmName}/${crmId}/${type}/${backupConfigId}/raw_data/${backupJobId}/${objectName}`;
   return operation ? `${base}/${operation}` : base;
 };

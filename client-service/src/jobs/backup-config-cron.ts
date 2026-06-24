@@ -150,7 +150,7 @@ const runArchivalConfig = async (config: IBackupConfig): Promise<number> => {
   // fans out roots internally (CONCURRENCY_LIMIT, per-root failure isolation),
   // so firing per-object here just duplicates work and creates N job rows.
   logger.info(`[ARCH-CRON] config ${config.backupConfigId} FIRE | dueObjects=[${dueObjects.map(o => o.name).join(',')}] (single job)`);
-  await triggerArchivalBackupJob(config, dueObjects, config.lastBackupAt, true);
+  await triggerArchivalBackupJob({ config, objects: dueObjects, lastUpdatedAt: config.lastBackupAt, bypassDedup: true });
   return dueObjects.length;
 };
 
@@ -165,7 +165,7 @@ const runNormalConfig = async (config: IBackupConfig): Promise<number> => {
     return 0;
   }
   logger.info(`[ARCH-CRON] config ${config.backupConfigId} FIRE | normal-backup`);
-  await triggerBackupJob(config, config.lastBackupAt);
+  await triggerBackupJob({ config, lastUpdatedAt: config.lastBackupAt });
   return 1;
 };
 
