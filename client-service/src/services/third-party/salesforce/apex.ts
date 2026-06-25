@@ -4,7 +4,7 @@ import { getCrmById } from '../../crm';
 import { salesforceRequest } from '../salesforce';
 import type { ICountItem, ICountResult } from './dry-run/types';
 
-const salesforceNamespace = '';
+const salesforceNamespace = 'SYX_DVV';
 
 const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = {}) => {
   if (!user || !user.crmId) {
