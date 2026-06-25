@@ -4,103 +4,17 @@ import {
   triggerArchivalBackupJob,
   triggerBackupJob,
   hasActiveBackupJob,
-  getBackupJobsByConfig,
 } from '../services';
 import { logger } from '../middlewares';
 import { filtereObjects } from '../utils/helper';
-import { IBackupConfig, IObject, IScheduling } from '../models';
-
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-
-// How many recent backup-job rows to scan when computing per-object last-run.
-const RECENT_JOB_LOOKBACK = 50;
-
-// True iff `now - lastRunAt` >= the interval configured on `scheduling`.
-// First run (no lastRunAt) always fires immediately for all frequencies.
-const isDueByScheduling = (
-  scheduling: IScheduling | undefined,
-  lastRunAt: string | undefined,
-  label: string,
-): boolean => {
-  logger.info(`[ARCH-CRON] gate check | ${label} lastRunAt=${lastRunAt ?? 'never'} scheduling=${JSON.stringify(scheduling ?? null)}`);
-
-  if (!scheduling) {
-    logger.warn(`[ARCH-CRON] gate SKIP | ${label} reason=scheduling_block_missing`);
-    return false;
-  }
-
-  if (!lastRunAt) {
-    logger.info(`[ARCH-CRON] gate ALLOW | ${label} reason=first_run freq=${scheduling.frequency}`);
-    return true;
-  }
-
-  const elapsedMs = Date.now() - new Date(lastRunAt).getTime();
-  const interval = Math.max(1, scheduling.interval ?? 1);
-
-  let requiredMs: number;
-  switch (scheduling.frequency) {
-    case 'HOURLY':  requiredMs = interval * HOUR_MS; break;
-    case 'DAILY':   requiredMs = interval * DAY_MS; break;
-    case 'WEEKLY':  requiredMs = interval * 7 * DAY_MS; break;
-    case 'MONTHLY': requiredMs = interval * 30 * DAY_MS; break;
-    case 'ONCE':
-    case 'CUSTOM':
-      logger.info(`[ARCH-CRON] gate SKIP | ${label} reason=${scheduling.frequency}_already_ran`);
-      return false;
-    default:
-      logger.warn(`[ARCH-CRON] gate SKIP | ${label} reason=unknown_frequency value=${String(scheduling.frequency)}`);
-      return false;
-  }
-
-  const due = elapsedMs >= requiredMs;
-  logger.info(`[ARCH-CRON] gate ${due ? 'ALLOW' : 'SKIP'} | ${label} freq=${scheduling.frequency} interval=${interval} elapsedMs=${elapsedMs} requiredMs=${requiredMs}`);
-  return due;
-};
-
-// objectName → most-recent-archival-job-createdAt for this config.
-// We rely on the fact that the cron fires one job per root object, so the
-// most recent job's root object name is reliable.
-const buildLastRunMapForConfig = async (backupConfigId: string): Promise<Map<string, string>> => {
-  const lastRunByObject = new Map<string, string>();
-  const { items } = await getBackupJobsByConfig(backupConfigId, { limit: RECENT_JOB_LOOKBACK });
-
-  for (const job of items) {
-    const rootName = job.object?.[0]?.name;
-    if (!rootName || lastRunByObject.has(rootName)) {
-      continue;
-    }
-    lastRunByObject.set(rootName, job.createdAt);
-  }
-  logger.info(`[ARCH-CRON] lastRun map | configId=${backupConfigId} entries=${JSON.stringify(Object.fromEntries(lastRunByObject))}`);
-  return lastRunByObject;
-};
+import { IBackupConfig } from '../models';
 
 const runArchivalConfig = async (config: IBackupConfig): Promise<number> => {
-  const { scheduledObjects, immediateObjects } = filtereObjects(config.objects || []);
-  logger.info(`[ARCH-CRON] config ${config.backupConfigId} archival split | scheduled=[${scheduledObjects.map(o => o.name).join(',')}] immediate=[${immediateObjects.map(o => o.name).join(',')}]`);
+  const { scheduledObjects } = filtereObjects(config.objects || []);
+  logger.info(`[ARCH-CRON] config ${config.backupConfigId} scheduledObjects=[${scheduledObjects.map(o => o.name).join(',')}]`);
 
   if (!scheduledObjects.length) {
     logger.info(`[ARCH-CRON] config ${config.backupConfigId} SKIP | reason=no_scheduled_objects`);
-    return 0;
-  }
-
-  const lastRunByObject = await buildLastRunMapForConfig(config.backupConfigId);
-
-  const dueObjects: IObject[] = [];
-  for (const obj of scheduledObjects) {
-    const label = `${config.backupConfigId}/${obj.name}`;
-    if (isDueByScheduling(
-      obj.scheduleConfig?.scheduling,
-      lastRunByObject.get(obj.name),
-      label,
-    )) {
-      dueObjects.push(obj);
-    }
-  }
-
-  if (!dueObjects.length) {
-    logger.info(`[ARCH-CRON] config ${config.backupConfigId} SKIP | reason=no_due_objects`);
     return 0;
   }
 
@@ -111,23 +25,12 @@ const runArchivalConfig = async (config: IBackupConfig): Promise<number> => {
     return 0;
   }
 
-  // One job per config per tick — the backup-service orchestrator already
-  // fans out roots internally (CONCURRENCY_LIMIT, per-root failure isolation),
-  // so firing per-object here just duplicates work and creates N job rows.
-  logger.info(`[ARCH-CRON] config ${config.backupConfigId} FIRE | dueObjects=[${dueObjects.map(o => o.name).join(',')}] (single job)`);
-  await triggerArchivalBackupJob(config, dueObjects, config.lastBackupAt, true);
-  return dueObjects.length;
+  logger.info(`[ARCH-CRON] config ${config.backupConfigId} FIRE | objects=[${scheduledObjects.map(o => o.name).join(',')}]`);
+  await triggerArchivalBackupJob(config, scheduledObjects, config.lastBackupAt, true);
+  return scheduledObjects.length;
 };
 
 const runNormalConfig = async (config: IBackupConfig): Promise<number> => {
-  const due = isDueByScheduling(
-    config.scheduleConfig?.scheduling,
-    config.lastBackupAt,
-    config.backupConfigId,
-  );
-  if (!due) {
-    return 0;
-  }
   logger.info(`[ARCH-CRON] config ${config.backupConfigId} FIRE | normal-backup`);
   await triggerBackupJob(config, config.lastBackupAt);
   return 1;
