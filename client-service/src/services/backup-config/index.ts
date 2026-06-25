@@ -19,6 +19,7 @@ interface CreateBackupConfigParams {
   destinationId: string;
   name?: string;
   description?: string;
+  dataset?: "ENTIRE" | "PARTIAL";
   objectNames: string[];
   schedule: string;
   scheduleConfig?: IScheduleConfig;
@@ -59,6 +60,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     objects,
     spaceId,
     status,
+    dataset,
     type = 'NORMAL',
   } = params;
   const now = new Date().toISOString();
@@ -85,6 +87,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     objects,
     status,
     schemaChange: false,
+    ...(dataset && { dataset }),
     ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
