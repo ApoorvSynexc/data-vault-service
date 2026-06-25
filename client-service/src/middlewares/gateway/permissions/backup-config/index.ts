@@ -10,6 +10,16 @@ const backupConfigPermissions = [
         permissions: ['backup.read']
     },
     {
+        path: '/backup-config/objects',
+        method: 'GET',
+        permissions: ['backup.read']
+    },
+    {
+        path: '/backup-config/objects-count',
+        method: 'POST',
+        permissions: ['backup.read']
+    },
+    {
         path: '/backup-config',
         method: 'GET',
         permissions: ['backup.read']
