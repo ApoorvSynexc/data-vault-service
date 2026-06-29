@@ -32,6 +32,6 @@ router.use('/archival-config', archivalRouter);
 router.use('/backup-job', backupJobRouter);
 router.use('/dashboard', dashboardRouter);
 router.use('/destination', destinationRouter);
-router.use('/restore-retrieve', authenticate, restoreRetrieveRouter);
+router.use('/restore', restoreRetrieveRouter);
 
 export const v1Routers = router;
