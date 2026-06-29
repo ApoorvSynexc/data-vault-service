@@ -603,7 +603,7 @@ export const archiveAndHardDelete = async (
     // Phase 1 — Bulk Query for root object (create or resume)
     // -------------------------------------------------------------------------
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(
-      crmId,
+      backupConfigId,
       objectName,
       'archival'
     );

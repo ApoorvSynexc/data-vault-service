@@ -17,22 +17,22 @@ const archivalConfigPermissions = [
     {
         path: '/archival-config/validate-soql',
         method: 'POST',
-        permissions: ['archival.execute']
+        permissions: ['archival.read']
     },
     {
         path: '/archival-config/dry-run',
         method: 'POST',
-        permissions: ['archival.execute']
+        permissions: ['archival.read']
     },
     {
         path: '/archival-config/object-records',
         method: 'POST',
-        permissions: ['archival.execute']
+        permissions: ['archival.read']
     },
     {
         path: '/archival-config',
         method: 'POST',
-        permissions: ['archival.execute']
+        permissions: ['archival.write']
     },
     {
         path: '/archival-config',
