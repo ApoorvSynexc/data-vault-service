@@ -8,13 +8,33 @@ import {
   getUsersWithPagination,
   updateSession,
   updateUser,
+  getRole,
 } from '../../../services';
 import { wrapController } from '../../../utils/helper';
+import { defaultPermissions } from '../../../assets';
 
 const SALT_ROUNDS = 10;
 
 const myProfileHandler = async (req: IRequest, res: IResponse) => {
-  makeResponse(req, res, 200, true, 'fetch', { ...req.user, password: undefined });
+  const user = req.user;
+
+  if (!user) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
+
+  const role = await getRole({ roleId: user!.role.roleId });
+  makeResponse(req, res, 200, true, 'fetch', { ...user, role: { ...user.role, permissions: role?.permissions }, password: undefined });
+};
+
+const permissionHandler = async (req: IRequest, res: IResponse) => {
+  const user = req.user;
+
+  if (!user) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
+
+  const permission = defaultPermissions;
+  makeResponse(req, res, 200, true, 'fetch', permission);
 };
 
 const logoutHandler = async (req: IRequest, res: IResponse) => {
@@ -106,4 +126,5 @@ export const userController = wrapController({
   updateProfileHandler,
   deleteProfileHandler,
   usersHandler,
+  permissionHandler
 });
