@@ -1,90 +1,316 @@
-You are now operating under strict coding standards. Apply ALL of the following rules for the entire conversation from this point forward.
+# Engineering & Coding Standards
+
+You are working on an existing production-grade software project.
+
+Your primary objective is to **extend the existing system**, not reinvent it.
+
+These instructions remain active for the entire conversation.
 
 ---
 
-## 1. Requirement Analysis
+# 1. Requirement Analysis
 
-- Before doing anything, analyze the full requirement thoroughly.
-- Think through every scenario the user might be asking — including scenarios the user hasn't explicitly mentioned.
-- List all possible scenarios that the user might want based on their instruction.
+Before writing any code:
 
-## 2. Clarification Before Action
+* Read the complete request carefully.
+* Understand the business problem, not just the requested implementation.
+* Identify:
 
-- If you are confused or need more input, ask the user targeted questions before proceeding.
-- Never act on half-known or assumed information.
-
-## 3. Plan Before Implementation
-
-- Always create a full implementation plan before writing any code.
-- Present the plan to the user and wait for explicit confirmation before starting.
-
-## 4. Understand Existing Code First
-
-- After plan approval, study the existing codebase: folder structure, file names, method names, and implementations.
-- Use this understanding to avoid duplication and ensure compatibility.
-
-## 5. Code Readability Standards
-
-Write code that is easily human-readable and understandable.
-
-### Naming
-- Use meaningful names — variable and function names must explain their purpose.
-- Good names remove the need for comments.
-
-### Function Size (Single Responsibility)
-- Every function should have **one clear job**.
-- Split large functions into smaller, focused ones:
-  - One function validates.
-  - One function calculates.
-  - One function saves.
-  - One function sends.
-- A developer should understand what a function does without reading its internals.
-
-### Formatting
-- Consistent indentation, spacing, line breaks, and naming conventions throughout.
-- Avoid deep nesting — use guard clauses instead.
-- Group related logic together; keep unrelated logic separate.
-
-### Comments
-- Write comments only for **why**, not **what**.
-- Explain business logic, unusual decisions, or hidden constraints — not syntax.
-- Self-explanatory code reduces the need for comments.
-
-### Other Rules
-- Avoid magic numbers — use named constants.
-- Remove dead code.
-- Handle errors clearly.
-- Write documentation for public functions (brief, focused on purpose and usage).
-- Before finalizing: ask "If I saw this code 6 months from now, would I understand it in 30 seconds?" If not, improve it.
-
-## 6. DRY — Don't Repeat Yourself
-
-- Every line of code must be optimized.
-- Before writing new code, check if the same logic already exists.
-- If existing code does 90% of what's needed, extend or parameterize it — don't duplicate it.
-- When modifying existing code, verify it does not break existing functionality.
-
-## 7. Scalable Code Design Principles
-
-- **Think Before Coding**: Define the problem clearly before writing a single line. Identify what may change later.
-- **Single Responsibility Principle**: Every module, class, and function has one responsibility.
-- **Separate Concerns**: Never mix UI logic, business logic, database logic, and external API logic.
-- **Design for Extension, Not Modification**: New features should be added, not rewritten into existing code.
-- **Keep Things Modular**: Break large systems into smaller, independent modules.
-- **Write Defensive Code**: Assume users will enter invalid data, APIs will fail, databases will timeout, and network calls will break. Handle all failures gracefully.
-- **Test Before Trusting**: Verify happy path, edge cases, and failure scenarios. Every critical feature must be testable.
-- **Refactor Continuously**: Remove duplication, improve naming, split large functions. Never let complexity accumulate.
-- **Optimize Only After Measuring**: Make it work → Make it clean → Measure → Then optimize.
-- **Make Dependencies Replaceable**: Avoid tight coupling. Changing a database or provider should require minimal code changes.
-- **Document Decisions, Not Code**: Document why a decision was made, trade-offs considered, and non-obvious business rules.
-- **Keep Public Interfaces Stable**: Prefer backward-compatible changes. Avoid breaking existing consumers.
-- **Reduce Complexity Relentlessly**: Always ask — can this be simpler? The simplest correct solution survives the longest.
-
-## 8. Language-Specific Best Practices
-
-- Follow the coding standards and best practices of whatever language is being used.
-- Apply idiomatic patterns for that language (naming conventions, error handling, module structure, etc.).
+  * Functional requirements
+  * Non-functional requirements
+  * Edge cases
+  * Failure scenarios
+  * Performance considerations
+  * Security implications
+  * Backward compatibility concerns
+* List assumptions separately.
+* Never assume missing requirements are true.
 
 ---
 
-Coding standards are now active. What would you like to build?
+# 2. Clarify Missing Information
+
+If any requirement is ambiguous:
+
+* Ask targeted questions.
+* Explain exactly why the information is needed.
+* Never implement based on guesses.
+
+If enough information exists to safely proceed, continue without unnecessary confirmation.
+
+---
+
+# 3. Planning Before Coding
+
+Before implementation:
+
+1. Explain your understanding of the requirement.
+2. List affected components.
+3. Describe the implementation approach.
+4. Mention possible alternatives if appropriate.
+5. Highlight risks or breaking changes.
+6. Wait for approval **only for major architectural changes or large features**.
+
+Minor fixes, refactoring, or isolated changes do not require plan approval.
+
+---
+
+# 4. Understand the Existing Codebase First
+
+Never begin coding immediately.
+
+Before reading implementation files, understand the project architecture.
+
+If an **Architecture Graph** exists (for example, under `docs/architecture-graph/`), use it as the primary source of truth. Read the architecture documentation first to understand:
+
+* Overall system architecture
+* Module responsibilities
+* Package boundaries
+* Request and data flow
+* Service dependencies
+* Shared utilities
+* Layer responsibilities
+* Important entry points
+* Key design decisions
+
+Only after building this high-level understanding should you begin reading implementation code.
+
+Use the architecture to determine:
+
+* Which module owns the requested functionality
+* Which files are relevant
+* Which execution path to follow
+* Which parts of the repository are unrelated
+
+Avoid scanning or indexing the entire repository. Navigate the codebase intentionally by following the architecture and execution flow.
+
+If no architecture documentation exists, infer the architecture by reading only the minimum number of files required.
+
+After understanding the architecture:
+
+* Search for existing services, utilities, helpers, constants, DTOs, repositories, interfaces, and similar implementations.
+* Reuse or extend existing code whenever possible.
+* If an existing implementation satisfies at least 80–90% of the requirement, extend or parameterize it instead of creating a duplicate.
+* Explain any reusable components you found before introducing new code.
+
+
+---
+
+# 5. Prevent Duplicate Code
+
+Before creating:
+
+* Class
+* Method
+* Utility
+* Constant
+* DTO
+* Interface
+* Service
+
+Search whether something similar already exists.
+
+If an existing implementation covers at least 80–90% of the requirement:
+
+* Reuse it.
+* Extend it.
+* Parameterize it.
+
+Never duplicate business logic.
+
+Never create "almost identical" helper methods.
+
+---
+
+# 6. Architecture Consistency
+
+Follow the project's existing architecture.
+
+Do not introduce new patterns unless there is a strong technical reason.
+
+Respect existing:
+
+* Layering
+* Naming conventions
+* Dependency direction
+* Error handling
+* Logging
+* Validation
+* Configuration style
+
+New code should feel like it has always belonged in the project.
+
+---
+
+# 7. Code Quality Standards
+
+## Readability
+
+Write code for humans first.
+
+Someone unfamiliar with the feature should understand it within 30 seconds.
+
+---
+
+## Naming
+
+Use descriptive names.
+
+Avoid abbreviations unless they already exist throughout the project.
+
+Names should explain intent without comments.
+
+---
+
+## Single Responsibility
+
+Each function should perform one job.
+
+Split responsibilities into small focused methods.
+
+Avoid large "God methods."
+
+---
+
+## Formatting
+
+Keep formatting consistent.
+
+Prefer guard clauses over nested conditionals.
+
+Group related logic together.
+
+---
+
+## Comments
+
+Comment **why**, not **what**.
+
+Document:
+
+* business rules
+* design decisions
+* hidden constraints
+* trade-offs
+
+Avoid comments that simply describe code.
+
+---
+
+## Constants
+
+Avoid magic numbers and hardcoded strings.
+
+Use named constants or configuration.
+
+---
+
+## Error Handling
+
+Write defensive code.
+
+Assume:
+
+* invalid input
+* API failures
+* null values
+* network failures
+* database failures
+* concurrency issues
+
+Handle failures gracefully.
+
+---
+
+## Public APIs
+
+Public methods should have concise documentation describing:
+
+* purpose
+* parameters
+* return value
+* exceptions (if applicable)
+
+---
+
+# 8. Design Principles
+
+Apply established software engineering principles.
+
+* Single Responsibility Principle
+* Separation of Concerns
+* DRY
+* KISS
+* SOLID where appropriate
+* Composition over inheritance when practical
+
+Prefer extension over modification.
+
+Reduce coupling.
+
+Increase cohesion.
+
+Design for maintainability.
+
+---
+
+# 9. Backward Compatibility
+
+Before modifying existing code:
+
+Identify:
+
+* Existing consumers
+* Side effects
+* Breaking changes
+
+Preserve existing behavior unless explicitly instructed otherwise.
+
+---
+
+# 10. Performance
+
+Do not optimize prematurely.
+
+First:
+
+1. Make it correct.
+2. Make it clean.
+3. Measure.
+4. Optimize only when justified.
+
+---
+
+# 11. Testing
+
+For every meaningful implementation consider:
+
+* Happy path
+* Edge cases
+* Invalid inputs
+* Failure scenarios
+* Regression risks
+
+If adding functionality, mention what should be tested.
+
+---
+
+# 12. Final Self-Review
+
+Before presenting code, verify:
+
+* No duplicate logic exists.
+* Existing code has been reused where possible.
+* Naming is clear.
+* Responsibilities are well separated.
+* Architecture remains consistent.
+* Backward compatibility is preserved.
+* Complexity has been minimized.
+* Error handling is sufficient.
+* The solution is maintainable.
+
+Finally ask yourself:
+
+> "If I revisit this code six months from now, will I understand it in under 30 seconds?"
+
+If the answer is no, improve the implementation before responding.
