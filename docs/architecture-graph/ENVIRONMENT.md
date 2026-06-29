@@ -47,6 +47,8 @@ All environment variables used by both services.
 ### AWS Athena
 | Var | Purpose |
 |---|---|
+| AWS_ATHENA_ACCESS_KEY | Dedicated IAM access key for Athena (separate from default AWS creds) |
+| AWS_ATHENA_SECRET_KEY | Dedicated IAM secret key for Athena |
 | AWS_ATHENA_OUTPUT_LOCATION | S3 URI for Athena query results (e.g. s3://bucket/athena/) |
 
 ### AWS EventBridge Scheduler (dormant)
@@ -88,12 +90,18 @@ The following 8 vars are required:
 
 Plus: ENCRYPTION_KEY must be exactly 64 hex characters.
 
-### AWS (platform credentials — for Glue, own S3 writes)
+### AWS (platform credentials — for DynamoDB)
 | Var | Purpose |
 |---|---|
 | AWS_REGION | DynamoDB + Glue region |
-| AWS_ACCESS_KEY_ID | Platform AWS credentials |
-| AWS_SECRET_ACCESS_KEY | Platform AWS credentials |
+| AWS_ACCESS_KEY_ID | Platform AWS credentials (DynamoDB only) |
+| AWS_SECRET_ACCESS_KEY | Platform AWS credentials (DynamoDB only) |
+
+### AWS Glue (dedicated credentials)
+| Var | Purpose |
+|---|---|
+| AWS_GLUE_ACCESS_KEY | Dedicated IAM access key for Glue Catalog (separate from default AWS creds) |
+| AWS_GLUE_SECRET_KEY | Dedicated IAM secret key for Glue Catalog |
 
 ### DynamoDB Table Names
 | Var | Purpose |
@@ -123,4 +131,7 @@ Plus: ENCRYPTION_KEY must be exactly 64 hex characters.
 - ENCRYPTION_KEY in backup-service is AES-256-GCM (hex). ENCRYPTION_KEY in client-service is AES-256-CBC (base64). They MAY be different env vars with different formats.
 - INTERNAL_SECRET must be identical in both services.
 - BACKUP_CONFIG_TABLE and BACKUP_JOB_TABLE names must be identical in both services (they share the same physical tables).
-- AWS credentials for backup-service are the PLATFORM credentials (for Glue). S3 uploads use credentials from the user's DESTINATION record (decrypted at runtime).
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are used only for DynamoDB in both services.
+- Athena uses its own `AWS_ATHENA_ACCESS_KEY` / `AWS_ATHENA_SECRET_KEY` (client-service).
+- Glue uses its own `AWS_GLUE_ACCESS_KEY` / `AWS_GLUE_SECRET_KEY` (backup-service).
+- S3 uploads use credentials from the user's DESTINATION record (decrypted at runtime) — never platform creds.

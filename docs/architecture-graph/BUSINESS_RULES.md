@@ -75,12 +75,26 @@ Jobs stuck in RUNNING, TRANSFER_IN_PROGRESS, or BULK_QUERY_IN_PROGRESS for more 
 
 Rationale: Salesforce Bulk API timeout is 2 hours. Network retries give another buffer. 6 hours total is conservative enough to not false-positive on slow large jobs.
 
+## AWS Credential Isolation
+
+Platform AWS credentials are scoped per service — they must never be swapped:
+
+| Service | Credential vars | Used for |
+|---|---|---|
+| DynamoDB (both services) | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Table reads/writes |
+| Athena (client-service) | `AWS_ATHENA_ACCESS_KEY` / `AWS_ATHENA_SECRET_KEY` | Athena query submission |
+| Glue (backup-service) | `AWS_GLUE_ACCESS_KEY` / `AWS_GLUE_SECRET_KEY` | Glue catalog management |
+| S3 (both services) | Customer destination credentials (decrypted at runtime) | Data uploads/reads |
+
+Athena must never use Glue credentials and vice versa.
+
 ## Ownership Rules
 
 - A destination is owned by `userId`. Users can only operate on their own destinations.
 - `isOwner(entity, userId)` utility check: `!!entity && entity.userId === userId`.
 - Backup configs reference `destinationId`. On backup config creation, ownership of destination is verified.
 - Archival configs (which contain parent-child object trees) are validated for ownership independently.
+- `fetchRecordsByBackupJobs` verifies ownership by reading `userId` from the first job (BACKUP) or from the config (ARCHIVAL) before running any Athena query.
 
 ## S3 Path Rules (Immutable Once Written)
 

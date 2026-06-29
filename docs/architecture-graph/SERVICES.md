@@ -70,6 +70,11 @@ Every service function, what it does, and its side effects.
 - `getSnapshotActivityLogs(params)` — For BACKUP type: fans out to all matching configs (concurrency 5), multi-cursor pagination. For ARCHIVAL type: returns config-level entries.
 - `getObjectListByConfigId(configId)` — Returns object list from latest job for the config.
 - `getObjectListByBackupJobIds(jobIds[])` — Batch fetch jobs, extract object lists.
+- `fetchRecordsByBackupJobs(params)` — Queries Athena for records. Two paths based on `configType`:
+  - `BACKUP`: verifies ownership of `backupJobIds[0]`, resolves Glue DB+table from that job's config, runs `SELECT cols FROM table WHERE backup_job_id IN (...)`, returns results grouped by jobId.
+  - `ARCHIVAL`: verifies config ownership, resolves most recent `SUCCESS` ARCHIVAL job via `getBackupJobsByConfig(configId, { limit:1, status:'SUCCESS', type:'ARCHIVAL' })`, then runs the same Athena query for that single job partition.
+  - Returns `null` on ownership failure or no qualifying job (controller maps to 404).
+  - Shared helpers: `toGlueId()` (identifier sanitiser), `buildFetchSql()`, `groupRowsByJobId()`.
 
 ### services/third-party/salesforce/index.ts (client-service)
 See EXTERNAL_INTEGRATIONS.md. Main exports: `getSalesforceLoginUrl`, `getSalesforceToken`, `getSalesforceProfile`, `refreashSalesforceToken`, `salesforceRequest`, `SalesforceAuthExpiredError`.

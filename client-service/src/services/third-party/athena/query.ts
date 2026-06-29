@@ -5,14 +5,14 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import { AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ATHENA_OUTPUT_LOCATION } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_OUTPUT_LOCATION } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 const athena = new AthenaClient({
   region: AWS_REGION,
   credentials: {
-    accessKeyId: AWS_ACCESS_KEY_ID,
-    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+    accessKeyId: AWS_ATHENA_ACCESS_KEY,
+    secretAccessKey: AWS_ATHENA_SECRET_KEY,
   },
 });
 

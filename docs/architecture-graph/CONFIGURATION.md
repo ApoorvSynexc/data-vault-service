@@ -32,9 +32,25 @@ OTP_FOR = { signup: 'SIGNUP', login: 'LOGIN', resetPassword: 'RESET_PASSWORD' }
 OTP_CHANNEL = { email: 'EMAIL', sms: 'SMS' }
 ```
 
+### Athena Credential Constants (client-service)
+```typescript
+AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY)
+AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY)
+AWS_ATHENA_OUTPUT_LOCATION = String(process.env.AWS_ATHENA_OUTPUT_LOCATION)
+```
+Athena never shares the default `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. These are its own dedicated IAM credentials.
+
 ## backup-service Constants
 
 File: `backup-service/src/constant/index.ts`
+
+### Glue Credential Constants (backup-service)
+```typescript
+AWS_GLUE_ACCESS_KEY = String(process.env.AWS_GLUE_ACCESS_KEY)
+AWS_GLUE_SECRET_KEY = String(process.env.AWS_GLUE_SECRET_KEY)
+AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 'datavault')
+```
+Glue never shares the default `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. These are its own dedicated IAM credentials.
 
 ### Job Status
 ```typescript

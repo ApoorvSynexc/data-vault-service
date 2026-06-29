@@ -51,7 +51,7 @@ controller/v1/public/index.ts
   → utils/http-request (POST to backup-service realtime endpoint)
 
 controller/v1/restore-retrieve/index.ts
-  → services/restore-retrieve
+  → services/restore-retrieve (including fetchRecordsByBackupJobs → runAthenaQuery)
   → services/backup-config
   → services/backup-job
 ```
@@ -102,8 +102,13 @@ services/third-party/athena/index.ts
   → utils/http-request (S3 bucket policy fetch/put via AWS SDK directly)
 
 services/third-party/athena/query.ts
-  → constant           (AWS_REGION, AWS_ACCESS_KEY_ID, etc.)
+  → constant           (AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_OUTPUT_LOCATION)
   → middlewares/logger
+
+services/restore-retrieve/index.ts
+  → services/third-party/athena/query (runAthenaQuery, IQueryResult)
+  → services/backup-config (getBackupConfigById, getBackupConfigsWithPagination)
+  → services/backup-job (getBackupJobsByConfig)
 
 services/third-party/payload-transform-service/index.ts
   → services/backup-config (getBackupConfigById)

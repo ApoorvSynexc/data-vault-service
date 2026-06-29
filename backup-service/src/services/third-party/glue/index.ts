@@ -11,8 +11,8 @@ import {
 } from '@aws-sdk/client-glue';
 import {
   AWS_REGION,
-  AWS_ACCESS_KEY_ID,
-  AWS_SECRET_ACCESS_KEY,
+  AWS_GLUE_ACCESS_KEY,
+  AWS_GLUE_SECRET_KEY,
   AWS_GLUE_DATABASE_PREFIX,
 } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
@@ -23,8 +23,8 @@ import { IDestinationConfig } from '../../../models';
 const glue = new GlueClient({
   region: AWS_REGION,
   credentials: {
-    accessKeyId: AWS_ACCESS_KEY_ID,
-    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+    accessKeyId: AWS_GLUE_ACCESS_KEY,
+    secretAccessKey: AWS_GLUE_SECRET_KEY,
   },
 });
 
