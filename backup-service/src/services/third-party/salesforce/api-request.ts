@@ -76,23 +76,23 @@ const salesforceRequest = async <T = any>(
 // ---------------------------------------------------------------------------
 const makePageFetcher =
   (tokens: SalesforceTokens) =>
-  async (url: string): Promise<Response> => {
-    let response = await fetch(url, {
-      headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-    });
-    if (response.status === 401) {
-      try {
-        const refreshed = await refreshSalesforceToken(tokens.backupConfigId);
-        tokens.accessToken = refreshed.access_token;
-      } catch {
-        throw new SalesforceAuthExpiredError();
-      }
-      response = await fetch(url, {
+    async (url: string): Promise<Response> => {
+      let response = await fetch(url, {
         headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
       });
-    }
-    return response;
-  };
+      if (response.status === 401) {
+        try {
+          const refreshed = await refreshSalesforceToken(tokens.backupConfigId);
+          tokens.accessToken = refreshed.access_token;
+        } catch {
+          throw new SalesforceAuthExpiredError();
+        }
+        response = await fetch(url, {
+          headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
+        });
+      }
+      return response;
+    };
 
 // Single call returning both field names (for SOQL) and full schema (for
 // schema comparison / upload). Replaces the former getObjectFields +
@@ -105,20 +105,28 @@ const makePageFetcher =
 type ApexMode = 'schedule' | 'realtime' | 'archival';
 
 const getObjectMetadata = async (
-  crmId: string,
+  backupConfigId: string,
   objectName: string,
   mode: ApexMode
 ): Promise<{ fieldNames: string[]; schema: any[] }> => {
-  const params = new URLSearchParams({ crmId, objectName, mode });
-  const res = await httpRequest({
-    url: `${CORE_SERVICE}/v1/internal/fields?${params.toString()}`,
-    headers: { 'x-internal-secret': INTERNAL_SECRET },
-  });
-  const fields: any[] = res?.data?.fields ?? [];
-  return {
-    fieldNames: fields.map((f) => f.apiName),
-    schema: fields,
-  };
+  try {
+    const params = new URLSearchParams({ backupConfigId, objectName, mode });
+    const res = await httpRequest({
+      url: `${CORE_SERVICE}/v1/internal/fields?${params.toString()}`,
+      headers: { 'x-internal-secret': INTERNAL_SECRET },
+    });
+    const fields: any[] = res?.data?.fields ?? [];
+    return {
+      fieldNames: fields.map((f) => f.apiName),
+      schema: fields,
+    };
+  } catch (error) {
+    console.log('Error fetching object metadata:', error);
+    return {
+      fieldNames: [],
+      schema: [],
+    }
+  }
 };
 
 // ---------------------------------------------------------------------------
