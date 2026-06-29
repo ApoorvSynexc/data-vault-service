@@ -5,16 +5,17 @@ Manages AWS Glue Catalog resources for data querying via Athena. All Glue resour
 
 ## Imports
 - `@aws-sdk/client-glue` — GlueClient, CreateDatabaseCommand, CreateTableCommand, BatchCreatePartitionCommand, UpdateTableCommand
-- `constant` — AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (platform credentials)
+- `constant` — AWS_REGION, AWS_GLUE_ACCESS_KEY, AWS_GLUE_SECRET_KEY (dedicated Glue credentials)
 
 ## Client Setup
 ```typescript
 const glue = new GlueClient({
   region: AWS_REGION,
-  credentials: { accessKeyId: AWS_ACCESS_KEY_ID, secretAccessKey: AWS_SECRET_ACCESS_KEY },
+  credentials: { accessKeyId: AWS_GLUE_ACCESS_KEY, secretAccessKey: AWS_GLUE_SECRET_KEY },
 });
 ```
 Single module-level client (not cached per-user — this is the platform's own AWS account).
+Credentials are intentionally separate from the default `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` so Glue IAM permissions can be scoped independently.
 
 ## Naming Conventions
 

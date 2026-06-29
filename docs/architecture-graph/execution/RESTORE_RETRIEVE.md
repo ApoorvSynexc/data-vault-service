@@ -100,6 +100,51 @@ const jobs = await Promise.all(
 // Optionally filtered by backupConfigId or date range
 ```
 
+## POST /v1/restore-retrieve/fetch-records
+
+```typescript
+// body: { configType: 'BACKUP' | 'ARCHIVAL', objectApiName, columnNames, backupJobIds?, backupConfigId? }
+```
+
+### Validation
+1. `configType` must be `'BACKUP'` or `'ARCHIVAL'` → else 400 `invalid_config_type`.
+2. `objectApiName` must be a non-empty string → else 400 `object_api_name_required`.
+3. `columnNames` must be a non-empty array → else 400 `column_names_required`.
+4. For `BACKUP`: `backupJobIds` must be a non-empty array → else 400 `id_required`. Deduplicated.
+5. For `ARCHIVAL`: `backupConfigId` must be present → else 400 `id_required`.
+
+### BACKUP path
+```typescript
+// 1. Ownership check: GetItem backupJobIds[0] → verify userId matches caller
+// 2. GetItem config from backupConfigId on that job
+// 3. Build Glue identifiers:
+const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+const tableName    = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
+// 4. Run Athena:
+const sql = `SELECT "col1","col2" FROM "tableName" WHERE backup_job_id IN ('id1','id2')`;
+const result = await runAthenaQuery(sql, databaseName);
+// 5. Group rows by backup_job_id column value
+// 6. Return [{ backupJobId, records: { columns, rows } }]
+```
+
+### ARCHIVAL path
+```typescript
+// 1. GetItem config → verify userId matches caller and config exists
+// 2. Query most recent successful ARCHIVAL job:
+const { items } = await getBackupJobsByConfig(backupConfigId, {
+  limit: 1, status: 'SUCCESS', type: 'ARCHIVAL'   // ScanIndexForward:false → newest first
+});
+const latestJob = items[0];
+// 3. Same Glue identifier construction as BACKUP
+// 4. Run Athena with WHERE backup_job_id IN ('latestJob.backupJobId')
+// 5. Return [{ backupJobId: latestJob.backupJobId, records }]
+```
+
+Both paths return `null` internally → controller sends 400 `not_exist` when:
+- Job / config not found.
+- Ownership mismatch (userId !== req.user.userId).
+- No completed ARCHIVAL job exists yet.
+
 ## Sanitize Pattern
 
 All restore-retrieve responses strip encrypted fields:
@@ -110,3 +155,4 @@ const sanitize = (job: IBackupJob) => ({
   destination: undefined,    // never expose encrypted S3 credentials
 });
 ```
+Note: `fetch-records` does not use this sanitize pattern — it never reads the encrypted source/destination fields; it reads only `userId` and `backupConfigId` via projection.

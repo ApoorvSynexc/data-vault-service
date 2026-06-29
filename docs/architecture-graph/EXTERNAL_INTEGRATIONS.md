@@ -86,7 +86,7 @@ backup-service caches one S3Client per `{region}:{accessKeyId}:{bucketName}` in 
 ## AWS Glue Catalog
 
 ### Platform-Owned
-- Glue client uses PLATFORM AWS credentials (not user's).
+- Glue client uses dedicated `AWS_GLUE_ACCESS_KEY` / `AWS_GLUE_SECRET_KEY` credentials (not the default `AWS_ACCESS_KEY_ID`).
 - One database per CRM: `datavault_{crmId}`.
 - One table per config×object: `cfg_{backupConfigId}_{objectName}`.
 - Tables use CSV SerDe (OpenCSVSerde).
@@ -101,10 +101,11 @@ backup-service caches one S3Client per `{region}:{accessKeyId}:{bucketName}` in 
 ## AWS Athena
 
 ### Platform-Owned
-- Athena client uses PLATFORM AWS credentials.
+- Athena client uses dedicated `AWS_ATHENA_ACCESS_KEY` / `AWS_ATHENA_SECRET_KEY` credentials (not the default `AWS_ACCESS_KEY_ID`).
 - Output location: `AWS_ATHENA_OUTPUT_LOCATION` env var.
 - Polling: every 1s, timeout 60s.
 - `runAthenaQuery(sql, database)` — startQuery → poll → fetchResults (paginated).
+- Used by `fetchRecordsByBackupJobs` in restore-retrieve service to query CSV data stored in user S3 buckets via the Glue Catalog.
 
 ### S3 Bucket Policy Grant
 On destination creation, `grantAthenaRoleS3Access` is called (non-fatal):

@@ -96,6 +96,7 @@ Every route in both services with method, path, auth, and handler.
 | GET | /restore-retrieve/get-objectlist-by-configid | restoreRetrieve.getObjectListByConfigIdHandler | |
 | GET | /restore-retrieve/get-objectlist-by-backup-jobids | restoreRetrieve.getObjectListByBackupJobIdsHandler | |
 | GET | /restore-retrieve/get-backup-configs-name | restoreRetrieve.getBackupConfigsNameHandler | |
+| POST | /restore-retrieve/fetch-records | restoreRetrieve.fetchRecordsHandler | Athena query; body: {configType, objectApiName, columnNames, backupJobIds?, backupConfigId?} |
 | GET | /restore-retrieve/ | restoreRetrieve.listJobsHandler | |
 
 ### Internal Routes — /v1/internal (internalAuth: X-Internal-Secret)
