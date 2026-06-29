@@ -39,6 +39,11 @@ const backupConfigPermissions = [
         method: 'DELETE',
         permissions: ['backup.delete']
     },
+    {
+        path: '/backup-config/fields',
+        method: 'GET',
+        permissions: ['backup.read']
+    },
 ];
 
 export { backupConfigPermissions };
