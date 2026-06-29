@@ -32,6 +32,9 @@ const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN);
 // S3 location where Athena writes query result files (required by StartQueryExecution).
 // e.g. s3://datavault-athena-results/
 const AWS_ATHENA_OUTPUT_LOCATION = String(process.env.AWS_ATHENA_OUTPUT_LOCATION);
+// Dedicated IAM credentials scoped to Athena (separate from the default AWS creds).
+const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
+const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
 
 // JWT Config
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
@@ -232,6 +235,8 @@ export {
   // AWS Athena
   AWS_ATHENA_ROLE_ARN,
   AWS_ATHENA_OUTPUT_LOCATION,
+  AWS_ATHENA_ACCESS_KEY,
+  AWS_ATHENA_SECRET_KEY,
 
   // JWT Config
   JWT_ACCESS_SECRET,
