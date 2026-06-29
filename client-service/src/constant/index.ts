@@ -25,9 +25,8 @@ const AWS_EMR_APPLICATION_ID = String(process.env.AWS_EMR_APPLICATION_ID);
 const AWS_EMR_EXECUTION_ROLE_ARN = String(process.env.AWS_EMR_EXECUTION_ROLE_ARN);
 const AWS_EMR_ENCRYPTION_KEY = String(process.env.AWS_EMR_ENCRYPTION_KEY);
 
-// AWS Glue / Athena
-const AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 'datavault');
-// IAM Role ARN that Athena/Glue assumes when reading from client S3 buckets.
+// AWS Athena
+// IAM Role ARN that Athena assumes when reading from client S3 buckets.
 // The client's bucket policy must grant this ARN s3:GetObject + s3:ListBucket.
 const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN);
 // S3 location where Athena writes query result files (required by StartQueryExecution).
@@ -230,8 +229,7 @@ export {
   AWS_EMR_EXECUTION_ROLE_ARN,
   AWS_EMR_ENCRYPTION_KEY,
 
-  // AWS Glue / Athena
-  AWS_GLUE_DATABASE_PREFIX,
+  // AWS Athena
   AWS_ATHENA_ROLE_ARN,
   AWS_ATHENA_OUTPUT_LOCATION,
 

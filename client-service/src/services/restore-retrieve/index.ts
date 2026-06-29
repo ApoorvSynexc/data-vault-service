@@ -1,11 +1,13 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS } from '../../constant';
+import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS, AWS_GLUE_DATABASE_PREFIX } from '../../constant';
 import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
 import { getBackupConfigById, getBackupConfigsWithPagination } from '../backup-config';
 import { getBackupJobsByConfig } from '../backup-job';
-import { getCrmById } from '../crm';
+import { getCrmById, getCrmByOrgId } from '../crm';
+import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
+import { runAthenaQuery, IQueryResult } from '../third-party/athena/query';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 const BACKUP_JOB_TYPE = 'NORMAL';
