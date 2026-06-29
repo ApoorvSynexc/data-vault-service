@@ -12,6 +12,9 @@ const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vaul
 
 // AWS Glue / Athena
 const AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 'datavault');
+// Dedicated IAM credentials scoped to Glue (separate from the default AWS creds).
+const AWS_GLUE_ACCESS_KEY = String(process.env.AWS_GLUE_ACCESS_KEY);
+const AWS_GLUE_SECRET_KEY = String(process.env.AWS_GLUE_SECRET_KEY);
 
 // Salesforce Config
 const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
@@ -108,6 +111,8 @@ export {
 
   // AWS Glue / Athena
   AWS_GLUE_DATABASE_PREFIX,
+  AWS_GLUE_ACCESS_KEY,
+  AWS_GLUE_SECRET_KEY,
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
   TABLE_COUNTER_TABLE,

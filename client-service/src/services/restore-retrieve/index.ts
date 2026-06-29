@@ -545,6 +545,150 @@ const getObjectListByBackupJobIds = async (
   }, {});
 };
 
+// ---------------------------------------------------------------------------
+// Fetch records via Athena
+// ---------------------------------------------------------------------------
+
+export type FetchRecordsConfigType = 'BACKUP' | 'ARCHIVAL';
+
+export interface IFetchRecordsParams {
+  configType: FetchRecordsConfigType;
+  objectApiName: string;
+  columnNames: string[];
+  userId: string;
+  // BACKUP: caller supplies the job IDs to query.
+  backupJobIds?: string[];
+  // ARCHIVAL: caller supplies the config ID; we resolve the most recent successful job.
+  backupConfigId?: string;
+}
+
+export interface IFetchRecordsResult {
+  backupJobId: string;
+  records: IQueryResult;
+}
+
+// Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
+const toGlueId = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+
+// Builds the Athena SQL for a given table, column list, and set of job IDs.
+const buildFetchSql = (
+  tableName: string,
+  columnNames: string[],
+  jobIds: string[]
+): string => {
+  const cols = columnNames.map((c) => `"${c}"`).join(', ');
+  const ids = jobIds.map((id) => `'${id}'`).join(', ');
+  return `SELECT ${cols} FROM "${tableName}" WHERE backup_job_id IN (${ids})`;
+};
+
+// Groups flat Athena result rows by their backup_job_id column value.
+const groupRowsByJobId = (
+  result: IQueryResult,
+  jobIds: string[]
+): IFetchRecordsResult[] => {
+  const byJobId = new Map<string, IQueryResult['rows']>();
+  for (const row of result.rows) {
+    const jobId = row['backup_job_id'] ?? '';
+    if (!byJobId.has(jobId)) byJobId.set(jobId, []);
+    byJobId.get(jobId)!.push(row);
+  }
+  return jobIds.map((id) => ({
+    backupJobId: id,
+    records: { columns: result.columns, rows: byJobId.get(id) ?? [] },
+  }));
+};
+
+/**
+ * BACKUP path: verifies ownership of the supplied job IDs against the caller,
+ * resolves the Glue table coordinates from the first job's config, and queries
+ * Athena filtering to the requested partitions.
+ */
+const fetchRecordsForBackup = async (
+  backupJobIds: string[],
+  objectApiName: string,
+  columnNames: string[],
+  userId: string
+): Promise<IFetchRecordsResult[] | null> => {
+  const ownerCheck = await docClient.send(
+    new GetCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId: backupJobIds[0] },
+      ProjectionExpression: 'userId, backupConfigId',
+    })
+  );
+
+  const ownerItem = ownerCheck.Item as Pick<IBackupJob, 'userId' | 'backupConfigId'> | undefined;
+  if (!ownerItem || ownerItem.userId !== userId) return null;
+
+  const config = await getBackupConfigById(ownerItem.backupConfigId);
+  if (!config) return null;
+
+  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const tableName = `cfg_${toGlueId(ownerItem.backupConfigId)}_${toGlueId(objectApiName)}`;
+
+  const result = await runAthenaQuery(
+    buildFetchSql(tableName, columnNames, backupJobIds),
+    databaseName
+  );
+
+  return groupRowsByJobId(result, backupJobIds);
+};
+
+/**
+ * ARCHIVAL path: resolves the most recent successful ARCHIVAL job for the given
+ * config ID, verifies the config belongs to the caller, then queries Athena for
+ * that single job's partition. Returns null when the config doesn't exist, is not
+ * owned by the caller, or has no completed archival job yet.
+ */
+const fetchRecordsForArchival = async (
+  backupConfigId: string,
+  objectApiName: string,
+  columnNames: string[],
+  userId: string
+): Promise<IFetchRecordsResult[] | null> => {
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config || config.userId !== userId) return null;
+
+  const { items } = await getBackupJobsByConfig(backupConfigId, {
+    limit: 1,
+    status: JOB_STATUS.success,
+    type: 'ARCHIVAL',
+  });
+
+  if (items.length === 0) return null;
+
+  const latestJob = items[0];
+  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const tableName = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
+
+  const result = await runAthenaQuery(
+    buildFetchSql(tableName, columnNames, [latestJob.backupJobId]),
+    databaseName
+  );
+
+  return groupRowsByJobId(result, [latestJob.backupJobId]);
+};
+
+/**
+ * Unified entry point that delegates to the BACKUP or ARCHIVAL path based on
+ * configType. Returns null to signal a 404/ownership failure to the controller.
+ */
+const fetchRecordsByBackupJobs = async (
+  params: IFetchRecordsParams
+): Promise<IFetchRecordsResult[] | null> => {
+  const { configType, objectApiName, columnNames, userId, backupJobIds, backupConfigId } = params;
+
+  if (configType === 'ARCHIVAL') {
+    if (!backupConfigId) return null;
+    return fetchRecordsForArchival(backupConfigId, objectApiName, columnNames, userId);
+  }
+
+  // BACKUP
+  if (!backupJobIds || backupJobIds.length === 0) return null;
+  return fetchRecordsForBackup(backupJobIds, objectApiName, columnNames, userId);
+};
+
 export {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
@@ -553,4 +697,5 @@ export {
   getSnapshotActivityLogs,
   getObjectListByConfigId,
   getObjectListByBackupJobIds,
+  fetchRecordsByBackupJobs,
 };

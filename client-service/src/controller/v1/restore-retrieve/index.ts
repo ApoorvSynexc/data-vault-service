@@ -8,9 +8,11 @@ import {
   getObjectListByConfigId,
   getObjectListByBackupJobIds,
   getBackupConfigNamesByDestination,
+  fetchRecordsByBackupJobs,
   getTableCounter,
   ConfigType,
   BackupScheduleType,
+  FetchRecordsConfigType,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -269,6 +271,101 @@ const getBackupConfigsNameHandler = async (req: IRequest, res: IResponse): Promi
   makeResponse(req, res, 200, true, 'fetch', configNames);
 };
 
+const VALID_FETCH_CONFIG_TYPES: FetchRecordsConfigType[] = ['BACKUP', 'ARCHIVAL'];
+
+/**
+ * POST /fetch-records
+ * Body: {
+ *   configType:     'BACKUP' | 'ARCHIVAL'
+ *   backupConfigId: string                  (required for ARCHIVAL; optional for BACKUP)
+ *   objectApiName:  string
+ *   columnNames:    string[]
+ *   backupJobIds?:  string[]                (required for BACKUP, ignored for ARCHIVAL)
+ * }
+ *
+ * BACKUP  — queries Athena for the supplied backupJobIds filtered to the given object and columns.
+ * ARCHIVAL — resolves the most recent successful archival job for the given backupConfigId,
+ *            then queries Athena for that job's partition.
+ *
+ * Returns not_exist when ownership cannot be confirmed or no qualifying job is found.
+ */
+const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { configType, backupConfigId, objectApiName, columnNames, backupJobIds } = req.body as {
+    configType?: unknown;
+    backupConfigId?: unknown;
+    objectApiName?: unknown;
+    columnNames?: unknown;
+    backupJobIds?: unknown;
+  };
+  const userId = req.user!.userId;
+
+  if (!configType || !VALID_FETCH_CONFIG_TYPES.includes(configType as FetchRecordsConfigType)) {
+    makeResponse(req, res, 400, false, 'invalid_config_type');
+    return;
+  }
+
+  if (!objectApiName || typeof objectApiName !== 'string') {
+    makeResponse(req, res, 400, false, 'object_api_name_required');
+    return;
+  }
+
+  if (!Array.isArray(columnNames) || columnNames.length === 0) {
+    makeResponse(req, res, 400, false, 'column_names_required');
+    return;
+  }
+
+  if (configType === 'ARCHIVAL') {
+    if (!backupConfigId || typeof backupConfigId !== 'string') {
+      makeResponse(req, res, 400, false, 'id_required');
+      return;
+    }
+
+    const result = await fetchRecordsByBackupJobs({
+      configType: 'ARCHIVAL',
+      backupConfigId: String(backupConfigId),
+      objectApiName: String(objectApiName),
+      columnNames: (columnNames as unknown[]).map((c) => String(c)),
+      userId,
+    });
+
+    if (!result) {
+      makeResponse(req, res, 400, false, 'not_exist');
+      return;
+    }
+
+    makeResponse(req, res, 200, true, 'fetch', result);
+    return;
+  }
+
+  // BACKUP path
+  if (!Array.isArray(backupJobIds) || backupJobIds.length === 0) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const ids = [...new Set((backupJobIds as unknown[]).map((id) => String(id).trim()).filter(Boolean))];
+
+  if (ids.length === 0) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const result = await fetchRecordsByBackupJobs({
+    configType: 'BACKUP',
+    backupJobIds: ids,
+    objectApiName: String(objectApiName),
+    columnNames: (columnNames as unknown[]).map((c) => String(c)),
+    userId,
+  });
+
+  if (!result) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result);
+};
+
 export const restoreRetrieveJobController = wrapController({
   fetchLogsHandler,
   listRestoreRetrieveJobsHandler,
@@ -277,4 +374,5 @@ export const restoreRetrieveJobController = wrapController({
   getObjectListByConfigIdHandler,
   getObjectListByBackupJobIdsHandler,
   getBackupConfigsNameHandler,
+  fetchRecordsHandler,
 });
