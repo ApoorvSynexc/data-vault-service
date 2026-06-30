@@ -53,5 +53,7 @@
   "config_id_required": "configId is required",
   "invalid_config_type": "configType must be NORMAL or ARCHIVAL",
   "invalid_schedule_type": "scheduleType must be REALTIME or SCHEDULE",
-  "invalid_schedule_type_for_snapshot": "scheduleType is only applicable when snapshotType is BACKUP"
+  "invalid_schedule_type_for_snapshot": "scheduleType is only applicable when snapshotType is BACKUP",
+  "object_api_name_required": "objectApiName is required",
+  "column_names_required": "columnNames must be a non-empty array"
 }
