@@ -224,7 +224,7 @@ export const exportFirstTime = async (
       Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
     );
 
-    createCsvGlueTable({
+    await createCsvGlueTable({
       crmId,
       crmName,
       backupConfigId,
@@ -238,7 +238,7 @@ export const exportFirstTime = async (
       )
     );
 
-    registerBackupJobPartition({
+    await registerBackupJobPartition({
       crmId,
       crmName,
       backupConfigId,

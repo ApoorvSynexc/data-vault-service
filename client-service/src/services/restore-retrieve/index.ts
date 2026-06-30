@@ -147,6 +147,7 @@ const SCHEDULE_TO_JOB_TYPE: Record<BackupScheduleType, string> = {
 
 export interface ISnapshotActivityLogEntry {
   backupConfigId: string;
+  backupJobId: string;
   dateTime: string;
   configName: string;
   sourceName: string;
@@ -181,6 +182,7 @@ const buildBackupJobLogEntry = (
 ): ISnapshotActivityLogEntry => {
   const entry: ISnapshotActivityLogEntry = {
     backupConfigId: job.backupConfigId,
+    backupJobId: job.backupJobId,
     dateTime: job.createdAt,
     configName,
     sourceName,

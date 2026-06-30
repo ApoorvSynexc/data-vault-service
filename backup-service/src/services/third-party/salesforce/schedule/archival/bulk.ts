@@ -444,7 +444,7 @@ async function uploadSingleObject(
 
       if (!gluePartitionRegistered) {
         gluePartitionRegistered = true;
-        registerBackupJobPartition({
+        await registerBackupJobPartition({
           crmId: ctx.crmId,
           crmName: ctx.crmName,
           backupConfigId: ctx.backupConfigId,
@@ -515,7 +515,7 @@ async function uploadSingleObject(
         logger.info(
           `[archival:child] schema uploaded (first time) | backupJobId:${backupJobId} objectName:${object.name} key:${schemaKey}`
         );
-        createCsvGlueTable({
+        await createCsvGlueTable({
           crmId: ctx.crmId,
           crmName: ctx.crmName,
           backupConfigId: ctx.backupConfigId,
@@ -554,7 +554,7 @@ async function uploadSingleObject(
             backupJobId,
             object: { id: object.id, schemaChange: true },
           });
-          updateGlueTableSchema({
+          await updateGlueTableSchema({
             crmId: ctx.crmId,
             backupConfigId: ctx.backupConfigId,
             objectName: object.name,
@@ -713,7 +713,7 @@ const uploadBulkResultsByPageArchival = async (
 
       if (!gluePartitionRegistered) {
         gluePartitionRegistered = true;
-        registerBackupJobPartition({
+        await registerBackupJobPartition({
           crmId,
           crmName,
           backupConfigId,
