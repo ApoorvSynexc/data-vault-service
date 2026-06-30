@@ -10,7 +10,6 @@ const createOAuthState = async (
   codeVerifier: string,
   userId: string,
   crmName: string,
-  crmId?: string,
   environment?: 'production' | 'sandbox' | 'custom',
   customUrl?: string,
   name?: string
@@ -20,7 +19,6 @@ const createOAuthState = async (
     codeVerifier,
     userId,
     crmName,
-    crmId,
     environment,
     customUrl,
     name,
