@@ -120,7 +120,7 @@ export const exportFirstTime = async (
 
   try {
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(
-      crmId,
+      backupConfigId,
       objectName,
       'schedule'
     );
@@ -299,7 +299,7 @@ export const exportIncremental = async (
 
   try {
     const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
-      crmId,
+      backupConfigId,
       objectName,
       'schedule'
     );

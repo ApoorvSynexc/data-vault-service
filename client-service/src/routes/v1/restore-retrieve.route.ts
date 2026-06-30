@@ -22,7 +22,7 @@ router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler)
 router.get('/get-objectlist-by-configid', restoreRetrieveJobController.getObjectListByConfigIdHandler);
 router.get('/get-objectlist-by-backup-jobids', restoreRetrieveJobController.getObjectListByBackupJobIdsHandler);
 router.get('/get-backup-configs-name', restoreRetrieveJobController.getBackupConfigsNameHandler);
-router.post('/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);
-router.get('/', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
+router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);
+router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 
 export const restoreRetrieveRouter = router;
