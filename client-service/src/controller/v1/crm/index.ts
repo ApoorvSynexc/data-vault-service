@@ -146,6 +146,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   await updateUser(
     { userId: user?.userId },
     {
+      isCrmConnected: true,
       crmCredential: encrptedCrm,
       ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {})
     }
