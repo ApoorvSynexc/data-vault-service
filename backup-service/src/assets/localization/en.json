@@ -36,5 +36,7 @@
   "crm_credentials_required": "crmCredentials is required",
   "destination_required": "destination is required",
   "job_already_running": "A backup job is already running for this configuration",
-  "job_resume": "Backup job resumed successfully"
+  "job_resume": "Backup job resumed successfully",
+  "params_required": "Required parameters are missing",
+  "repair": "Glue table repair completed"
 }
