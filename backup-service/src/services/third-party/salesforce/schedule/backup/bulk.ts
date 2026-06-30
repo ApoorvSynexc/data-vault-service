@@ -106,9 +106,16 @@ const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
   const { instanceUrl, tokens, jobId, backupJobId, objectIndex } = payload;
   let { salesforceApiCount } = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
+  let pollCount = 0;
+  const MAX_POLL_INTERVAL_MS = 60000; // 1 minute
 
   while (true) {
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    pollCount++;
+    const currentInterval = Math.min(
+      POLL_INTERVAL_MS + Math.floor((pollCount - 1) / 3) * 5000,
+      MAX_POLL_INTERVAL_MS
+    );
+    await new Promise((r) => setTimeout(r, currentInterval));
 
     if (Date.now() >= deadline) {
       throw new Error(
