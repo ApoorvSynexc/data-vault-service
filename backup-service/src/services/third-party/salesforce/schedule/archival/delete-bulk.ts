@@ -138,13 +138,18 @@ const pollJobCompletion = async (paylaod: {
   const { backupJobId, object, instanceUrl, tokens, jobId } = paylaod;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
   let pollCount = 0;
+  const MAX_POLL_INTERVAL_MS = 60000; // 1 minute
 
   logger.info(
     `[archival:delete:poll] started | backupJobId:${backupJobId} objectName:${object.name} jobId:${jobId}`
   );
 
   while (true) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    const currentInterval = Math.min(
+      POLL_INTERVAL_MS + Math.floor((pollCount - 1) / 3) * 5000,
+      MAX_POLL_INTERVAL_MS
+    );
+    await new Promise((resolve) => setTimeout(resolve, currentInterval));
 
     if (Date.now() >= deadline) {
       logger.error(
