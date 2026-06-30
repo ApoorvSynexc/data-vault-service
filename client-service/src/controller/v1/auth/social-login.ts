@@ -154,7 +154,7 @@ const socialLoginCallbackHandler = async (
   const encrptedCrm = encrypt(JSON.stringify(crmCredential));
   await updateUser(
     { userId: user.userId }, 
-    { crmCredential: encrptedCrm, ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}) });
+    { crmCredential: encrptedCrm, isCrmConnected: true, ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}) });
 
   // Create session and generate tokens
   const deviceInfo = {
