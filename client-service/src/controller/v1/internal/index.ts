@@ -15,14 +15,26 @@ import { wrapController } from '../../../utils/helper';
 import { decrypt } from '../../../utils/encryption';
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  const { crmId, objectName, mode } = req.query;
-  if (!crmId) {
-    return makeResponse(req, res, 400, false, 'crm_id_required');
+  const { backupConfigId, objectName, mode } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
   }
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
+
+  const backupConfig = await getBackupConfigById(String(backupConfigId));
+  if (!backupConfig) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  const user = await getUser({ userId: backupConfig.userId });
+  if (!user) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
   const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
   makeResponse(req, res, 200, true, 'fetch', result);
 };

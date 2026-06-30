@@ -93,8 +93,25 @@ export const defaultPermissions = [
         ]
     },
     {
-        label: "Connection",
-        value: "connection",
+        label: "Source Connection",
+        value: "sourceConnection",
+        description: "",
+        permissions: [
+            {
+                label: "View",
+                value: "read",
+                description: "",
+            },
+            {
+                label: "Config",
+                value: "write",
+                description: "",
+            }
+        ]
+    },
+    {
+        label: "Destination Connection",
+        value: "destinationConnection",
         description: "",
         permissions: [
             {
