@@ -163,10 +163,16 @@ const pollBulkJobArchival = async (payload: IPollBulkJobArchival): Promise<numbe
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
   let latestObjects: IBackupObject[] = [];
   let pollCount = 0;
+  const MAX_POLL_INTERVAL_MS = 60000; // 1 minute
 
   while (true) {
+    pollCount++;
+    const currentInterval = Math.min(
+      POLL_INTERVAL_MS + Math.floor((pollCount - 1) / 3) * 5000,
+      MAX_POLL_INTERVAL_MS
+    );
     // Always wait first — the job was just submitted or we just polled.
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    await new Promise((r) => setTimeout(r, currentInterval));
 
     if (Date.now() >= deadline) {
       logger.error(

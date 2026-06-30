@@ -31,7 +31,7 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
   const item: Record<string, any> = {
     ...data,
     userId: data.userId ?? uuidv4(),
-    contactEmail: data.contact?.email ?? undefined,
+    contactEmail: data.crmProfile?.email ?? data.contact?.email ?? undefined,
     contactMobileKey: data.contact?.mobile ? buildMobileKey(data.contact.mobile) : undefined,
     crmProfileUserId: data.crmProfile?.userId ?? undefined,
     status: data.status ?? STATUS.active,
@@ -292,6 +292,24 @@ const getUsers = async (search: Record<string, any> = {}): Promise<IUser[]> => {
   return (result.Items ?? []) as IUser[];
 };
 
+interface IGetUsersByContactEmailParams {
+  contactEmail: string;
+}
+
+const getUsersByContactEmail = async (params: IGetUsersByContactEmailParams): Promise<IUser[]> => {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: USER_TABLE,
+      IndexName: 'email-index',
+      KeyConditionExpression: 'contactEmail = :email',
+      ExpressionAttributeValues: {
+        ':email': params.contactEmail,
+      },
+    })
+  );
+  return (result.Items ?? []) as IUser[];
+};
+
 // ---------------------------------------------------------------------------
 // Converts a MongoDB-style projection { firstName: 1, email: 1 } into
 // DynamoDB ProjectionExpression params.  Returns null when projection is empty.
@@ -446,4 +464,4 @@ const deleteUser = async (userId: string): Promise<boolean> => {
   return true;
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser };
+export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser };
