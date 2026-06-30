@@ -455,7 +455,7 @@ const getSnapshotActivityLogs = async (params: {
 // Object list helper
 // ---------------------------------------------------------------------------
 
-export type ConfigType = 'NORMAL' | 'ARCHIVAL' | 'BACKUP';
+export type ConfigType = 'BACKUP' | 'ARCHIVAL';
 
 // Minimal shape covering both IObject (config-level) and IBackupObject (job-level)
 // so the same walker can flatten either tree.
@@ -480,7 +480,9 @@ const getObjectListByConfigId = async (
 ): Promise<{ objects: string[]; found: boolean }> => {
   const config = await getBackupConfigById(backupConfigId);
 
-  if (!config || config.userId !== userId || config.type !== configType) {
+  // BACKUP maps to the stored type 'NORMAL' in DynamoDB.
+  const storedType = configType === 'BACKUP' ? 'NORMAL' : configType;
+  if (!config || config.userId !== userId || config.type !== storedType) {
     return { objects: [], found: false };
   }
 
