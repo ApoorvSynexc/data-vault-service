@@ -455,7 +455,7 @@ const getSnapshotActivityLogs = async (params: {
 // Object list helper
 // ---------------------------------------------------------------------------
 
-export type ConfigType = 'NORMAL' | 'ARCHIVAL';
+export type ConfigType = 'NORMAL' | 'ARCHIVAL' | 'BACKUP';
 
 // Minimal shape covering both IObject (config-level) and IBackupObject (job-level)
 // so the same walker can flatten either tree.
