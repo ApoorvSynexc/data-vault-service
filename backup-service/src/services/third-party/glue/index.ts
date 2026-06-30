@@ -113,6 +113,8 @@ const CSV_STORAGE_DESCRIPTOR_BASE = {
 const CSV_TABLE_PARAMETERS = {
   'skip.header.line.count': '1',
   classification: 'csv',
+  // Recurse into sub-folders (inserts/, updates/, deletes/) within each partition prefix.
+  recurse: '1',
 } as const;
 
 export interface IGlueColumnDef {
@@ -302,11 +304,56 @@ export const updateGlueTableSchema = async (
           // Preserve the original root location set at table creation.
           Location: Table?.StorageDescriptor?.Location ?? '',
         },
-        Parameters: { ...CSV_TABLE_PARAMETERS },
+        Parameters: { ...(Table?.Parameters ?? {}), ...CSV_TABLE_PARAMETERS },
         TableType: 'EXTERNAL_TABLE',
       },
     })
   );
 
   logger.info(`[glue] updated table schema | table:${tableName} columns:${glueColumns.length}`);
+};
+
+export interface IRepairGlueTableParamsInput {
+  crmId: string;
+  backupConfigId: string;
+  objectName: string;
+}
+
+// Patches an existing Glue table to add any missing table parameters (e.g. recurse=1)
+// without touching columns, partition keys, or storage location.
+// Call this once per table for tables created before recurse=1 was added.
+export const repairGlueTableParams = async (
+  params: IRepairGlueTableParamsInput
+): Promise<void> => {
+  const { crmId, backupConfigId, objectName } = params;
+
+  const databaseName = buildGlueDatabaseName(crmId);
+  const tableName = buildGlueTableName(backupConfigId, objectName);
+
+  const { Table } = await glue.send(
+    new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
+  );
+
+  if (!Table) {
+    logger.warn(`[glue] repairGlueTableParams: table not found | db:${databaseName} table:${tableName}`);
+    return;
+  }
+
+  await glue.send(
+    new UpdateTableCommand({
+      DatabaseName: databaseName,
+      TableInput: {
+        Name: tableName,
+        PartitionKeys: Table.PartitionKeys ?? [],
+        StorageDescriptor: {
+          ...Table.StorageDescriptor,
+          SerdeInfo: Table.StorageDescriptor?.SerdeInfo ?? {},
+        },
+        Parameters: { ...(Table.Parameters ?? {}), ...CSV_TABLE_PARAMETERS },
+        TableType: Table.TableType ?? 'EXTERNAL_TABLE',
+      },
+    })
+  );
+
+  logger.info(`[glue] repaired table params | db:${databaseName} table:${tableName}`);
 };
