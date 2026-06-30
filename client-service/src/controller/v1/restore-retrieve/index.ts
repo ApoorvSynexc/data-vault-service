@@ -18,7 +18,7 @@ import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 
-const VALID_CONFIG_TYPES: ConfigType[] = ['NORMAL', 'ARCHIVAL'];
+const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 const VALID_BACKUP_SCHEDULE_TYPES: BackupScheduleType[] = ['REALTIME', 'SCHEDULE'];
 
 const VALID_SNAPSHOT_TYPES = ['BACKUP', 'ARCHIVAL'] as const;
