@@ -80,7 +80,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             { userId: existingUser.userId },
             {
               userId: existingUser.userId,
-              profile: { ...existingUser.profile, ...profile },
+              crmProfile: { ...existingUser.profile, ...profile },
             });
           await updateRole(
             { roleId: existingUser.role.roleId },

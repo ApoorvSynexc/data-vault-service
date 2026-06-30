@@ -17,6 +17,8 @@ import {
   getUser,
   getCrmByOrgId,
   updateUser,
+  getUsers,
+  getUsersByContactEmail,
 } from '../../../services';
 import {
   refreashSalesforceToken,
@@ -155,10 +157,23 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const spaceId = req.user?.crmId;
-  const crms = await getCrmById(String(spaceId));
+  const user = req.user!;
+  if (!user || !user.contactEmail) {
+    return makeResponse(req, res, 400, false, 'unauthorized');
+  }
+  const users = await getUsersByContactEmail({ contactEmail: user.contactEmail });
+  if (!users) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
 
-  makeResponse(req, res, 200, true, 'fetch', [crms]);
+  for (let index = 0; index < users.length; index++) {
+    const currentUser = users[index];
+    const crm = await getCrmById(currentUser.crmId!);
+    if (crm) {
+      (users[index] as any).crm = crm;
+    }
+  }
+  makeResponse(req, res, 200, true, 'fetch', users);
 };
 
 const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
