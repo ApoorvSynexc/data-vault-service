@@ -1,33 +1,25 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   createOAuthState,
-  disconnectCrm,
   getCrmById,
-  getCrmsBySpace,
   getOAuthState,
   getSalesforceLoginUrl,
   getSalesforceProfile,
   getSalesforceToken,
-  reconnectCrm,
-  upsertCrm,
   updateCrm,
   deleteCrm,
   getBackupConfigsByCrm,
-  createUser,
-  getUser,
   getCrmByOrgId,
   updateUser,
-  getUsers,
   getUsersByContactEmail,
+  getUser,
 } from '../../../services';
 import {
   refreashSalesforceToken,
   SalesforceAuthExpiredError,
   SalesforceEnvironment,
 } from '../../../services/third-party/salesforce';
-import { AUTH_PROVIDER, STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
-import { defaultRoles } from '../../../assets';
 import { decrypt, encrypt } from '../../../utils/encryption';
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
@@ -42,28 +34,25 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmName, crmId, environment, name } = req.query;
+  const { crmName, userId, environment, name } = req.query;
 
-  if (!crmName && !crmId) {
-    makeResponse(req, res, 400, false, 'crm_name_required');
+  if (!crmName && !userId) {
+    makeResponse(req, res, 400, false, 'id_required');
     return;
   }
 
   const env = (environment as SalesforceEnvironment) ?? 'production';
-
-  const userId = req.user!.userId;
   let resolvedCrmName = String(crmName ?? '');
   let oauthStateKey: string | undefined;
 
-  if (!resolvedCrmName && crmId) {
-    const crm = await getCrmById(String(crmId));
-    if (!crm) {
+  if (!resolvedCrmName && userId) {
+    const user = await getUser({ userId: String(userId) });
+    if (!user) {
       makeResponse(req, res, 400, false, 'not_exist');
       return;
     }
 
-    resolvedCrmName = crm.crmName;
-    oauthStateKey = `crm-${crm.crmId}`;
+    oauthStateKey = `user-${user.userId}`;
   }
 
   let redirectUrl;
@@ -79,9 +68,8 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
       await createOAuthState(
         state,
         codeVerifier,
-        userId,
+        String(userId),
         resolvedCrmName,
-        crmId ? String(crmId) : undefined,
         env,
         undefined,
         name ? String(name) : undefined
@@ -96,7 +84,7 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
 
 const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
-  const { crmName, code, state } = req.query;
+  const { code, state } = req.query;
 
   const oauthState = await getOAuthState(String(state));
   if (!oauthState) {
@@ -106,7 +94,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
 
   let token;
   try {
-    switch (crmName) {
+    switch (oauthState.crmName) {
       case 'salesforce':
       default:
         token = await getSalesforceToken(
@@ -136,7 +124,17 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
 
   const existingCrms = await getCrmByOrgId(sfProfile.organization_id);
   if (!existingCrms) {
-    makeResponse(req, res, 409, false, 'not_exist');
+    makeResponse(req, res, 409, false, 'crm_not_found');
+    return;
+  }
+
+  const userDetail = await getUser({ userId: String(oauthState.userId) });
+  if (!userDetail) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+  if (userDetail?.crmProfile?.userId != sfProfile.user_id) {
+    makeResponse(req, res, 400, false, 'organization_mismatch_exist');
     return;
   }
 
@@ -148,6 +146,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   await updateUser(
     { userId: user?.userId },
     {
+      isCrmConnected: true,
       crmCredential: encrptedCrm,
       ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {})
     }
@@ -177,19 +176,13 @@ const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId } = req.query;
-
-  if (!crmId) {
-    makeResponse(req, res, 400, false, 'crm_id_required');
+  const { userId } = req.query;
+  if (!userId) {
+    makeResponse(req, res, 400, false, 'id_required');
     return;
   }
 
-  const disconnected = await disconnectCrm(String(crmId));
-
-  if (!disconnected) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
+  await updateUser({ userId: String(userId) }, { isCrmConnected: false });
 
   makeResponse(req, res, 200, true, 'update');
 };
