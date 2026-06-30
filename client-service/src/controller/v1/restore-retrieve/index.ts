@@ -9,6 +9,7 @@ import {
   getObjectListByBackupJobIds,
   getBackupConfigNamesByDestination,
   fetchRecordsByBackupJobs,
+  repairGlueTables,
   getTableCounter,
   ConfigType,
   BackupScheduleType,
@@ -366,6 +367,43 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 
+/**
+ * POST /retrieve/repair-glue
+ * Body: { backupConfigId: string, backupJobId?: string }
+ *
+ * Resolves the config's CRM, destination, and object list then calls the
+ * backup-service /glue/repair endpoint to:
+ *   1. Patch every Glue table for this config with recurse=1 so Athena scans
+ *      inserts/, updates/, deletes/ sub-folders within each partition.
+ *   2. Re-register the partition for backupJobId (when supplied) so Athena
+ *      knows where that job's CSVs live without waiting for the next backup run.
+ */
+const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupConfigId, backupJobId } = req.body as {
+    backupConfigId?: unknown;
+    backupJobId?: unknown;
+  };
+  const userId = req.user!.userId;
+
+  if (!backupConfigId || typeof backupConfigId !== 'string') {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const result = await repairGlueTables({
+    backupConfigId,
+    userId,
+    ...(backupJobId && typeof backupJobId === 'string' ? { backupJobId } : {}),
+  });
+
+  if (!result) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'repair', result);
+};
+
 export const restoreRetrieveJobController = wrapController({
   fetchLogsHandler,
   listRestoreRetrieveJobsHandler,
@@ -375,4 +413,5 @@ export const restoreRetrieveJobController = wrapController({
   getObjectListByBackupJobIdsHandler,
   getBackupConfigsNameHandler,
   fetchRecordsHandler,
+  repairGlueTablesHandler,
 });

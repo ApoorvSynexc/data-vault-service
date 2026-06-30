@@ -1,13 +1,14 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS, AWS_GLUE_DATABASE_PREFIX } from '../../constant';
+import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
 import { getBackupConfigById, getBackupConfigsWithPagination } from '../backup-config';
 import { getBackupJobsByConfig } from '../backup-job';
 import { getCrmById, getCrmByOrgId } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery, IQueryResult } from '../third-party/athena/query';
+import { httpRequest } from '../../utils/http-request';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 const BACKUP_JOB_TYPE = 'NORMAL';
@@ -574,12 +575,14 @@ const toGlueId = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
 // Builds the Athena SQL for a given table, column list, and set of job IDs.
+// backup_job_id is always prepended — it is a Glue partition key that Athena
+// exposes as a virtual column, so groupRowsByJobId can correlate rows to jobs.
 const buildFetchSql = (
   tableName: string,
   columnNames: string[],
   jobIds: string[]
 ): string => {
-  const cols = columnNames.map((c) => `"${c}"`).join(', ');
+  const cols = ['backup_job_id', ...columnNames.map((c) => `"${c}"`)].join(', ');
   const ids = jobIds.map((id) => `'${id}'`).join(', ');
   return `SELECT ${cols} FROM "${tableName}" WHERE backup_job_id IN (${ids})`;
 };
@@ -691,6 +694,85 @@ const fetchRecordsByBackupJobs = async (
   return fetchRecordsForBackup(backupJobIds, objectApiName, columnNames, userId);
 };
 
+// ---------------------------------------------------------------------------
+// Glue table repair
+// ---------------------------------------------------------------------------
+
+export interface IRepairGlueTablesParams {
+  backupConfigId: string;
+  userId: string;
+  // Optional: when supplied, also re-registers the partition for this job so
+  // Athena can immediately query data from it without waiting for the next run.
+  backupJobId?: string;
+}
+
+export interface IRepairGlueTablesResult {
+  repaired: string[];
+  failed: { objectName: string; error: string }[];
+}
+
+/**
+ * Resolves a backup config's CRM, destination, and selected object list from
+ * DynamoDB, then calls the backup-service /glue/repair endpoint so that each
+ * Glue table gets the missing recurse=1 parameter and (optionally) its
+ * partition re-registered.
+ *
+ * Returns null when the config doesn't exist or isn't owned by the caller.
+ */
+const repairGlueTables = async (
+  params: IRepairGlueTablesParams
+): Promise<IRepairGlueTablesResult | null> => {
+  const { backupConfigId, userId, backupJobId } = params;
+
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config || config.userId !== userId) {
+    return null;
+  }
+
+  const crm = await getCrmById(config.crmId);
+  if (!crm) {
+    return null;
+  }
+
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) {
+    return null;
+  }
+
+  const destConfig = getDecryptedDestinationConfig(destination);
+
+  // Collect object names from the config — prefer objects[] (full metadata) over
+  // objectNames[] (name-only) as it is more authoritative when present.
+  const objectNames: string[] =
+    config.objects && config.objects.length > 0
+      ? [...new Set(config.objects.map((o) => o.name))]
+      : [...new Set(config.objectNames ?? [])];
+
+  if (objectNames.length === 0) {
+    return { repaired: [], failed: [] };
+  }
+
+  // Derive the S3 path type segment from the config type stored in DynamoDB.
+  const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
+
+  const response = await httpRequest<{ data: IRepairGlueTablesResult }>({
+    url: `${BACKUP_SERVICE}/v1/glue/repair`,
+    method: 'POST',
+    headers: { 'x-internal-secret': INTERNAL_SECRET },
+    body: JSON.stringify({
+      crmId: crm.crmId,
+      crmName: crm.crmName,
+      backupConfigId,
+      objectNames,
+      type,
+      destConfig,
+      ...(backupJobId && { backupJobId }),
+    }),
+  });
+
+  return response.data;
+};
+
 export {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
@@ -700,4 +782,5 @@ export {
   getObjectListByConfigId,
   getObjectListByBackupJobIds,
   fetchRecordsByBackupJobs,
+  repairGlueTables,
 };
