@@ -526,6 +526,30 @@ const computeArchivalJobStats = async (query: { indexName: string; keyName: stri
   };
 };
 
+const getLastNBackupByCrm = async (
+  crmId: string,
+  type?: 'NORMAL' | 'ARCHIVAL' | 'RESTORE',
+  limit: number = 10
+): Promise<IBackupJob[]> => {
+  const queryParams: any = {
+    TableName: BACKUP_JOB_TABLE,
+    IndexName: 'crmId-index',
+    KeyConditionExpression: 'crmId = :crmId',
+    ExpressionAttributeValues: { ':crmId': crmId },
+    Limit: limit,
+    ScanIndexForward: false, // Descending: largest sizeInBytes first
+  };
+
+  if (type) {
+    queryParams.FilterExpression = '#type = :type';
+    queryParams.ExpressionAttributeNames = { '#type': 'type' };
+    queryParams.ExpressionAttributeValues[':type'] = type;
+  }
+
+  const result = await docClient.send(new QueryCommand(queryParams));
+  return (result.Items as IBackupJob[] | undefined) ?? [];
+};
+
 const getMonthlyStatsByCrmCurrentYear = async (crmId: string): Promise<Array<{ month: string; sizeInBytes: number; uploadedRecords: number }>> => {
   const currentYear = new Date().getFullYear();
   const startDate = dayjs(`${currentYear}-01-01`).startOf('year').toISOString();
@@ -591,6 +615,7 @@ export {
   getBackupJobsByUser,
   getBackupJobsByConfig,
   getLastBackupJobByCrm,
+  getLastNBackupByCrm,
   deleteBackupJobsByConfig,
   computeJobStats,
   computeArchivalJobStats,

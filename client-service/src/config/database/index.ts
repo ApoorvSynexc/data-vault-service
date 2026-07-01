@@ -57,6 +57,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       { AttributeName: 'createdAt', AttributeType: 'S' },
       { AttributeName: 'spaceId', AttributeType: 'S' },
       { AttributeName: 'crmId', AttributeType: 'S' },
+      { AttributeName: 'sizeInBytes', AttributeType: 'N' },
     ],
     KeySchema: [{ AttributeName: 'backupJobId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
@@ -88,7 +89,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         IndexName: 'crmId-index',
         KeySchema: [
           { AttributeName: 'crmId', KeyType: 'HASH' },
-          { AttributeName: 'createdAt', KeyType: 'RANGE' },
+          { AttributeName: 'sizeInBytes', KeyType: 'RANGE' },
         ],
         Projection: { ProjectionType: 'ALL' },
       },
@@ -124,17 +125,24 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       { AttributeName: 'userId', AttributeType: 'S' },
       { AttributeName: 'spaceId', AttributeType: 'S' },
       { AttributeName: 'crmId', AttributeType: 'S' },
+      { AttributeName: 'sizeInBytes', AttributeType: 'N' },
     ],
     KeySchema: [{ AttributeName: 'backupConfigId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'userId-index',
-        KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+        KeySchema: [
+          { AttributeName: 'userId', KeyType: 'HASH' },
+          { AttributeName: 'sizeInBytes', KeyType: 'RANGE' },
+        ],
         Projection: { ProjectionType: 'ALL' },
       },
       {
         IndexName: 'spaceId-index',
-        KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
+        KeySchema: [
+          { AttributeName: 'spaceId', KeyType: 'HASH' },
+          { AttributeName: 'sizeInBytes', KeyType: 'RANGE' },
+        ],
         Projection: { ProjectionType: 'ALL' },
       },
       {
