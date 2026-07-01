@@ -454,6 +454,29 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
   };
 };
 
+const getLastBackupJobByUser = async (
+  userId: string,
+  type?: 'NORMAL' | 'ARCHIVAL' | 'RESTORE'
+): Promise<IBackupJob | null> => {
+  const queryParams: any = {
+    TableName: BACKUP_JOB_TABLE,
+    IndexName: 'userId-index',
+    KeyConditionExpression: 'userId = :userId',
+    ExpressionAttributeValues: { ':userId': userId },
+    Limit: 1,
+    ScanIndexForward: false,
+  };
+
+  if (type) {
+    queryParams.FilterExpression = '#type = :type';
+    queryParams.ExpressionAttributeNames = { '#type': 'type' };
+    queryParams.ExpressionAttributeValues[':type'] = type;
+  }
+
+  const result = await docClient.send(new QueryCommand(queryParams));
+  return (result.Items?.[0] as IBackupJob) ?? null;
+};
+
 const computeArchivalJobStats = async (query: { indexName: string; keyName: string; keyValue: string }) => {
   let totalArchival = 0;
   let completedArchival = 0;
@@ -512,6 +535,7 @@ export {
   getBackupJobById,
   getBackupJobsByUser,
   getBackupJobsByConfig,
+  getLastBackupJobByUser,
   deleteBackupJobsByConfig,
   computeJobStats,
   computeArchivalJobStats,

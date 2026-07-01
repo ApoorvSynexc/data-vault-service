@@ -72,6 +72,7 @@ export interface IBackupConfig {
   lastBackupAt?: string; // when the last backup job ran
   lastEventId?: string; // idempotency key — last processed backup-service event ID
   schemaChange?: boolean;
+  uploadedRecords?: number;
   sizeInBytes?: number;
   successRecordCount?: number;
   spaceId?: string;
