@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { getBackupConfigSizeRecordByCrmId, getLastBackupJobByCrm } from "../../../services";
+import { getBackupConfigSizeRecordByCrmId, getLastBackupJobByCrm, getMonthlyStatsByCrmCurrentYear } from "../../../services";
 
 
 const overview = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -12,10 +12,12 @@ const overview = async (req: IRequest, res: IResponse): Promise<void> => {
 
     const backupConfigSizeRecord = await getBackupConfigSizeRecordByCrmId(crmId);
     const lastBackupJob = await getLastBackupJobByCrm(crmId, "NORMAL");
+    const archivalMonthlyStats = await getMonthlyStatsByCrmCurrentYear(crmId);
 
     const result = {
         backupConfigSizeRecord,
-        lastBackupJob
+        lastBackupJob,
+        archivalMonthlyStats
     }
     makeResponse(req, res, 200, true, 'fetch', result);
 }

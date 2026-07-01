@@ -60,7 +60,7 @@ const triggerArchivalBackupJob = async (params: {
   const { config, objects, lastUpdatedAt, bypassDedup, user } = params;
   const objectNames = (objects ?? []).map(o => o.name).join(',') || 'none';
 
-  if(!user) return null;
+  if (!user) return null;
 
   if (!bypassDedup) {
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} dedup check (bypassDedup=false)`);
@@ -526,6 +526,61 @@ const computeArchivalJobStats = async (query: { indexName: string; keyName: stri
   };
 };
 
+const getMonthlyStatsByCrmCurrentYear = async (crmId: string): Promise<Array<{ month: string; sizeInBytes: number; uploadedRecords: number }>> => {
+  const currentYear = new Date().getFullYear();
+  const startDate = dayjs(`${currentYear}-01-01`).startOf('year').toISOString();
+  const endDate = dayjs().endOf('year').toISOString();
+
+  const monthlyStats: Record<string, { sizeInBytes: number; uploadedRecords: number }> = {};
+
+  // Initialize all months for the current year
+  for (let month = 0; month < 12; month++) {
+    const monthKey = dayjs(`${currentYear}-${String(month + 1).padStart(2, '0')}-01`).format('YYYY-MM');
+    monthlyStats[monthKey] = { sizeInBytes: 0, uploadedRecords: 0 };
+  }
+
+  let lastKey: Record<string, any> | undefined;
+
+  do {
+    const queryParams: any = {
+      TableName: BACKUP_JOB_TABLE,
+      IndexName: 'crmId-index',
+      KeyConditionExpression: 'crmId = :crmId AND createdAt BETWEEN :startDate AND :endDate',
+      ExpressionAttributeValues: {
+        ':crmId': crmId,
+        ':startDate': startDate,
+        ':endDate': endDate,
+      },
+      Limit: 100,
+      ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+    };
+
+    const result = await docClient.send(new QueryCommand(queryParams));
+    const jobs = (result.Items ?? []) as IBackupJob[];
+    lastKey = result.LastEvaluatedKey;
+
+    for (const job of jobs) {
+      if (job.createdAt) {
+        const monthKey = dayjs(job.createdAt).format('YYYY-MM');
+        const flattenObjects = flattenBackupObjects(job.object ?? []);
+
+        if (!monthlyStats[monthKey]) {
+          monthlyStats[monthKey] = { sizeInBytes: 0, uploadedRecords: 0 };
+        }
+
+        flattenObjects?.forEach((obj) => {
+          monthlyStats[monthKey].sizeInBytes += obj.sizeInBytes ?? 0;
+          monthlyStats[monthKey].uploadedRecords += obj.completedRecordCount ?? 0;
+        });
+      }
+    }
+  } while (lastKey);
+
+  return Object.entries(monthlyStats).map(([month, stats]) => ({
+    month,
+    ...stats,
+  }));
+};
 
 export {
   triggerBackupJob,
@@ -539,4 +594,5 @@ export {
   deleteBackupJobsByConfig,
   computeJobStats,
   computeArchivalJobStats,
+  getMonthlyStatsByCrmCurrentYear,
 };
