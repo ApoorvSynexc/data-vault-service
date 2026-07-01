@@ -185,7 +185,7 @@ interface IUploadBulkResultsByPage {
 
 const uploadBulkResultsByPage = async (
   payload: IUploadBulkResultsByPage
-): Promise<{ sizeInBytes: number }> => {
+): Promise<{ sizeInBytes: number, completedRecordCount: number }> => {
   let { salesforceApiCount } = payload;
   const {
     instanceUrl,
@@ -270,7 +270,7 @@ const uploadBulkResultsByPage = async (
     throw new Error(errorMessage, { cause: err });
   }
 
-  return { sizeInBytes };
+  return { sizeInBytes, completedRecordCount };
 };
 
 // ---------------------------------------------------------------------------
