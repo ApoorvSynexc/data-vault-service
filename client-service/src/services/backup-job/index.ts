@@ -454,15 +454,15 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
   };
 };
 
-const getLastBackupJobByUser = async (
-  userId: string,
+const getLastBackupJobByCrm = async (
+  crmId: string,
   type?: 'NORMAL' | 'ARCHIVAL' | 'RESTORE'
 ): Promise<IBackupJob | null> => {
   const queryParams: any = {
     TableName: BACKUP_JOB_TABLE,
-    IndexName: 'userId-index',
-    KeyConditionExpression: 'userId = :userId',
-    ExpressionAttributeValues: { ':userId': userId },
+    IndexName: 'crmId-index',
+    KeyConditionExpression: 'crmId = :crmId',
+    ExpressionAttributeValues: { ':crmId': crmId },
     Limit: 1,
     ScanIndexForward: false,
   };
@@ -535,7 +535,7 @@ export {
   getBackupJobById,
   getBackupJobsByUser,
   getBackupJobsByConfig,
-  getLastBackupJobByUser,
+  getLastBackupJobByCrm,
   deleteBackupJobsByConfig,
   computeJobStats,
   computeArchivalJobStats,
