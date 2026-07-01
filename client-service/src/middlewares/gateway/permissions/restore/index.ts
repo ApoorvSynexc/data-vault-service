@@ -1,5 +1,10 @@
 const restorePermissions = [
     {
+        path: '/restore/get-backup-configs-name',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
         path: '/restore/snapshot-logs',
         method: 'GET',
         permissions: ['restore.read']
