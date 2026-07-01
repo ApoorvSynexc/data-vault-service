@@ -57,7 +57,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       { AttributeName: 'createdAt', AttributeType: 'S' },
       { AttributeName: 'spaceId', AttributeType: 'S' },
       { AttributeName: 'crmId', AttributeType: 'S' },
-      { AttributeName: 'sizeInBytes', AttributeType: 'N' },
     ],
     KeySchema: [{ AttributeName: 'backupJobId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
@@ -89,7 +88,7 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         IndexName: 'crmId-index',
         KeySchema: [
           { AttributeName: 'crmId', KeyType: 'HASH' },
-          { AttributeName: 'sizeInBytes', KeyType: 'RANGE' },
+          { AttributeName: 'createdAt', KeyType: 'RANGE' },
         ],
         Projection: { ProjectionType: 'ALL' },
       },
@@ -146,8 +145,11 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         Projection: { ProjectionType: 'ALL' },
       },
       {
-        IndexName: 'crmId-index',
-        KeySchema: [{ AttributeName: 'crmId', KeyType: 'HASH' }],
+        IndexName: 'crmId-sizeInBytes-index',
+        KeySchema: [
+          { AttributeName: 'crmId', KeyType: 'HASH' },
+          { AttributeName: 'sizeInBytes', KeyType: 'RANGE' },
+        ],
         Projection: { ProjectionType: 'ALL' },
       },
     ],

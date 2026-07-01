@@ -389,6 +389,30 @@ const getBackupConfigsWithPagination = async (
 
 
 
+const getLastNBackupConfigByCrm = async (
+  crmId: string,
+  limit: number = 10,
+  type?: 'NORMAL' | 'ARCHIVAL'
+): Promise<IBackupConfig[]> => {
+  const queryParams: any = {
+    TableName: BACKUP_CONFIG_TABLE,
+    IndexName: 'crmId-sizeInBytes-index',
+    KeyConditionExpression: 'crmId = :crmId',
+    ExpressionAttributeValues: { ':crmId': crmId },
+    Limit: limit,
+    ScanIndexForward: false,
+  };
+
+  if (type) {
+    queryParams.FilterExpression = '#type = :type';
+    queryParams.ExpressionAttributeNames = { '#type': 'type' };
+    queryParams.ExpressionAttributeValues[':type'] = type;
+  }
+
+  const result = await docClient.send(new QueryCommand(queryParams));
+  return (result.Items as IBackupConfig[] | undefined) ?? [];
+};
+
 const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup: { sizeInBytes: number, uploadedRecords: number }, archival: { sizeInBytes: number, uploadedRecords: number } }> => {
   let lastEvaluatedKey: Record<string, any> | undefined;
   const batchSize = 100;
@@ -492,6 +516,7 @@ export {
   getBackupConfigsByUserAndCrm,
   getBackupConfigNamesByDestination,
   getBackupConfigsByCrm,
+  getLastNBackupConfigByCrm,
   getBackupConfigSizeRecordByCrmId,
   getScheduledIncrementalBackupConfigs,
   getBackupConfigsWithPagination,

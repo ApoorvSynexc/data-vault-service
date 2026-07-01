@@ -464,7 +464,7 @@ const getLastBackupJobByCrm = async (
     KeyConditionExpression: 'crmId = :crmId',
     ExpressionAttributeValues: { ':crmId': crmId },
     Limit: 1,
-    ScanIndexForward: false,
+    ScanIndexForward: false, // Descending: most recent (latest createdAt) first
   };
 
   if (type) {
@@ -524,30 +524,6 @@ const computeArchivalJobStats = async (query: { indexName: string; keyName: stri
     totalSize,
     totalRecords,
   };
-};
-
-const getLastNBackupByCrm = async (
-  crmId: string,
-  type?: 'NORMAL' | 'ARCHIVAL' | 'RESTORE',
-  limit: number = 10
-): Promise<IBackupJob[]> => {
-  const queryParams: any = {
-    TableName: BACKUP_JOB_TABLE,
-    IndexName: 'crmId-index',
-    KeyConditionExpression: 'crmId = :crmId',
-    ExpressionAttributeValues: { ':crmId': crmId },
-    Limit: limit,
-    ScanIndexForward: false, // Descending: largest sizeInBytes first
-  };
-
-  if (type) {
-    queryParams.FilterExpression = '#type = :type';
-    queryParams.ExpressionAttributeNames = { '#type': 'type' };
-    queryParams.ExpressionAttributeValues[':type'] = type;
-  }
-
-  const result = await docClient.send(new QueryCommand(queryParams));
-  return (result.Items as IBackupJob[] | undefined) ?? [];
 };
 
 const getMonthlyStatsByCrmCurrentYear = async (crmId: string): Promise<Array<{ month: string; sizeInBytes: number; uploadedRecords: number }>> => {
@@ -615,7 +591,6 @@ export {
   getBackupJobsByUser,
   getBackupJobsByConfig,
   getLastBackupJobByCrm,
-  getLastNBackupByCrm,
   deleteBackupJobsByConfig,
   computeJobStats,
   computeArchivalJobStats,
