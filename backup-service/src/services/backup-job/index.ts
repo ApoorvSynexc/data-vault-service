@@ -17,7 +17,7 @@ interface CreateBackupJobParams {
 
 const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJob> => {
   const { userId, backupConfigId, source, destination, lastUpdatedAt, spaceId } = params;
-  const { object, ...sourceCredentials } = source;
+  const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
@@ -34,6 +34,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     jobType: JOB_TYPE.bulk as 'BULK',
     type: 'NORMAL',
     userId,
+    crmId,
     backupConfigId,
     source: encryptedSource,
     destination: { type: destination.type, ...encryptedDestConfig },
@@ -77,7 +78,7 @@ const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
 
 const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBackupJob> => {
   const { userId, backupConfigId, source, destination, spaceId } = params;
-  const { object, ...sourceCredentials } = source;
+  const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
@@ -89,6 +90,7 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
     jobType: JOB_TYPE.bulk as 'BULK',
     type: 'ARCHIVAL',
     userId,
+    crmId,
     backupConfigId,
     source: encryptedSource,
     destination: { type: destination.type, ...encryptedDestConfig },
