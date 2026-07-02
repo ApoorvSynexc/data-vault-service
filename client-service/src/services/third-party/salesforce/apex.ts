@@ -92,7 +92,7 @@ const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; o
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-childs?apiName=${objectName}`;
+  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-children?apiName=${objectName}`;
   if (mode) {
     url += `&mode=${mode}`;
   }
