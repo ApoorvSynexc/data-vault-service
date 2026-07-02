@@ -1,6 +1,6 @@
 # Architecture First
 
-**Description:**  
+**Description:**\
 Ensure every new Claude session understands the project architecture before reading the implementation.
 
 ---
@@ -84,17 +84,7 @@ Instead:
 
 ## Workflow
 
-New Session
-↓
-Read `docs/architecture-graph/`
-↓
-Understand architecture
-↓
-Identify relevant modules
-↓
-Read only required implementation files
-↓
-Perform requested task
+New Session ↓ Read `docs/architecture-graph/`↓ Understand architecture ↓ Identify relevant modules ↓ Read only required implementation files ↓ Perform requested task
 
 ---
 
