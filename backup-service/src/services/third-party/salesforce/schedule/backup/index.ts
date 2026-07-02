@@ -183,7 +183,7 @@ export const exportFirstTime = async (
       operation: 'inserts',
       type: 'backup',
     });
-    const { sizeInBytes } = await uploadBulkResultsByPage({
+    const { sizeInBytes, completedRecordCount } = await uploadBulkResultsByPage({
       instanceUrl,
       tokens,
       jobId,
@@ -200,9 +200,10 @@ export const exportFirstTime = async (
     backupConfig = await getBackupConfigById(backupConfigId);
     if (backupConfig?.objects) {
       const updatedObjects = backupConfig.objects.map((obj) =>
-        obj.name === objectName ? { ...obj, sizeInBytes } : obj
+        obj.name === objectName ? { ...obj, sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes, completedRecordCount: (obj.completedRecordCount ?? 0) + completedRecordCount } : obj
       );
       updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+      updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + completedRecordCount;
       updateParams.objects = updatedObjects;
     }
     await updateBackupConfig(backupConfigId, updateParams);

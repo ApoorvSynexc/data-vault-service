@@ -387,6 +387,76 @@ const getBackupConfigsWithPagination = async (
   };
 };
 
+
+
+const getLastNBackupConfigByCrm = async (
+  crmId: string,
+  limit: number = 10,
+  type?: 'NORMAL' | 'ARCHIVAL'
+): Promise<IBackupConfig[]> => {
+  const queryParams: any = {
+    TableName: BACKUP_CONFIG_TABLE,
+    IndexName: 'crmId-sizeInBytes-index',
+    KeyConditionExpression: 'crmId = :crmId',
+    ExpressionAttributeValues: { ':crmId': crmId },
+    Limit: limit,
+    ScanIndexForward: false,
+  };
+
+  if (type) {
+    queryParams.FilterExpression = '#type = :type';
+    queryParams.ExpressionAttributeNames = { '#type': 'type' };
+    queryParams.ExpressionAttributeValues[':type'] = type;
+  }
+
+  const result = await docClient.send(new QueryCommand(queryParams));
+  return (result.Items as IBackupConfig[] | undefined) ?? [];
+};
+
+const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup: { sizeInBytes: number, uploadedRecords: number }, archival: { sizeInBytes: number, uploadedRecords: number } }> => {
+  let lastEvaluatedKey: Record<string, any> | undefined;
+  const batchSize = 100;
+
+  const response = {
+    backup: {
+      sizeInBytes: 0,
+      uploadedRecords: 0
+    },
+    archival: {
+      sizeInBytes: 0,
+      uploadedRecords: 0
+    }
+  }
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: 'crmId-index',
+        KeyConditionExpression: 'crmId = :crmId',
+        ExpressionAttributeValues: { ':crmId': crmId },
+        Limit: batchSize,
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const items = (result.Items as IBackupConfig[] | undefined) ?? [];
+    items.forEach((config) => {
+      if(config.type === 'ARCHIVAL') {
+        response.archival.sizeInBytes += config.sizeInBytes ?? 0;
+        response.archival.uploadedRecords += config.uploadedRecords ?? 0;
+      } else {
+        response.backup.sizeInBytes += config.sizeInBytes ?? 0;
+        response.backup.uploadedRecords += config.uploadedRecords ?? 0;
+      }
+    });
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return response;
+};
+
 const getBackupConfigBySlug = async (params: {
   userId: string;
   slug: string;
@@ -446,6 +516,8 @@ export {
   getBackupConfigsByUserAndCrm,
   getBackupConfigNamesByDestination,
   getBackupConfigsByCrm,
+  getLastNBackupConfigByCrm,
+  getBackupConfigSizeRecordByCrmId,
   getScheduledIncrementalBackupConfigs,
   getBackupConfigsWithPagination,
   updateBackupConfig,

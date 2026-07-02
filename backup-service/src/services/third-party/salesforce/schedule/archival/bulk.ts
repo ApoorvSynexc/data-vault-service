@@ -11,7 +11,7 @@
 
 import { OBJECT_STATUS } from '../../../../../constant';
 import { updateArchivalObject } from '../../../../backup-job';
-import { incrementBackupConfigCounters } from '../../../../backup-config';
+import { incrementBackupConfigCounters, updateBackupConfigSizeRecords } from '../../../../backup-config';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import {
@@ -486,6 +486,14 @@ async function uploadSingleObject(
       `[archival:child] all pages uploaded | backupJobId:${backupJobId} objectName:${object.name} totalPages:${pageCount} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`
     );
 
+    await updateBackupConfigSizeRecords({
+      backupConfigId: ctx.backupConfigId,
+      sizeInBytes: totalSizeInBytes,
+      uploadedRecords: completedRecordCount,
+      objectName: object.name,
+      completedRecordCount,
+    });
+
     // Schema comparison — versioned upload when schema changes.
     logger.info(
       `[archival:child] checking schema | backupJobId:${backupJobId} objectName:${object.name}`
@@ -627,7 +635,7 @@ async function uploadSingleObject(
  */
 const uploadBulkResultsByPageArchival = async (
   payload: IUploadBulkResultsByPageArchival
-): Promise<{ s3UrlsPerObject: Map<string, string[]> }> => {
+): Promise<{ s3UrlsPerObject: Map<string, string[]>, totalSizeInBytes: number, completedRecordCount: number }> => {
   const {
     instanceUrl,
     tokens,
@@ -774,7 +782,7 @@ const uploadBulkResultsByPageArchival = async (
   logger.info(
     `[archival:parent] completed | backupJobId:${backupJobId} objectName:${object.name} totalRecords:${completedRecordCount} totalBytes:${totalSizeInBytes}`
   );
-  return { s3UrlsPerObject };
+  return { s3UrlsPerObject, completedRecordCount, totalSizeInBytes };
 };
 
 export {
