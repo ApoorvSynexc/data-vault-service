@@ -11,7 +11,10 @@
 
 import { OBJECT_STATUS } from '../../../../../constant';
 import { updateArchivalObject } from '../../../../backup-job';
-import { incrementBackupConfigCounters, updateBackupConfigSizeRecords } from '../../../../backup-config';
+import {
+  incrementBackupConfigCounters,
+  updateBackupConfigSizeRecords,
+} from '../../../../backup-config';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import {
@@ -325,7 +328,11 @@ async function uploadSingleObject(
     `[archival:child] WHERE build | objectName:${object.name} parentWhereBody:"${parentWhereBody || '(none)'}" → effectiveWhereBody:"${effectiveWhereBody}"`
   );
 
-  const { fieldNames, schema } = await getObjectMetadata(ctx.tokens.backupConfigId, object.name, 'archival');
+  const { fieldNames, schema } = await getObjectMetadata(
+    ctx.tokens.backupConfigId,
+    object.name,
+    'archival'
+  );
   // Exclude soft-deleted records from every level of the archival query — see
   // the matching comment in archival/index.ts for the rationale.
   const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE IsDeleted = false AND (${effectiveWhereBody}) ORDER BY Id ASC`;
@@ -635,7 +642,11 @@ async function uploadSingleObject(
  */
 const uploadBulkResultsByPageArchival = async (
   payload: IUploadBulkResultsByPageArchival
-): Promise<{ s3UrlsPerObject: Map<string, string[]>, totalSizeInBytes: number, completedRecordCount: number }> => {
+): Promise<{
+  s3UrlsPerObject: Map<string, string[]>;
+  totalSizeInBytes: number;
+  completedRecordCount: number;
+}> => {
   const {
     instanceUrl,
     tokens,

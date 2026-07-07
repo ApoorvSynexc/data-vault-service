@@ -1,5 +1,8 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { repairGlueTableParams, registerBackupJobPartition } from '../../../services/third-party/glue';
+import {
+  repairGlueTableParams,
+  registerBackupJobPartition,
+} from '../../../services/third-party/glue';
 import { wrapController } from '../../../utils/helper';
 
 /**
@@ -25,25 +28,26 @@ import { wrapController } from '../../../utils/helper';
  * Returns per-object results so the caller can see which tables were found / missing.
  */
 const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const {
-    crmId,
-    crmName,
-    backupConfigId,
-    objectNames,
-    type,
-    destConfig,
-    backupJobId,
-  } = req.body as {
-    crmId: string;
-    crmName: string;
-    backupConfigId: string;
-    objectNames: string[];
-    type: string;
-    destConfig: any;
-    backupJobId?: string;
-  };
+  const { crmId, crmName, backupConfigId, objectNames, type, destConfig, backupJobId } =
+    req.body as {
+      crmId: string;
+      crmName: string;
+      backupConfigId: string;
+      objectNames: string[];
+      type: string;
+      destConfig: any;
+      backupJobId?: string;
+    };
 
-  if (!crmId || !crmName || !backupConfigId || !Array.isArray(objectNames) || objectNames.length === 0 || !type || !destConfig) {
+  if (
+    !crmId ||
+    !crmName ||
+    !backupConfigId ||
+    !Array.isArray(objectNames) ||
+    objectNames.length === 0 ||
+    !type ||
+    !destConfig
+  ) {
     makeResponse(req, res, 400, false, 'params_required');
     return;
   }
@@ -75,7 +79,10 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
     if (result.status === 'fulfilled') {
       repaired.push(objectNames[i]);
     } else {
-      failed.push({ objectName: objectNames[i], error: result.reason?.message ?? String(result.reason) });
+      failed.push({
+        objectName: objectNames[i],
+        error: result.reason?.message ?? String(result.reason),
+      });
     }
   });
 

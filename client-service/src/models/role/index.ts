@@ -1,10 +1,14 @@
+// Module key -> granted action keys for that module, e.g. { backup: ['read','write'], archival: ['read'] }.
+export type IRolePermissions = Record<string, string[]>;
+
 export interface IRole {
   roleId: string;
   name: string;
   description?: string;
-  permissions?: string[];
+  permissions?: IRolePermissions;
   isDefault?: boolean;
   status?: string;
+  createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
   crmId?: string;

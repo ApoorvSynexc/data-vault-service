@@ -132,6 +132,7 @@ const STATUS = {
   active: 'ACTIVE',
   inactive: 'INACTIVE',
   deleted: 'DELETED',
+  notAuthorized: 'NOT_AUTHORIZED',
 };
 const BACKUP_STATUS = {
   // draft: 'DRAFT',

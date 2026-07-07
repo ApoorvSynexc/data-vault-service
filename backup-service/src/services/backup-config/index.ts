@@ -165,19 +165,36 @@ const incrementBackupConfigCounters = async (
   );
 };
 
-const updateBackupConfigSizeRecords = async (params: { backupConfigId: string, sizeInBytes: number, uploadedRecords: number, objectName: string, completedRecordCount: number }) => {
-  const { backupConfigId, sizeInBytes, uploadedRecords, objectName } = params
+const updateBackupConfigSizeRecords = async (params: {
+  backupConfigId: string;
+  sizeInBytes: number;
+  uploadedRecords: number;
+  objectName: string;
+  completedRecordCount: number;
+}) => {
+  const { backupConfigId, sizeInBytes, uploadedRecords, objectName } = params;
   const updateParams: any = { sizeInBytes: sizeInBytes };
   const backupConfig = await getBackupConfigById(backupConfigId);
   if (backupConfig?.objects) {
     const updatedObjects = backupConfig.objects.map((obj) =>
-      obj.name === objectName ? { ...obj, sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes, completedRecordCount: (obj.completedRecordCount ?? 0) + uploadedRecords } : obj
+      obj.name === objectName
+        ? {
+            ...obj,
+            sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes,
+            completedRecordCount: (obj.completedRecordCount ?? 0) + uploadedRecords,
+          }
+        : obj
     );
     updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
     updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + uploadedRecords;
     updateParams.objects = updatedObjects;
   }
   await updateBackupConfig(backupConfigId, updateParams);
-}
+};
 
-export { updateBackupConfig, updateBackupConfigSizeRecords, getBackupConfigById, incrementBackupConfigCounters };
+export {
+  updateBackupConfig,
+  updateBackupConfigSizeRecords,
+  getBackupConfigById,
+  incrementBackupConfigCounters,
+};
