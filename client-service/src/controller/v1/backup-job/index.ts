@@ -20,14 +20,12 @@ const sanitize = ({ destination, ...rest }: IBackupJob) => ({
 const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { slug, limit, cursor, status } = req.query as Record<string, string>;
   const userId = req.user!.userId;
-  const spaceId = req.user?.spaceId;
   const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
   if (slug) {
     const config = await getBackupConfigBySlug({
       userId,
       slug,
-      spaceId,
     });
 
     if (!config) {
