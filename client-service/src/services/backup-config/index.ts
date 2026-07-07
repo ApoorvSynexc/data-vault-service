@@ -24,7 +24,6 @@ interface CreateBackupConfigParams {
   schedule: string;
   scheduleConfig?: IScheduleConfig;
   objects?: IObject[];
-  spaceId?: string;
   status: string;
   type?: string; // NORMAL | ARCHIVAL, defaults to NORMAL
 }
@@ -58,7 +57,6 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     schedule,
     scheduleConfig,
     objects,
-    spaceId,
     status,
     dataset,
     type = 'NORMAL',
@@ -88,7 +86,6 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     status,
     schemaChange: false,
     ...(dataset && { dataset }),
-    ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
   };
@@ -116,7 +113,7 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' },
       ExpressionAttributeValues: { ':uid': userId },
     })
@@ -135,7 +132,7 @@ const getBackupConfigsByUserAndCrm = async (
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
       FilterExpression: 'crmId = :crmId',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' },
       ExpressionAttributeValues: { ':uid': userId, ':crmId': crmId },
       ...(limit && { Limit: limit }),
@@ -316,20 +313,20 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
-  filter: { userId?: string; spaceId?: string; type?: string; name?: string; status?: string; destinationId?: string; schedule?: string; crmId?: string },
+  filter: { userId?: string; crmId?: string; type?: string; name?: string; status?: string; destinationId?: string; schedule?: string },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, spaceId, type, name, status, destinationId, schedule, crmId } = filter;
+  const { userId, crmId, type, name, status, destinationId, schedule } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
-  if (!userId && !spaceId) {
-    throw new Error('Either userId or spaceId must be provided');
+  if (!userId && !crmId) {
+    throw new Error('Either userId or crmId must be provided');
   }
 
-  const isSpaceQuery = !!spaceId;
-  const indexName = isSpaceQuery ? 'spaceId-index' : 'userId-index';
-  const keyValue = isSpaceQuery ? spaceId : userId;
+  const isCrmQuery = !!crmId && !userId;
+  const indexName = isCrmQuery ? 'crmId-index' : 'userId-index';
+  const keyValue = isCrmQuery ? crmId : userId;
 
   const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
   const expressionAttributeNames: Record<string, string> = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
@@ -355,11 +352,6 @@ const getBackupConfigsWithPagination = async (
     filterParts.push('#schedule = :schedule');
   }
 
-  if (crmId) {
-    expressionAttributeValues[':crmId'] = crmId;
-    filterParts.push('crmId = :crmId');
-  }
-
   if (name) {
     expressionAttributeValues[':name'] = name;
     filterParts.push('contains(#name, :name)');
@@ -371,8 +363,8 @@ const getBackupConfigsWithPagination = async (
     new QueryCommand({
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: indexName,
-      KeyConditionExpression: isSpaceQuery ? 'spaceId = :key' : 'userId = :key',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
+      KeyConditionExpression: isCrmQuery ? 'crmId = :key' : 'userId = :key',
+      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, createdAt, updatedAt',
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
       Limit: limit,
@@ -460,10 +452,9 @@ const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup
 const getBackupConfigBySlug = async (params: {
   userId: string;
   slug: string;
-  spaceId?: string;
   type?: 'ARCHICAL' | 'NORMAL';
 }): Promise<IBackupConfig | null> => {
-  const { userId, slug, spaceId, type } = params;
+  const { userId, slug, type } = params;
 
   // Build filter expression dynamically
   const filterParts: string[] = ['slug = :slug'];
@@ -476,23 +467,6 @@ const getBackupConfigBySlug = async (params: {
 
   const filterExpression = filterParts.join(' AND ');
   const expressionNames = type ? { '#type': 'type' } : undefined;
-
-  // Try to find by spaceId first if provided
-  if (spaceId) {
-    const result = await docClient.send(
-      new QueryCommand({
-        TableName: BACKUP_CONFIG_TABLE,
-        IndexName: 'spaceId-index',
-        KeyConditionExpression: 'spaceId = :spaceId',
-        FilterExpression: filterExpression,
-        ExpressionAttributeValues: { ':spaceId': spaceId, ...expressionValues },
-        ...(expressionNames && { ExpressionAttributeNames: expressionNames }),
-      })
-    );
-    if (result.Items?.[0]) {
-      return result.Items[0] as IBackupConfig;
-    }
-  }
 
   // Fall back to userId query
   const result = await docClient.send(
