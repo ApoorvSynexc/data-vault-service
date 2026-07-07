@@ -1,18 +1,19 @@
 import { Router } from 'express';
 import { salesofrceController } from '../../controller';
-import { upsertUsersValidation, createRoleValidation, updateRoleValidation } from '../../middlewares';
+import { upsertUsersValidation, createRoleValidation, updateRoleValidation, attachDecryptedSalesforceRequest } from '../../middlewares';
 
 const router = Router();
 
 // Permission & User endpoints
 router.get('/permissions', salesofrceController.getPermissionsHandler);
-router.get('/user/list', salesofrceController.getUsersHandler);
-router.post('/user-update', upsertUsersValidation, salesofrceController.upsertUsersHandler);
+router.put('/permissions', attachDecryptedSalesforceRequest('body'), salesofrceController.updatePermissionsHandler);
+router.get('/user/list', attachDecryptedSalesforceRequest('query'), salesofrceController.getUsersHandler);
+router.post('/user-update', attachDecryptedSalesforceRequest('body'), upsertUsersValidation, salesofrceController.upsertUsersHandler);
 
 // Role endpoints
-router.get('/role/list', salesofrceController.getRolesHandler);
-router.post('/role/create', createRoleValidation, salesofrceController.createRoleHandler);
-router.put('/role/update', updateRoleValidation, salesofrceController.updateRoleHandler);
-router.delete('/role/delete', salesofrceController.deleteRoleHandler);
+router.get('/role/list', attachDecryptedSalesforceRequest('query'), salesofrceController.getRolesHandler);
+router.post('/role/create', attachDecryptedSalesforceRequest('body'), createRoleValidation, salesofrceController.createRoleHandler);
+router.put('/role/update', attachDecryptedSalesforceRequest('body'), updateRoleValidation, salesofrceController.updateRoleHandler);
+router.delete('/role/delete', attachDecryptedSalesforceRequest('query'), salesofrceController.deleteRoleHandler);
 
 export const salesforceRouter = router;

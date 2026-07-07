@@ -2,180 +2,187 @@ export const defaultPermissions = [
     {
         label: "Dashboard",
         value: "dashboard",
-        description: "",
+        description: "Overview metrics and system health",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: ""
+                description: "See dashboard metrics and status"
             }
         ]
     },
     {
         label: "Backup",
         value: "backup",
-        description: "",
+        description: "Take & manage snapshots",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: "",
+                description: "See backups & history",
             },
             {
                 label: "Config",
                 value: "write",
-                description: "",
+                description: "Edit backup policies & jobs",
             },
             {
                 label: "Execute",
                 value: "execute",
-                description: "",
+                description: "Run a backup job",
+                risky: true,
             },
             {
                 label: "Delete",
                 value: "delete",
-                description: "",
+                description: "Delete a backup or snapshot",
+                risky: true,
             }
         ]
     },
     {
         label: "Archival",
         value: "archival",
-        description: "",
+        description: "Move data to cold storage",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: "",
+                description: "See archives & history",
             },
             {
                 label: "Config",
                 value: "write",
-                description: "",
+                description: "Edit archival policies & jobs",
             },
             {
                 label: "Execute",
                 value: "execute",
-                description: "",
+                description: "Run an archival job",
+                risky: true,
             },
             {
                 label: "Delete",
                 value: "delete",
-                description: "",
+                description: "Delete archived records",
+                risky: true,
             }
         ]
     },
     {
         label: "Restore",
         value: "restore",
-        description: "",
+        description: "Restore data back to Salesforce",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: "",
+                description: "See retrievals & history",
             },
             {
                 label: "Config",
                 value: "write",
-                description: "",
+                description: "Edit retrieval policies & jobs",
             },
             {
                 label: "Execute",
                 value: "execute",
-                description: "",
+                description: "Run a retrieval job",
+                risky: true,
             },
             {
                 label: "Delete",
                 value: "delete",
-                description: "",
+                description: "Delete a retrieval job or its log",
+                risky: true,
             }
         ]
     },
     {
         label: "Source Connection",
         value: "sourceConnection",
-        description: "",
+        description: "Connections data is pulled from",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: "",
+                description: "See source connections",
             },
             {
                 label: "Config",
                 value: "write",
-                description: "",
+                description: "Add or edit source connections",
             }
         ]
     },
     {
         label: "Destination Connection",
         value: "destinationConnection",
-        description: "",
+        description: "Connections data is written to",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: "",
+                description: "See destination connections",
             },
             {
                 label: "Config",
                 value: "write",
-                description: "",
+                description: "Add or edit destination connections",
             },
             {
                 label: "Delete",
                 value: "delete",
-                description: "",
+                description: "Remove a destination connection",
+                risky: true,
             }
         ]
     },
     {
         label: "Storage",
         value: "storage",
-        description: "",
+        description: "Storage usage and capacity",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: ""
+                description: "See storage usage"
             }
         ]
     },
     {
         label: "Activity Logs",
         value: "activitylogs",
-        description: "",
+        description: "System and user activity history",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: ""
+                description: "See activity logs"
             }
         ]
     },
     {
         label: "Report",
         value: "report",
-        description: "",
+        description: "Usage and compliance reporting",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: ""
+                description: "See reports"
             }
         ]
     },
     {
         label: "Security",
         value: "security",
-        description: "",
+        description: "Encryption and access security settings",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: ""
+                description: "See security settings"
             }
         ]
     },
@@ -183,18 +190,18 @@ export const defaultPermissions = [
     {
         label: "Settings",
         value: "settings",
-        description: "",
+        description: "Org-wide DataVault configuration",
         permissions: [
             {
                 label: "View",
                 value: "read",
-                description: ""
+                description: "See settings"
             },
             {
                 label: "Config",
                 value: "write",
-                description: ""
+                description: "Edit settings"
             }
         ]
     },
-]
+];

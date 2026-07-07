@@ -4,6 +4,16 @@ import { ENCRYPTION_KEY } from '../constant';
 const ALGORITHM = 'aes-256-cbc';
 const TENANT_KEY_PREFIX = 'v2:';
 
+// ---------------------------------------------------------------------------
+// Per-org key generation (Salesforce authorize-org flow)
+// Generates a unique 256-bit key per Salesforce org, stored on the CRM record
+// and returned to Salesforce once. Not derived from ENCRYPTION_KEY — Salesforce
+// currently still encrypts authorize-org/authorize-admin requests with the
+// shared master key, so this key isn't used to decrypt inbound requests yet.
+// ---------------------------------------------------------------------------
+
+const generateOrgEncryptionKey = (): string => crypto.randomBytes(32).toString('base64');
+
 interface EncryptedPayload {
   ciphertext: string;
   iv: string;
@@ -81,5 +91,45 @@ const decrypt = ({ ciphertext, iv }: EncryptedPayload, userId?: string): string 
   ]).toString('utf8');
 };
 
-export { encrypt, encryptForTenant, decrypt };
+// ---------------------------------------------------------------------------
+// Explicit-key decrypt (two-layer Salesforce scheme)
+// Decrypts with a caller-supplied base64 key rather than ENCRYPTION_KEY or a
+// derived tenant key — used for the org-specific key stored on a CRM record
+// (the inner layer of the Bootstrap-Key-wraps-org-key-encrypted-payload
+// scheme; see utils/salesforce-crypto.ts).
+// ---------------------------------------------------------------------------
+
+const decryptWithKey = ({ ciphertext, iv }: EncryptedPayload, keyBase64: string): string => {
+  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(keyBase64, 'base64'), Buffer.from(iv, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(ciphertext, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
+};
+
+// Encrypt counterpart to decryptWithKey — used to encrypt directly with an
+// org's own key (Org-Key-encrypted responses, and the reverse-direction calls
+// into Salesforce's own REST API; see utils/salesforce-crypto.ts).
+const encryptWithKey = (plaintext: string, keyBase64: string): EncryptedPayload => {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(keyBase64, 'base64'), iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  return {
+    ciphertext: encrypted.toString('base64'),
+    iv: iv.toString('base64'),
+  };
+};
+
+// Salesforce's DataVaultCryptoService.encryptPayload() emits `cipherText` (capital T);
+// its own decryptEnvelope() is lenient about casing, so we mirror that leniency here.
+// Shared across every endpoint that receives an encrypted envelope from Salesforce.
+const readEnvelope = (raw: any): EncryptedPayload => {
+  const ciphertext = raw?.cipherText ?? raw?.ciphertext;
+  if (!ciphertext || !raw?.iv) {
+    throw new Error('invalid_envelope');
+  }
+  return { ciphertext, iv: raw.iv };
+};
+
+export { encrypt, encryptForTenant, decrypt, decryptWithKey, encryptWithKey, readEnvelope, generateOrgEncryptionKey };
 export type { EncryptedPayload };

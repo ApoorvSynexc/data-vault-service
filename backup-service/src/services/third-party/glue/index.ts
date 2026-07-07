@@ -322,9 +322,7 @@ export interface IRepairGlueTableParamsInput {
 // Patches an existing Glue table to add any missing table parameters (e.g. recurse=1)
 // without touching columns, partition keys, or storage location.
 // Call this once per table for tables created before recurse=1 was added.
-export const repairGlueTableParams = async (
-  params: IRepairGlueTableParamsInput
-): Promise<void> => {
+export const repairGlueTableParams = async (params: IRepairGlueTableParamsInput): Promise<void> => {
   const { crmId, backupConfigId, objectName } = params;
 
   const databaseName = buildGlueDatabaseName(crmId);
@@ -335,7 +333,9 @@ export const repairGlueTableParams = async (
   );
 
   if (!Table) {
-    logger.warn(`[glue] repairGlueTableParams: table not found | db:${databaseName} table:${tableName}`);
+    logger.warn(
+      `[glue] repairGlueTableParams: table not found | db:${databaseName} table:${tableName}`
+    );
     return;
   }
 
