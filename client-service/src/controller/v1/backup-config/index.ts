@@ -185,7 +185,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
       }
     }
 
-    const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, userId);
+    const counter = await getTableCounter(BACKUP_CONFIG_TABLE, userId);
 
     return makeResponse(req, res, 200, true, 'fetch', documents, {
       limit: limitNum,
