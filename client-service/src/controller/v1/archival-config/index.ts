@@ -219,14 +219,14 @@ const attachArchivalStatsToRows = async (documents: any[]): Promise<void> => {
 
 const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const { pagination, limit, cursor, name } = req.query as Record<string, string>;
-    const spaceId = req.user?.spaceId;
+    const crmId = req.user?.crmId;
     const userId = req.user!.userId;
 
     if (pagination === 'true') {
         const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
         const result = await getBackupConfigsWithPagination(
-            { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL', name: name },
+            { ...(crmId ? { crmId } : { userId }), type: 'ARCHIVAL', name: name },
             { limit: limitNum, cursor }
         );
 
@@ -243,7 +243,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
 
         await attachArchivalStatsToRows(documents);
 
-        const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, userId);
+        const counter = await getTableCounter(BACKUP_CONFIG_TABLE, userId);
 
         return makeResponse(req, res, 200, true, 'fetch', documents, {
             limit: limitNum,
@@ -254,7 +254,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
     }
 
     const { documents } = await getBackupConfigsWithPagination(
-        { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL', name: name },
+        { ...(crmId ? { crmId } : { userId }), type: 'ARCHIVAL', name: name },
         { limit: 1000 }
     );
 
@@ -277,7 +277,6 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         userId: req.user!.userId,
         ...req.body,
         status: req.body.status || 'ACTIVE',
-        ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
         type: 'ARCHIVAL',
     });
 
@@ -329,7 +328,6 @@ const getArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<
     const config = await getBackupConfigBySlug({
         userId: req.user!.userId,
         slug: String(slug),
-        spaceId: req.user?.spaceId,
     });
     if (!config) {
         makeResponse(req, res, 400, false, 'backup_config_not_found');
@@ -462,7 +460,6 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
         const config = await getBackupConfigBySlug({
             userId: req.user!.userId,
             slug: String(slug),
-            spaceId: req.user?.spaceId,
             type: 'NORMAL'
         });
         if (!config) {
