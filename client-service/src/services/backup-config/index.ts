@@ -313,20 +313,20 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
-  filter: { userId?: string; spaceId?: string; type?: string; name?: string; status?: string; destinationId?: string; schedule?: string; crmId?: string },
+  filter: { userId?: string; crmId?: string; type?: string; name?: string; status?: string; destinationId?: string; schedule?: string },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, spaceId, type, name, status, destinationId, schedule, crmId } = filter;
+  const { userId, crmId, type, name, status, destinationId, schedule } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
-  if (!userId && !spaceId) {
-    throw new Error('Either userId or spaceId must be provided');
+  if (!userId && !crmId) {
+    throw new Error('Either userId or crmId must be provided');
   }
 
-  const isSpaceQuery = !!spaceId;
-  const indexName = isSpaceQuery ? 'spaceId-index' : 'userId-index';
-  const keyValue = isSpaceQuery ? spaceId : userId;
+  const isCrmQuery = !!crmId && !userId;
+  const indexName = isCrmQuery ? 'crmId-index' : 'userId-index';
+  const keyValue = isCrmQuery ? crmId : userId;
 
   const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
   const expressionAttributeNames: Record<string, string> = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
@@ -352,11 +352,6 @@ const getBackupConfigsWithPagination = async (
     filterParts.push('#schedule = :schedule');
   }
 
-  if (crmId) {
-    expressionAttributeValues[':crmId'] = crmId;
-    filterParts.push('crmId = :crmId');
-  }
-
   if (name) {
     expressionAttributeValues[':name'] = name;
     filterParts.push('contains(#name, :name)');
@@ -368,7 +363,7 @@ const getBackupConfigsWithPagination = async (
     new QueryCommand({
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: indexName,
-      KeyConditionExpression: isSpaceQuery ? 'spaceId = :key' : 'userId = :key',
+      KeyConditionExpression: isCrmQuery ? 'crmId = :key' : 'userId = :key',
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
