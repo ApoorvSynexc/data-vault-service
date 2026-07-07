@@ -329,7 +329,6 @@ const getArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<
     const config = await getBackupConfigBySlug({
         userId: req.user!.userId,
         slug: String(slug),
-        spaceId: req.user?.spaceId,
     });
     if (!config) {
         makeResponse(req, res, 400, false, 'backup_config_not_found');
@@ -462,7 +461,6 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
         const config = await getBackupConfigBySlug({
             userId: req.user!.userId,
             slug: String(slug),
-            spaceId: req.user?.spaceId,
             type: 'NORMAL'
         });
         if (!config) {
