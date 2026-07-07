@@ -111,8 +111,9 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
+  const userId = user!.userId!;
   const destination = await getDestinationById(String(req.body.destinationId));
-  const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
+  const isOwner = destination && (destination.userId === userId);
 
   if (!isOwner) {
     makeResponse(req, res, 400, false, 'not_exist');
@@ -123,7 +124,6 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     userId: req.user!.userId,
     ...req.body,
     status: req.body.status || 'ACTIVE',
-    ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
   });
 
   try {
@@ -162,14 +162,14 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
 const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { pagination, limit, cursor, name } = req.query as Record<string, string>;
-  const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
+  const crmId = req.user?.crmId;
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
     const result = await getBackupConfigsWithPagination(
-      { ...(spaceId ? { spaceId } : { userId }), type: 'NORMAL', name },
+      { ...(crmId ? { crmId } : { userId }), type: 'NORMAL', name },
       { limit: limitNum, cursor }
     );
 
@@ -189,7 +189,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
       }
     }
 
-    const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, userId);
+    const counter = await getTableCounter(BACKUP_CONFIG_TABLE, userId);
 
     return makeResponse(req, res, 200, true, 'fetch', documents, {
       limit: limitNum,
@@ -200,8 +200,8 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
   }
 
   let configs;
-  if (spaceId) {
-    const { documents } = await getBackupConfigsWithPagination({ spaceId, type: 'NORMAL', name: name }, { limit: 1000 });
+  if (crmId) {
+    const { documents } = await getBackupConfigsWithPagination({ crmId, type: 'NORMAL', name: name }, { limit: 1000 });
     configs = documents;
   } else {
     configs = await getBackupConfigsByUser(userId);
@@ -211,15 +211,15 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 };
 
 const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const userId = req.user!.userId;
   const { slug } = req.query;
   if (!slug) {
     return makeResponse(req, res, 400, false, 'slug_required');
   }
 
   const config = await getBackupConfigBySlug({
-    userId: req.user!.userId,
-    slug: String(slug),
-    spaceId: req.user?.spaceId,
+    userId,
+    slug: String(slug)
   });
   if (!config) {
     makeResponse(req, res, 400, false, 'backup_config_not_found');
@@ -289,12 +289,11 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
   const crmCredential = req.user!.crmCredential;
   const existing = await getBackupConfigById(String(backupConfigId));
 
-  const isConfigOwner = spaceId ? existing?.spaceId === spaceId : existing?.userId === userId;
+  const isConfigOwner = existing?.userId === userId;
   if (!isConfigOwner) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
@@ -347,7 +346,6 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   const config = await getBackupConfigBySlug({
     userId: req.user!.userId,
     slug: String(slug),
-    spaceId: req.user?.spaceId,
   });
   if (!config) {
     makeResponse(req, res, 400, false, 'backup_config_not_found');
@@ -365,7 +363,6 @@ const syncMeatadataHandler = async (req: IRequest, res: IResponse): Promise<void
   const config = await getBackupConfigBySlug({
     userId: req.user!.userId,
     slug: String(slug),
-    spaceId: req.user?.spaceId,
   });
   if (!config) {
     makeResponse(req, res, 400, false, 'backup_config_not_found');
@@ -378,14 +375,12 @@ const syncMeatadataHandler = async (req: IRequest, res: IResponse): Promise<void
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { slug } = req.query;
-  const spaceId = req.user!.spaceId;
   const userId = req.user!.userId;
 
   if (slug) {
     const config = await getBackupConfigBySlug({
       userId: req.user!.userId,
       slug: String(slug),
-      spaceId: req.user?.spaceId,
       type: 'NORMAL'
     });
     if (!config) {
@@ -400,12 +395,6 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
   let indexName = 'userId-index';
   let keyName = 'userId';
   let keyValue = userId;
-
-  if (spaceId) {
-    indexName = 'spaceId-index';
-    keyName = 'spaceId';
-    keyValue = spaceId;
-  }
 
   const stats = await computeJobStats({ indexName, keyName, keyValue, type: 'NORMAL' });
   makeResponse(req, res, 200, true, 'fetch', stats);
