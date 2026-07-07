@@ -277,7 +277,6 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         userId: req.user!.userId,
         ...req.body,
         status: req.body.status || 'ACTIVE',
-        ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
         type: 'ARCHIVAL',
     });
 

@@ -24,7 +24,6 @@ interface CreateBackupConfigParams {
   schedule: string;
   scheduleConfig?: IScheduleConfig;
   objects?: IObject[];
-  spaceId?: string;
   status: string;
   type?: string; // NORMAL | ARCHIVAL, defaults to NORMAL
 }
@@ -58,7 +57,6 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     schedule,
     scheduleConfig,
     objects,
-    spaceId,
     status,
     dataset,
     type = 'NORMAL',
@@ -88,7 +86,6 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     status,
     schemaChange: false,
     ...(dataset && { dataset }),
-    ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
   };
