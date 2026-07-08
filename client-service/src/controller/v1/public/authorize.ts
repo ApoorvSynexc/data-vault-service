@@ -90,7 +90,8 @@ const authorizeUserHandler = async (req: IRequest, res: IResponse): Promise<void
   // both layers before this handler runs.
   const { orgId, crm, plaintext }: { orgId: string; crm: ICrm; plaintext: string } = req.salesforcePayload;
 
-  let payload: { current_user_id?: string; org_id?: string; instance_url?: string };
+  //let payload: { user_id?: string; org_id?: string; user_email?: string; user_username?: string; user_first_name?: string; user_last_name?: string; instance_url?: string };
+  let payload: { current_user_id?: string; org_id?: string; user_email?: string; user_username?: string; user_first_name?: string; user_last_name?: string; instance_url?: string };
   try {
     payload = JSON.parse(plaintext);
   } catch (error: any) {
@@ -99,12 +100,20 @@ const authorizeUserHandler = async (req: IRequest, res: IResponse): Promise<void
     return;
   }
 
-  const { current_user_id: userId, org_id: innerOrgId, instance_url: instanceUrl } = payload;
-  if (!userId || !innerOrgId || !instanceUrl) {
+  const { current_user_id: userId, org_id: innerOrgId, user_email: userEmail, user_username: username, user_first_name: firstName, user_last_name: lastName, instance_url: instanceUrl } = payload;
+  if (!userId 
+    || !innerOrgId 
+    || !instanceUrl 
+    //|| !userEmail || !username || !firstName || !lastName
+  ) {
     console.log('[authorize-admin] 401: missing required field(s):', {
       hasUserId: !!userId,
       hasOrgId: !!innerOrgId,
       hasInstanceUrl: !!instanceUrl,
+      // hasUserEmail: !!userEmail,
+      // hasUsername: !!username,
+      // hasFirstName: !!firstName,
+      // hasLastName: !!lastName,
     });
     makeResponse(req, res, 401, false, 'unauthorized');
     return;
@@ -126,6 +135,12 @@ const authorizeUserHandler = async (req: IRequest, res: IResponse): Promise<void
     const adminRole = defaultRoles.find((r) => r.name === 'Admin');
     await createUser({
       userId: uuidv4(),
+      contactEmail: userEmail,
+      username,
+      firstName,
+      lastName,
+      // status: STATUS.active,
+      // authProvider: 'salesforce',
       crmId: crm.crmId,
       crmProfile: { instanceUrl, organizationId: orgId, userId },
       ...(adminRole && { role: { name: adminRole.name, roleId: adminRole.roleId } }),

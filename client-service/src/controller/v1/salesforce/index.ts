@@ -6,6 +6,8 @@ import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, upd
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrm, ICrmProfile, IRole, IRolePermissions } from '../../../models';
 import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
+import { provisionEcaPermissionSet } from '../../../services/third-party/salesforce/eca-permission-set';
+import { SalesforceTokens } from '../../../services/third-party/salesforce';
 
 // A role "has access" once any module has at least one granted action —
 // mirrors hasAnyAccess() in the reference UI design.
@@ -271,6 +273,64 @@ const getRolesHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   res.status(200).json(encryptSalesforceResponse(crm, { roles: mappedRoles }));
 };
 
+// Provisions the '360 Data Vault ECA Permission Set' and wires it into the
+// existing '360 Data Vault' External Client App's OAuth policy — flipping
+// permittedUsers to admin-approved-only and appending the permission set to
+// permittedPermissionSets without overwriting anything already there.
+//
+// The two-layer envelope is unwrapped by attachDecryptedSalesforceRequest
+// upstream; this handler consumes req.salesforcePayload.plaintext, which
+// carries the Salesforce auth details:
+//   { accessToken, refreshToken, instanceUrl, environment?, customUrl? }
+// Every response is org-key encrypted, per the endpoint-wide convention.
+const createEcaPermissionSetAndAssignHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
+
+  let payload: {
+    accessToken?: string;
+    refreshToken?: string;
+    instanceUrl?: string;
+    environment?: 'production' | 'sandbox';
+    customUrl?: string;
+  };
+  try {
+    payload = JSON.parse(plaintext);
+  } catch {
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'INVALID_PAYLOAD' }));
+    return;
+  }
+
+  const instanceUrl = payload.instanceUrl ?? crm.instanceUrl;
+  if (!payload.accessToken || !payload.refreshToken || !instanceUrl) {
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'AUTH_FIELDS_REQUIRED' }));
+    return;
+  }
+
+  const tokens: SalesforceTokens = {
+    accessToken: payload.accessToken,
+    refreshToken: payload.refreshToken,
+    environment: payload.environment ?? crm.environment,
+    customUrl: payload.customUrl,
+  };
+
+  try {
+    const result = await provisionEcaPermissionSet(instanceUrl, tokens);
+    res.status(200).json(encryptSalesforceResponse(crm, { success: true, ...result }));
+  } catch (error: any) {
+    // Surface the underlying reason (permission set create failure,
+    // metadata deploy failure, ECA not found, etc.) as a coded error the
+    // Apex caller can log — same pattern the other salesforce/* handlers use.
+    const message = error?.message ?? String(error);
+    const errorCode = message.startsWith('external_client_app_not_found')
+      ? 'EXTERNAL_CLIENT_APP_NOT_FOUND'
+      : message.startsWith('metadata_deploy_failed') || message.startsWith('metadata_deploy_request_failed')
+        ? 'METADATA_DEPLOY_FAILED'
+        : 'ECA_PROVISION_FAILED';
+    console.log('[eca-permission-set] failure:', message);
+    res.status(500).json(encryptSalesforceResponse(crm, { errorCode, message }));
+  }
+};
+
 export const salesofrceController = wrapController({
   getPermissionsHandler,
   updatePermissionsHandler,
@@ -280,4 +340,5 @@ export const salesofrceController = wrapController({
   updateRoleHandler,
   deleteRoleHandler,
   getRolesHandler,
+  createEcaPermissionSetAndAssignHandler,
 });
