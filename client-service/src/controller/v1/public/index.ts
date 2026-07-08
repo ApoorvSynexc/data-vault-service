@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
-import { getCrmByOrgId, getCrmById } from '../../../services/crm';
+import { getCrmById } from '../../../services/crm';
 import {
   updateBackupConfig,
   getBackupConfigById,
@@ -18,6 +18,8 @@ import {
   SCHEDULE_MODE,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
+import { decryptSalesforceRequest } from '../../../utils/salesforce-crypto';
+import { ICrm } from '../../../models';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -48,17 +50,30 @@ import { logger } from '../../../middlewares';
  *   backup-service needs the raw Salesforce payload (records, schema, orgId, operation,
  *   objectApiName, transactionId) to write the CSV and resolve the job. Forwarding the
  *   entire body avoids re-mapping fields here and keeps client-service as a thin router.
+ *
+ * WHY decryption happens here, not in the handler:
+ *   DataVaultRecordSyncQueueable.sendPayload() encrypts this body two-layer (Bootstrap
+ *   Key wraps an org-key-encrypted payload — see utils/salesforce-crypto.ts). The
+ *   handler must respond 200 before this runs (fire-and-forget), so decrypting here
+ *   keeps that response fast; a decrypt/CRM-lookup failure just means the hit is
+ *   dropped (logged), same as the pre-existing "unknown org" no-op below.
  */
-const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
-  const { orgId, transactionId } = decryptedBody;
-
-  if (!transactionId) {
-    logger.warn('Realtime webhook received without transactionId — skipping');
+const processRealtimeWebhook = async (rawBody: any): Promise<void> => {
+  let crm: ICrm;
+  let decryptedBody: any;
+  try {
+    const result = await decryptSalesforceRequest(rawBody);
+    crm = result.crm;
+    decryptedBody = JSON.parse(result.plaintext);
+  } catch (error) {
+    logger.warn(`Realtime webhook decrypt failed — skipping: ${error}`);
     return;
   }
 
-  const crm = await getCrmByOrgId(orgId);
-  if (!crm) {
+  const { transactionId } = decryptedBody;
+
+  if (!transactionId) {
+    logger.warn('Realtime webhook received without transactionId — skipping');
     return;
   }
 
@@ -68,7 +83,7 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
     return;
   }
 
-  logger.info(`Found ${realtimeConfigs.length} real-time backup config(s) for orgId: ${orgId} transactionId: ${transactionId}`);
+  logger.info(`Found ${realtimeConfigs.length} real-time backup config(s) for orgId: ${crm.organizationId} transactionId: ${transactionId}`);
 
   for (const config of realtimeConfigs) {
     const destination = await getDestinationById(config.destinationId);
@@ -135,11 +150,11 @@ const processRealtimeWebhook = async (decryptedBody: any): Promise<void> => {
  */
 const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
-    const body = req.body;
+    const rawBody = req.body;
     makeResponse(req, res, 200, true, 'fetch');
 
-    await processRealtimeWebhook(body);
-    logger.info(`Processed real-time webhook for orgId: ${body.orgId}`);
+    await processRealtimeWebhook(rawBody);
+    logger.info('Processed real-time webhook');
   } catch (error) {
     logger.error('realtime webhook processing error:', error);
   }

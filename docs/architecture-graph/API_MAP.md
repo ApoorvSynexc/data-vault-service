@@ -38,7 +38,7 @@ Every route in both services with method, path, auth, and handler.
 | DELETE | /crm/:crmId | crm.deleteHandler | |
 | GET | /crm/salesforce/objects | crm.sfObjectsHandler | Calls Apex accessible-objects |
 | GET | /crm/salesforce/object-fields | crm.sfObjectFieldsHandler | Calls Apex object-fields-metadata |
-| GET | /crm/salesforce/object-childs | crm.sfObjectChildsHandler | Calls Apex object-childs |
+| GET | /crm/salesforce/object-childs | crm.sfObjectChildsHandler | Calls Apex object-children |
 | POST | /crm/salesforce/object-record-count | crm.sfObjectRecordCountHandler | Apex object-record-count batch |
 | POST | /crm/salesforce/preview-records | crm.sfPreviewRecordsHandler | Apex preview-records |
 | POST | /crm/salesforce/dry-run | crm.sfDryRunHandler | Dry-run SOQL execution via Athena |

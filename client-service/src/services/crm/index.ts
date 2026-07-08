@@ -17,25 +17,56 @@ interface UpsertCrmParams {
   organizationId: string;
   environment?: 'production' | 'sandbox';
   name?: string;
+  status?: string;
+  instanceUrl?: string;
+  encryptionKey?: string;
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
-  const { crmId, userId, crmName, organizationId, environment, name } = params;
+  const {
+    crmId,
+    userId,
+    crmName,
+    organizationId,
+    environment,
+    name,
+    status,
+    instanceUrl,
+    encryptionKey,
+  } = params;
+
+  const id = crmId ?? uuidv4();
   const now = new Date().toISOString();
 
+  // Get existing item (if any)
+  const existingCrm = await getCrmById(id);
+
   const crm: ICrm = {
-    crmId: crmId ?? uuidv4(),
+    ...existingCrm,
+
+    crmId: id,
     organizationId,
     crmName,
-    environment: environment ?? 'production',
-    status: STATUS.active,
-    ...(name && { name }),
-    ...(userId && { userId }),
-    createdAt: now,
+
+    environment: environment ?? existingCrm?.environment ?? 'production',
+    status: status ?? existingCrm?.status ?? STATUS.active,
+
+    ...(name !== undefined && { name }),
+    ...(userId !== undefined && { userId }),
+    ...(instanceUrl !== undefined && { instanceUrl }),
+    ...(encryptionKey !== undefined && { encryptionKey }),
+
+    createdAt: existingCrm?.createdAt ?? now,
     updatedAt: now,
   };
 
-  await docClient.send(new PutCommand({ TableName: CRM_TABLE, Item: crm }));
+  await docClient.send(
+    new PutCommand({
+      TableName: CRM_TABLE,
+      Item: crm,
+    })
+  );
+
   return crm;
 };
 

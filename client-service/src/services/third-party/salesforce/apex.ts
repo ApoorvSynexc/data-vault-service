@@ -1,10 +1,38 @@
-import { IUser } from '../../../models';
+import { ICrm, IUser } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
+import { encryptOrgDirect, decryptOrgDirect } from '../../../utils/salesforce-crypto';
 import { getCrmById } from '../../crm';
-import { salesforceRequest } from '../salesforce';
+import { salesforceRequest, SalesforceTokens } from '../salesforce';
 import type { ICountItem, ICountResult } from './dry-run/types';
 
 const salesforceNamespace = '';
+
+/**
+ * Every callout to Salesforce's own REST API is org-key-encrypted in both
+ * directions — no Bootstrap wrapping, since both sides already know which
+ * org they're talking to. Centralizes the encrypt-request/decrypt-response
+ * pair every function below used to reimplement independently (and, before
+ * this fix, didn't implement at all — see the mismatch this closes).
+ */
+const callApex = async <T = any>(
+  crm: ICrm,
+  tokens: SalesforceTokens,
+  opts: { url: string; method: 'GET' | 'POST'; body?: object; timeoutMs?: number }
+): Promise<T> => {
+  if (!crm.encryptionKey) {
+    throw new Error('org_not_registered');
+  }
+  const body = opts.body !== undefined
+    ? JSON.stringify(encryptOrgDirect(JSON.stringify(opts.body), crm.encryptionKey))
+    : undefined;
+
+  const result = await salesforceRequest<any>(
+    { url: opts.url, method: opts.method, body, timeoutMs: opts.timeoutMs },
+    tokens
+  );
+
+  return JSON.parse(decryptOrgDirect(result.data, crm.encryptionKey)) as T;
+};
 
 const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = {}) => {
   if (!user || !user.crmId) {
@@ -27,11 +55,11 @@ const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = 
     url += `?mode=${mode}`;
   }
 
-  const encryptedResult = await salesforceRequest(
-    { url, method: 'GET' },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+  return callApex(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+    { url, method: 'GET' }
   );
-  return encryptedResult.data;
 };
 
 const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: object } = {}) => {
@@ -49,11 +77,11 @@ const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: objec
     throw new Error('Instance URL not found');
   }
   const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/preview-records`;
-  const encryptedResult = await salesforceRequest(
-    { url, method: 'POST', body: JSON.stringify(body) },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+  return callApex(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+    { url, method: 'POST', body }
   );
-  return encryptedResult.data;
 };
 
 const getApexObjectsCount = async ({ user, body }: { user?: IUser; body?: object } = {}) => {
@@ -71,11 +99,11 @@ const getApexObjectsCount = async ({ user, body }: { user?: IUser; body?: object
     throw new Error('Instance URL not found');
   }
   const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-record-count`;
-  const encryptedResult = await salesforceRequest(
-    { url, method: 'POST', body: JSON.stringify(body) },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+  return callApex(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+    { url, method: 'POST', body }
   );
-  return encryptedResult.data;
 };
 
 const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
@@ -92,15 +120,15 @@ const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; o
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-childs?apiName=${objectName}`;
+  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-children?apiName=${objectName}`;
   if (mode) {
     url += `&mode=${mode}`;
   }
-  const encryptedResult = await salesforceRequest(
-    { url, method: 'GET' },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+  return callApex(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+    { url, method: 'GET' }
   );
-  return encryptedResult.data;
 };
 
 const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
@@ -118,11 +146,11 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   if (mode) {
     url += `&mode=${mode}`;
   }
-  const encryptedResult = await salesforceRequest(
-    { url, method: 'GET' },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+  return callApex(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+    { url, method: 'GET' }
   );
-  return encryptedResult.data;
 };
 
 const createApexSecret = async ({ user, body }: { user?: IUser; body?: { webhookSecret: string } } = {}) => {
@@ -137,11 +165,11 @@ const createApexSecret = async ({ user, body }: { user?: IUser; body?: { webhook
   const instanceUrl = user.crmProfile?.instanceUrl;
 
   const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/upsert-webhook-secret`;
-  const encryptedResult = await salesforceRequest(
-    { url, method: 'POST', body: JSON.stringify(body) },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+  return callApex(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+    { url, method: 'POST', body }
   );
-  return encryptedResult.data;
 };
 
 const APEX_BASE = (instanceUrl?: string) =>
@@ -158,20 +186,21 @@ const apexCountBatch = async (user?: IUser, items?: ICountItem[]): Promise<ICoun
   const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  const result = await salesforceRequest(
+  const data = await callApex<{ success: boolean; results: Array<Omit<ICountResult, 'key'>> }>(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     {
       url: `${APEX_BASE(instanceUrl)}/object-record-count`,
       method: 'POST',
-      body: JSON.stringify({ items: items?.map(({ apiName, whereClause }) => ({ apiName, whereClause })) }),
-    },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+      body: { items: items?.map(({ apiName, whereClause }) => ({ apiName, whereClause })) },
+    }
   );
 
-  if (!result.data.success) {
-    throw new Error(`[object-record-count] request failed: ${JSON.stringify(result.data)}`);
+  if (!data.success) {
+    throw new Error(`[object-record-count] request failed: ${JSON.stringify(data)}`);
   }
   // Apex returns results in the same order as input items; re-attach the key used for map lookups.
-  return (result.data.results as Array<Omit<ICountResult, 'key'>>).map((r, i) => ({ ...r, key: items?.[i] ? items[i].key : "" }));
+  return data.results.map((r, i) => ({ ...r, key: items?.[i] ? items[i].key : "" }));
 };
 
 const apexValidateSoql = async (
@@ -189,16 +218,15 @@ const apexValidateSoql = async (
   const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  const result = await salesforceRequest(
+  return callApex(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     {
       url: `${APEX_BASE(instanceUrl)}/validate-soql`,
       method: 'POST',
-      body: JSON.stringify({ apiName, whereClause: whereClause || null }),
-    },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+      body: { apiName, whereClause: whereClause || null },
+    }
   );
-
-  return result.data;
 };
 
 // ── Shared filter types for object-record-count ───────────────────────────────
@@ -237,26 +265,23 @@ export const apexCountOne = async (
     ? { apiName, parentFieldName: filter.parentFieldName, ids: filter.ids }
     : { apiName, whereClause: (filter as ApexWhereFilter).whereClause ?? null };
 
-  console.log('[apexCountOne] request payload:', JSON.stringify({ items: [item] }, null, 2));
-
-  const result = await salesforceRequest(
+  const data = await callApex<{ success: boolean; results: Array<{ recordCount?: number; success: boolean; errorCode?: string; errorMessage?: string }> }>(
+    crm,
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     {
-      url:       `${APEX_BASE(instanceUrl)}/object-record-count`,
-      method:    'POST',
-      body:      JSON.stringify({ items: [item] }),
+      url: `${APEX_BASE(instanceUrl)}/object-record-count`,
+      method: 'POST',
+      body: { items: [item] },
       // Dry-run counts can hit large filtered tables — 30s default is too tight.
       timeoutMs: 60_000
-    },
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl }
+    }
   );
 
-  console.log('[apexCountOne] raw response for', apiName, ':', JSON.stringify(result.data, null, 2));
-
-  if (!result.data.success) {
-    throw new Error(`[object-record-count] request failed: ${JSON.stringify(result.data)}`);
+  if (!data.success) {
+    throw new Error(`[object-record-count] request failed: ${JSON.stringify(data)}`);
   }
 
-  const r = result.data.results[0];
+  const r = data.results[0];
   return { count: r.recordCount ?? null, success: r.success, errorCode: r.errorCode, errorMessage: r.errorMessage };
 };
 
