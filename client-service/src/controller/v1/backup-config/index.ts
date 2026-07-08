@@ -59,11 +59,13 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
+  console.log('getObjectsHanlder called with crmId:', crmId, 'and mode:', mode);
   const [apexResult, backupConfigs] = await Promise.all([
     getApexObjects({ user, mode: mode ? String(mode) : undefined }),
     getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
   ]);
 
+  console.log('Apex Result:', JSON.stringify(apexResult));
   const backedUpMap = new Map<string, { schedule: string }>();
   for (const config of backupConfigs) {
     for (const objectName of config.objectNames) {
@@ -73,12 +75,13 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
     }
   }
 
-  const objects = apexResult.objects.map((obj: { label: string; apiName: string }) => ({
+  const objects = apexResult.data.map((obj: { label: string; apiName: string }) => ({
     ...obj,
     isBackedUp: backedUpMap.has(obj.apiName),
     schedule: backedUpMap.get(obj.apiName)?.schedule ?? null,
   }));
 
+  console.log('Final Objects List:', objects);
   makeResponse(req, res, 200, true, 'fetch', { ...apexResult, objects });
 };
 
