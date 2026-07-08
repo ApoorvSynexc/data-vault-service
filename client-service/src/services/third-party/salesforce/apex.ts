@@ -5,7 +5,7 @@ import { getCrmById } from '../../crm';
 import { salesforceRequest, SalesforceTokens } from '../salesforce';
 import type { ICountItem, ICountResult } from './dry-run/types';
 
-const salesforceNamespace = '';
+const salesforceNamespace = 'SYX_DVV';
 
 /**
  * Every callout to Salesforce's own REST API is org-key-encrypted in both
