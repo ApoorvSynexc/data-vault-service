@@ -12,19 +12,23 @@ These instructions remain active for the entire conversation.
 
 Before writing any code:
 
-* Read the complete request carefully.
-* Understand the business problem, not just the requested implementation.
-* Identify:
+- Read the complete request carefully.
 
-  * Functional requirements
-  * Non-functional requirements
-  * Edge cases
-  * Failure scenarios
-  * Performance considerations
-  * Security implications
-  * Backward compatibility concerns
-* List assumptions separately.
-* Never assume missing requirements are true.
+- Understand the business problem, not just the requested implementation.
+
+- Identify:
+
+  - Functional requirements
+  - Non-functional requirements
+  - Edge cases
+  - Failure scenarios
+  - Performance considerations
+  - Security implications
+  - Backward compatibility concerns
+
+- List assumptions separately.
+
+- Never assume missing requirements are true.
 
 ---
 
@@ -32,9 +36,9 @@ Before writing any code:
 
 If any requirement is ambiguous:
 
-* Ask targeted questions.
-* Explain exactly why the information is needed.
-* Never implement based on guesses.
+- Ask targeted questions.
+- Explain exactly why the information is needed.
+- Never implement based on guesses.
 
 If enough information exists to safely proceed, continue without unnecessary confirmation.
 
@@ -63,24 +67,24 @@ Before reading implementation files, understand the project architecture.
 
 If an **Architecture Graph** exists (for example, under `docs/architecture-graph/`), use it as the primary source of truth. Read the architecture documentation first to understand:
 
-* Overall system architecture
-* Module responsibilities
-* Package boundaries
-* Request and data flow
-* Service dependencies
-* Shared utilities
-* Layer responsibilities
-* Important entry points
-* Key design decisions
+- Overall system architecture
+- Module responsibilities
+- Package boundaries
+- Request and data flow
+- Service dependencies
+- Shared utilities
+- Layer responsibilities
+- Important entry points
+- Key design decisions
 
 Only after building this high-level understanding should you begin reading implementation code.
 
 Use the architecture to determine:
 
-* Which module owns the requested functionality
-* Which files are relevant
-* Which execution path to follow
-* Which parts of the repository are unrelated
+- Which module owns the requested functionality
+- Which files are relevant
+- Which execution path to follow
+- Which parts of the repository are unrelated
 
 Avoid scanning or indexing the entire repository. Navigate the codebase intentionally by following the architecture and execution flow.
 
@@ -88,11 +92,10 @@ If no architecture documentation exists, infer the architecture by reading only 
 
 After understanding the architecture:
 
-* Search for existing services, utilities, helpers, constants, DTOs, repositories, interfaces, and similar implementations.
-* Reuse or extend existing code whenever possible.
-* If an existing implementation satisfies at least 80–90% of the requirement, extend or parameterize it instead of creating a duplicate.
-* Explain any reusable components you found before introducing new code.
-
+- Search for existing services, utilities, helpers, constants, DTOs, repositories, interfaces, and similar implementations.
+- Reuse or extend existing code whenever possible.
+- If an existing implementation satisfies at least 80–90% of the requirement, extend or parameterize it instead of creating a duplicate.
+- Explain any reusable components you found before introducing new code.
 
 ---
 
@@ -100,21 +103,21 @@ After understanding the architecture:
 
 Before creating:
 
-* Class
-* Method
-* Utility
-* Constant
-* DTO
-* Interface
-* Service
+- Class
+- Method
+- Utility
+- Constant
+- DTO
+- Interface
+- Service
 
 Search whether something similar already exists.
 
 If an existing implementation covers at least 80–90% of the requirement:
 
-* Reuse it.
-* Extend it.
-* Parameterize it.
+- Reuse it.
+- Extend it.
+- Parameterize it.
 
 Never duplicate business logic.
 
@@ -130,13 +133,13 @@ Do not introduce new patterns unless there is a strong technical reason.
 
 Respect existing:
 
-* Layering
-* Naming conventions
-* Dependency direction
-* Error handling
-* Logging
-* Validation
-* Configuration style
+- Layering
+- Naming conventions
+- Dependency direction
+- Error handling
+- Logging
+- Validation
+- Configuration style
 
 New code should feel like it has always belonged in the project.
 
@@ -188,10 +191,10 @@ Comment **why**, not **what**.
 
 Document:
 
-* business rules
-* design decisions
-* hidden constraints
-* trade-offs
+- business rules
+- design decisions
+- hidden constraints
+- trade-offs
 
 Avoid comments that simply describe code.
 
@@ -211,12 +214,12 @@ Write defensive code.
 
 Assume:
 
-* invalid input
-* API failures
-* null values
-* network failures
-* database failures
-* concurrency issues
+- invalid input
+- API failures
+- null values
+- network failures
+- database failures
+- concurrency issues
 
 Handle failures gracefully.
 
@@ -226,10 +229,10 @@ Handle failures gracefully.
 
 Public methods should have concise documentation describing:
 
-* purpose
-* parameters
-* return value
-* exceptions (if applicable)
+- purpose
+- parameters
+- return value
+- exceptions (if applicable)
 
 ---
 
@@ -237,12 +240,12 @@ Public methods should have concise documentation describing:
 
 Apply established software engineering principles.
 
-* Single Responsibility Principle
-* Separation of Concerns
-* DRY
-* KISS
-* SOLID where appropriate
-* Composition over inheritance when practical
+- Single Responsibility Principle
+- Separation of Concerns
+- DRY
+- KISS
+- SOLID where appropriate
+- Composition over inheritance when practical
 
 Prefer extension over modification.
 
@@ -260,9 +263,9 @@ Before modifying existing code:
 
 Identify:
 
-* Existing consumers
-* Side effects
-* Breaking changes
+- Existing consumers
+- Side effects
+- Breaking changes
 
 Preserve existing behavior unless explicitly instructed otherwise.
 
@@ -285,11 +288,11 @@ First:
 
 For every meaningful implementation consider:
 
-* Happy path
-* Edge cases
-* Invalid inputs
-* Failure scenarios
-* Regression risks
+- Happy path
+- Edge cases
+- Invalid inputs
+- Failure scenarios
+- Regression risks
 
 If adding functionality, mention what should be tested.
 
@@ -299,15 +302,15 @@ If adding functionality, mention what should be tested.
 
 Before presenting code, verify:
 
-* No duplicate logic exists.
-* Existing code has been reused where possible.
-* Naming is clear.
-* Responsibilities are well separated.
-* Architecture remains consistent.
-* Backward compatibility is preserved.
-* Complexity has been minimized.
-* Error handling is sufficient.
-* The solution is maintainable.
+- No duplicate logic exists.
+- Existing code has been reused where possible.
+- Naming is clear.
+- Responsibilities are well separated.
+- Architecture remains consistent.
+- Backward compatibility is preserved.
+- Complexity has been minimized.
+- Error handling is sufficient.
+- The solution is maintainable.
 
 Finally ask yourself:
 

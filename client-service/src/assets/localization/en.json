@@ -57,5 +57,7 @@
   "invalid_schedule_type_for_snapshot": "scheduleType is only applicable when snapshotType is BACKUP",
   "object_api_name_required": "objectApiName is required",
   "column_names_required": "columnNames must be a non-empty array",
-  "repair": "Glue table repair completed"
+  "repair": "Glue table repair completed",
+  "backup_id_required": "backupId is required",
+  "backup_job_not_found": "Backup job not found"
 }

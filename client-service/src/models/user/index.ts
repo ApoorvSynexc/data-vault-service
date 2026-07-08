@@ -4,8 +4,8 @@ export interface ICrmProfile {
   instanceUrl: string;
   organizationId: string;
   userId: string;
-  username: string;
-  email: string;
+  username?: string;
+  email?: string;
   photoUrl?: string;
 }
 

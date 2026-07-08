@@ -33,8 +33,8 @@ const getRole = async (search: Record<string, any>): Promise<IRole | null> => {
         TableName: ROLE_TABLE,
         IndexName: 'name-index',
         KeyConditionExpression: '#name = :name',
-        ProjectionExpression: 'roleId, #name, description, permissions, isDefault, #status, createdAt, updatedAt',
-        ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
+        ProjectionExpression: 'roleId, #name, description, #permissions, isDefault, #status, createdAt, updatedAt',
+        ExpressionAttributeNames: { '#name': 'name', '#permissions': 'permissions', '#status': 'status' },
         ExpressionAttributeValues: { ':name': search.name },
         Limit: 1,
       })

@@ -38,7 +38,11 @@ import { listS3Objects, uploadToS3 } from '../../../../destination/s3';
 import { uploadSingleObject, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { buildFailedRecordsIdCsv, bulkDeleteRecords } from './delete-bulk';
-import { getBackupConfigById, updateBackupConfig, updateBackupConfigSizeRecords } from '../../../../backup-config';
+import {
+  // getBackupConfigById,
+  // updateBackupConfig,
+  updateBackupConfigSizeRecords,
+} from '../../../../backup-config';
 
 // Statuses that mean Phase 2 (upload) already completed — retry skips to Phase 3 (delete all from S3).
 const DELETE_ONLY_STATUSES = new Set([
@@ -723,7 +727,11 @@ export const archiveAndHardDelete = async (
       const existingKeys = await listS3Objects(destConfig, archivePrefix);
       s3UrlsById.set(object.id, existingKeys);
     } else {
-      const { s3UrlsPerObject: rootS3Map, totalSizeInBytes, completedRecordCount } = await uploadBulkResultsByPageArchival({
+      const {
+        s3UrlsPerObject: rootS3Map,
+        totalSizeInBytes,
+        completedRecordCount,
+      } = await uploadBulkResultsByPageArchival({
         instanceUrl,
         tokens,
         jobId,

@@ -1,7 +1,7 @@
 import Joi from 'joi';
-import { NextFunction, Request, Response } from 'express';
-import { makeResponse } from '../../../lib';
-import { decrypt } from '../../../utils/encryption';
+import { NextFunction, Response } from 'express';
+import { IRequest } from '../../../lib/interface/shared';
+import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
 
 const profileSchema = Joi.object({
   organizationId: Joi.string().required(),
@@ -14,9 +14,14 @@ const profileSchema = Joi.object({
   photoUrl: Joi.string().allow('').optional(),
 });
 
+// permissions is a module-key -> granted-action-keys map, matching IRole.permissions
+// (Record<string,string[]>) — same shape modulePermissionsSchema enforces below for
+// /role/create and /role/update. Stage 1 refactored upsertUsersHandler to use this
+// map shape (hasAnyGrant, updateRole({permissions: role.permissions})) but this
+// nested rule was missed; a flat string[] here now blocks every real request.
 const roleSchema = Joi.object({
-  permissions: Joi.array()
-    .items(Joi.string())
+  permissions: Joi.object()
+    .pattern(Joi.string(), Joi.array().items(Joi.string()))
     .required(),
 });
 
@@ -27,7 +32,7 @@ const userSchema = Joi.object({
   role: roleSchema.required(),
 });
 
-export const upsertUsersValidation = (req: Request, res: Response, next: NextFunction) => {
+export const upsertUsersValidation = (req: IRequest, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     organizationId: Joi.string().required(),
     environment: Joi.string().optional(),
@@ -37,53 +42,66 @@ export const upsertUsersValidation = (req: Request, res: Response, next: NextFun
       .required(),
   });
 
-  const body = JSON.parse(decrypt({ ciphertext: String(req.body.ciphertext), iv: String(req.body.iv) }));
+  const { crm, plaintext } = req.salesforcePayload;
+  const body = JSON.parse(plaintext);
+
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
-    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    // Log the exact Joi error so 400 VALIDATION_FAILED responses can be
+    // diagnosed on the Node side — matches the log the other two validators
+    // in this file already emit.
+    console.log({ upsertUsersValidationError: error.details.map((d) => ({ path: d.path.join('.'), message: d.message })) });
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
     return;
   }
   next();
 };
 
-export const createRoleValidation = (req: Request, res: Response, next: NextFunction) => {
+// modules is a module-key -> granted-action-keys map, e.g. { backup: ['read','write'] } —
+// matches IRole.permissions (Record<string,string[]>), not a flat module list.
+const modulePermissionsSchema = Joi.object()
+  .pattern(Joi.string(), Joi.array().items(Joi.string()))
+  .optional();
+
+// DataVaultPermissionService.createRole()/updateRole() (Apex) send
+// { orgId, name, modules, createdBy } / { orgId, roleId, name, modules } — not
+// organizationId/environment/description/permissions, which nothing on the
+// Salesforce side ever sends.
+export const createRoleValidation = (req: IRequest, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    organizationId: Joi.string().optional(),
-    environment: Joi.string().trim().optional(),
-    name: Joi.string().trim().optional(),
-    description: Joi.string().trim().optional(),
-    permissions: Joi.array()
-      .items(Joi.string())
-      .optional(),
+    orgId: Joi.string().optional(),
+    name: Joi.string().trim().required(),
+    modules: modulePermissionsSchema,
+    createdBy: Joi.string().optional(),
   });
 
-  const body = JSON.parse(decrypt({ ciphertext: String(req.body.ciphertext), iv: String(req.body.iv) }));
+  const { crm, plaintext } = req.salesforcePayload;
+  const body = JSON.parse(plaintext);
+
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
     console.log({ Error: error });
-    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
     return;
   }
   next();
 };
 
-export const updateRoleValidation = (req: Request, res: Response, next: NextFunction) => {
+export const updateRoleValidation = (req: IRequest, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    organizationId: Joi.string().required(),
+    orgId: Joi.string().optional(),
     roleId: Joi.string().required(),
     name: Joi.string().trim().optional(),
-    environment: Joi.string().trim().optional(),
-    description: Joi.string().trim().optional(),
-    permissions: Joi.array()
-      .items(Joi.string())
-      .optional(),
-  }).min(1);
+    modules: modulePermissionsSchema,
+  });
 
-  const body = JSON.parse(decrypt({ ciphertext: String(req.body.ciphertext), iv: String(req.body.iv) }));
+  const { crm, plaintext } = req.salesforcePayload;
+  const body = JSON.parse(plaintext);
+
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
     console.log({error});
-    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
     return;
   }
   next();
