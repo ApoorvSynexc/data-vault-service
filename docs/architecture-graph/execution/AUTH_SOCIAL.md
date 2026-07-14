@@ -2,9 +2,13 @@
 
 Step-by-step trace for Salesforce CRM connection and social login.
 
-## Social Login Flow (new user login via Salesforce)
+Corrected 2026-07-14: route paths below were documented as `/v1/auth/salesforce` and `/v1/auth/salesforce/callback` — neither exists. The actual handler is `socialLoginHandler`/`socialLoginCallbackHandler` in `controller/v1/auth/social-login.ts`, mounted at `/v1/auth/social-login` and `/v1/auth/social-login/callback`. This same callback is also the landing point for the **Salesforce admin-authorization popup** (`DataVaultAdminAuthorizationService.authorizeOrganization()` in Apex → `/v1/auth/authorize-org` → returns a Salesforce authorize URL using the same `SALESFORCE_LOGIN_REDIRECT_URI`), not just the flow below — see [SECURITY.md](../SECURITY.md#5-salesforce-oauth-crm-connections-dashboard-social-login-and-admin-authorization).
 
-### Step 1: GET /v1/auth/salesforce
+## Social Login Flow (existing user login via Salesforce)
+
+Also corrected 2026-07-14: this is **not** a new-user signup flow — see Step 4 below. A Salesforce user must already exist in the users table (created separately, e.g. by the admin-authorization flow's `authorizeUserHandler`) before this callback will succeed.
+
+### Step 1: GET /v1/auth/social-login
 
 ```typescript
 // Optional body: { environment, customUrl, redirectUri }
@@ -28,10 +32,10 @@ return 200 { url, state }
 ### Step 2: User authorizes in browser → Salesforce redirects to callback
 
 ```
-GET /v1/auth/salesforce/callback?code={code}&state={state}
+GET /v1/auth/social-login/callback?authProvider=salesforce&code={code}&state={state}
 ```
 
-### Step 3: salesforceCallbackHandler (in auth/social-login.ts)
+### Step 3: socialLoginCallbackHandler (in auth/social-login.ts)
 
 ```typescript
 const { code, state } = req.query;
@@ -55,40 +59,32 @@ const profileResult = await getSalesforceProfile({ accessToken, refreshToken }, 
 // Returns: { user_id, organization_id, email, name, picture, ... }
 ```
 
-### Step 4: User lookup or creation
+### Step 4: User lookup (corrected 2026-07-14 — this callback never creates a user)
 
 ```typescript
-const sfUserId = profileResult.data.user_id;
-const organizationId = profileResult.data.organization_id;
+const sfUserId = sfProfile.user_id;
 
-// Look up user by crmProfileUserId (Salesforce user ID)
+// Look up user by crmProfileUserId (Salesforce user ID) — REQUIRED to already exist.
 let user = await getUserByCrmProfileUserId(sfUserId);
-
 if (!user) {
-  // New user — create with Salesforce profile
-  user = await createUser({
-    userId: uuid(),
-    authProvider: AUTH_PROVIDER.salesforce,
-    contactEmail: profileResult.data.email,
-    crmProfile: {
-      instanceUrl, organizationId, userId: sfUserId,
-      username: profileResult.data.preferred_username,
-      email: profileResult.data.email,
-    },
-    crmCredential: encrypt(JSON.stringify({ access_token, refresh_token })),
-    status: STATUS.active,
-    role: { roleId: defaultRoleId, name: 'Admin' },
-  });
+  return 401 unauthorized;   // no auto-provisioning here
+}
+if (user.status === STATUS.inactive) {
+  return 403 blocked_or_removed;
 }
 
-// Update existing user's tokens (access_token may have changed)
-if (existingUser) {
-  await updateUser({ userId: user.userId }, {
-    crmCredential: encrypt(JSON.stringify({ access_token, refresh_token })),
-    crmProfile: { ...updatedProfile },
-  });
-}
+// Persist tokens + Salesforce's own authoritative instance_url (may differ from
+// whatever domain was reported separately, e.g. Apex's URL.getOrgDomainUrl()
+// during admin authorization — Salesforce's token response wins).
+await updateUser({ userId: user.userId }, {
+  crmCredential: encrypt(JSON.stringify({ access_token: token.access_token, refresh_token: token.refresh_token })),
+  isCrmConnected: true,
+  ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
+  ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
+});
 ```
+
+The Salesforce admin-authorization flow is what actually creates the user (see `authorizeUserHandler` in `controller/v1/auth/authorize.ts`, called from `/v1/auth/authorize-org`) — by the time this callback runs (redirected here from the same OAuth round trip), the user record already exists.
 
 ### Step 5: Create session and set cookies
 

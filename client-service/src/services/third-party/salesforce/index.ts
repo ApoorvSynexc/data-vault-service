@@ -101,6 +101,7 @@ const salesforceRequest = async <T = any>(
     const data = await makeCall(tokens.accessToken);
     return { data, accessToken: tokens.accessToken };
   } catch (error: any) {
+    console.log('Salesforce request failed, checking for 401 to refresh token...', error?.message);
     if (!error?.message?.startsWith('HTTP Error 401')) {
       throw error;
     }
@@ -158,6 +159,13 @@ const getSalesforceLoginUrl = (
     state,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
+    // Without an explicit scope, Salesforce falls back to the Connected
+    // App's default — if that default doesn't include 'api', the resulting
+    // access_token authenticates fine against identity endpoints (userinfo)
+    // but is rejected (as a generic INVALID_SESSION_ID, not a clear scope
+    // error) the moment it's used against /services/data/* or the Tooling
+    // API, e.g. provisionEcaPermissionSet's SOQL/metadata-deploy calls.
+    scope: 'api refresh_token',
   });
 
   return { url: `${authUrl}?${params}`, codeVerifier, state };
@@ -167,16 +175,21 @@ const getSalesforceToken = async (
   code: string,
   code_verifier: string,
   environment?: SalesforceEnvironment,
-  customUrl?: string
+  customUrl?: string,
+  redirectUri?: string
 ) => {
   const { tokenUrl } = getSalesforceUrls(environment, customUrl);
-  console.log({ tokenUrl, environment, customUrl, code, code_verifier });
+  // Must exactly match the redirect_uri sent in the original authorize
+  // request (getSalesforceLoginUrl's `uri`) — Salesforce validates this at
+  // token-exchange time. Defaults to SALESFORCE_REDIRECT_URI for callers that
+  // built their authorize URL without an explicit redirectUri override.
+  const uri = redirectUri ?? SALESFORCE_REDIRECT_URI;
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     client_id: String(SALESFORCE_CLIENT_ID),
     client_secret: String(SALESFORCE_CLIENT_SECRET),
-    redirect_uri: String(SALESFORCE_REDIRECT_URI),
+    redirect_uri: String(uri),
     code_verifier,
   }).toString();
 

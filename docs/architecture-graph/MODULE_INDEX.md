@@ -36,13 +36,14 @@ Every module, what it owns, and where it lives.
 | src/routes/v1/crm.routes.ts | /v1/crm |
 | src/routes/v1/backup-config.routes.ts | /v1/backup-config |
 | src/routes/v1/archival-config.routes.ts | /v1/archival-config |
-| src/routes/v1/backup-job.routes.ts | /v1/backup-job |
-| src/routes/v1/destination.routes.ts | /v1/destination |
+| src/routes/v1/backup-job.route.ts | /v1/backup-job |
+| src/routes/v1/destination.route.ts | /v1/destination |
 | src/routes/v1/dashboard.routes.ts | /v1/dashboard |
-| src/routes/v1/restore-retrieve.route.ts | /v1/restore-retrieve |
-| src/routes/v1/internal.routes.ts | /v1/internal |
+| src/routes/v1/restore-retrieve.route.ts | /v1/restore (corrected 2026-07-14 — file name kept "restore-retrieve", mount prefix is "/restore") |
+| src/routes/v1/storage.routes.ts | /v1/storage (missing from the previous version of this table) |
+| src/routes/v1/internal.route.ts | /v1/internal |
 | src/routes/v1/public.routes.ts | /v1/public |
-| src/routes/v1/salesforce.routes.ts | /v1/salesforce |
+| src/routes/v1/salesforce.route.ts | /v1/salesforce |
 
 ### Middlewares
 | Path | Purpose |

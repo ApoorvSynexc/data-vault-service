@@ -18,14 +18,16 @@ Ordered steps from `node index.ts` to first HTTP response, for each service.
     d. express.json() applied
     e. trust proxy 1 set
     f. morganMiddleware applied
-    g. v1Router mounted at /v1
-       - /auth routes (public, rate-limited)
+    g. v1Router mounted at /v1 (corrected 2026-07-14 against routes/v1/index.ts)
+       - /auth routes (public; individual routes add rate-limit/validation, not a router-level middleware)
        - /internal routes (internalAuth middleware)
-       - /public routes (webhookAuth middleware)
-       - /salesforce routes (salesforceAuthenticate middleware)
+       - /public routes (public; only PUT /webhook/salesforce adds webhookAuth)
+       - /salesforce routes (public; secured per-route via attachDecryptedSalesforceRequest —
+         salesforceAuthenticate doesn't exist, see docs/architecture-graph/SECURITY.md)
        - /user, /crm, /backup-config, /archival-config, /backup-job, /dashboard,
-         /destination routes (authenticate + aclGateway middleware)
-       - /restore-retrieve routes (authenticate + authenticate again)
+         /destination, /storage routes (authenticate + aclGateway middleware)
+       - /restore routes (authenticate + aclGateway — same single chain as above, mount
+         prefix is /restore not /restore-retrieve)
     h. 404 handler registered
     i. app.listen(PORT, callback)
     j. In callback:

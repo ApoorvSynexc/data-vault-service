@@ -2,10 +2,11 @@
 
 Step-by-step trace for snapshot logs and object list queries.
 
-## GET /v1/restore-retrieve/snapshot-logs
+Corrected 2026-07-14: every route below was documented under the `/v1/restore-retrieve/*` prefix — the actual mount (`routes/v1/index.ts`) is `/v1/restore/*` (the router file is still named `restore-retrieve.route.ts`, only the URL prefix differs). There is also no "double authenticate" — this router sits behind the same single global `authenticate → aclGateway` chain as every other private route group. The TypeScript snippets in this file describe implementation logic that was **not** re-verified against the current controller source during this pass (only route paths/mounting were checked) — treat the code blocks below as unconfirmed until cross-checked against `controller/v1/restore-retrieve/index.ts`.
+
+## GET /v1/restore/snapshot-logs
 
 ```typescript
-// Double authenticate (authenticate → authenticate again)
 // query: { type: 'BACKUP' | 'ARCHIVAL', backupConfigId?, cursor?, limit? }
 
 const { type, backupConfigId } = req.query;
@@ -58,7 +59,7 @@ The cursor for snapshot-logs is a JSON map:
 ```
 This is then base64url-encoded as the outer cursor. Allows independent pagination per config in a single request.
 
-## GET /v1/restore-retrieve/get-objectlist-by-configid
+## GET /v1/restore/get-objectlist-by-configid
 
 ```typescript
 // query: { backupConfigId, limit?, cursor? }
@@ -72,7 +73,7 @@ const objectList = latestJob?.object ?? [];
 // Returns flat list of objects with status, counts, s3Prefix
 ```
 
-## GET /v1/restore-retrieve/get-objectlist-by-backup-jobids
+## GET /v1/restore/get-objectlist-by-backup-jobids
 
 ```typescript
 // query: { backupJobIds: string[] (comma-separated) }
@@ -84,7 +85,7 @@ const jobs = await Promise.all(
 // Return { [backupJobId]: object[] } map
 ```
 
-## GET /v1/restore-retrieve/fetch-logs
+## GET /v1/restore/fetch-logs
 
 ```typescript
 // query: { backupConfigId?, limit?, cursor?, filter? }
@@ -93,14 +94,16 @@ const jobs = await Promise.all(
 // All jobs sanitized (no source/destination)
 ```
 
-## GET /v1/restore-retrieve/
+## GET /v1/restore/list
 
 ```typescript
 // Returns paginated list of all backup jobs for user
 // Optionally filtered by backupConfigId or date range
 ```
 
-## POST /v1/restore-retrieve/fetch-records
+Also present but not previously documented: `GET /v1/restore/restore` (`getRestoreRetrieveJobHandler` — single restore/retrieve job by backupJobId; the doubled path segment is real — it's `router.get('/restore', ...)` mounted under the `/restore` prefix) and `POST /v1/restore/retrieve/repair-glue` (`repairGlueTablesHandler`).
+
+## POST /v1/restore/retrieve/fetch-records
 
 ```typescript
 // body: { configType: 'BACKUP' | 'ARCHIVAL', objectApiName, columnNames, backupJobIds?, backupConfigId? }
