@@ -24,4 +24,7 @@ router.post(
   salesofrceController.createEcaPermissionSetAndAssignHandler
 );
 
+router.get('/confirm-admin-user-created', attachDecryptedSalesforceRequest('query'), salesofrceController.confirmAdminUserCreatedHandler);
+router.get('/confirm-org-authorized', salesofrceController.confirmOrgAuthorizedHandler);
+
 export const salesforceRouter = router;
