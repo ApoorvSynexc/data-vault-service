@@ -323,7 +323,7 @@ const getBackupConfigsWithPagination = async (
     '#schedule': 'schedule',
     '#status': 'status',
     '#type': 'type',
-    '#backupStatus': 'backupStatus',
+    ...(backupStatus && { '#backupStatus': 'backupStatus' }),
   };
 
   const buildCommonFilters = (expressionAttributeValues: Record<string, any>): string[] => {
