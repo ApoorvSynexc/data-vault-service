@@ -295,10 +295,10 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
-  filter: { userId?: string; spaceId?: string; type?: string },
+  filter: { userId?: string; spaceId?: string; type?: string; search?: string },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, spaceId, type } = filter;
+  const { userId, spaceId, type, search } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
@@ -310,8 +310,46 @@ const getBackupConfigsWithPagination = async (
   const indexName = isSpaceQuery ? 'spaceId-index' : 'userId-index';
   const keyValue = isSpaceQuery ? spaceId : userId;
 
+  const expressionAttributeNames: Record<string, string> = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
+
+  if (search && search.length > 0) {
+    const expressionAttributeValues: Record<string, any> = {
+      ':search': search.toLowerCase(),
+    };
+    const filterExpressions: string[] = ['contains(#name, :search)'];
+
+    if (type) {
+      expressionAttributeValues[':type'] = type;
+      filterExpressions.push('#type = :type');
+    }
+
+    if (isSpaceQuery) {
+      expressionAttributeValues[':spaceId'] = spaceId;
+      filterExpressions.push('spaceId = :spaceId');
+    } else {
+      expressionAttributeValues[':userId'] = userId;
+      filterExpressions.push('userId = :userId');
+    }
+
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+        ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues,
+        FilterExpression: filterExpressions.join(' AND '),
+        Limit: limit,
+        ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
+      })
+    );
+
+    return {
+      documents: (result.Items as IBackupConfig[] | undefined) ?? [],
+      nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+    };
+  }
+
   const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
-  const expressionAttributeNames = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
   let filterExpression: string | undefined;
 
   if (type) {
