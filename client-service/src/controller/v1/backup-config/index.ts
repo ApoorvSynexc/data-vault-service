@@ -273,8 +273,11 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
-  } else if(updated?.schedule === SCHEDULE_MODE.realtime && !updated.lastBackupAt) {
-    await triggerBackupJob(updated, undefined, 'backup'); 
+  } else if (updated?.schedule === SCHEDULE_MODE.realtime && !updated.lastBackupAt) {
+    await triggerBackupJob(updated, undefined, 'backup');
+    const triggerResults = await realTimeTriggerManagement('create', updated);
+    await updateBackupConfig(updated.backupConfigId, { triggerResults });
+    logger.info(`Real-time trigger setup results for backupConfigId ${updated.backupConfigId}: ${triggerResults.length}`);
   }
 
   makeResponse(req, res, 200, true, 'update', updated!);
