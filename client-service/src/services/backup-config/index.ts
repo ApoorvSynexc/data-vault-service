@@ -295,10 +295,18 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
-  filter: { userId?: string; spaceId?: string; type?: string; search?: string },
+  filter: {
+    userId?: string;
+    spaceId?: string;
+    type?: string;
+    search?: string;
+    status?: string;
+    backupStatus?: string;
+    schedule?: string;
+  },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, spaceId, type, search } = filter;
+  const { userId, spaceId, type, search, status, backupStatus, schedule } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
@@ -310,18 +318,42 @@ const getBackupConfigsWithPagination = async (
   const indexName = isSpaceQuery ? 'spaceId-index' : 'userId-index';
   const keyValue = isSpaceQuery ? spaceId : userId;
 
-  const expressionAttributeNames: Record<string, string> = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
+  const expressionAttributeNames: Record<string, string> = {
+    '#name': 'name',
+    '#schedule': 'schedule',
+    '#status': 'status',
+    '#type': 'type',
+    '#backupStatus': 'backupStatus',
+  };
 
-  if (search && search.length > 0) {
-    const expressionAttributeValues: Record<string, any> = {
-      ':search': search.toLowerCase(),
-    };
-    const filterExpressions: string[] = ['contains(#name, :search)'];
+  const buildCommonFilters = (expressionAttributeValues: Record<string, any>): string[] => {
+    const filterExpressions: string[] = [];
 
     if (type) {
       expressionAttributeValues[':type'] = type;
       filterExpressions.push('#type = :type');
     }
+    if (status) {
+      expressionAttributeValues[':status'] = status;
+      filterExpressions.push('#status = :status');
+    }
+    if (backupStatus) {
+      expressionAttributeValues[':backupStatus'] = backupStatus;
+      filterExpressions.push('#backupStatus = :backupStatus');
+    }
+    if (schedule) {
+      expressionAttributeValues[':schedule'] = schedule;
+      filterExpressions.push('#schedule = :schedule');
+    }
+
+    return filterExpressions;
+  };
+
+  if (search && search.length > 0) {
+    const expressionAttributeValues: Record<string, any> = {
+      ':search': search.toLowerCase(),
+    };
+    const filterExpressions: string[] = ['contains(#name, :search)', ...buildCommonFilters(expressionAttributeValues)];
 
     if (isSpaceQuery) {
       expressionAttributeValues[':spaceId'] = spaceId;
@@ -350,12 +382,7 @@ const getBackupConfigsWithPagination = async (
   }
 
   const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
-  let filterExpression: string | undefined;
-
-  if (type) {
-    expressionAttributeValues[':type'] = type;
-    filterExpression = '#type = :type';
-  }
+  const filterExpressions = buildCommonFilters(expressionAttributeValues);
 
   const result = await docClient.send(
     new QueryCommand({
@@ -366,7 +393,7 @@ const getBackupConfigsWithPagination = async (
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
       Limit: limit,
-      ...(filterExpression && { FilterExpression: filterExpression }),
+      ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
       ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
     })
   );
