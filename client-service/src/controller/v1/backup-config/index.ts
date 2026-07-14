@@ -273,6 +273,8 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+  } else if(updated?.schedule === SCHEDULE_MODE.realtime && !updated.lastBackupAt) {
+    await triggerBackupJob(updated, undefined, 'backup'); 
   }
 
   makeResponse(req, res, 200, true, 'update', updated!);
