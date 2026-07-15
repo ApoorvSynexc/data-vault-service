@@ -395,8 +395,8 @@ const getBackupConfigsWithPagination = async (
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
-      Limit: limit,
       ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
+      Limit: limit,
       ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
     })
   );
