@@ -1,4 +1,4 @@
-import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from "../../../constant";
+import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -10,6 +10,7 @@ import {
     getBackupConfigsWithPagination,
     getCrmById,
     getTableCounter,
+    buildBackupConfigCounterKey,
     getBackupConfigBySlug,
     getBackupConfigById,
     updateBackupConfig,
@@ -226,7 +227,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
         const result = await getBackupConfigsWithPagination(
             {
                 userId,
-                type: 'ARCHIVAL',
+                type: BACKUP_TYPE.archival,
                 ...(search && search.length > 0 && { search }),
                 ...(status && { status }),
                 ...(backupStatus && { backupStatus }),
@@ -247,7 +248,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
 
         await attachArchivalStatsToRows(documents);
 
-        const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, userId);
+        const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(userId, BACKUP_TYPE.archival));
 
         return makeResponse(req, res, 200, true, 'fetch', documents, {
             limit: limitNum,
@@ -258,7 +259,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
     }
 
     const { documents } = await getBackupConfigsWithPagination(
-        { ...(spaceId ? { spaceId } : { userId }), type: 'ARCHIVAL' },
+        { ...(spaceId ? { spaceId } : { userId }), type: BACKUP_TYPE.archival },
         { limit: 1000 }
     );
 
@@ -281,7 +282,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         ...req.body,
         status: req.body.status || 'ACTIVE',
         ...(req.user?.spaceId && { spaceId: req.user.spaceId }),
-        type: 'ARCHIVAL',
+        type: BACKUP_TYPE.archival,
     });
 
     try {

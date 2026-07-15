@@ -12,6 +12,7 @@ import {
   deleteBackupConfig,
   deleteBackupJobsByConfig,
   getTableCounter,
+  buildBackupConfigCounterKey,
   triggerBackupJob,
   getCrmById,
   getCrmTokens,
@@ -25,7 +26,7 @@ import {
   syncMetadataAndTriggers,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from '../../../constant';
 import { IBackupConfig, IScheduleConfig } from '../../../models';
 
 const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
@@ -167,7 +168,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
     const result = await getBackupConfigsWithPagination(
       {
         userId,
-        type: 'NORMAL',
+        type: BACKUP_TYPE.normal,
         ...(search && search.length > 0 && { search }),
         ...(status && { status }),
         ...(backupStatus && { backupStatus }),
@@ -192,7 +193,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
       }
     }
 
-    const counter = await getTableCounter(BACKUP_CONFIG_TABLE, userId);
+    const counter = await getTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(userId, BACKUP_TYPE.normal));
     return makeResponse(req, res, 200, true, 'fetch', documents, {
       limit: limitNum,
       nextCursor,
