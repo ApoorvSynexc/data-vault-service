@@ -247,8 +247,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
         }
 
         await attachArchivalStatsToRows(documents);
-
-        const counter = spaceId ? null : await getTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(userId, BACKUP_TYPE.archival));
+        const counter = await getTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(userId, BACKUP_TYPE.archival));
 
         return makeResponse(req, res, 200, true, 'fetch', documents, {
             limit: limitNum,
