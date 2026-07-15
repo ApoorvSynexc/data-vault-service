@@ -8,10 +8,13 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
+import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS } from '../../constant';
 import { IBackupConfig, IObject, IScheduleConfig, ITriggerResult } from '../../models';
 import { toSlug, buildSlug } from '../../utils/helper';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
+
+// Keeps NORMAL and ARCHIVAL configs counted separately per user, since both types share BACKUP_CONFIG_TABLE
+const buildBackupConfigCounterKey = (userId: string, type: string): string => `${userId}::${type}`;
 
 interface CreateBackupConfigParams {
   userId: string;
@@ -92,7 +95,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
 
   await Promise.all([
     docClient.send(new PutCommand({ TableName: BACKUP_CONFIG_TABLE, Item: item })),
-    incrementTableCounter(BACKUP_CONFIG_TABLE, userId),
+    incrementTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(userId, type)),
   ]);
   return item;
 };
@@ -287,7 +290,7 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 
   await Promise.all([
     docClient.send(new DeleteCommand({ TableName: BACKUP_CONFIG_TABLE, Key: { backupConfigId } })),
-    incrementTableCounter(BACKUP_CONFIG_TABLE, existing.userId, -1),
+    incrementTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(existing.userId, existing.type ?? BACKUP_TYPE.normal), -1),
   ]);
   return true;
 };
@@ -466,4 +469,5 @@ export {
   getBackupConfigsWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
+  buildBackupConfigCounterKey,
 };
