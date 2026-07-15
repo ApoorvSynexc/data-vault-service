@@ -85,7 +85,16 @@ const patchTriggerStatus = async (
 };
 
 // ---------------------------------------------------------------------------
-// Creates a single trigger via POST — shared by createTriggers and activateTriggers.
+// Creates a single trigger via Metadata API deploy — shared by createTriggers
+// and activateTriggers.
+//
+// Salesforce blocks direct Tooling API POST /sobjects/ApexTrigger in active
+// (production) orgs — "Can not create Apex Trigger on an active organization"
+// (ENTITY_IS_LOCKED). Apex code creation must instead go through a Metadata
+// API deploy of a triggers/*.trigger + *.trigger-meta.xml pair, the same
+// container-deploy workflow already used below for the permission set.
+// Production deploys containing Apex also require a testLevel other than
+// NoTestRun, so RunLocalTests is specified explicitly.
 // ---------------------------------------------------------------------------
 const createSingleTrigger = async (
   instanceUrl: string,
@@ -96,20 +105,103 @@ const createSingleTrigger = async (
   if (triggerName.includes("__c")) {
     triggerName = triggerName.replace('__c', '');
   }
-  await salesforceRequest(
-    {
-      url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger`,
-      method: 'POST',
-      body: JSON.stringify({
-        Name: triggerName,
-        TableEnumOrId: objectApiName,
-        Body: buildTriggerBody(objectApiName),
-        Status: 'Active',
-        ApiVersion: API_VERSION,
-      }),
+
+  const packageXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <types>\n` +
+    `        <members>${triggerName}</members>\n` +
+    `        <name>ApexTrigger</name>\n` +
+    `    </types>\n` +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
+
+  const triggerMetaXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<ApexTrigger xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <apiVersion>${API_VERSION}</apiVersion>\n` +
+    `    <status>Active</status>\n` +
+    `</ApexTrigger>`;
+
+  const zip = new JSZip();
+  zip.file(`triggers/${triggerName}.trigger`, buildTriggerBody(objectApiName));
+  zip.file(`triggers/${triggerName}.trigger-meta.xml`, triggerMetaXml);
+  zip.file('package.xml', packageXml);
+  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+  const deployOptions = JSON.stringify({
+    deployOptions: {
+      allowMissingFiles: false,
+      autoUpdatePackage: false,
+      checkOnly: false,
+      ignoreWarnings: true,
+      rollbackOnError: true,
+      singlePackage: true,
+      testLevel: 'RunLocalTests',
     },
-    tokens
+  });
+
+  const boundary = `----DataVaultBoundary${Date.now()}`;
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="json"\r\n` +
+      `Content-Type: application/json\r\n\r\n` +
+      `${deployOptions}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="deploy.zip"\r\n` +
+      `Content-Type: application/zip\r\n\r\n`
+    ),
+    zipBuffer,
+    Buffer.from(`\r\n--${boundary}--`),
+  ]);
+
+  const deployResponse = await fetch(
+    `${instanceUrl}/services/data/v${API_VERSION}/metadata/deployRequest`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${tokens.accessToken}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    }
   );
+
+  if (!deployResponse.ok) {
+    throw new Error(`Trigger deploy request failed: ${await deployResponse.text()}`);
+  }
+
+  const { id: jobId } = await deployResponse.json() as { id: string };
+
+  // Poll until the deploy job completes (Salesforce deploys are async).
+  while (true) {
+    await timer(2000);
+    const { data } = await salesforceRequest<{
+      deployResult: {
+        done: boolean;
+        success: boolean;
+        errorMessage?: string;
+        details?: {
+          componentFailures?: { problem: string; componentType: string; fullName: string }[];
+        };
+      };
+    }>(
+      {
+        url: `${instanceUrl}/services/data/v${API_VERSION}/metadata/deployRequest/${jobId}?includeDetails=true`,
+        method: 'GET',
+      },
+      tokens
+    );
+
+    const { done, success, errorMessage, details } = data.deployResult;
+    if (!done) { continue; }
+    if (!success) {
+      const failures = details?.componentFailures?.map((f) => `${f.componentType}:${f.fullName} — ${f.problem}`).join('; ');
+      throw new Error(`Trigger deploy failed: ${failures ?? errorMessage ?? 'unknown error'}`);
+    }
+    break;
+  }
 };
 
 // ---------------------------------------------------------------------------
