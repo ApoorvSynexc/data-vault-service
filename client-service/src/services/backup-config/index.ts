@@ -352,6 +352,31 @@ const getBackupConfigsWithPagination = async (
     return filterExpressions;
   };
 
+  // DynamoDB's Limit bounds items read per request, not items matched by FilterExpression,
+  // so a single page can under-fill (or fully empty out) once a filter is applied. Keep
+  // paging with ExclusiveStartKey until `limit` filtered documents are collected or the
+  // table is exhausted, capping each request's Limit to the remaining need so we never
+  // over-fetch past the page boundary we report back via nextCursor.
+  const collectPage = async (
+    sendPage: (pageLimit: number, startKey?: Record<string, any>) => Promise<{ Items?: any[]; LastEvaluatedKey?: Record<string, any> }>
+  ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
+    const documents: IBackupConfig[] = [];
+    let startKey = exclusiveStartKey;
+    let lastEvaluatedKey: Record<string, any> | undefined;
+
+    do {
+      const pageResult = await sendPage(limit - documents.length, startKey);
+      documents.push(...((pageResult.Items as IBackupConfig[] | undefined) ?? []));
+      lastEvaluatedKey = pageResult.LastEvaluatedKey;
+      startKey = lastEvaluatedKey;
+    } while (documents.length < limit && lastEvaluatedKey);
+
+    return {
+      documents,
+      nextCursor: lastEvaluatedKey ? encodeCursor(lastEvaluatedKey) : null,
+    };
+  };
+
   if (search && search.length > 0) {
     const expressionAttributeValues: Record<string, any> = {
       ':search': search.toLowerCase(),
@@ -366,45 +391,39 @@ const getBackupConfigsWithPagination = async (
       filterExpressions.push('userId = :userId');
     }
 
-    const result = await docClient.send(
-      new ScanCommand({
-        TableName: BACKUP_CONFIG_TABLE,
-        ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
-        ExpressionAttributeNames: expressionAttributeNames,
-        ExpressionAttributeValues: expressionAttributeValues,
-        FilterExpression: filterExpressions.join(' AND '),
-        Limit: limit,
-        ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
-      })
+    return collectPage((pageLimit, startKey) =>
+      docClient.send(
+        new ScanCommand({
+          TableName: BACKUP_CONFIG_TABLE,
+          ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+          ExpressionAttributeNames: expressionAttributeNames,
+          ExpressionAttributeValues: expressionAttributeValues,
+          FilterExpression: filterExpressions.join(' AND '),
+          Limit: pageLimit,
+          ...(startKey && { ExclusiveStartKey: startKey }),
+        })
+      )
     );
-
-    return {
-      documents: (result.Items as IBackupConfig[] | undefined) ?? [],
-      nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
-    };
   }
 
   const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
   const filterExpressions = buildCommonFilters(expressionAttributeValues);
 
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_CONFIG_TABLE,
-      IndexName: indexName,
-      KeyConditionExpression: isSpaceQuery ? 'spaceId = :key' : 'userId = :key',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
-      ExpressionAttributeNames: expressionAttributeNames,
-      ExpressionAttributeValues: expressionAttributeValues,
-      ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
-      Limit: limit,
-      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
-    })
+  return collectPage((pageLimit, startKey) =>
+    docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: indexName,
+        KeyConditionExpression: isSpaceQuery ? 'spaceId = :key' : 'userId = :key',
+        ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+        ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues,
+        ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
+        Limit: pageLimit,
+        ...(startKey && { ExclusiveStartKey: startKey }),
+      })
+    )
   );
-
-  return {
-    documents: (result.Items as IBackupConfig[] | undefined) ?? [],
-    nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
-  };
 };
 
 const getBackupConfigBySlug = async (params: {
