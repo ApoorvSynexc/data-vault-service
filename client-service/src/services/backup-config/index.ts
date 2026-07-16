@@ -418,6 +418,7 @@ const getBackupConfigsWithPagination = async (
   const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
   const filterExpressions = buildCommonFilters(expressionAttributeValues);
 
+  console.log({isCrmQuery, indexName});
   return collectPage((pageLimit, startKey) =>
     docClient.send(
       new QueryCommand({
@@ -427,7 +428,7 @@ const getBackupConfigsWithPagination = async (
         ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
         ExpressionAttributeNames: expressionAttributeNames,
         ExpressionAttributeValues: expressionAttributeValues,
-        ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
+        // ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
         Limit: pageLimit,
         ...(startKey && { ExclusiveStartKey: startKey }),
       })
