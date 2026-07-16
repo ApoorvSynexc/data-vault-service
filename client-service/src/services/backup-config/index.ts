@@ -88,6 +88,9 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
     objects,
     status,
     schemaChange: false,
+    // userId-index's sort key is sizeInBytes; GSIs are sparse, so an item without this
+    // attribute never gets projected into the index and is invisible to userId-scoped queries
+    sizeInBytes: 0,
     ...(dataset && { dataset }),
     createdAt: now,
     updatedAt: now,
@@ -420,7 +423,7 @@ const getBackupConfigsWithPagination = async (
       new QueryCommand({
         TableName: BACKUP_CONFIG_TABLE,
         IndexName: indexName,
-        KeyConditionExpression: 'userId = :key',
+        KeyConditionExpression: isCrmQuery ? 'crmId = :key' : 'userId = :key',
         ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
         ExpressionAttributeNames: expressionAttributeNames,
         ExpressionAttributeValues: expressionAttributeValues,
