@@ -114,8 +114,8 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
   // userDetails arrives here already plaintext: authorizationHandler decrypts
   // the whole request body (org_details + user_details together) with the
   // Bootstrap Key alone — there's no separate org-key layer on this route.
-  const { user_id: userId, org_id: orgId, user_email: userEmail, user_username: username, user_first_name: firstName, user_last_name: lastName, instance_url: instanceUrl, org_environment: environment } = userDetails;
-  if (!userId
+  const { user_id: crmUserId, org_id: orgId, user_email: userEmail, user_username: username, user_first_name: firstName, user_last_name: lastName, instance_url: instanceUrl, org_environment: environment } = userDetails;
+  if (!crmUserId
     || !orgId
     || !instanceUrl
     || !userEmail || !username || !firstName || !lastName
@@ -124,11 +124,11 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
   }
 
 
-  const existingUser = await getUserByCrmProfileUserId(userId);
+  const existingUser = await getUserByCrmProfileUserId(crmUserId);
   if (existingUser) {
     await updateUser(
       { userId: existingUser.userId },
-      { crmProfile: { ...existingUser.crmProfile, instanceUrl, organizationId: orgId, userId } }
+      { crmProfile: { ...existingUser.crmProfile, instanceUrl, organizationId: orgId, crmUserId } }
     );
   } else {
     const permissions: IRolePermissions = [];
@@ -142,7 +142,7 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
     const roleId = uuidv4();
     await createRole({ roleId, name: roleName, permissions });
 
-    const crmUserId = userId || uuidv4();
+    const userId = uuidv4();
     console.log('[authorize-admin] Creating new user for CRM profile:', { userId, orgId, userEmail });
     let crmId = uuidv4();
     const crmExist = await getCrmByOrgId(orgId);
