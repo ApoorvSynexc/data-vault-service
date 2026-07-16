@@ -61,6 +61,13 @@ const listDestinationsHandler = async (req: IRequest, res: IResponse): Promise<v
 
   const { documents, nextCursor } = result;
 
+   for (let index = 0; index < documents.length; index++) {
+    const element = documents[index];
+     const config = getDecryptedDestinationConfig(element);
+     (documents[index] as any).bucketName = config.bucketName;
+     (documents[index] as any).region = config.region;
+  }
+
   makeResponse(
     req,
     res,

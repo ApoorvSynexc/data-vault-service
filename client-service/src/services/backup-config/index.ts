@@ -8,10 +8,13 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS } from '../../constant';
+import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS } from '../../constant';
 import { IBackupConfig, IObject, IScheduleConfig, ITriggerResult } from '../../models';
 import { toSlug, buildSlug } from '../../utils/helper';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
+
+// Keeps NORMAL and ARCHIVAL configs counted separately per user, since both types share BACKUP_CONFIG_TABLE
+const buildBackupConfigCounterKey = (userId: string, type: string): string => `${userId}::${type}`;
 
 interface CreateBackupConfigParams {
   userId: string;
@@ -92,7 +95,7 @@ const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBa
 
   await Promise.all([
     docClient.send(new PutCommand({ TableName: BACKUP_CONFIG_TABLE, Item: item })),
-    incrementTableCounter(BACKUP_CONFIG_TABLE, userId),
+    incrementTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(userId, type)),
   ]);
   return item;
 };
@@ -305,7 +308,7 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 
   await Promise.all([
     docClient.send(new DeleteCommand({ TableName: BACKUP_CONFIG_TABLE, Key: { backupConfigId } })),
-    incrementTableCounter(BACKUP_CONFIG_TABLE, existing.userId, -1),
+    incrementTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(existing.userId, existing.type ?? BACKUP_TYPE.normal), -1),
   ]);
   return true;
 };
@@ -313,10 +316,10 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
-  filter: { userId?: string; crmId?: string; type?: string; name?: string; status?: string; destinationId?: string; schedule?: string },
+  filter: { userId?: string; crmId?: string; type?: string; name?: string; status?: string; destinationId?: string; schedule?: string, backupStatus?: string, search?: string },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, crmId, type, name, status, destinationId, schedule } = filter;
+  const { userId, crmId, type, status, schedule, backupStatus, search } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
@@ -328,55 +331,105 @@ const getBackupConfigsWithPagination = async (
   const indexName = isCrmQuery ? 'crmId-index' : 'userId-index';
   const keyValue = isCrmQuery ? crmId : userId;
 
-  const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
-  const expressionAttributeNames: Record<string, string> = { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' };
-  const filterParts: string[] = [];
-
-  if (type) {
-    expressionAttributeValues[':type'] = type;
-    filterParts.push('#type = :type');
-  }
-
-  if (status) {
-    expressionAttributeValues[':status'] = status;
-    filterParts.push('#status = :status');
-  }
-
-  if (destinationId) {
-    expressionAttributeValues[':destinationId'] = destinationId;
-    filterParts.push('destinationId = :destinationId');
-  }
-
-  if (schedule) {
-    expressionAttributeValues[':schedule'] = schedule;
-    filterParts.push('#schedule = :schedule');
-  }
-
-  if (name) {
-    expressionAttributeValues[':name'] = name;
-    filterParts.push('contains(#name, :name)');
-  }
-
-  const filterExpression = filterParts.length > 0 ? filterParts.join(' AND ') : undefined;
-
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_CONFIG_TABLE,
-      IndexName: indexName,
-      KeyConditionExpression: isCrmQuery ? 'crmId = :key' : 'userId = :key',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, createdAt, updatedAt',
-      ExpressionAttributeNames: expressionAttributeNames,
-      ExpressionAttributeValues: expressionAttributeValues,
-      Limit: limit,
-      ...(filterExpression && { FilterExpression: filterExpression }),
-      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
-    })
-  );
-
-  return {
-    documents: (result.Items as IBackupConfig[] | undefined) ?? [],
-    nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+  const expressionAttributeNames: Record<string, string> = {
+    '#name': 'name',
+    '#schedule': 'schedule',
+    '#status': 'status',
+    '#type': 'type',
+    ...(backupStatus && { '#backupStatus': 'backupStatus' }),
   };
+
+  const buildCommonFilters = (expressionAttributeValues: Record<string, any>): string[] => {
+    const filterExpressions: string[] = [];
+
+    if (type) {
+      expressionAttributeValues[':type'] = type;
+      filterExpressions.push('#type = :type');
+    }
+    if (status) {
+      expressionAttributeValues[':status'] = status;
+      filterExpressions.push('#status = :status');
+    }
+    if (backupStatus) {
+      expressionAttributeValues[':backupStatus'] = backupStatus;
+      filterExpressions.push('#backupStatus = :backupStatus');
+    }
+    if (schedule) {
+      expressionAttributeValues[':schedule'] = schedule;
+      filterExpressions.push('#schedule = :schedule');
+    }
+
+    return filterExpressions;
+  };
+
+  // DynamoDB's Limit bounds items read per request, not items matched by FilterExpression,
+  // so a single page can under-fill (or fully empty out) once a filter is applied. Keep
+  // paging with ExclusiveStartKey until `limit` filtered documents are collected or the
+  // table is exhausted, capping each request's Limit to the remaining need so we never
+  // over-fetch past the page boundary we report back via nextCursor.
+  const collectPage = async (
+    sendPage: (pageLimit: number, startKey?: Record<string, any>) => Promise<{ Items?: any[]; LastEvaluatedKey?: Record<string, any> }>
+  ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
+    const documents: IBackupConfig[] = [];
+    let startKey = exclusiveStartKey;
+    let lastEvaluatedKey: Record<string, any> | undefined;
+
+    do {
+      const pageResult = await sendPage(limit - documents.length, startKey);
+      documents.push(...((pageResult.Items as IBackupConfig[] | undefined) ?? []));
+      lastEvaluatedKey = pageResult.LastEvaluatedKey;
+      startKey = lastEvaluatedKey;
+    } while (documents.length < limit && lastEvaluatedKey);
+
+    return {
+      documents,
+      nextCursor: lastEvaluatedKey ? encodeCursor(lastEvaluatedKey) : null,
+    };
+  };
+
+  if (search && search.length > 0) {
+    const expressionAttributeValues: Record<string, any> = {
+      ':search': search.toLowerCase(),
+    };
+    const filterExpressions: string[] = ['contains(#name, :search)', ...buildCommonFilters(expressionAttributeValues)];
+
+
+    expressionAttributeValues[':userId'] = userId;
+    filterExpressions.push('userId = :userId');
+
+    return collectPage((pageLimit, startKey) =>
+      docClient.send(
+        new ScanCommand({
+          TableName: BACKUP_CONFIG_TABLE,
+          ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+          ExpressionAttributeNames: expressionAttributeNames,
+          ExpressionAttributeValues: expressionAttributeValues,
+          FilterExpression: filterExpressions.join(' AND '),
+          Limit: pageLimit,
+          ...(startKey && { ExclusiveStartKey: startKey }),
+        })
+      )
+    );
+  }
+
+  const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
+  const filterExpressions = buildCommonFilters(expressionAttributeValues);
+
+  return collectPage((pageLimit, startKey) =>
+    docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: indexName,
+        KeyConditionExpression: 'userId = :key',
+        ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+        ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues,
+        ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
+        Limit: pageLimit,
+        ...(startKey && { ExclusiveStartKey: startKey }),
+      })
+    )
+  );
 };
 
 
@@ -434,7 +487,7 @@ const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup
 
     const items = (result.Items as IBackupConfig[] | undefined) ?? [];
     items.forEach((config) => {
-      if(config.type === 'ARCHIVAL') {
+      if (config.type === 'ARCHIVAL') {
         response.archival.sizeInBytes += config.sizeInBytes ?? 0;
         response.archival.uploadedRecords += config.uploadedRecords ?? 0;
       } else {
@@ -496,4 +549,5 @@ export {
   getBackupConfigsWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
+  buildBackupConfigCounterKey,
 };

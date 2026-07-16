@@ -1,4 +1,4 @@
-import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from "../../../constant";
+import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -10,6 +10,7 @@ import {
     getBackupConfigsWithPagination,
     getCrmById,
     getTableCounter,
+    buildBackupConfigCounterKey,
     getBackupConfigBySlug,
     getBackupConfigById,
     updateBackupConfig,
@@ -34,24 +35,24 @@ import { decrypt } from "../../../utils/encryption";
 // ── Parent chain types ────────────────────────────────────────────────────────
 
 interface ParentFilters {
-  condition: ICondition | null;
-  fields: IFieldFilter[] | null;
+    condition: ICondition | null;
+    fields: IFieldFilter[] | null;
 }
 
 interface ParentNode {
-  apiName: string;
-  referenceName: string;
-  filters: ParentFilters;
-  parent?: ParentNode;
+    apiName: string;
+    referenceName: string;
+    filters: ParentFilters;
+    parent?: ParentNode;
 }
 
 interface ObjectRecordsBody {
-  crmId: string;
-  apiName: string;
-  fields: string[];
-  referenceName?: string;
-  parent?: ParentNode;
-  objectConfig?: object;
+    crmId: string;
+    apiName: string;
+    fields: string[];
+    referenceName?: string;
+    parent?: ParentNode;
+    objectConfig?: object;
 }
 
 // ── WHERE clause builder ──────────────────────────────────────────────────────
@@ -67,68 +68,68 @@ interface ObjectRecordsBody {
 // "Trainer__c" → "Trainer__r" (replace "__c" with "__r")
 // "WhatId"     → "What"      (strip trailing "Id")
 const toRelationshipName = (fieldApiName: string): string => {
-  if (fieldApiName.endsWith('__c')) return `${fieldApiName.slice(0, -3)}__r`;
-  if (fieldApiName.endsWith('Id')) return fieldApiName.slice(0, -2);
-  return fieldApiName;
+    if (fieldApiName.endsWith('__c')) return `${fieldApiName.slice(0, -3)}__r`;
+    if (fieldApiName.endsWith('Id')) return fieldApiName.slice(0, -2);
+    return fieldApiName;
 };
 
 const buildWhereClauseFromParentChain = (parent: ParentNode, childReferenceName?: string): string | null => {
-  const chain: ParentNode[] = [];
-  let node: ParentNode | undefined = parent;
-  while (node) {
-    chain.push(node);
-    node = node.parent;
-  }
-  // chain[0] = immediate parent (outermost), chain[last] = root (innermost)
-  chain.reverse(); // now root-first: [root, level1, ..., immediate-parent]
+    const chain: ParentNode[] = [];
+    let node: ParentNode | undefined = parent;
+    while (node) {
+        chain.push(node);
+        node = node.parent;
+    }
+    // chain[0] = immediate parent (outermost), chain[last] = root (innermost)
+    chain.reverse(); // now root-first: [root, level1, ..., immediate-parent]
 
-  const root = chain[0];
-  const rootWhereBody = buildOwnWhereBody({
-    condition: root.filters.condition ?? undefined,
-    field: root.filters.fields ?? undefined,
-  });
+    const root = chain[0];
+    const rootWhereBody = buildOwnWhereBody({
+        condition: root.filters.condition ?? undefined,
+        field: root.filters.fields ?? undefined,
+    });
 
-  // Direct child of root (chain has only the root as parent):
-  // use buildChildWhereBody to translate root's WHERE into the child's FK field.
-  // e.g. root WHERE "Id != null" + childReferenceName "AccountId" → "AccountId != null"
-  if (chain.length === 1) {
-    if (!childReferenceName) { return rootWhereBody; }
-    if (!rootWhereBody) { return `${childReferenceName} != null`; }
-    return buildChildWhereBody(rootWhereBody, childReferenceName);
-  }
+    // Direct child of root (chain has only the root as parent):
+    // use buildChildWhereBody to translate root's WHERE into the child's FK field.
+    // e.g. root WHERE "Id != null" + childReferenceName "AccountId" → "AccountId != null"
+    if (chain.length === 1) {
+        if (!childReferenceName) { return rootWhereBody; }
+        if (!rootWhereBody) { return `${childReferenceName} != null`; }
+        return buildChildWhereBody(rootWhereBody, childReferenceName);
+    }
 
-  // Multiple levels deep: build a dotted SOQL traversal path.
-  //
-  // The chain contains only parent nodes (root → ... → immediate parent).
-  // childReferenceName is the FK on the requested object itself (e.g. "WhatId").
-  //
-  // Example:
-  //   chain  = [Account, Contact, Pok_mon__c]  (root-first)
-  //   childReferenceName = "WhatId"  (ContactRequest's own FK)
-  //
-  //   childReferenceName "WhatId"     → toRelName → "What"       (outermost traversal)
-  //   chain[2].referenceName "Trainer__c" → toRelName → "Trainer__r" (middle traversal)
-  //   chain[1].referenceName "AccountId"                              (terminal FK field)
-  //
-  // Result: "What.Trainer__r.AccountId != null"
+    // Multiple levels deep: build a dotted SOQL traversal path.
+    //
+    // The chain contains only parent nodes (root → ... → immediate parent).
+    // childReferenceName is the FK on the requested object itself (e.g. "WhatId").
+    //
+    // Example:
+    //   chain  = [Account, Contact, Pok_mon__c]  (root-first)
+    //   childReferenceName = "WhatId"  (ContactRequest's own FK)
+    //
+    //   childReferenceName "WhatId"     → toRelName → "What"       (outermost traversal)
+    //   chain[2].referenceName "Trainer__c" → toRelName → "Trainer__r" (middle traversal)
+    //   chain[1].referenceName "AccountId"                              (terminal FK field)
+    //
+    // Result: "What.Trainer__r.AccountId != null"
 
-  const traversalParts: string[] = [];
+    const traversalParts: string[] = [];
 
-  // Outermost: the requested child object's own FK → relationship name
-  if (childReferenceName) {
-    traversalParts.push(toRelationshipName(childReferenceName));
-  }
+    // Outermost: the requested child object's own FK → relationship name
+    if (childReferenceName) {
+        traversalParts.push(toRelationshipName(childReferenceName));
+    }
 
-  // Intermediate ancestors (chain[last] down to chain[2]): relationship names
-  for (let i = chain.length - 1; i >= 2; i--) {
-    traversalParts.push(toRelationshipName(chain[i].referenceName));
-  }
+    // Intermediate ancestors (chain[last] down to chain[2]): relationship names
+    for (let i = chain.length - 1; i >= 2; i--) {
+        traversalParts.push(toRelationshipName(chain[i].referenceName));
+    }
 
-  // Terminal: chain[1].referenceName is the FK column on root's immediate child — kept as-is
-  traversalParts.push(chain[1].referenceName);
+    // Terminal: chain[1].referenceName is the FK column on root's immediate child — kept as-is
+    traversalParts.push(chain[1].referenceName);
 
-  const fieldPath = traversalParts.join('.');
-  return `${fieldPath} != null`;
+    const fieldPath = traversalParts.join('.');
+    return `${fieldPath} != null`;
 };
 
 
@@ -224,9 +225,16 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
 
     if (pagination === 'true') {
         const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
+        const { search, status, backupStatus } = req.query as Record<string, string>;
 
         const result = await getBackupConfigsWithPagination(
-            { ...(crmId ? { crmId } : { userId }), type: 'ARCHIVAL', name: name },
+            {
+                userId,
+                type: BACKUP_TYPE.archival,
+                ...(search && search.length > 0 && { search }),
+                ...(status && { status }),
+                ...(backupStatus && { backupStatus }),
+            },
             { limit: limitNum, cursor }
         );
 
@@ -242,8 +250,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
         }
 
         await attachArchivalStatsToRows(documents);
-
-        const counter = await getTableCounter(BACKUP_CONFIG_TABLE, userId);
+        const counter = await getTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(userId, BACKUP_TYPE.archival));
 
         return makeResponse(req, res, 200, true, 'fetch', documents, {
             limit: limitNum,
@@ -277,7 +284,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         userId: req.user!.userId,
         ...req.body,
         status: req.body.status || 'ACTIVE',
-        type: 'ARCHIVAL',
+        type: BACKUP_TYPE.archival,
     });
 
     try {
