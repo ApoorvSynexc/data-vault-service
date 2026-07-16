@@ -1,6 +1,8 @@
-import { salesforceRequest, SalesforceTokens } from './index';
+import { ICrm } from '../../../models';
+import { salesforceRequest, SalesforceTokens, SalesforceAuthExpiredError } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
 import { listMetadataSoap } from './metadata-listing';
+import { callApex, APEX_BASE } from './apex';
 
 // Packaged API/developer name of the ECA shipped with the managed package
 // (force-app/internal/360DV/externalClientApps/Data_Vault_Connected_App.eca-meta.xml).
@@ -177,6 +179,45 @@ const fetchExistingPermittedPermissionSets = async (
   }
 };
 
+// Salesforce requires the ECA Permission Set to already be assigned to the
+// admin user before an ExtlClntAppOauthConfigurablePolicies deploy can
+// reference it in commaSeparatedPermissionSet — so this must run, and
+// succeed, before deployEcaOauthPolicy is ever called (see
+// provisionEcaPermissionSet below). Reuses apex.ts's callApex, the same
+// org-key encrypt-request/decrypt-response wrapper every other call into
+// DataVaultApiGateway uses, rather than reimplementing it here.
+//
+// Deliberately does not accept or forward a userId — DataVaultAssignUserToEcaHandler
+// (Apex) always resolves the admin user itself from
+// Data_Vault_Integration_Config__c.Admin_User_Id__c, so there's nothing for
+// this call to pass beyond which Permission Set was just created.
+const assignUserToEcaViaApex = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  crm: ICrm
+): Promise<void> => {
+  const response = await callApex<{
+    success: boolean;
+    data?: { assigned?: boolean; assignmentsCreated?: number; assignmentsAlreadyExisted?: number };
+    errorCode?: string;
+    message?: string;
+  }>(crm, tokens, {
+    url: `${APEX_BASE(instanceUrl)}/assign-user-to-eca`,
+    method: 'POST',
+    body: { permissionSetName: ECA_PERMISSION_SET_NAME },
+  });
+
+  if (!response.success || !response.data?.assigned) {
+    throw new Error(
+      `assign_user_to_eca_failed: ${response.message ?? response.errorCode ?? 'unknown error'}`
+    );
+  }
+  console.log(
+    '[eca-permission-set] Assigned admin user to ECA/Data Vault permission sets:',
+    response.data
+  );
+};
+
 // The fullName of the OAuth policy record is NOT the ECA's own developer
 // name — confirmed 2026-07-14 by a live "duplicate value found:
 // ExternalClientApplicationId duplicates value on Data_Vault_Connected_App_oauthPlcy"
@@ -287,7 +328,8 @@ const deployEcaOauthPolicy = async (
  */
 export const provisionEcaPermissionSet = async (
   instanceUrl: string,
-  tokens: SalesforceTokens
+  tokens: SalesforceTokens,
+  crm: ICrm
 ): Promise<EcaProvisionResult> => {
   console.log('[eca-permission-set] Checking org capabilities...');
   const { mode, developerName } = await resolveEcaDeveloperName(instanceUrl, tokens);
@@ -322,15 +364,56 @@ export const provisionEcaPermissionSet = async (
   if (alreadyAssigned) {
     console.log('[eca-permission-set] Permission set already assigned to ECA OAuth policy — skipping deploy.');
   } else {
-    console.log('[eca-permission-set] Permission set not yet assigned to ECA OAuth policy — resolving policy record...');
+    // Required order, confirmed against a live Salesforce validation error:
+    // the ECA Permission Set must already be assigned to the admin user
+    // before an ExtlClntAppOauthConfigurablePolicies deploy can reference it.
+    // assignUserToEcaViaApex is not wrapped in a try/catch here — if it
+    // throws, deployEcaOauthPolicy below never runs, and the throw
+    // propagates out of provisionEcaPermissionSet the same way a deploy
+    // failure already does, so the caller sees one clear failure instead of
+    // a deploy error that doesn't explain the real, earlier cause.
+    console.log('[eca-permission-set] Permission set not yet assigned to ECA OAuth policy — assigning to admin user first...');
+    await assignUserToEcaViaApex(instanceUrl, tokens, crm);
+
+    console.log('[eca-permission-set] Resolving OAuth policy record...');
     // Salesforce auto-generates this record per-org when the ECA is created —
     // its fullName is never the ECA's own name (see resolveEcaOauthPolicyName)
     // and must be discovered, not assumed, or the deploy creates a colliding
     // duplicate instead of updating the real one.
-    const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${developerName}_oauthPlcy`;
+    const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${developerName.replace('SYX_DVV__', '')}_oauthPlcy`;
     console.log('[eca-permission-set] Deploying ECA OAuth policy:', policyName);
     const union = Array.from(new Set([...existingPermittedPermissionSets, ECA_PERMISSION_SET_NAME]));
-    await deployEcaOauthPolicy(instanceUrl, tokens, developerName, policyName, union);
+
+    try {
+      await deployEcaOauthPolicy(instanceUrl, tokens, developerName, policyName, union);
+    } catch (err) {
+      if (!(err instanceof SalesforceAuthExpiredError)) {
+        throw err;
+      }
+      // Documented Salesforce behavior, not a real failure: switching
+      // permittedUsersPolicyType to AdminApprovedPreAuthorized can revoke the
+      // very session used to request the change. deployMetadata's initial
+      // submit uses a plain fetch() with no session-refresh handling — only
+      // the status poll goes through salesforceRequest (whose retry-then-
+      // SalesforceAuthExpiredError path is what's being caught here) — so a
+      // 401 at this exact point means the deploy was already submitted
+      // before the session died, and is very likely already applied; we
+      // just lost the ability to poll for confirmation.
+      console.log(
+        '[eca-permission-set] Session invalidated while confirming the OAuth policy deploy — expected when permittedUsersPolicyType changes to AdminApprovedPreAuthorized. The deploy was already submitted and is very likely applied; verify in Setup and have the admin re-authenticate.'
+      );
+      return {
+        mode,
+        ecaFound: true,
+        ecaDeveloperName: developerName,
+        permissionSetCreated: !alreadyExists,
+        permissionSetAlreadyExists: alreadyExists,
+        permissionSetAssignedToEca: true,
+        externalClientAppUpdated: true,
+        message:
+          'ECA OAuth policy deploy was submitted, but the session used to confirm it was invalidated by the policy change itself — a known Salesforce behavior when permittedUsersPolicyType switches to AdminApprovedPreAuthorized. The change is very likely already applied. Verify in Setup, then have the admin re-authenticate before the next action that needs a live session.',
+      };
+    }
   }
 
   console.log('[eca-permission-set] Provisioning complete.');

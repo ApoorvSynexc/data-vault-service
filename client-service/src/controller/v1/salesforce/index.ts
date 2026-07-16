@@ -387,7 +387,7 @@ const createEcaPermissionSetAndAssignHandler = async (req: IRequest, res: IRespo
   console.log('[eca-permission-set] provisioning ECA permission set for org', crm.organizationId, 'with instanceUrl:', instanceUrl);
 
   try {
-    const result = await provisionEcaPermissionSet(instanceUrl, tokens);
+    const result = await provisionEcaPermissionSet(instanceUrl, tokens, crm);
     res.status(200).json(encryptSalesforceResponse(crm, { success: true, ...result }));
   } catch (error: any) {
     // A missing/undiscoverable ECA is no longer thrown here — see
