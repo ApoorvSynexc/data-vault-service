@@ -44,6 +44,16 @@ const backupConfigPermissions = [
         method: 'GET',
         permissions: ['backup.read']
     },
+    {
+        path: '/backup-config/initalize-payload-transform',
+        method: 'GET',
+        permissions: ['backup.read']
+    },
+    {
+        path: '/backup-config/sync-metadata',
+        method: 'GET',
+        permissions: ['backup.read']
+    }
 ];
 
 export { backupConfigPermissions };
