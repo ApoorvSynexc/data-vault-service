@@ -13,6 +13,7 @@ import {
   deleteBackupConfig,
   deleteBackupJobsByConfig,
   getTableCounter,
+  buildBackupConfigCounterKey,
   triggerBackupJob,
   getCrmById,
   getDestinationById,
@@ -24,7 +25,7 @@ import {
   syncMetadataAndTriggers,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, STATUS, SCHEDULE_TYPE } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from '../../../constant';
 import { IBackupConfig, IScheduleConfig } from '../../../models';
 
 const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
@@ -164,15 +165,23 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 };
 
 const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { pagination, limit, cursor, name } = req.query as Record<string, string>;
+  const { pagination, limit, cursor } = req.query as Record<string, string>;
   const userId = req.user!.userId;
   const crmId = req.user?.crmId;
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
+    const { search, status, backupStatus, schedule } = req.query as Record<string, string>;
 
     const result = await getBackupConfigsWithPagination(
-      { ...(crmId ? { crmId } : { userId }), type: 'NORMAL', name },
+      {
+        userId,
+        type: BACKUP_TYPE.normal,
+        ...(search && search.length > 0 && { search }),
+        ...(status && { status }),
+        ...(backupStatus && { backupStatus }),
+        ...(schedule && { schedule }),
+      },
       { limit: limitNum, cursor }
     );
 
@@ -192,8 +201,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
       }
     }
 
-    const counter = await getTableCounter(BACKUP_CONFIG_TABLE, userId);
-
+    const counter = await getTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(userId, BACKUP_TYPE.normal));
     return makeResponse(req, res, 200, true, 'fetch', documents, {
       limit: limitNum,
       nextCursor,
@@ -204,7 +212,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 
   let configs;
   if (crmId) {
-    const { documents } = await getBackupConfigsWithPagination({ crmId, type: 'NORMAL', name: name }, { limit: 1000 });
+    const { documents } = await getBackupConfigsWithPagination({ crmId, type: 'NORMAL' }, { limit: 1000 });
     configs = documents;
   } else {
     configs = await getBackupConfigsByUser(userId);
@@ -281,6 +289,11 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+  } else if (updated?.schedule === SCHEDULE_MODE.realtime && !updated.lastBackupAt) {
+    await triggerBackupJob({ user, config: updated, type: 'backup' });
+    const triggerResults = await realTimeTriggerManagement('create', updated);
+    await updateBackupConfig(updated.backupConfigId, { triggerResults });
+    logger.info(`Real-time trigger setup results for backupConfigId ${updated.backupConfigId}: ${triggerResults.length}`);
   }
 
   makeResponse(req, res, 200, true, 'update', updated!);
