@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { authController } from '../../controller';
 import { socialLoginController } from '../../controller/v1/auth/social-login';
+import { authorizeController } from '../../controller/v1/auth/authorize';
+
 import {
   authRateLimit,
   otpRateLimit,
@@ -8,6 +10,7 @@ import {
   resetPasswordValidation,
   sendOtpValidation,
   signupValidation,
+  authorizeOrganizationValidation,
   verifyOtpValidation,
 } from '../../middlewares';
 
@@ -32,5 +35,6 @@ router.get(
   '/social-login/callback',
   socialLoginController.socialLoginCallbackHandler
 );
+router.post('/authorize-org', authorizeOrganizationValidation, authorizeController.authorizationHandler);
 
 export const authRouter = router;

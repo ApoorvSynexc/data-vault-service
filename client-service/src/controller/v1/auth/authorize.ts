@@ -1,0 +1,171 @@
+import { v4 as uuidv4 } from 'uuid';
+import { IRequest, IResponse, makeResponse } from '../../../lib';
+import { wrapController } from '../../../utils/helper';
+import {
+  getCrmByOrgId,
+  upsertCrm,
+  updateCrm,
+  getUserByCrmProfileUserId,
+  createUser,
+  updateUser,
+  createOAuthState,
+  getSalesforceLoginUrl,
+  createRole,
+} from '../../../services';
+import { decrypt, encrypt, generateOrgEncryptionKey, readEnvelope } from '../../../utils/encryption';
+import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
+import { STATUS, SALESFORCE_LOGIN_REDIRECT_URI } from '../../../constant';
+import { defaultPermissions, defaultRoles } from '../../../assets';
+import { ICrm, IRolePermissions } from '../../../models';
+
+interface IAuthorizeOrganizationPayload {
+  orgId: string;
+  instanceUrl: string;
+  environment?: 'production' | 'sandbox' | 'custom';
+}
+
+interface IAuthorizeUserPayload {
+  user_id: string;
+  org_id: string;
+  user_email: string;
+  user_username: string;
+  user_first_name: string;
+  user_last_name: string;
+  instance_url: string;
+  org_environment?: 'production' | 'sandbox';
+}
+
+
+const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  try {
+
+    let plaintext: string;
+    try {
+      plaintext = decrypt(readEnvelope(req.body));
+    } catch (error: any) {
+      console.log('[authorize-org] 401: decrypt/envelope failed:', error?.message ?? error);
+      makeResponse(req, res, 401, false, 'unauthorized');
+      return;
+    }
+
+    const payload: {type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload} = JSON.parse(plaintext);
+    const finalResponse: any = {};
+    if (payload.type === 'org' && payload.org_details) {
+      finalResponse.org = await authorizeOrgHandler(payload.org_details);
+    }
+    if (payload.user_details) {
+      const crm = await getCrmByOrgId(payload.user_details.org_id);
+      if (!crm) {
+        console.log('[authorize-org] 401: org not registered for user authorization:', payload.user_details.org_id);
+        throw new Error('Org not registered for user authorization');
+      }
+      finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
+    }
+
+    makeResponse(req, res, 200, true, 'fetch', encrypt(JSON.stringify(finalResponse)));
+  } catch (error) {
+    console.error('Error in authorizeOrganizationHandler:', error);
+    makeResponse(req, res, 500, false, 'unknown_error');
+  }
+};
+
+
+const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{encryptionKey: any}> => {
+  // DataVaultAdminAuthorizationService.authorizeOrganization() (invoked from the
+  // LWC's Authorize Admin flow, not the Post Install Handler — the installing user
+  // has no Named Credential access at install time) encrypts { orgId, instanceUrl }
+  // as a whole with the shared Bootstrap Key and sends the envelope as the entire
+  // request body — there's no separate plaintext orgId to cross-check against, so a
+  // successful decrypt (and presence of the expected fields) is the validation itself.
+  //
+  // This endpoint stays single-layer (Bootstrap Key only) — there's no org key to
+  // wrap with yet, since registering the org is what produces one. Every other
+  // Salesforce-facing endpoint uses the two-layer scheme (see
+  // utils/salesforce-crypto.ts) once an org key exists.
+  const { orgId, instanceUrl } = payload;
+  if (!orgId || !instanceUrl) {
+    console.log('[authorize-org] 401: missing required field(s):', {
+      hasOrgId: !!orgId,
+      hasInstanceUrl: !!instanceUrl,
+    });
+    throw new Error('Missing required field(s) in authorizeOrgHandler payload');
+  }
+
+  let crm = await getCrmByOrgId(orgId);
+
+  if (!crm) {
+    const encryptionKey = generateOrgEncryptionKey();
+    crm = await upsertCrm({
+      crmId: uuidv4(),
+      organizationId: orgId,
+      crmName: 'salesforce',
+      instanceUrl,
+      encryptionKey,
+      status: STATUS.notAuthorized,
+    });
+  } else if (crm.instanceUrl !== instanceUrl) {
+    crm = (await updateCrm(crm.crmId, { instanceUrl })) ?? crm;
+  }
+
+  return { encryptionKey: crm.encryptionKey };
+};
+
+const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise<{authorizationUrl: string}> => {
+  // userDetails arrives here already plaintext: authorizationHandler decrypts
+  // the whole request body (org_details + user_details together) with the
+  // Bootstrap Key alone — there's no separate org-key layer on this route.
+  const { user_id: userId, org_id: orgId, user_email: userEmail, user_username: username, user_first_name: firstName, user_last_name: lastName, instance_url: instanceUrl, org_environment: environment } = userDetails;
+  if (!userId
+    || !orgId
+    || !instanceUrl
+    || !userEmail || !username || !firstName || !lastName
+  ) {
+    throw new Error('Missing required field(s) in authorizeUserHandler payload');;
+  }
+
+
+  const existingUser = await getUserByCrmProfileUserId(userId);
+  if (existingUser) {
+    await updateUser(
+      { userId: existingUser.userId },
+      { crmProfile: { ...existingUser.crmProfile, instanceUrl, organizationId: orgId, userId } }
+    );
+  } else {
+    const permissions: IRolePermissions = [];
+      defaultPermissions.forEach((module) => {
+        module.permissions.forEach((permission) => {
+          permissions.push(`${module.value}.${permission.value}`);
+        });
+    });
+
+    const roleName = 'Custom';
+    const roleId = uuidv4();
+    await createRole({ roleId, name: roleName, permissions });
+
+    const crmUserId = userId || uuidv4();
+    console.log('[authorize-admin] Creating new user for CRM profile:', { userId, orgId, userEmail });
+    let crmId = uuidv4();
+    const crmExist = await getCrmByOrgId(orgId);
+    if (crmExist) {
+      crmId = crmExist.crmId;
+    }
+    await createUser({ crmProfile: { username, email: userEmail, userId: crmUserId, instanceUrl, organizationId: orgId }, role: { name: roleName, roleId }, userId, crmId });
+    await upsertCrm({
+        userId,
+        crmId,
+        environment,
+        organizationId: orgId,
+        crmName: 'salesforce',
+      });
+  }
+
+
+  const { url, codeVerifier, state } = getSalesforceLoginUrl(undefined, SALESFORCE_LOGIN_REDIRECT_URI, environment, instanceUrl);
+  await createOAuthState(state, codeVerifier, '', 'salesforce', environment, instanceUrl);
+
+  return { authorizationUrl: url };
+};
+
+export const authorizeController = wrapController({
+  authorizationHandler
+});

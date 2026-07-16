@@ -25,18 +25,24 @@ All authentication layers, encryption schemes, and secrets.
 - If found → request is authentic (the backupConfigId is the shared secret).
 - No HMAC or signed body verification — relies on backupConfigId secrecy.
 
-### 4. Salesforce Encrypted Payload (salesforce-to-service sync)
-- Salesforce Apex encrypts its payload body with AES-256-CBC using the platform ENCRYPTION_KEY.
-- `salesforceAuthenticate` middleware decrypts the body/query param ciphertext+iv.
-- Decrypted payload is stored as `req.salesforcePayload`.
+### 4. Salesforce Encrypted Payload — two-key model (salesforce-to-service sync)
+Corrected 2026-07-14: `salesforceAuthenticate` does not exist — it was removed as dead code in an earlier "Two-Key Encryption Redesign" session (see this repo's root `handoff.md`), superseded by `attachDecryptedSalesforceRequest` (`middlewares/salesforce/index.ts`), wired ahead of most `/salesforce/*` routes in `routes/v1/salesforce.route.ts`.
 
-### 5. Salesforce PKCE OAuth (CRM connections and social login)
-- Client calls `GET /auth/salesforce` → receives `{ url, state }`.
-- `state` and `codeVerifier` are stored in OAUTH_STATE_TABLE (TTL: short expiry).
-- User is redirected to Salesforce auth URL with `code_challenge = SHA256(codeVerifier)` base64url.
-- Salesforce redirects back with `code + state`.
-- `GET /auth/salesforce/callback` exchanges code for tokens using code_verifier (PKCE).
-- Tokens stored encrypted on user record (`crmCredential`).
+- **Bootstrap Key** (`ENCRYPTION_KEY` env var, shared secret, mirrors Apex's `Bootstrap_Key__c`): used only (a) to register a new org (`/auth/authorize-org`'s `org_details`, decrypted with plain `decrypt()`), and (b) as the *outer* envelope layer that lets the service identify which org a request is for before it knows that org's own key.
+- **Org Encryption Key** (unique per org, `generateOrgEncryptionKey()`, stored on the CRM record as `crm.encryptionKey`, mirrors Apex's `Org_Encryption_Key__c`): used for the *inner* layer of every request once an org is registered, and for encrypting every response back to Salesforce.
+- **Two-layer requests** (`decryptSalesforceRequest` / `attachDecryptedSalesforceRequest`, `utils/salesforce-crypto.ts`): the whole body (or, for GET/DELETE, a single `?envelope=` query param) is Bootstrap-Key-decrypted first to reveal `{ orgId, payload | params }`; `orgId` is looked up to fetch the org's key, which then decrypts the inner `payload`/`params` envelope. Populated onto `req.salesforcePayload` as `{ orgId, crm, plaintext }`.
+- **`/auth/authorize-org` is the one exception that stays single-layer**: there's no org key to wrap with yet on a first-time call (registering the org is what produces one), so its whole body is Bootstrap-Key-decrypted directly, not via `attachDecryptedSalesforceRequest`.
+- **Responses**: `encryptSalesforceResponse(crm, payload)` always encrypts directly with the org's own key once an org is identified — success or business-logic error alike. Apex decrypts these with `DataVaultCryptoService.decryptOrgPayload()` / `decryptPayload(rawBody, orgKey)`.
+- **`/salesforce/confirm-org-authorized`** is a documented exception: Bootstrap-only (no org key may exist yet), since its purpose is checking whether the org is registered at all.
+
+### 5. Salesforce OAuth (CRM connections, dashboard social login, and admin authorization)
+Corrected 2026-07-14: the previous version of this section referenced `GET /auth/salesforce` / `GET /auth/salesforce/callback`, which don't exist — the actual routes are `/auth/social-login` and `/auth/social-login/callback` (`controller/v1/auth/social-login.ts`). There are three distinct entry points into the same underlying `getSalesforceLoginUrl()`/`getSalesforceToken()` helpers (`services/third-party/salesforce/index.ts`), each building its own `state`/PKCE pair via `createOAuthState`:
+
+- **Dashboard "Sign in with Salesforce"**: `GET /auth/social-login?authProvider=salesforce` → `{ authorizationUrl }` → browser redirect → `GET /auth/social-login/callback?code&state` exchanges the code (PKCE, `code_verifier`), stores `crmCredential` (`{access_token, refresh_token}`, master-key encrypted) and `crmProfile.instanceUrl` (Salesforce's own `instance_url` from the token response — authoritative for later API calls) on the user record, and sets the dashboard's own JWT session cookies.
+- **Salesforce admin-authorization popup**: `DataVaultAdminAuthorizationService.authorizeOrganization()` (Apex) → `/auth/authorize-org` → returns a Salesforce OAuth authorize URL built the same way, with `redirect_uri = SALESFORCE_LOGIN_REDIRECT_URI` (same value as the dashboard flow above, so both land on the **same** `/auth/social-login/callback`). The admin never sees an intermediate dashboard page — the LWC opens this URL directly.
+- **CRM connect/reconnect** (`GET /crm/connect` → `GET /crm/callback`, `controller/v1/crm/index.ts`): a separate, similar OAuth round trip for attaching/re-attaching a CRM to an already-logged-in dashboard user.
+- All three request `scope: 'api refresh_token'` explicitly (added 2026-07-14 — previously no `scope` param was sent at all, which is worth keeping in mind if any Connected App's default scope doesn't include `api`).
+- `getSalesforceToken()`'s `redirect_uri` must exactly match whichever `redirect_uri` was used to build the authorize URL (OAuth2 requirement); as of 2026-07-14 the social-login and admin-authorization flows pass it explicitly instead of relying on `getSalesforceToken`'s hardcoded default.
 
 ## Encryption Schemes
 

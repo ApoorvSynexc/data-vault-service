@@ -31,7 +31,7 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
   const item: Record<string, any> = {
     ...data,
     userId: data.userId ?? uuidv4(),
-    contactEmail: data.crmProfile?.email ?? data.contact?.email ?? undefined,
+    contactEmail: data.crmProfile?.email ?? data.contact?.email ?? data.contactEmail,
     contactMobileKey: data.contact?.mobile ? buildMobileKey(data.contact.mobile) : undefined,
     crmProfileUserId: data.crmProfile?.userId ?? undefined,
     status: data.status ?? STATUS.active,

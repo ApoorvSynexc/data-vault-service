@@ -49,6 +49,7 @@ const asyncHandler =
       }
       const message = error instanceof Error ? error.message : 'unknown_error';
       console.log("Error: ", message);
+      console.log("Stack: ", error instanceof Error ? error.stack : 'no stack trace');
       makeResponse(
         req,
         res,

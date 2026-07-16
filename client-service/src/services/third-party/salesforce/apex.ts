@@ -5,7 +5,7 @@ import { getCrmById } from '../../crm';
 import { salesforceRequest, SalesforceTokens } from '../salesforce';
 import type { ICountItem, ICountResult } from './dry-run/types';
 
-const salesforceNamespace = '';
+const salesforceNamespace = 'SYX_DVV';
 
 /**
  * Every callout to Salesforce's own REST API is org-key-encrypted in both
@@ -285,4 +285,4 @@ export const apexCountOne = async (
   return { count: r.recordCount ?? null, success: r.success, errorCode: r.errorCode, errorMessage: r.errorMessage };
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexCountBatch, apexValidateSoql };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexCountBatch, apexValidateSoql, callApex, APEX_BASE };
