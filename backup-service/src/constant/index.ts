@@ -9,6 +9,7 @@ const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
 const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
 const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
+const CRM_TABLE = String(process.env.CRM_TABLE || 'data-vault-crms');
 
 // AWS Glue / Athena
 const AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 'datavault');
@@ -23,6 +24,14 @@ const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
 
 // Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
+
+// Salesforce Bootstrap Key — base64-encoded 32 bytes. MUST match the value
+// client-service uses as its ENCRYPTION_KEY (the outer envelope Salesforce
+// sends is encrypted with it). Kept as a separate constant here because
+// backup-service's own ENCRYPTION_KEY (above) is hex-encoded and used with
+// AES-256-GCM for internal data — different encoding + algorithm from the
+// Salesforce two-layer scheme, which is AES-256-CBC + base64.
+const SALESFORCE_BOOTSTRAP_KEY = String(process.env.SALESFORCE_BOOTSTRAP_KEY ?? '');
 
 //service
 const CORE_SERVICE = String(process.env.CORE_SERVICE);
@@ -102,6 +111,7 @@ export {
   HOST,
   PORT,
   ENCRYPTION_KEY,
+  SALESFORCE_BOOTSTRAP_KEY,
 
   // Aws Config
   AWS_REGION,
@@ -116,6 +126,7 @@ export {
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
   TABLE_COUNTER_TABLE,
+  CRM_TABLE,
 
   // Salesforce Config
   SALESFORCE_CLIENT_ID,

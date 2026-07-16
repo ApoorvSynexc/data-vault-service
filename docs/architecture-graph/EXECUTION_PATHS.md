@@ -44,7 +44,7 @@ Index of all major execution flows with links to their detailed documents.
 6. See execution/ARCHIVAL_FLOW.md
 
 ### "User logs in"
-1. POST /v1/auth/login (OTP) or GET /v1/auth/salesforce (PKCE)
+1. POST /v1/auth/login (OTP) or GET /v1/auth/social-login (PKCE — corrected 2026-07-14, was documented as /v1/auth/salesforce, which doesn't exist)
 2. JWT tokens issued, stored as httpOnly cookies
 3. See execution/AUTH_OTP.md or execution/AUTH_SOCIAL.md
 

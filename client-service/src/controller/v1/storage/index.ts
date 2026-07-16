@@ -11,13 +11,19 @@ const overview = async (req: IRequest, res: IResponse): Promise<void> => {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
 
-    const result = await Promise.all([
+    const [backupConfigSizeRecord, lastBackupJob, monthlyStats] = await Promise.all([
         getBackupConfigSizeRecordByCrmId(crmId),
         getLastBackupJobByCrm(crmId, "NORMAL"),
         getMonthlyStatsByCrmCurrentYear(crmId)
     ]);
 
-    makeResponse(req, res, 200, true, 'fetch', result);
+    const payload = {
+        backupConfigSizeRecord,
+         lastBackupJob,
+          monthlyStats
+    }
+
+    makeResponse(req, res, 200, true, 'fetch', payload);
 }
 
 const lastNBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {

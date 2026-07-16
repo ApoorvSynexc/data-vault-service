@@ -5,7 +5,8 @@ Validates JWT cookies on every protected request. Populates `req.user` and `req.
 
 ## Exports
 - `authenticate` — Express middleware for standard user auth
-- `salesforceAuthenticate` — Express middleware for Salesforce-encrypted payloads
+
+Corrected 2026-07-14: `salesforceAuthenticate` does not exist in this file (or anywhere in the codebase) — it was removed as dead code during an earlier "Two-Key Encryption Redesign" session (see this repo's root `handoff.md`: "removed dead, unused `salesforceAuthenticate` — superseded single-layer decrypt middleware, never wired to any route"). Salesforce-encrypted payloads are handled instead by `attachDecryptedSalesforceRequest` in `middlewares/salesforce/index.ts`, which implements the two-key (Bootstrap Key + per-org key) scheme documented in [SECURITY.md](../SECURITY.md#4-salesforce-encrypted-payload--two-key-model-salesforce-to-service-sync) — not the single master-key AES-256-CBC decrypt described below for the old middleware.
 
 ## authenticate
 
@@ -29,25 +30,6 @@ Session is validated on EVERY request (not just at login). This means:
 
 ### DynamoDB Calls per Request
 2 reads: `getSession()` + `getUser()`. No caching.
-
-## salesforceAuthenticate
-
-### Flow
-```
-1. Check req.body for { ciphertext, iv }
-   OR check req.query for { ciphertext, iv }
-2. If neither found → 400 params_required
-3. decrypt({ ciphertext, iv }) → AES-256-CBC with master key
-4. req.salesforcePayload = JSON.parse(decrypted)
-5. next()
-```
-
-### When Used
-- `POST /v1/salesforce/upsert-users` — Salesforce Apex sends encrypted user data.
-- `GET /v1/salesforce/permissions` — Optional encrypted query param.
-
-### Key Note
-`salesforceAuthenticate` uses the MASTER key (no userId prefix, no HKDF). The Salesforce Apex class encrypts with the same ENCRYPTION_KEY. This is NOT per-tenant encryption.
 
 ## Error Cases
 

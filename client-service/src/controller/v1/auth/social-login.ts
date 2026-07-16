@@ -103,7 +103,9 @@ const socialLoginCallbackHandler = async (
   try {
     switch (authProviderStr) {
       case 'salesforce': {
-        token = await getSalesforceToken(String(code), oauthState.codeVerifier, oauthState.environment, oauthState.customUrl);
+        console.log('[social-login-callback] oauthState:', { environment: oauthState.environment, customUrl: oauthState.customUrl });
+        token = await getSalesforceToken(String(code), oauthState.codeVerifier, oauthState.environment, oauthState.customUrl, SALESFORCE_LOGIN_REDIRECT_URI);
+        console.log('[social-login-callback] token response:', { instance_url: token.instance_url, id: token.id, token_type: token.token_type });
         const { data } = await getSalesforceProfile(
           {
             accessToken: token.access_token,
@@ -150,11 +152,23 @@ const socialLoginCallbackHandler = async (
   const crmCredential = {
     access_token: token.access_token,
     refresh_token: token.refresh_token,
-  }
+  };
   const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+  // Salesforce's OAuth token response carries its own authoritative
+  // instance_url — the only domain guaranteed to accept this access_token.
+  // It can differ from whatever domain was reported separately (e.g. Apex's
+  // URL.getOrgDomainUrl() during admin authorization), so it must win here;
+  // otherwise later API calls made against the wrong domain fail with
+  // INVALID_SESSION_ID even though the token itself is perfectly valid.
   await updateUser(
-    { userId: user.userId }, 
-    { crmCredential: encrptedCrm, isCrmConnected: true, ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}) });
+    { userId: user.userId },
+    {
+      crmCredential: encrptedCrm,
+      isCrmConnected: true,
+      ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
+      ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
+    });
+  console.log('[social-login-callback] persisted crmProfile.instanceUrl:', token.instance_url ?? '(none returned by Salesforce — kept prior value)', 'prior value was:', user.crmProfile?.instanceUrl);
 
   // Create session and generate tokens
   const deviceInfo = {

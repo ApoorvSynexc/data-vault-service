@@ -14,12 +14,16 @@ Express Router (trust proxy 1, cookieParser, cors, json body parser)
 morganMiddleware (logs method, path, status, duration)
   |
   v
-Route group middleware (varies by route group):
+Route group middleware (varies by route group; corrected 2026-07-14 against `routes/v1/index.ts`):
   |
-  +-- /v1/auth/*           → (none — public)
+  +-- /v1/auth/*           → (none at router level — individual routes add rate-limit/validation)
   +-- /v1/internal/*       → internalAuth (X-Internal-Secret header, timingSafeEqual)
-  +-- /v1/public/*         → webhookAuth  (X-Webhook-Secret header = backupConfigId)
-  +-- /v1/salesforce/*     → salesforceAuthenticate (decrypt AES-256-CBC from body/query)
+  +-- /v1/public/*         → (none at router level — only `PUT /webhook/salesforce` adds webhookAuth)
+  +-- /v1/salesforce/*     → (no router-level middleware — secured per-route via attachDecryptedSalesforceRequest,
+  |                           the two-key Bootstrap+org-key scheme; salesforceAuthenticate doesn't exist, see
+  |                           modules/authentication-middleware.md)
+  |
+  |   -- everything below shares one `router.use(authenticate); router.use(aclGateway);` in v1/index.ts --
   +-- /v1/user/*           → authenticate → aclGateway
   +-- /v1/crm/*            → authenticate → aclGateway
   +-- /v1/backup-config/*  → authenticate → aclGateway
@@ -27,7 +31,9 @@ Route group middleware (varies by route group):
   +-- /v1/backup-job/*     → authenticate → aclGateway
   +-- /v1/dashboard/*      → authenticate → aclGateway
   +-- /v1/destination/*    → authenticate → aclGateway
-  +-- /v1/restore-retrieve/* → authenticate → authenticate (double — intentional?)
+  +-- /v1/storage/*        → authenticate → aclGateway (missing from the previous version of this doc)
+  +-- /v1/restore/*        → authenticate → aclGateway (mount prefix is `/restore`, not `/restore-retrieve`;
+                              there is no double `authenticate` — same single global chain as every route above)
   |
   v
 Controller function (via wrapController / asyncHandler wrapper)
