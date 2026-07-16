@@ -20,6 +20,7 @@ const aclGateway = async (req: IRequest, res: IResponse, next: NextFunction): Pr
             return makeResponse(req, res, 401, false, 'unauthorized');
         }
 
+        
         const submodule = requestaPath.split('/')[1] as IAclGatewayPermissions;
         if (!allowedModules.includes(submodule)) {
             const modulePermissions = aclGatewayPermissions[submodule];
@@ -30,8 +31,7 @@ const aclGateway = async (req: IRequest, res: IResponse, next: NextFunction): Pr
             // permission strings are "moduleKey.actionKey" (e.g. "backup.read") —
             // role.permissions maps moduleKey -> granted action keys.
             const hasPermission = modulePermissions.some(({ path, method, permissions }) => path === requestaPath && method === requestMethod && permissions.some((permission) => {
-                const [moduleKey, actionKey] = permission.split('.');
-                return !!role.permissions?.[moduleKey]?.includes(actionKey);
+                return !!role.permissions?.includes(permission);
             }));
             if (!hasPermission) {
                 return makeResponse(req, res, 403, false, 'insufficient_permission');
