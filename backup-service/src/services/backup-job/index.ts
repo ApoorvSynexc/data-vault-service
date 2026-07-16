@@ -385,34 +385,61 @@ const updateArchivalObject = async ({
   object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
-  let objectsPayload: IBackupObject[];
-  if (objects && objects?.length) {
-    objectsPayload = objects;
-  } else {
+  // When `objects` is provided (caller already holds the array), use it directly
+  // with no retry — the caller owns the version.
+  if (objects?.length) {
+    const payload = await recursivelyUpdateObjects(objects, object);
+    await docClient.send(
+      new UpdateCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Key: { backupJobId },
+        UpdateExpression: 'SET #object = :object',
+        ExpressionAttributeNames: { '#object': 'object' },
+        ExpressionAttributeValues: { ':object': payload },
+      })
+    );
+    return payload;
+  }
+
+  // Optimistic-lock retry: read → merge → conditional write.
+  // Two concurrent updates on the same job (e.g. Account and Contact both
+  // finishing at the same tick) would otherwise race: the last writer overwrites
+  // the first writer's status, leaving objects stuck in BULK_QUERY_IN_PROGRESS.
+  // On ConditionalCheckFailedException we re-read and retry — safe because
+  // recursivelyUpdateObjects only touches the single node matching object.id.
+  const MAX_RETRIES = 5;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const job = await getBackupJob(backupJobId);
     if (!job?.object?.length) {
       return [];
     }
-    objectsPayload = job.object;
+
+    const payload = await recursivelyUpdateObjects(job.object, object);
+
+    try {
+      await docClient.send(
+        new UpdateCommand({
+          TableName: BACKUP_JOB_TABLE,
+          Key: { backupJobId },
+          UpdateExpression: 'SET #object = :object',
+          ConditionExpression: '#object = :current',
+          ExpressionAttributeNames: { '#object': 'object' },
+          ExpressionAttributeValues: {
+            ':object': payload,
+            ':current': job.object,
+          },
+        })
+      );
+      return payload;
+    } catch (err: any) {
+      if (err.name === 'ConditionalCheckFailedException' && attempt < MAX_RETRIES) {
+        continue;
+      }
+      throw err;
+    }
   }
 
-  const payload = await recursivelyUpdateObjects(objectsPayload, object);
-
-  await docClient.send(
-    new UpdateCommand({
-      TableName: BACKUP_JOB_TABLE,
-      Key: { backupJobId },
-      UpdateExpression: 'SET #object = :object',
-      ExpressionAttributeNames: {
-        '#object': 'object',
-      },
-      ExpressionAttributeValues: {
-        ':object': payload,
-      },
-    })
-  );
-
-  return payload;
+  return [];
 };
 
 const getBackupJob = async (backupJobId: string): Promise<IBackupJob | null> => {
