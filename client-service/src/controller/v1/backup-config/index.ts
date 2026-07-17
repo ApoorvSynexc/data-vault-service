@@ -106,7 +106,19 @@ const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<vo
   }
 
   const apexResult = await getApexObjectsCount({ user, apiNames });
-  makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
+
+  // Apex returns unfiltered counts keyed by object name ({ Account: 12 }); the UI
+  // wants one row per requested object, in the order it asked for them. An object
+  // missing from the map means Apex could not count it — report success:false there
+  // rather than a 0 that reads as "this object is empty".
+  const counts = unwrapApex<Record<string, number>>(apexResult) ?? {};
+  const results = apiNames.map((apiName) => ({
+    success: apiName in counts,
+    recordCount: counts[apiName] ?? 0,
+    apiName,
+  }));
+
+  makeResponse(req, res, 200, true, 'fetch', { success: true, results });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
