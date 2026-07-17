@@ -51,8 +51,8 @@ Index of all major execution flows with links to their detailed documents.
 ### "Scheduled backup fires automatically"
 1. node-cron ticks every 5 min
 2. startBackupConfigCron() → getScheduledIncrementalBackupConfigs()
-3. isDueByScheduling() check → configs that are due
-4. HTTP POST to backup-service for each due config
+3. getUser() per config — no due-time check as of 2026-07-17 (see SCHEDULERS.md)
+4. HTTP POST to backup-service for every config the scan returned
 5. See execution/SCHEDULED_BACKUP.md
 
 ### "Salesforce token expires mid-backup"

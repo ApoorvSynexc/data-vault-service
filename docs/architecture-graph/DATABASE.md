@@ -8,7 +8,15 @@ All DynamoDB tables, keys, GSIs, TTL, and primary access patterns.
 - PK: userId (S)
 - GSI: email-index (PK: contactEmail)
 - GSI: mobile-index (PK: contactMobileKey)
-- Fields: userId, firstName, lastName, contactEmail, contactMobileKey, contact, profile, crmId, crmProfile, crmCredential (encrypted), role{ name, roleId, permissions[] }, password (hashed), status, authProvider, spaceId, settings, customUrl, deletedAt, createdAt, updatedAt
+- GSI: crmId-index (PK: crmId)
+- GSI: crmProfileUserId-index (PK: crmProfileUserId) — backs `getUserByCrmProfileUserId`, the Salesforce-admin-authorization lookup
+- Fields: userId, firstName, lastName, contactEmail, contactMobileKey, contact, profile, crmId, crmProfile, **crmProfileUserId**, crmCredential (encrypted), role{ name, roleId, permissions[] }, password (hashed), status, authProvider, spaceId, settings, customUrl, deletedAt, createdAt, updatedAt
+
+  (The previous version of this file listed only the first two GSIs and omitted `crmProfileUserId`.)
+
+  **`crmProfileUserId` is a flattened copy, not a source of truth.** The Salesforce user id lives at `crmProfile.userId`; DynamoDB cannot index a nested attribute, so both `createUser` and `updateUser` derive the top-level `crmProfileUserId` from `crmProfile?.userId` on every write. Any code path that writes `crmProfile` **must** keep `userId` on it or the index silently goes stale — `updateUser` only copies when `$set.crmProfile?.userId` is truthy, and it never deletes.
+
+  Minor wart (2026-07-17): `authorizeUserHandler`'s update branch writes `crmProfile: { ...existing, instanceUrl, organizationId, crmUserId }` — `crmUserId` is not a field of `ICrmProfile` (which declares `userId`) and nothing reads it. It is harmless: the spread preserves the real `userId`, so the index still refreshes correctly. It is a leftover from renaming the local variable `userId` → `crmUserId`, and it typechecks only because `updateUser`'s payload is `Record<string, any>`. The create branch on the same route correctly writes `crmProfile.userId`.
 
 ### SESSION_TABLE
 - PK: sessionId (S)
@@ -37,7 +45,14 @@ All DynamoDB tables, keys, GSIs, TTL, and primary access patterns.
 
 ### BACKUP_CONFIG_TABLE
 - PK: backupConfigId (S)
-- GSI: userId-index (PK: userId)
+- GSI: userId-index (PK: userId, SK: sizeInBytes (N)) — Projection: ALL
+- GSI: spaceId-index (PK: spaceId, SK: sizeInBytes (N)) — Projection: ALL
+- GSI: crmId-index (PK: crmId, SK: createdAt (S)) — Projection: ALL
+- GSI: crmId-sizeInBytes-index (PK: crmId, SK: sizeInBytes (N)) — Projection: ALL
+
+  (The previous version of this file listed only `userId-index`; all four are declared in `config/database/index.ts`.)
+
+  **Sparse-index trap:** three of these four sort on `sizeInBytes`. A GSI omits any item missing a key attribute, so a config written without `sizeInBytes` never appears in `userId-index`, `spaceId-index` or `crmId-sizeInBytes-index` — including in the `getBackupConfigsWithPagination` Query that backs `/backup-config/list`. `createBackupConfig` now always writes `sizeInBytes: 0` (added 2026-07-17) to keep new rows visible. Rows created before that fix and never assigned a size remain absent from those three indexes; `crmId-index` (SK `createdAt`) is unaffected and still sees them.
 - Fields: backupConfigId, userId, crmId, destinationId, slug, name, description, type (NORMAL|ARCHIVAL), dataset (ENTIRE|PARTIAL), objectNames[], schedule (REALTIME|SCHEDULE), scheduleConfig{ type, timeZone, scheduling{ frequency, interval, weekDays, monthDate, selectedMonths, startDate, endDate, startTime } }, objects[] (IObject tree with children), status, backupStatus (PENDING|SUCCESS|FAILED), lastBackupAt, lastEventId (idempotency), schemaChange, sizeInBytes, successRecordCount, spaceId, triggerResults[], createdAt, updatedAt
 
 ### DESTINATION_TABLE
@@ -55,6 +70,7 @@ All DynamoDB tables, keys, GSIs, TTL, and primary access patterns.
 - PK: tableName (S)
 - SK: entityId (S)
 - Fields: tableName, entityId, count (Number), updatedAt
+- `entityId` is not always a bare id. For BACKUP_CONFIG_TABLE it is `` `${userId}::${type}` `` via `buildBackupConfigCounterKey` (added 2026-07-17) — NORMAL and ARCHIVAL configs share one table, so their per-user totals are counted under separate keys. Counter rows written under the old bare-`userId` key are not migrated and are no longer read by any caller.
 
 ### COUNTER_TABLE
 - Purpose unclear from code — likely a simpler global counter

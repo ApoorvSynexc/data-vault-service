@@ -102,14 +102,12 @@ CRM_NAME = { salesforce: 'salesforce' }
 }
 ```
 
-`isDueByScheduling()` in backup-config-cron.ts:
-- Computes elapsed time since `lastBackupAt`.
-- Checks if elapsed >= frequency × interval.
-- Returns boolean.
-
-`hasScheduledStartPassed()`:
-- Uses `dayjs` with timezone.
-- Returns true if scheduled start date+time has passed.
+**As of 2026-07-17 this block is stored but not enforced.** `isDueByScheduling()` and
+`hasScheduledStartPassed()` were removed from `backup-config-cron.ts`; nothing in the cron
+reads `scheduling` any more, so `frequency`, `interval`, `startDate`, `startTime` and
+`timeZone` currently have no effect on when a scheduled config fires. The fields are still
+written by config create/update and still typed on `IScheduleConfig`. See SCHEDULERS.md
+§ Scheduling Logic.
 
 ## Permissions Configuration
 
