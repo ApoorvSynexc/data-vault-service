@@ -23,6 +23,7 @@ import {
     triggerArchivalBackupJob,
     getBackupJobById,
     getDecryptedDestinationConfig,
+    unwrapApex,
 } from "../../../services";
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
@@ -144,7 +145,7 @@ const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<voi
         getApexObjectChilds({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined }),
     ]);
 
-    makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
+    makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -157,7 +158,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
         return makeResponse(req, res, 400, false, 'object_name_required');
     }
     const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
-    makeResponse(req, res, 200, true, 'fetch', result);
+    makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -190,7 +191,7 @@ const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<v
         fields,
         ...(whereClause && { whereClause }) }}
     );
-    makeResponse(req, res, 200, true, 'fetch', apexResult);
+    makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
 };
 
 // Computes per-row aggregate stats (records archived, bytes archived) by
