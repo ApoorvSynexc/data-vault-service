@@ -9,6 +9,7 @@ import {
   getObjectListByBackupJobIds,
   getBackupConfigNamesByDestination,
   fetchRecordsByBackupJobs,
+  fetchObjectFields,
   repairGlueTables,
   getTableCounter,
   ConfigType,
@@ -368,6 +369,65 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 };
 
 /**
+ * POST /retrieve/fetch-object-fields
+ * Body: {
+ *   objectApiName: string
+ *   backupJobIds:  string[]
+ * }
+ *
+ * Resolves the single backup config shared by the given jobs (enforcing the
+ * one-config rule), then returns the latest schema JSON stored on S3 for
+ * objectApiName under that config — exactly as stored, without transformation.
+ *
+ * Returns 400 multiple_backup_configs when the jobs span more than one config,
+ * and 400 not_exist when a job/config/destination can't be resolved (or isn't
+ * owned by the caller) or no schema has been written for the object yet.
+ */
+const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { objectApiName, backupJobIds } = req.body as {
+    objectApiName?: unknown;
+    backupJobIds?: unknown;
+  };
+  const userId = req.user!.userId;
+
+  if (!objectApiName || typeof objectApiName !== 'string') {
+    makeResponse(req, res, 400, false, 'object_api_name_required');
+    return;
+  }
+
+  if (!Array.isArray(backupJobIds) || backupJobIds.length === 0) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const ids = [...new Set((backupJobIds as unknown[]).map((id) => String(id).trim()).filter(Boolean))];
+
+  if (ids.length === 0) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const result = await fetchObjectFields({
+    objectApiName: String(objectApiName),
+    backupJobIds: ids,
+    userId,
+  });
+
+  if (!result.ok) {
+    makeResponse(
+      req,
+      res,
+      400,
+      false,
+      result.reason === 'multiple_configs' ? 'multiple_backup_configs' : 'not_exist'
+    );
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result.schema);
+};
+
+/**
  * POST /retrieve/repair-glue
  * Body: { backupConfigId: string, backupJobId?: string }
  *
@@ -413,5 +473,6 @@ export const restoreRetrieveJobController = wrapController({
   getObjectListByBackupJobIdsHandler,
   getBackupConfigsNameHandler,
   fetchRecordsHandler,
+  fetchObjectFieldsHandler,
   repairGlueTablesHandler,
 });

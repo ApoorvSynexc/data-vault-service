@@ -59,5 +59,6 @@
   "column_names_required": "columnNames must be a non-empty array",
   "repair": "Glue table repair completed",
   "backup_id_required": "backupId is required",
-  "backup_job_not_found": "Backup job not found"
+  "backup_job_not_found": "Backup job not found",
+  "multiple_backup_configs": "All selected backup jobs must belong to a single backup configuration"
 }
