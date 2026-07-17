@@ -1,6 +1,5 @@
-import { ICrm, IUser } from '../../../models';
+import { IUser } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
-import { encryptOrgDirect, decryptOrgDirect } from '../../../utils/salesforce-crypto';
 import { getCrmById } from '../../crm';
 import { salesforceRequest, SalesforceTokens } from '../salesforce';
 import type { ICountItem, ICountResult } from './dry-run/types';
@@ -8,30 +7,23 @@ import type { ICountItem, ICountResult } from './dry-run/types';
 const salesforceNamespace = 'SYX_DVV';
 
 /**
- * Every callout to Salesforce's own REST API is org-key-encrypted in both
- * directions — no Bootstrap wrapping, since both sides already know which
- * org they're talking to. Centralizes the encrypt-request/decrypt-response
- * pair every function below used to reimplement independently (and, before
- * this fix, didn't implement at all — see the mismatch this closes).
+ * Outbound Node -> Salesforce REST calls. Auth is the OAuth access/refresh
+ * token (injected by salesforceRequest); the payload is plain JSON in both
+ * directions — no org-key encryption on this path. Encryption stays only on
+ * the inbound Salesforce -> Node path (see the salesforce middleware).
  */
 const callApex = async <T = any>(
-  crm: ICrm,
   tokens: SalesforceTokens,
   opts: { url: string; method: 'GET' | 'POST'; body?: object; timeoutMs?: number }
 ): Promise<T> => {
-  if (!crm.encryptionKey) {
-    throw new Error('org_not_registered');
-  }
-  const body = opts.body !== undefined
-    ? JSON.stringify(encryptOrgDirect(JSON.stringify(opts.body), crm.encryptionKey))
-    : undefined;
+  const body = opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
 
   const result = await salesforceRequest<any>(
     { url: opts.url, method: opts.method, body, timeoutMs: opts.timeoutMs },
     tokens
   );
 
-  return JSON.parse(decryptOrgDirect(result.data, crm.encryptionKey)) as T;
+  return result.data as T;
 };
 
 const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = {}) => {
@@ -56,7 +48,6 @@ const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = 
   }
 
   return callApex(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
   );
@@ -78,7 +69,6 @@ const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: objec
   }
   const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/preview-records`;
   return callApex(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'POST', body }
   );
@@ -99,8 +89,8 @@ const getApexObjectsCount = async ({ user, body }: { user?: IUser; body?: object
     throw new Error('Instance URL not found');
   }
   const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-record-count`;
+  
   return callApex(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'POST', body }
   );
@@ -125,7 +115,6 @@ const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; o
     url += `&mode=${mode}`;
   }
   return callApex(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
   );
@@ -147,7 +136,6 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
     url += `&mode=${mode}`;
   }
   return callApex(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
   );
@@ -166,7 +154,6 @@ const createApexSecret = async ({ user, body }: { user?: IUser; body?: { webhook
 
   const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/upsert-webhook-secret`;
   return callApex(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'POST', body }
   );
@@ -187,7 +174,6 @@ const apexCountBatch = async (user?: IUser, items?: ICountItem[]): Promise<ICoun
   const instanceUrl = user.crmProfile?.instanceUrl;
 
   const data = await callApex<{ success: boolean; results: Array<Omit<ICountResult, 'key'>> }>(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     {
       url: `${APEX_BASE(instanceUrl)}/object-record-count`,
@@ -219,7 +205,6 @@ const apexValidateSoql = async (
   const instanceUrl = user.crmProfile?.instanceUrl;
 
   return callApex(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     {
       url: `${APEX_BASE(instanceUrl)}/validate-soql`,
@@ -266,7 +251,6 @@ export const apexCountOne = async (
     : { apiName, whereClause: (filter as ApexWhereFilter).whereClause ?? null };
 
   const data = await callApex<{ success: boolean; results: Array<{ recordCount?: number; success: boolean; errorCode?: string; errorMessage?: string }> }>(
-    crm,
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     {
       url: `${APEX_BASE(instanceUrl)}/object-record-count`,

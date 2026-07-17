@@ -9,6 +9,7 @@ import { getCrmById, getCrmByOrgId } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery, IQueryResult } from '../third-party/athena/query';
 import { httpRequest } from '../../utils/http-request';
+import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 const BACKUP_JOB_TYPE = 'NORMAL';
@@ -775,6 +776,107 @@ const repairGlueTables = async (
   return response.data;
 };
 
+// ---------------------------------------------------------------------------
+// Fetch object schema (fields) from S3
+// ---------------------------------------------------------------------------
+
+export interface IFetchObjectFieldsParams {
+  objectApiName: string;
+  backupJobIds: string[];
+  userId: string;
+}
+
+export type FetchObjectFieldsResult =
+  | { ok: true; schema: unknown }
+  | { ok: false; reason: 'not_exist' | 'multiple_configs' };
+
+/**
+ * Returns the latest schema JSON stored on S3 for an object, exactly as written
+ * by backup-service — no transformation. Returns { ok:false } instead of throwing
+ * so the controller can map each failure to the right status/message.
+ *
+ * Flow:
+ *   1. Resolve each job's owner + backupConfigId (projection keeps encrypted
+ *      source/destination blobs out of memory).
+ *   2. Enforce the one-config rule: every selected job must share a single
+ *      backupConfigId, else 'multiple_configs'.
+ *   3. Resolve the config's CRM and destination, decrypt the S3 credentials.
+ *   4. Read the most recent schema file from S3 and return its parsed contents.
+ *
+ * Schema S3 layout (written by backup-service): every schema version is stored
+ * as a new fields_<timestamp>.json — fields.json is the original and is never
+ * overwritten — so the highest-timestamped versioned file is the latest schema,
+ * falling back to fields.json when no versioned files exist yet.
+ */
+const fetchObjectFields = async (
+  params: IFetchObjectFieldsParams
+): Promise<FetchObjectFieldsResult> => {
+  const { objectApiName, backupJobIds, userId } = params;
+
+  const jobItems = await runWithConcurrency(
+    backupJobIds,
+    BACKUP_JOB_CONCURRENCY,
+    async (backupJobId) => {
+      const result = await docClient.send(
+        new GetCommand({
+          TableName: BACKUP_JOB_TABLE,
+          Key: { backupJobId },
+          ProjectionExpression: 'userId, backupConfigId',
+        })
+      );
+      return result.Item as Pick<IBackupJob, 'userId' | 'backupConfigId'> | undefined;
+    }
+  );
+
+  // Every job must exist and belong to the caller.
+  if (jobItems.some((item) => !item || item.userId !== userId)) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  // Business rule: all selected jobs must belong to a single backup configuration.
+  const configIds = [...new Set(jobItems.map((item) => item!.backupConfigId))];
+  if (configIds.length !== 1) {
+    return { ok: false, reason: 'multiple_configs' };
+  }
+  const backupConfigId = configIds[0];
+
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config || config.userId !== userId) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  const crm = await getCrmById(config.crmId);
+  if (!crm) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
+  const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
+  const schemaFolder = `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/${objectApiName}/`;
+
+  const keys = await listS3Keys(destConfig, schemaFolder);
+  const versionedKeys = keys.filter((k) => /fields_\d+\.json$/.test(k));
+  const latestKey =
+    versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : `${schemaFolder}fields.json`;
+
+  // No schema has been written for this object on this config yet.
+  if (!keys.includes(latestKey)) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  const raw = await getS3Text(destConfig, latestKey);
+  if (!raw) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  return { ok: true, schema: JSON.parse(raw) };
+};
+
 export {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
@@ -785,4 +887,5 @@ export {
   getObjectListByBackupJobIds,
   fetchRecordsByBackupJobs,
   repairGlueTables,
+  fetchObjectFields,
 };
