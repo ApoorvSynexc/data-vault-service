@@ -236,10 +236,10 @@ async function initalizePayloadTransform(
             '--conf spark.serializer=org.apache.spark.serializer.KryoSerializer',
             '--conf spark.kryo.registrator=org.apache.spark.HoodieSparkKryoRegistrar',
 
-            // S3A filesystem + throughput
+            // S3A
             '--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
-            '--conf spark.hadoop.fs.s3a.connection.maximum=1000',
-            '--conf spark.hadoop.fs.s3a.threads.max=500',
+            '--conf spark.hadoop.fs.s3a.connection.maximum=100',
+            '--conf spark.hadoop.fs.s3a.threads.max=64',
             '--conf spark.hadoop.fs.s3a.threads.keepalivetime=60',
             '--conf spark.hadoop.fs.s3a.connection.timeout=60000',
             '--conf spark.hadoop.fs.s3a.connection.establish.timeout=15000',
@@ -247,49 +247,54 @@ async function initalizePayloadTransform(
             '--conf spark.hadoop.fs.s3a.retry.limit=5',
             '--conf spark.hadoop.fs.s3a.retry.throttle.limit=20',
             '--conf spark.hadoop.fs.s3a.paging.maximum=1000',
+
             '--conf spark.hadoop.fs.s3a.multipart.size=134217728',
-            '--conf spark.hadoop.fs.s3a.block.size=134217728',
             '--conf spark.hadoop.fs.s3a.multipart.threshold=134217728',
+            '--conf spark.hadoop.fs.s3a.block.size=134217728',
+
             '--conf spark.hadoop.fs.s3a.fast.upload=true',
             '--conf spark.hadoop.fs.s3a.fast.upload.buffer=bytebuffer',
-            '--conf spark.hadoop.fs.s3a.fast.upload.active.blocks=8',
+            '--conf spark.hadoop.fs.s3a.fast.upload.active.blocks=4',
+
             '--conf spark.hadoop.fs.s3a.readahead.range=4194304',
 
-            // Network / heartbeats
+            // Network
             '--conf spark.network.timeout=600s',
             '--conf spark.executor.heartbeatInterval=60s',
 
-            // Dynamic allocation — 200 executors needed for parallel object dispatch
-            '--conf spark.dynamicAllocation.minExecutors=20',
-            '--conf spark.dynamicAllocation.initialExecutors=50',
-            '--conf spark.dynamicAllocation.maxExecutors=200',
+            // Dynamic Allocation
+            '--conf spark.dynamicAllocation.enabled=true',
+            '--conf spark.dynamicAllocation.minExecutors=1',
+            '--conf spark.dynamicAllocation.initialExecutors=2',
+            '--conf spark.dynamicAllocation.maxExecutors=6',
             '--conf spark.dynamicAllocation.executorIdleTimeout=60s',
             '--conf spark.dynamicAllocation.schedulerBacklogTimeout=1s',
             '--conf spark.dynamicAllocation.sustainedSchedulerBacklogTimeout=1s',
 
-            // Driver — coordinates 200 objects + holds metadata
-            '--conf spark.driver.memory=16g',
-            '--conf spark.driver.cores=8',
-            '--conf spark.driver.maxResultSize=4g',
+            // Driver
+            '--conf spark.driver.memory=8g',
+            '--conf spark.driver.cores=4',
+            '--conf spark.driver.maxResultSize=2g',
 
-            // Executor sizing
-            '--conf spark.executor.memory=16g',
-            '--conf spark.executor.cores=4',
-            '--conf spark.executor.memoryOverhead=4g',
+            // Executors
+            '--conf spark.executor.memory=6g',
+            '--conf spark.executor.cores=2',
+            '--conf spark.executor.memoryOverhead=1g',
+
             '--conf spark.memory.fraction=0.8',
             '--conf spark.memory.storageFraction=0.3',
 
-            // Spark SQL / shuffle
-            '--conf spark.sql.shuffle.partitions=800',
+            // Spark SQL
+            '--conf spark.sql.shuffle.partitions=100',
             '--conf spark.sql.adaptive.enabled=true',
             '--conf spark.sql.adaptive.coalescePartitions.enabled=true',
-            '--conf spark.sql.adaptive.coalescePartitions.minPartitionNum=1',
             '--conf spark.sql.adaptive.skewJoin.enabled=true',
             '--conf spark.sql.adaptive.localShuffleReader.enabled=true',
+
             '--conf spark.sql.files.maxPartitionBytes=134217728',
             '--conf spark.sql.files.openCostInBytes=4194304',
 
-            // Scheduler — FAIR is required for concurrent object dispatch from the driver
+            // Scheduler
             '--conf spark.scheduler.mode=FAIR',
             '--conf spark.task.cpus=1',
             '--conf spark.locality.wait=0s',
