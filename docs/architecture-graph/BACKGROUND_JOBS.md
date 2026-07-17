@@ -17,21 +17,19 @@ What it does:
    - schedule = SCHEDULE
    - type = INCREMENTAL or ARCHIVAL
    - backupStatus is complete (not currently running)
-2. For each matching config:
-   a. Runs `hasScheduledStartPassed(config)` — TZ-aware check that startDate+startTime has passed.
-   b. For ARCHIVAL configs: checks `lastRunByObject` map (fetched from recent 50 jobs) for per-object due times.
-   c. For NORMAL configs: checks config-level `lastBackupAt` against frequency×interval.
-   d. If due: HTTP POST to backup-service to trigger a backup or archival job.
-3. All configs processed concurrently (no serial gate).
+2. For each matching config (serially — `for...of` with `await`, not concurrent):
+   a. `getUser({ userId: config.userId })` — `continue` if the user no longer exists.
+   b. ARCHIVAL configs: `filtereObjects(config.objects)` → if any `scheduledObjects` and
+      `hasActiveBackupJob()` is false, `Promise.all` one `triggerArchivalBackupJob` **per
+      scheduled object** (`bypassDedup: true`).
+   c. All other configs: `triggerBackupJob({ user, config, lastUpdatedAt: config.lastBackupAt })`.
+   d. Per-config errors are caught and logged; the loop continues to the next config.
 
-`isDueByScheduling(config)`:
-- Reads `lastBackupAt` from config.
-- Computes elapsed = now - lastBackupAt in appropriate unit.
-- Returns true if elapsed >= scheduling.interval.
-
-`hasScheduledStartPassed(config)`:
-- Uses `dayjs(startDate + startTime).tz(timeZone)`.
-- Returns true if that moment is in the past.
+**No due-time check runs (changed 2026-07-17).** `isDueByScheduling()` and
+`hasScheduledStartPassed()` were removed from this file — `scheduleConfig.scheduling` is
+stored but never read by the cron. Every config the scan returns is fired on every tick.
+See SCHEDULERS.md § Scheduling Logic for the full consequence and the dead
+`runArchivalConfig`/`runNormalConfig` helpers left behind.
 
 ### 2. Nightly Cron — startNightlyCron()
 

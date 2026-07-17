@@ -21,6 +21,18 @@ Key: ENCRYPTION_KEY env var (base64, 32 bytes decoded).
 - Routes to tenant key if ciphertext starts with 'v2:', else master key.
 - Throws if 'v2:' prefix detected but userId not provided.
 
+### encryptToTransport(plaintext: string): string  /  decryptFromTransport(payload: string): string
+Added 2026-07-17. Packs the master-key `{ ciphertext, iv }` envelope into one opaque base64
+string so an endpoint can exchange a single `payload` field:
+```typescript
+encryptToTransport   = (s) => Buffer.from(JSON.stringify(encrypt(s))).toString('base64')
+decryptFromTransport = (p) => decrypt(JSON.parse(Buffer.from(p, 'base64').toString('utf8')))
+```
+Framing only — same AES-256-CBC scheme as `encrypt`/`decrypt`, not a new algorithm and not
+authenticated (no authTag). Base64 is not encryption; the confidentiality is entirely the
+inner `encrypt`. Used by `POST /public/payload` and `POST /spark-job/build-payload`, where
+it doubles as those routes' only access control — see SECURITY.md § 5.
+
 ### EncryptedPayload type
 ```typescript
 { ciphertext: string; iv: string }
@@ -91,7 +103,7 @@ count=1 → `baseSlug`, count>1 → `baseSlug-{count}`.
 `new Promise(resolve => setTimeout(resolve, ms))` — used for polling delays.
 
 ### flattenBackupObjects(objects: IBackupObject[]): IBackupObject[]
-Recursive flatten of the children tree into a flat array. Used by payload-transform-service and schema change detection.
+Recursive flatten of the children tree into a flat array. Used by `services/payload` and schema change detection.
 
 ### formatFieldValuesForSOQL(fields): fields[]
 Formats filter values for SOQL: adds quotes for strings/text/email/phone/url/picklist/multipicklist/date/datetime, bare values for numeric/boolean.
@@ -120,8 +132,21 @@ Generic fetch wrapper with:
 
 ## client-service/src/utils/validate-aws-credentials.ts
 
+Despite the file name, this is now client-service's small S3 access helper, not just a validator.
+The exported name is `validateS3Credentials` — there is no `validateAwsCredentials` export
+(the previous version of this file implied one).
+
+### validateS3Credentials(config: S3Config): Promise<void>
 Validates that provided AWS credentials (from destination) can actually access S3 before saving.
 Called during destination creation to give early feedback.
+
+### listS3Keys(cfg: S3Config, prefix: string): Promise<string[]>
+### getS3Text(cfg: S3Config, key: string): Promise<string>
+Added alongside restore-retrieve's `fetchObjectFields`, which uses them to find and read the
+latest schema JSON a backup wrote under a config's schema prefix.
+
+### S3Config (exported interface)
+The bucket/region/credential shape these helpers take.
 
 ---
 

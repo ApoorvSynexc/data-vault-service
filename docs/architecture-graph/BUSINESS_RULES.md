@@ -26,10 +26,17 @@ Core domain logic and constraints that must be preserved across changes.
 - Records accumulate via atomic ADD across multiple webhook hits for the same transaction.
 
 ### SCHEDULE
-- node-cron checks every 5 minutes which configs are due.
-- Due = elapsed time since lastBackupAt >= scheduling.frequency × scheduling.interval.
-- ONE_TIME: runs once and stops (no further triggers from cron after completion).
-- INCREMENTAL: repeats indefinitely on schedule.
+- node-cron ticks every 5 minutes and fires every config its scan returns.
+- **The "due" rule below is currently not enforced (changed 2026-07-17).** It is recorded
+  here as the intended domain rule — the cron's implementation of it was removed and no
+  replacement gate exists in the codebase. See SCHEDULERS.md § Scheduling Logic.
+  - Intended: Due = elapsed since lastBackupAt >= scheduling.frequency × scheduling.interval.
+  - Intended: ONE_TIME runs once and stops (no further cron triggers after completion).
+  - Intended: INCREMENTAL repeats indefinitely on schedule.
+- Actually enforced today: a config is re-fired on the next tick once its `backupStatus`
+  reaches SUCCESS/FAILED/PARTIAL_FAILURE, whatever its configured frequency. ARCHIVAL
+  configs additionally skip while `hasActiveBackupJob()` is true; NORMAL configs have no
+  such guard.
 
 ## Object Processing Rules
 
