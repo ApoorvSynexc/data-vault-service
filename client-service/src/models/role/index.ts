@@ -1,4 +1,5 @@
-// Module key -> granted action keys for that module, e.g. { backup: ['read','write'], archival: ['read'] }.
+// Flat list of granted "moduleKey.actionKey" strings, e.g. ['backup.read', 'backup.write', 'archival.read'].
+// Checked by aclGateway with permissions.includes('backup.read').
 export type IRolePermissions = Array<string>;
 
 export interface IRole {
