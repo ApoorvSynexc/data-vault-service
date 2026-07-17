@@ -29,7 +29,7 @@ const aclGateway = async (req: IRequest, res: IResponse, next: NextFunction): Pr
             }
 
             // permission strings are "moduleKey.actionKey" (e.g. "backup.read") —
-            // role.permissions maps moduleKey -> granted action keys.
+            // role.permissions is the flat list of granted "moduleKey.actionKey" strings.
             const hasPermission = modulePermissions.some(({ path, method, permissions }) => path === requestaPath && method === requestMethod && permissions.some((permission) => {
                 return !!role.permissions?.includes(permission);
             }));

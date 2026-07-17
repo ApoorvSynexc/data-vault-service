@@ -1,16 +1,15 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
-import { getCrmById } from '../../../services/crm';
 import {
   updateBackupConfig,
-  getBackupConfigById,
   getBackupConfigsByCrm,
 } from '../../../services/backup-config';
 import {
   getDestinationById,
   getDecryptedDestinationConfig,
 } from '../../../services/destination';
-import { getBackupJobsByConfig } from '../../../services/backup-job';
+import { initalizePayloadTransform } from '../../../services/payload';
+import { decryptFromTransport } from '../../../utils/encryption';
 import { httpRequest } from '../../../utils/http-request';
 import {
   BACKUP_SERVICE,
@@ -171,131 +170,35 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
 };
 
 /**
- * fetchAllBackupJobs — paginates through all backup jobs for a config using cursor-based
- * pagination until no next page exists.
+ * POST /public/payload
+ * Body: { payload: "<encrypted-string>" }  → decrypts to { backupConfigId }
  *
- * WHY cursor-based (not offset-based):
- *   DynamoDB does not support offset pagination. The SDK returns a LastEvaluatedKey that
- *   encodes where the next page starts. We encode that as a cursor and pass it back on
- *   the next request. This is the only reliable way to page through DynamoDB results
- *   without skipping or duplicating items.
- *
- * WHY this collects all jobs into memory:
- *   The payloadHandler needs to aggregate operation counts across every job. The total
- *   number of jobs per config is bounded and manageable in memory. If this becomes a
- *   bottleneck, consider streaming or pre-aggregating counts at write time.
+ * Decrypts the request, builds the EMR payload and submits the EMR Serverless job.
+ * The encrypted payload is the trust boundary — only a caller holding the shared
+ * key can produce a valid request.
  */
-const fetchAllBackupJobs = async (backupConfigId: string): Promise<any[]> => {
-  const allJobs: any[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const result = await getBackupJobsByConfig(backupConfigId, { limit: 100, cursor });
-    allJobs.push(...result.items);
-    cursor = result.nextCursor;
-  } while (cursor);
-
-  return allJobs;
-};
-
-/**
- * processObjectOperations — builds a map of { objectName → ['inserts', 'updates', ...] }
- * across all backup jobs for a config.
- *
- * WHY we deduplicate operations per object (includes check):
- *   Multiple jobs can record the same operation for the same object (e.g. two INSERT
- *   batches on Account). The restore/retrieve middleware only needs to know which
- *   operation types exist for each object, not how many times they occurred.
- *   Short-circuiting via allOpsFound avoids redundant iteration once all four ops are seen.
- */
-const processObjectOperations = (jobs: any[]): Record<string, string[]> => {
-  const objectOperations: Record<string, string[]> = {};
-
-  for (const job of jobs) {
-    const jobObjects = job.object ?? [];
-    for (const obj of jobObjects) {
-      if (!objectOperations[obj.name]) {
-        objectOperations[obj.name] = [];
-      }
-
-      const operations = objectOperations[obj.name];
-      const allOpsFound = ['inserts', 'updates', 'deletes', 'undeletes'].every((op) =>
-        operations.includes(op)
-      );
-      if (allOpsFound) {
-        continue;
-      }
-
-      if (obj.insertCount > 0 && !operations.includes('inserts')) {
-        operations.push('inserts');
-      }
-      if (obj.updateCount > 0 && !operations.includes('updates')) {
-        operations.push('updates');
-      }
-      if (obj.deleteCount > 0 && !operations.includes('deletes')) {
-        operations.push('deletes');
-      }
-    }
-  }
-
-  return objectOperations;
-};
-
 const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  try {
-    const { backupConfigId } = req.query;
+  const { payload } = req.body as { payload?: unknown };
 
-    if (!backupConfigId || typeof backupConfigId !== 'string') {
-      return makeResponse(req, res, 400, false, 'id_required');
-    }
-
-    const backupConfig = await getBackupConfigById(backupConfigId);
-    if (!backupConfig) {
-      return makeResponse(req, res, 404, false, 'backup_config_not_found');
-    }
-
-    const crm = await getCrmById(backupConfig.crmId);
-    if (!crm) {
-      return makeResponse(req, res, 404, false, 'crm_not_found');
-    }
-
-    const destination = await getDestinationById(backupConfig.destinationId);
-    if (!destination) {
-      return makeResponse(req, res, 404, false, 'destination_not_found');
-    }
-
-    const allBackupJobs = await fetchAllBackupJobs(backupConfigId);
-    if (!allBackupJobs.length) {
-      return makeResponse(req, res, 404, false, 'not_found');
-    }
-
-    const objectOperations = processObjectOperations(allBackupJobs ?? []);
-
-    const payload = {
-      jobType: 'BACKUP',
-      backupConfigId: backupConfigId,
-      details: {
-        clientId: backupConfig.userId,
-        backupType: backupConfig.schedule,
-        sourceDetails: {
-          "sourceName": crm.crmName,
-          "orgId": crm.crmId,
-        },
-        objectOperations,
-        "destinationConfigs": {
-          "destinationName": destination.provider,
-          ciphertext: destination.ciphertext,
-          iv: destination.iv,
-          salt: destination.userId
-        }
-      },
-    };
-
-    return makeResponse(req, res, 200, true, 'fetch', payload);
-  } catch (error) {
-    logger.error('payload handler error:', error);
-    return makeResponse(req, res, 500, false, 'unknown_error');
+  if (!payload || typeof payload !== 'string') {
+    return makeResponse(req, res, 400, false, 'params_required');
   }
+
+  let backupConfigId: string | undefined;
+  try {
+    ({ backupConfigId } = JSON.parse(decryptFromTransport(payload)));
+    logger.info('payload decrypted');
+  } catch (error) {
+    logger.error('payload decryption failed:', error);
+    return makeResponse(req, res, 400, false, 'invalid_payload');
+  }
+
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  await initalizePayloadTransform(backupConfigId);
+  return makeResponse(req, res, 200, true, 'create');
 };
 
 export const publicController = wrapController({

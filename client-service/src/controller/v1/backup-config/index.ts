@@ -88,15 +88,21 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
 
 const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
-  const { crmId, ...body } = req.body;
+  const { crmId, items } = req.body;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
-  const [apexResult] = await Promise.all([
-    getApexObjectsCount({ user, body }),
-  ]);
+  // UI sends items: [{ apiName }]; Apex wants a flat name list.
+  const apiNames: string[] = (items ?? [])
+    .map((item: { apiName?: string }) => item?.apiName)
+    .filter(Boolean);
 
+  if (apiNames.length === 0) {
+    return makeResponse(req, res, 400, false, 'object_name_required');
+  }
+
+  const apexResult = await getApexObjectsCount({ user, apiNames });
   makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
 };
 
