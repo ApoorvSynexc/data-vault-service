@@ -2,14 +2,10 @@ import { createRole, getRole, updateRole } from '../services';
 import { defaultRoles } from '../assets';
 import { IRolePermissions } from '../models/role';
 
-// Canonicalizes a module -> action-keys map (sorted keys, sorted action lists)
-// so two equivalent permission sets compare equal regardless of insertion order.
+// Canonicalizes the granted "moduleKey.actionKey" list (sorted) so two
+// equivalent permission sets compare equal regardless of insertion order.
 const normalizePermissions = (permissions?: IRolePermissions): string =>
-  JSON.stringify(
-    Object.keys(permissions ?? {})
-      .sort()
-      .map((moduleKey) => [moduleKey, [...(permissions?.[moduleKey] ?? [])].sort()])
-  );
+  JSON.stringify([...(permissions ?? [])].sort());
 
 export const runCreateRole = async (): Promise<void> => {
   console.log('Running migration: CREATE_ROLE');

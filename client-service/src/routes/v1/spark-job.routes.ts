@@ -1,7 +1,8 @@
-// import { Router } from 'express';
-// import { sparkJobController } from '../../controller';
+import { Router } from 'express';
+import { sparkJobController } from '../../controller';
 
-// const router = Router();
+const router = Router();
 
+router.post('/build-payload', sparkJobController.buildPayloadHandler);
 
-// export const sparkRouter = router;
+export const sparkRouter = router;
