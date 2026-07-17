@@ -11,7 +11,7 @@ import { destinationRouter } from './destination.route';
 import { internalRouter } from './internal.route';
 import { publicRouter } from './public.routes';
 import { archivalRouter } from './archival-config.routes';
-// import { sparkJobRouter } from './spark-job.routes';
+import { sparkRouter } from './spark-job.routes';
 import { salesforceRouter } from './salesforce.route';
 import { aclGateway } from '../../middlewares/gateway';
 import { storageRouter } from './storage.routes';
@@ -22,6 +22,7 @@ const router = Router();
 router.use('/auth', authRouter);
 router.use('/internal', internalRouter);
 router.use('/public', publicRouter);
+router.use('/spark-job', sparkRouter);
 router.use('/salesforce', salesforceRouter);
 
 // Private routes
@@ -36,6 +37,5 @@ router.use('/dashboard', dashboardRouter);
 router.use('/destination', destinationRouter);
 router.use('/restore', restoreRetrieveRouter);
 router.use('/storage', storageRouter);
-// router.use('/spark-job', sparkJobRouter);
 
 export const v1Routers = router;

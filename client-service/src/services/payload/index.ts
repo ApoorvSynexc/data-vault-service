@@ -1,15 +1,14 @@
 import { EMRServerlessClient, StartJobRunCommand, StartJobRunCommandOutput } from '@aws-sdk/client-emr-serverless';
-import { getBackupConfigById } from '../../backup-config';
-import { getCrmById } from '../../crm';
-import { getDestinationById } from '../../destination';
-import { getBackupJobsByConfig } from '../../backup-job';
-import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION } from '../../../constant';
-import { logger } from '../../../middlewares';
-import { IBackupConfig, IBackupJob } from '../../../models';
-import { flattenBackupObjects } from '../../../utils/helper';
+import { getBackupConfigById } from '../backup-config';
+import { getCrmById } from '../crm';
+import { getDestinationById } from '../destination';
+import { getBackupJobsByConfig } from '../backup-job';
+import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION } from '../../constant';
+import { logger } from '../../middlewares';
+import { IBackupConfig, IBackupJob } from '../../models';
+import { flattenBackupObjects } from '../../utils/helper';
 
 const client = new EMRServerlessClient({ region: AWS_REGION });
-
 
 // ─── Process object operations from backup jobs ────────────────────────────────
 function processArchivalObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
@@ -104,7 +103,7 @@ function processObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
     return objectOperations;
 }
 
-// Schema chnage detection 
+// Schema chnage detection
 function archivalSchemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Record<string, string[]>): Record<string, string[]> {
     const objects = flattenBackupObjects(backupConfig.objects ?? []) ?? [];
     const objectOperationsKeys = Object.keys(objectOperations);
@@ -119,7 +118,7 @@ function archivalSchemaChangeDetection(backupConfig: IBackupConfig, objectOperat
     return objectOperations;
 }
 
-// Schema chnage detection 
+// Schema chnage detection
 function schemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Record<string, string[]>): Record<string, string[]> {
     const objects = backupConfig.objects ?? [];
     const objectOperationsKeys = Object.keys(objectOperations);
@@ -136,84 +135,79 @@ function schemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Re
 
 // ─── Fetch all backup jobs with pagination ────────────────────────────────────
 async function fetchAllBackupJobs(backupConfigId: string) {
-    try {
-        const allJobs = [];
-        let cursor: string | undefined;
+    const allJobs = [];
+    let cursor: string | undefined;
 
-        do {
-            const result = await getBackupJobsByConfig(backupConfigId, { limit: 100, cursor });
-            allJobs.push(...result.items);
-            cursor = result.nextCursor;
-        } while (cursor);
+    do {
+        const result = await getBackupJobsByConfig(backupConfigId, { limit: 100, cursor });
+        allJobs.push(...result.items);
+        cursor = result.nextCursor;
+    } while (cursor);
 
-        return allJobs;
-    } catch (error) {
-        throw error;
-    }
+    return allJobs;
 }
 
-// ─── Build payload from payloadHandler logic ──────────────────────────────────
-
+// ─── Build EMR payload from a backupConfigId ──────────────────────────────────
+// Pure builder: resolves config/crm/destination/jobs and shapes the EMR payload.
+// No behavioral change from the original payload-transform-service.
 async function buildPayload(backupConfigId: string) {
-    try {
-        const backupConfig = await getBackupConfigById(backupConfigId);
-        if (!backupConfig) {
-            throw new Error('Backup config not found');
-        }
+    logger.info(`Building EMR payload for backupConfigId: ${backupConfigId}`);
 
-        const crm = await getCrmById(backupConfig.crmId);
-        if (!crm) {
-            throw new Error('CRM not found');
-        }
-
-        const destination = await getDestinationById(backupConfig.destinationId);
-        if (!destination) {
-            throw new Error('Destination not found');
-        }
-
-        const allBackupJobs = await fetchAllBackupJobs(backupConfigId);
-        if (!allBackupJobs.length) {
-            throw new Error('No backup jobs found');
-        }
-
-        let objectOperations = backupConfig.type === 'NORMAL' ?
-            processObjectOperations(allBackupJobs ?? []) :
-            processArchivalObjectOperations(allBackupJobs ?? []);
-        objectOperations = backupConfig.type === 'NORMAL' ?
-            schemaChangeDetection(backupConfig, objectOperations) :
-            archivalSchemaChangeDetection(backupConfig, objectOperations);
-
-        return {
-            jobType: backupConfig.type === 'NORMAL' ? 'BACKUP' : 'ARCHIVAL',
-            backupConfigId: backupConfigId,
-            details: {
-                clientId: backupConfig.userId,
-                backupType: backupConfig.schedule,
-                sourceDetails: {
-                    sourceName: crm.crmName,
-                    orgId: crm.crmId,
-                },
-                objectOperations,
-                destinationConfigs: {
-                    destinationName: destination.provider,
-                    ciphertext: destination.ciphertext,
-                    iv: destination.iv,
-                    salt: destination.userId,
-                },
-            },
-        };
-    } catch (error) {
-        throw error;
+    const backupConfig = await getBackupConfigById(backupConfigId);
+    if (!backupConfig) {
+        throw new Error('Backup config not found');
     }
+
+    const crm = await getCrmById(backupConfig.crmId);
+    if (!crm) {
+        throw new Error('CRM not found');
+    }
+
+    const destination = await getDestinationById(backupConfig.destinationId);
+    if (!destination) {
+        throw new Error('Destination not found');
+    }
+
+    const allBackupJobs = await fetchAllBackupJobs(backupConfigId);
+    if (!allBackupJobs.length) {
+        throw new Error('No backup jobs found');
+    }
+
+    let objectOperations = backupConfig.type === 'NORMAL' ?
+        processObjectOperations(allBackupJobs ?? []) :
+        processArchivalObjectOperations(allBackupJobs ?? []);
+    objectOperations = backupConfig.type === 'NORMAL' ?
+        schemaChangeDetection(backupConfig, objectOperations) :
+        archivalSchemaChangeDetection(backupConfig, objectOperations);
+
+    logger.info(`Built EMR payload for backupConfigId: ${backupConfigId}`);
+
+    return {
+        jobType: backupConfig.type === 'NORMAL' ? 'BACKUP' : 'ARCHIVAL',
+        backupConfigId: backupConfigId,
+        details: {
+            clientId: backupConfig.userId,
+            backupType: backupConfig.schedule,
+            sourceDetails: {
+                sourceName: crm.crmName,
+                orgId: crm.crmId,
+            },
+            objectOperations,
+            destinationConfigs: {
+                destinationName: destination.provider,
+                ciphertext: destination.ciphertext,
+                iv: destination.iv,
+                salt: destination.userId,
+            },
+        },
+    };
 }
 
-// ─── Submit to EMR Serverless ─────────────────────────────────────────────────
+type EmrPayload = Awaited<ReturnType<typeof buildPayload>>;
 
-async function initalizePayloadTransform(
-    backupConfigId: string,
-): Promise<StartJobRunCommandOutput> {
+// ─── Submit a built payload to EMR Serverless ─────────────────────────────────
+async function submitEMR(payload: EmrPayload): Promise<StartJobRunCommandOutput> {
     try {
-        const payload = await buildPayload(backupConfigId);
         const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64');
 
         logger.info('Initializing EMR job...');
@@ -342,7 +336,14 @@ async function initalizePayloadTransform(
     }
 }
 
+// ─── Build + submit in one step (used by /payload and the config trigger) ─────
+async function initalizePayloadTransform(backupConfigId: string): Promise<StartJobRunCommandOutput> {
+    return submitEMR(await buildPayload(backupConfigId));
+}
 
 export {
+    buildPayload,
+    submitEMR,
     initalizePayloadTransform,
+    EmrPayload,
 };
