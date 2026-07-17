@@ -25,6 +25,21 @@ const callApex = async <T = any>(
   return result.data as T;
 };
 
+/**
+ * Apex replies carry their own { success, data } envelope. makeResponse then adds
+ * the API's own { success, message, data, meta } envelope, so handing an Apex reply
+ * straight to makeResponse is what produces `data.data` in the UI. Controllers should
+ * pass only the inner payload — this lifts it.
+ *
+ * Deliberately tolerant: it unwraps only when a `data` key is actually present, so
+ * replies shaped { success, fields } or a bare array pass through untouched rather
+ * than collapsing to undefined.
+ */
+const unwrapApex = <T = any>(result: any): T =>
+  result && typeof result === 'object' && !Array.isArray(result) && 'data' in result
+    ? (result.data as T)
+    : (result as T);
+
 const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = {}) => {
   if (!user || !user.crmId) {
     return [];
@@ -245,4 +260,4 @@ export const apexCountOne = async (
   }
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexValidateSoql, callApex, APEX_BASE };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
