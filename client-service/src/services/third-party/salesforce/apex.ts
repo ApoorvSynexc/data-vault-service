@@ -157,24 +157,6 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   );
 };
 
-const createApexSecret = async ({ user, body }: { user?: IUser; body?: { webhookSecret: string } } = {}) => {
-  if (!user || !user.crmId) {
-    return [];
-  }
-  const crm = await getCrmById(user.crmId);
-  if (!crm) {
-    throw new Error('CRM not found');
-  }
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
-  const instanceUrl = user.crmProfile?.instanceUrl;
-
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/upsert-webhook-secret`;
-  return callApex(
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    { url, method: 'POST', body }
-  );
-};
-
 const APEX_BASE = (instanceUrl?: string) =>
   `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault`;
 
@@ -193,14 +175,18 @@ const apexValidateSoql = async (
   const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  return callApex(
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    {
-      url: `${APEX_BASE(instanceUrl)}/validate-soql`,
-      method: 'POST',
-      body: { apiName, whereClause: whereClause || null },
-    }
+  const raw = unwrapApex<{ isValid?: boolean; errorMessage?: string }>(
+    await callApex(
+      { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+      {
+        url: `${APEX_BASE(instanceUrl)}/validate-soql`,
+        method: 'POST',
+        body: { apiName: apiName, whereClause: whereClause || null },
+      }
+    )
   );
+
+  return { isValid: !!raw?.isValid, message: raw?.errorMessage };
 };
 
 export interface IApexCountOneResult {
@@ -260,4 +246,4 @@ export const apexCountOne = async (
   }
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
