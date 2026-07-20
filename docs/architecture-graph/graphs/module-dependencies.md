@@ -17,6 +17,7 @@ graph TD
         CS_ROUTES --> CS_CTRL_PUB[controller/v1/public]
         CS_ROUTES --> CS_CTRL_SF[controller/v1/salesforce]
         CS_ROUTES --> CS_CTRL_RR[controller/v1/restore-retrieve]
+        CS_ROUTES --> CS_CTRL_SPARK[controller/v1/spark-job]
         CS_CTRL_AUTH --> CS_SVC_USER[services/user]
         CS_CTRL_AUTH --> CS_SVC_SESSION[services/session]
         CS_CTRL_AUTH --> CS_SVC_OTP[services/otp]
@@ -27,7 +28,8 @@ graph TD
         CS_CTRL_DEST --> CS_SVC_DEST[services/destination]
         CS_CTRL_DEST --> CS_SVC_ATHENA[services/third-party/athena]
         CS_CTRL_INT --> CS_SVC_BC
-        CS_CTRL_PUB --> CS_SVC_EMR[services/third-party/payload-transform-service]
+        CS_CTRL_PUB --> CS_SVC_EMR[services/payload]
+        CS_CTRL_SPARK --> CS_SVC_EMR
         CS_CRON_BC --> CS_SVC_BC
         CS_SVC_USER --> CS_DB
         CS_SVC_SESSION --> CS_DB

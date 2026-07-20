@@ -148,6 +148,36 @@ Both paths return `null` internally → controller sends 400 `not_exist` when:
 - Ownership mismatch (userId !== req.user.userId).
 - No completed ARCHIVAL job exists yet.
 
+## POST /v1/restore/fetch-object-fields — added 2026-07-17, currently unreachable
+
+**Route bug:** `restore-retrieve.route.ts:28` registers this as `router.post('fetch-object-fields', ...)` — no leading slash. Express 5 accepts the registration silently, then matches nothing (verified against this repo's `express@^5.2.1`: 404 as written, 200 with the slash added). Everything below is live, tested-in-isolation code with no reachable entry point until the slash is added.
+
+```typescript
+// body: { objectApiName: string, backupJobIds: string[] }
+
+// Controller: validates objectApiName is a non-empty string, backupJobIds a
+// non-empty array; dedupes + trims ids (Set) → 400 id_required if nothing survives.
+const result = await fetchObjectFields({ objectApiName, backupJobIds: ids, userId });
+```
+
+```typescript
+// Service (services/restore-retrieve): resolves the ONE backup config shared by
+// the given jobs — a set spanning >1 config is rejected rather than guessed at.
+// Then lists the config's schema prefix on S3 and returns the latest schema JSON
+// verbatim (no transformation).
+//   → listS3Keys / getS3Text  (utils/validate-aws-credentials)
+```
+
+Returns a discriminated result instead of throwing, so the controller maps each case explicitly:
+
+| Service result | HTTP | Message |
+|---|---|---|
+| `{ ok: true, schema }` | 200 | `fetch` (schema is the response body) |
+| `{ ok: false, reason: 'multiple_configs' }` | 400 | `multiple_backup_configs` |
+| `{ ok: false, reason: 'not_exist' }` | 400 | `not_exist` — job/config/destination unresolvable, not owned by the caller, or no schema written for the object yet |
+
+Note the ownership failure and the genuinely-absent-schema case collapse into the same 400 `not_exist` — deliberate, and consistent with `fetch-records` above (it avoids confirming that another user's job id exists).
+
 ## Sanitize Pattern
 
 All restore-retrieve responses strip encrypted fields:

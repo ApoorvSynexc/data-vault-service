@@ -40,15 +40,23 @@ Every third-party system the platform integrates with.
 ### Tooling API (client-service, realtime trigger management)
 
 - Endpoint: `{instanceUrl}/services/data/v66.0/tooling/`
-- Used for: create, activate, inactivate, delete ApexTrigger records.
+- Used for: **activate/inactivate** (`patchTriggerStatus`) and **delete** ApexTrigger records, and to look up trigger ids.
+- **Trigger creation no longer uses this API (changed 2026-07-17)** — see Metadata API below.
 - Trigger pattern: `trigger DataVault_{ObjectName}_Trigger on {ObjectName} (after insert, after update, after delete, after undelete)`
 - Calls `SYX_DVV.DataVaultRecordSyncTriggerHandler.enqueueSync(...)`.
 
-### Metadata API (client-service, permission set management)
+### Metadata API (client-service, permission set management **and trigger creation**)
 
 - Endpoint: `{instanceUrl}/services/data/v66.0/metadata/deployRequest`
 - Used for: grant ExternalCredentialPrincipal access via PermissionSet deploy.
 - Multipart form-data with ZIP containing package.xml + permissionset XML.
+
+**Trigger creation moved here 2026-07-17** (`createSingleTrigger`, `services/third-party/salesforce/trigger.ts`). Salesforce rejects a direct Tooling API `POST /sobjects/ApexTrigger` in an active production org — *"Can not create Apex Trigger on an active organization"* (`ENTITY_IS_LOCKED`) — so Apex code creation must go through a Metadata API deploy instead:
+
+- ZIP contains `triggers/{name}.trigger` + `triggers/{name}.trigger-meta.xml` + `package.xml`, posted as multipart form-data (same container-deploy shape as the permission set).
+- `testLevel: 'RunLocalTests'` is mandatory: production deploys containing Apex reject `NoTestRun`. This makes trigger creation **as slow as the org's local test suite**, not a quick metadata write.
+- The initial submit uses a plain `fetch()` (no session-refresh wrapper); the status poll runs every 2s via `salesforceRequest` until `deployResult.done`, then throws with `componentFailures` detail if `success` is false.
+- The poll loop is `while (true)` with no iteration cap or deadline — a deploy that never reports `done` blocks the caller indefinitely. (The Bulk API poller, by contrast, caps at 2h.)
 - Polls deploy job until done.
 - Also used for deleting the permission set (destructiveChanges.xml).
 
@@ -137,14 +145,16 @@ On destination creation, `grantAthenaRoleS3Access` is called (non-fatal):
 - `initalizePayloadTransform(backupConfigId)` — builds payload + submits EMR job.
 - JAR: `s3://jar-files-360datavault/JAR/DEV/latest/datavault-1.0.0.jar`.
 - Main class: `com.example.Main`.
-- Spark config: dynamic allocation 20-200 executors, 16GB driver + executors.
+- Spark config: dynamic allocation up to 200 executors, 16GB driver + executors. The `minExecutors=20` / `initialExecutors=50` floor was **removed 2026-07-17**, along with a general S3A throughput reduction (`connection.maximum` 1000→100, `threads.max` 500→64, `fast.upload.active.blocks` 8→4).
 - Payload: base64(JSON) passed as `entryPointArguments[0]`.
 - ENCRYPTION_KEY forwarded via `sparkExecutorEnv.ENCRYPTION_KEY`.
+- Code lives in `services/payload/index.ts` (moved 2026-07-17 out of `services/third-party/payload-transform-service/`), split into `buildPayload` (pure builder) and `submitEMR` (submitter); `initalizePayloadTransform` composes the two.
 
 ### When Called
 
-- From `public.payloadHandler` (POST /v1/public/payload).
-- Triggered after backup jobs complete (fire-and-forget from controller).
+- From `public.payloadHandler` (**POST** /v1/public/payload — the method changed from GET on 2026-07-17, and the handler now submits the job rather than returning the payload).
+- `POST /v1/spark-job/build-payload` calls `buildPayload` only — it returns the payload re-encrypted and submits nothing.
+- Both are gated only by the encrypted request body (see SECURITY.md § 5).
 
 ## AWS EventBridge Scheduler (DORMANT)
 

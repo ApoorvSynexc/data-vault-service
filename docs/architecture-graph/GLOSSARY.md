@@ -32,7 +32,7 @@ Domain terms and their precise meanings in this codebase.
 
 **query** — Bulk API operation that excludes soft-deleted records. Used for first-time backups.
 
-**apex trigger** — Salesforce-side code that fires on DML events (insert/update/delete/undelete). DataVault creates triggers via Tooling API for realtime backup.
+**apex trigger** — Salesforce-side code that fires on DML events (insert/update/delete/undelete). DataVault creates triggers via a **Metadata API deploy** for realtime backup (changed 2026-07-17 — Tooling API creation is blocked in active orgs); Tooling API still handles activate/inactivate/delete.
 
 **SYX_DVV** — Salesforce namespace for the DataVault managed package.
 
