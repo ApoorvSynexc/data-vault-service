@@ -15,6 +15,9 @@ import {
   ConfigType,
   BackupScheduleType,
   FetchRecordsConfigType,
+  IFetchRecordsFilters,
+  IChangedSinceRange,
+  IFetchRecordsFilterField,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -274,6 +277,99 @@ const getBackupConfigsNameHandler = async (req: IRequest, res: IResponse): Promi
 };
 
 const VALID_FETCH_CONFIG_TYPES: FetchRecordsConfigType[] = ['BACKUP', 'ARCHIVAL'];
+const VALID_FETCH_FILTER_TYPES = ['AND', 'OR', 'SOQL'] as const;
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+interface IFetchRecordsExtras {
+  filters?: IFetchRecordsFilters;
+  changedSince?: IChangedSinceRange;
+  bulkCsvIds?: string[];
+  deletedOnly?: boolean;
+}
+
+/**
+ * Validates and normalises the optional query-refinement fields on the request
+ * body. These are accepted and threaded through to the service but not yet
+ * applied to the Athena query — SQL wiring is a follow-up. Returns an error
+ * message string when a supplied field is malformed, so the caller can 400.
+ */
+const parseFetchExtras = (
+  body: Record<string, unknown>
+):
+  | { ok: true; value: IFetchRecordsExtras }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const extras: IFetchRecordsExtras = {};
+
+  if (body.filters !== undefined) {
+    const f = body.filters;
+    if (!isRecord(f)) return { ok: false, error: 'invalid_filters' };
+    if (!VALID_FETCH_FILTER_TYPES.includes(f.type as (typeof VALID_FETCH_FILTER_TYPES)[number])) {
+      return { ok: false, error: 'invalid_filter_type' };
+    }
+    const type = f.type as IFetchRecordsFilters['type'];
+
+    if (type === 'SOQL') {
+      if (typeof f.soqlQuery !== 'string' || f.soqlQuery.trim() === '') {
+        return { ok: false, error: 'soql_query_required' };
+      }
+      extras.filters = { type, soqlQuery: f.soqlQuery.trim() };
+    } else {
+      if (!Array.isArray(f.fields)) return { ok: false, error: 'filter_fields_required' };
+      const fields: IFetchRecordsFilterField[] = [];
+      for (const raw of f.fields) {
+        if (
+          !isRecord(raw) ||
+          typeof raw.name !== 'string' ||
+          typeof raw.dataType !== 'string' ||
+          typeof raw.operator !== 'string' ||
+          typeof raw.value !== 'string'
+        ) {
+          return { ok: false, error: 'invalid_filter_field' };
+        }
+        fields.push({
+          name: raw.name,
+          dataType: raw.dataType,
+          operator: raw.operator,
+          value: raw.value,
+        });
+      }
+      extras.filters = { type, fields };
+    }
+  }
+
+  if (body.changedSince !== undefined) {
+    const c = body.changedSince;
+    if (!isRecord(c)) return { ok: false, error: 'invalid_changed_since' };
+    const startDate = c.startDate;
+    const endDate = c.endDate;
+    if (
+      (startDate !== undefined && typeof startDate !== 'string') ||
+      (endDate !== undefined && typeof endDate !== 'string')
+    ) {
+      return { ok: false, error: 'invalid_changed_since' };
+    }
+    extras.changedSince = {
+      ...(startDate !== undefined && { startDate }),
+      ...(endDate !== undefined && { endDate }),
+    };
+  }
+
+  if (body.bulkCsvIds !== undefined) {
+    if (!Array.isArray(body.bulkCsvIds)) return { ok: false, error: 'invalid_bulk_csv_ids' };
+    extras.bulkCsvIds = [
+      ...new Set(body.bulkCsvIds.map((id) => String(id).trim()).filter(Boolean)),
+    ];
+  }
+
+  if (body.deletedOnly !== undefined) {
+    if (typeof body.deletedOnly !== 'boolean') return { ok: false, error: 'invalid_deleted_only' };
+    extras.deletedOnly = body.deletedOnly;
+  }
+
+  return { ok: true, value: extras };
+};
 
 /**
  * POST /fetch-records
@@ -283,6 +379,14 @@ const VALID_FETCH_CONFIG_TYPES: FetchRecordsConfigType[] = ['BACKUP', 'ARCHIVAL'
  *   objectApiName:  string
  *   columnNames:    string[]
  *   backupJobIds?:  string[]                (required for BACKUP, ignored for ARCHIVAL)
+ *
+ *   // Optional query refinements — validated and threaded through, not yet
+ *   // applied to the Athena query (SQL wiring is a follow-up):
+ *   filters?:      { type: 'AND'|'OR'|'SOQL', soqlQuery?: string,
+ *                    fields?: { name, dataType, operator, value }[] }
+ *   changedSince?: { startDate?: string, endDate?: string }
+ *   bulkCsvIds?:   string[]
+ *   deletedOnly?:  boolean
  * }
  *
  * BACKUP  — queries Athena for the supplied backupJobIds filtered to the given object and columns.
@@ -316,6 +420,13 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
     return;
   }
 
+  const parsedExtras = parseFetchExtras(req.body as Record<string, unknown>);
+  if (!parsedExtras.ok) {
+    makeResponse(req, res, 400, false, parsedExtras.error);
+    return;
+  }
+  const extras = parsedExtras.value;
+
   if (configType === 'ARCHIVAL') {
     if (!backupConfigId || typeof backupConfigId !== 'string') {
       makeResponse(req, res, 400, false, 'id_required');
@@ -328,6 +439,7 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
       objectApiName: String(objectApiName),
       columnNames: (columnNames as unknown[]).map((c) => String(c)),
       userId,
+      ...extras,
     });
 
     if (!result) {
@@ -358,6 +470,7 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
     objectApiName: String(objectApiName),
     columnNames: (columnNames as unknown[]).map((c) => String(c)),
     userId,
+    ...extras,
   });
 
   if (!result) {

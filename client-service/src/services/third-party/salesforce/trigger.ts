@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { createApexSecret, salesforceRequest, SalesforceTokens } from './index';
+import { salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig } from '../../../models';
 import { getCrmById } from '../../crm';
 import { getUser } from '../../user';
@@ -810,7 +810,6 @@ const realTimeTriggerManagement = async (
     const objectApiNames = config.objectNames;
 
     if (operation === 'create') {
-      await createApexSecret({ user, body: { webhookSecret: config.backupConfigId } });
       return createTriggers(instanceUrl, tokens, objectApiNames);
     }
     if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }

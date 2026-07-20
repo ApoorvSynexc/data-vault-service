@@ -557,6 +557,28 @@ const getObjectListByBackupJobIds = async (
 
 export type FetchRecordsConfigType = 'BACKUP' | 'ARCHIVAL';
 
+export type FetchRecordsFilterType = 'AND' | 'OR' | 'SOQL';
+
+export interface IFetchRecordsFilterField {
+  name: string;
+  dataType: string;
+  operator: string;
+  value: string;
+}
+
+export interface IFetchRecordsFilters {
+  type: FetchRecordsFilterType;
+  // Present (and used) only when type === 'SOQL'.
+  soqlQuery?: string;
+  // Present (and used) when type is 'AND' | 'OR'.
+  fields?: IFetchRecordsFilterField[];
+}
+
+export interface IChangedSinceRange {
+  startDate?: string;
+  endDate?: string;
+}
+
 export interface IFetchRecordsParams {
   configType: FetchRecordsConfigType;
   objectApiName: string;
@@ -566,6 +588,12 @@ export interface IFetchRecordsParams {
   backupJobIds?: string[];
   // ARCHIVAL: caller supplies the config ID; we resolve the most recent successful job.
   backupConfigId?: string;
+  // ── Accepted but not yet applied to the Athena query ────────────────────────
+  // The controller validates and threads these through; SQL wiring is a follow-up.
+  filters?: IFetchRecordsFilters;
+  changedSince?: IChangedSinceRange;
+  bulkCsvIds?: string[];
+  deletedOnly?: boolean;
 }
 
 export interface IFetchRecordsResult {
