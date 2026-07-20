@@ -63,15 +63,8 @@ const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<voi
     return;
   }
 
-  const {
-    userId,
-    backupConfigId,
-    crmId,
-    crmName,
-    destination,
-    realtimePayload,
-    spaceId,
-  } = decryptedBody;
+  const { userId, backupConfigId, crmId, crmName, destination, realtimePayload, spaceId } =
+    decryptedBody;
 
   /**
    * Resolve (or create) the job for this hit.

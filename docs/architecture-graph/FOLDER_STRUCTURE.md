@@ -87,6 +87,8 @@ data-vault-service/
 │       │   ├── oauth-state/index.ts
 │       │   ├── otp/index.ts
 │       │   ├── payload/index.ts          # EMR payload build + EMR Serverless submit
+│       │   ├── payload/payload.check.ts  # framework-free assert self-check (compression payload)
+│       │   ├── spark-job/index.ts        # ensureCompressionGlueTables (delegates to backup-service)
 │       │   ├── restore-retrieve/index.ts
 │       │   ├── role/index.ts
 │       │   ├── session/index.ts
@@ -148,7 +150,8 @@ data-vault-service/
 │       │   └── third-party/
 │       │       ├── registry.ts            # getCrmHandler, getRealtimeCrmHandler
 │       │       ├── types.ts               # ICrmBackupHandler, ICrmRealtimeHandler
-│       │       ├── glue/index.ts          # GlueClient, createDatabase, createCsvGlueTable
+│       │       ├── glue/index.ts          # GlueClient, createCsvGlueTable, ensureHudi/DeltaTable (compression)
+│       │       ├── glue/hudi-schema.ts     # reads Hudi/Delta schema from committed .hoodie S3 metadata
 │       │       └── salesforce/
 │       │           ├── index.ts           # salesforceHandler (runBackup, runArchival)
 │       │           ├── api-request.ts     # salesforceRequest, makePageFetcher, createBulkQueryJob

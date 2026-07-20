@@ -2,6 +2,8 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   repairGlueTableParams,
   registerBackupJobPartition,
+  ensureHudiCurrentStateTable,
+  ensureDeltaTable,
 } from '../../../services/third-party/glue';
 import { wrapController } from '../../../utils/helper';
 
@@ -89,4 +91,86 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
   makeResponse(req, res, 200, true, 'repair', { repaired, failed });
 };
 
-export const glueController = wrapController({ repairGlueHandler });
+/**
+ * POST /api/v1/glue/ensure-compression-tables
+ *
+ * Body:
+ *   {
+ *     crmId:          string
+ *     crmName:        string
+ *     backupConfigId: string
+ *     objectNames:    string[]
+ *     destConfig:     IDestinationConfig
+ *   }
+ *
+ * Called after Spark reports a successful compression. For each object, ensures
+ * the current-state Hudi table and the Delta table exist in the Glue Catalog —
+ * created once from the committed `.hoodie` schema, never updated. Fully
+ * idempotent: existing tables are left untouched, so retries and concurrent
+ * completion events are safe.
+ *
+ * Per-object results are returned so the caller can see which tables were created
+ * vs. which failed (e.g. `.hoodie` not written yet) without one failure blocking
+ * the rest.
+ */
+const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { crmId, crmName, backupConfigId, objectNames, destConfig } = req.body as {
+    crmId: string;
+    crmName: string;
+    backupConfigId: string;
+    objectNames: string[];
+    destConfig: any;
+  };
+
+  if (
+    !crmId ||
+    !crmName ||
+    !backupConfigId ||
+    !Array.isArray(objectNames) ||
+    objectNames.length === 0 ||
+    !destConfig
+  ) {
+    makeResponse(req, res, 400, false, 'params_required');
+    return;
+  }
+
+  const results = await Promise.allSettled(
+    objectNames.map(async (objectName) => {
+      // Both are independent; a missing/not-yet-written delta must not block hudi.
+      const [hudi, delta] = await Promise.allSettled([
+        ensureHudiCurrentStateTable({ crmId, crmName, backupConfigId, objectName, destConfig }),
+        ensureDeltaTable({ crmId, crmName, backupConfigId, objectName, destConfig }),
+      ]);
+
+      const errors: string[] = [];
+      if (hudi.status === 'rejected') {
+        errors.push(`hudi: ${hudi.reason?.message ?? String(hudi.reason)}`);
+      }
+      if (delta.status === 'rejected') {
+        errors.push(`delta: ${delta.reason?.message ?? String(delta.reason)}`);
+      }
+      if (errors.length) {
+        throw new Error(errors.join(' | '));
+      }
+      return objectName;
+    })
+  );
+
+  const ensured: string[] = [];
+  const failed: { objectName: string; error: string }[] = [];
+
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      ensured.push(objectNames[i]);
+    } else {
+      failed.push({
+        objectName: objectNames[i],
+        error: result.reason?.message ?? String(result.reason),
+      });
+    }
+  });
+
+  makeResponse(req, res, 200, true, 'create', { ensured, failed });
+};
+
+export const glueController = wrapController({ repairGlueHandler, ensureCompressionTablesHandler });

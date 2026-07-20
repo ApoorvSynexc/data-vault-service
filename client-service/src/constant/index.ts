@@ -150,6 +150,15 @@ const JOB_STATUS = {
   success: 'SUCCESS',
   failed: 'FAILED',
 };
+// Compression lifecycle. Written to the same `status` field as JOB_STATUS, so a
+// compressed job no longer reports the backup outcome it had before compression.
+// ponytail: one-way door — SUCCESS vs FAILED is lost once compression starts.
+// Move to a separate `compressionStatus` attribute if that outcome is ever needed.
+const COMPRESSION_STATUS = {
+  inProgress: 'COMPRESSION_JOB_IN_PROGRESS',
+  compressed: 'COMPRESSED',
+  failed: 'COMPRESSION_JOB_FAILED',
+};
 const ENVIRONMENT_TYPE = {
   production: 'PRODUCTION',
   sandbox: 'SANDBOX',
@@ -292,6 +301,7 @@ export {
   FILTER_OPERATOR,
   BACKUP_STATUS,
   JOB_STATUS,
+  COMPRESSION_STATUS,
   CONDITION_TYPE,
   OBJECT_TYPE,
   BACKUP_TYPE,
