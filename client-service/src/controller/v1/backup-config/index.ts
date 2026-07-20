@@ -23,6 +23,7 @@ import {
   getSalesforceProfile,
   initalizePayloadTransform,
   syncMetadataAndTriggers,
+  unwrapApex,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from '../../../constant';
@@ -76,28 +77,48 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
     }
   }
 
-  const objects = apexResult.data.map((obj: { label: string; apiName: string }) => ({
+  const objects = unwrapApex<Array<{ label: string; apiName: string }>>(apexResult).map((obj) => ({
     ...obj,
     isBackedUp: backedUpMap.has(obj.apiName),
     schedule: backedUpMap.get(obj.apiName)?.schedule ?? null,
   }));
 
   console.log('Final Objects List:', objects);
-  makeResponse(req, res, 200, true, 'fetch', { ...apexResult, objects });
+  // Only the enriched list — spreading apexResult here also leaked its raw `data`
+  // and `success` into the response envelope.
+  makeResponse(req, res, 200, true, 'fetch', { objects });
 };
 
 const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
-  const { crmId, ...body } = req.body;
+  const { crmId, items } = req.body;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
-  const [apexResult] = await Promise.all([
-    getApexObjectsCount({ user, body }),
-  ]);
+  // UI sends items: [{ apiName }]; Apex wants a flat name list.
+  const apiNames: string[] = (items ?? [])
+    .map((item: { apiName?: string }) => item?.apiName)
+    .filter(Boolean);
 
-  makeResponse(req, res, 200, true, 'fetch', { ...apexResult });
+  if (apiNames.length === 0) {
+    return makeResponse(req, res, 400, false, 'object_name_required');
+  }
+
+  const apexResult = await getApexObjectsCount({ user, apiNames });
+
+  // Apex returns unfiltered counts keyed by object name ({ Account: 12 }); the UI
+  // wants one row per requested object, in the order it asked for them. An object
+  // missing from the map means Apex could not count it — report success:false there
+  // rather than a 0 that reads as "this object is empty".
+  const counts = unwrapApex<Record<string, number>>(apexResult) ?? {};
+  const results = apiNames.map((apiName) => ({
+    success: apiName in counts,
+    recordCount: counts[apiName] ?? 0,
+    apiName,
+  }));
+
+  makeResponse(req, res, 200, true, 'fetch', { success: true, results });
 };
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -110,7 +131,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
   const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
-  makeResponse(req, res, 200, true, 'fetch', result);
+  makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {

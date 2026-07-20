@@ -19,13 +19,18 @@ const configs = await getScheduledIncrementalBackupConfigs();
 // backupStatus is not RUNNING
 ```
 
-### Step 2: Filter by schedule
+### Step 2: Resolve the user (no due-time filter — changed 2026-07-17)
 
 For each config:
 ```typescript
-if (!hasScheduledStartPassed(config)) continue;  // start date/time not yet reached
-if (!isDueByScheduling(config)) continue;          // interval not elapsed since lastBackupAt
+const user = await getUser({ userId: config.userId });
+if (!user) continue;   // the only per-config skip on the NORMAL path
 ```
+
+The `hasScheduledStartPassed()` / `isDueByScheduling()` gate that used to sit here was
+removed — every config returned by Step 1 is fired on every tick. Step 1's `backupStatus`
+filter is what stops a config that is already running from being picked up again.
+See SCHEDULERS.md § Scheduling Logic.
 
 ### Step 3: Trigger backup on backup-service
 

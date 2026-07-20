@@ -32,7 +32,7 @@ Domain terms and their precise meanings in this codebase.
 
 **query** — Bulk API operation that excludes soft-deleted records. Used for first-time backups.
 
-**apex trigger** — Salesforce-side code that fires on DML events (insert/update/delete/undelete). DataVault creates triggers via Tooling API for realtime backup.
+**apex trigger** — Salesforce-side code that fires on DML events (insert/update/delete/undelete). DataVault creates triggers via a **Metadata API deploy** for realtime backup (changed 2026-07-17 — Tooling API creation is blocked in active orgs); Tooling API still handles activate/inactivate/delete.
 
 **SYX_DVV** — Salesforce namespace for the DataVault managed package.
 
@@ -96,4 +96,10 @@ Domain terms and their precise meanings in this codebase.
 
 **slug** — URL-safe lowercase identifier derived from a name. Unique per user. E.g. "My Backup Config" → "my-backup-config".
 
-**INTERNAL_SECRET** — Shared secret between client-service and backup-service. Sent as `X-Internal-Secret` header. Guards all /v1/internal/* endpoints.
+**INTERNAL_SECRET** — Shared secret between client-service and backup-service. Sent as `X-Internal-Secret` header. Guards all /v1/internal/* endpoints. (Note: backup-service's own routes — `/glue/*`, `/backup-job/*` — do *not* verify it, even when the caller sends it.)
+
+**compression** — A post-backup Spark (EMR Serverless) job that rewrites a config's raw per-job CSV output into current-state **Hudi** + **Delta** tables so Athena reads current state without replaying every job partition. Drives a job through `COMPRESSION_JOB_IN_PROGRESS → COMPRESSED | COMPRESSION_JOB_FAILED`, overwriting its backup `status`. See BUSINESS_RULES.md § Compression Lifecycle.
+
+**Hudi (Apache Hudi)** — Copy-on-Write table format Spark writes for the current-state compression output. Its schema lives in committed `.hoodie/` metadata on S3, which `hudi-schema.ts` reads to build the matching Glue table. Read by Athena via `HoodieParquetInputFormat`.
+
+**Delta table (here)** — A partitioned Hudi dataset holding change data (`change_data MAP<STRING,STRUCT<old,new>>`), distinct from the current-state Hudi table. Not to be confused with Delta Lake — in this codebase it's the `..._delta` Glue table under `.../delta/{objectName}/`.

@@ -87,7 +87,11 @@ if (schedule === SCHEDULE_MODE.realtime) {
   //   - For each objectName:
   //       fetch existing trigger by name
   //       if exists and Active → status = EXIST
-  //       if not exists → POST Tooling API /sobjects/ApexTrigger
+  //       if not exists → Metadata API deploy of triggers/*.trigger + *.trigger-meta.xml
+  //                       (changed 2026-07-17: Tooling API POST /sobjects/ApexTrigger is
+  //                        rejected with ENTITY_IS_LOCKED in active production orgs)
+  //                       testLevel=RunLocalTests → runs the org's local tests, slow
+  //                       poll /metadata/deployRequest/{id} every 2s until done (no timeout)
   //                       status = CREATED
   //   - setupPermissionSet:
   //       upsertPermissionSet (create DataVaultRealTimeTriggerAccess if not exists)

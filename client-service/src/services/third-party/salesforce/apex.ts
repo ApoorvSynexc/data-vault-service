@@ -2,7 +2,6 @@ import { IUser } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
 import { getCrmById } from '../../crm';
 import { salesforceRequest, SalesforceTokens } from '../salesforce';
-import type { ICountItem, ICountResult } from './dry-run/types';
 
 const salesforceNamespace = 'SYX_DVV';
 
@@ -25,6 +24,21 @@ const callApex = async <T = any>(
 
   return result.data as T;
 };
+
+/**
+ * Apex replies carry their own { success, data } envelope. makeResponse then adds
+ * the API's own { success, message, data, meta } envelope, so handing an Apex reply
+ * straight to makeResponse is what produces `data.data` in the UI. Controllers should
+ * pass only the inner payload — this lifts it.
+ *
+ * Deliberately tolerant: it unwraps only when a `data` key is actually present, so
+ * replies shaped { success, fields } or a bare array pass through untouched rather
+ * than collapsing to undefined.
+ */
+const unwrapApex = <T = any>(result: any): T =>
+  result && typeof result === 'object' && !Array.isArray(result) && 'data' in result
+    ? (result.data as T)
+    : (result as T);
 
 const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = {}) => {
   if (!user || !user.crmId) {
@@ -74,7 +88,9 @@ const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: objec
   );
 };
 
-const getApexObjectsCount = async ({ user, body }: { user?: IUser; body?: object } = {}) => {
+// Apex `object-record-count` takes a flat list of names under `apiName` and
+// returns unfiltered counts keyed by object name: { success, data: { Account: 12 } }.
+const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?: string[] } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -89,10 +105,10 @@ const getApexObjectsCount = async ({ user, body }: { user?: IUser; body?: object
     throw new Error('Instance URL not found');
   }
   const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-record-count`;
-  
+
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    { url, method: 'POST', body }
+    { url, method: 'POST', body: { apiName: apiNames } }
   );
 };
 
@@ -162,33 +178,6 @@ const createApexSecret = async ({ user, body }: { user?: IUser; body?: { webhook
 const APEX_BASE = (instanceUrl?: string) =>
   `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault`;
 
-const apexCountBatch = async (user?: IUser, items?: ICountItem[]): Promise<ICountResult[]> => {
-  if (!user || !user.crmId) {
-    return [];
-  }
-  const crm = await getCrmById(user.crmId);
-  if (!crm) {
-    throw new Error('CRM not found');
-  }
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
-  const instanceUrl = user.crmProfile?.instanceUrl;
-
-  const data = await callApex<{ success: boolean; results: Array<Omit<ICountResult, 'key'>> }>(
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    {
-      url: `${APEX_BASE(instanceUrl)}/object-record-count`,
-      method: 'POST',
-      body: { items: items?.map(({ apiName, whereClause }) => ({ apiName, whereClause })) },
-    }
-  );
-
-  if (!data.success) {
-    throw new Error(`[object-record-count] request failed: ${JSON.stringify(data)}`);
-  }
-  // Apex returns results in the same order as input items; re-attach the key used for map lookups.
-  return data.results.map((r, i) => ({ ...r, key: items?.[i] ? items[i].key : "" }));
-};
-
 const apexValidateSoql = async (
   user?: IUser,
   apiName?: string,
@@ -214,14 +203,6 @@ const apexValidateSoql = async (
   );
 };
 
-// ── Shared filter types for object-record-count ───────────────────────────────
-type ApexWhereFilter = { whereClause?: string };
-type ApexIdsFilter = { parentFieldName: string; ids: string[] };
-type ApexFilterMode = ApexWhereFilter | ApexIdsFilter;
-
-const isIdsMode = (f: ApexFilterMode): f is ApexIdsFilter =>
-  'ids' in f && Array.isArray((f as ApexIdsFilter).ids);
-
 export interface IApexCountOneResult {
   count: number | null;
   success: boolean;
@@ -229,12 +210,23 @@ export interface IApexCountOneResult {
   errorMessage?: string;
 }
 
-// Count a single object via one Apex call — used by the dry-run leaf step.
-// Accepts either a whereClause string or a parentFieldName + ids pair.
+// Apex rejects a bad object/WHERE with a 400 body ({ success:false, errorCode, message }),
+// which httpRequest surfaces as a thrown "HTTP Error 400: {json}". Unwrap it so a single
+// object's failure stays reportable data instead of killing the whole dry-run branch.
+const parseApexError = (error: any): { errorCode: string; message?: string } | null => {
+  try {
+    const parsed = JSON.parse(String(error?.message).replace(/^HTTP Error \d+:\s*/, ''));
+    return parsed?.errorCode ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+// Count a single object, optionally filtered by a WHERE clause — the dry-run leaf step.
 export const apexCountOne = async (
   user?: IUser,
   apiName?: string,
-  filter: ApexFilterMode = {}
+  filter: { whereClause?: string } = {}
 ): Promise<IApexCountOneResult> => {
   if (!user || !user.crmId) {
     return { count: null, success: false };
@@ -246,27 +238,26 @@ export const apexCountOne = async (
   const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  const item = isIdsMode(filter)
-    ? { apiName, parentFieldName: filter.parentFieldName, ids: filter.ids }
-    : { apiName, whereClause: (filter as ApexWhereFilter).whereClause ?? null };
+  try {
+    const data = await callApex<{ success: boolean; data?: { count?: number } }>(
+      { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+      {
+        url: `${APEX_BASE(instanceUrl)}/query-count`,
+        method: 'POST',
+        body: { objectApiName: apiName, whereClause: filter.whereClause ?? null },
+        // Dry-run counts can hit large filtered tables — 30s default is too tight.
+        timeoutMs: 60_000
+      }
+    );
 
-  const data = await callApex<{ success: boolean; results: Array<{ recordCount?: number; success: boolean; errorCode?: string; errorMessage?: string }> }>(
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    {
-      url: `${APEX_BASE(instanceUrl)}/object-record-count`,
-      method: 'POST',
-      body: { items: [item] },
-      // Dry-run counts can hit large filtered tables — 30s default is too tight.
-      timeoutMs: 60_000
+    return { count: data.data?.count ?? null, success: data.success };
+  } catch (error: any) {
+    const apexError = parseApexError(error);
+    if (!apexError) {
+      throw error;
     }
-  );
-
-  if (!data.success) {
-    throw new Error(`[object-record-count] request failed: ${JSON.stringify(data)}`);
+    return { count: null, success: false, errorCode: apexError.errorCode, errorMessage: apexError.message };
   }
-
-  const r = data.results[0];
-  return { count: r.recordCount ?? null, success: r.success, errorCode: r.errorCode, errorMessage: r.errorMessage };
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexCountBatch, apexValidateSoql, callApex, APEX_BASE };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
