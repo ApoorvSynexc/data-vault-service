@@ -45,10 +45,17 @@ controller/v1/internal/index.ts
   → services/third-party/salesforce/metadata (getObjectFields)
 
 controller/v1/public/index.ts
-  → services/backup-config (getBackupConfigsByOrgId)
-  → services/crm
-  → services/third-party/payload-transform-service (initalizePayloadTransform)
+  → services/backup-config (updateBackupConfig, getBackupConfigsByCrm)
+  → services/destination   (getDestinationById, getDecryptedDestinationConfig)
+  → services/payload       (initalizePayloadTransform)
+  → utils/encryption       (decryptFromTransport)
   → utils/http-request (POST to backup-service realtime endpoint)
+  (no longer imports services/crm or services/backup-job — the job-aggregation
+   helpers moved into services/payload's buildPayload)
+
+controller/v1/spark-job/index.ts
+  → services/payload  (buildPayload)
+  → utils/encryption  (decryptFromTransport, encryptToTransport)
 
 controller/v1/restore-retrieve/index.ts
   → services/restore-retrieve (including fetchRecordsByBackupJobs → runAthenaQuery)
@@ -109,8 +116,9 @@ services/restore-retrieve/index.ts
   → services/third-party/athena/query (runAthenaQuery, IQueryResult)
   → services/backup-config (getBackupConfigById, getBackupConfigsWithPagination)
   → services/backup-job (getBackupJobsByConfig)
+  → utils/validate-aws-credentials (listS3Keys, getS3Text, S3Config — fetchObjectFields)
 
-services/third-party/payload-transform-service/index.ts
+services/payload/index.ts        (moved 2026-07-17 from services/third-party/payload-transform-service/)
   → services/backup-config (getBackupConfigById)
   → services/crm           (getCrmById)
   → services/destination   (getDestinationById)

@@ -6,7 +6,7 @@ How data moves from Salesforce into S3 and the Glue Catalog.
 
 ```
 client-service (cron every 5 min)
-  ↓ isDueByScheduling() returns true
+  ↓ scan returns the config (no due-time check — see SCHEDULERS.md)
   ↓ HTTP POST → backup-service /api/v1/backup-job
      body: { backupConfigId, userId, crmId, ... }
 
