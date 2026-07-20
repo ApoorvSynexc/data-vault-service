@@ -5,6 +5,7 @@ import {
   updateBackupConfig,
   getBackupConfigById,
   getUser,
+  unwrapApex,
 } from '../../../services';
 import { BACKUP_STATUS, STATUS } from '../../../constant';
 import {
@@ -36,7 +37,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
   }
 
   const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
-  makeResponse(req, res, 200, true, 'fetch', result);
+  makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
 const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
