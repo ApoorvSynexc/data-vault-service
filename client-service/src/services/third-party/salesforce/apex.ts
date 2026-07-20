@@ -147,7 +147,7 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-fields-metadata?objectApiName=${objectName}`;
+  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-fields-metadata?apiName=${objectName}`;
   if (mode) {
     url += `&mode=${mode}`;
   }
