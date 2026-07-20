@@ -9,7 +9,7 @@ All scheduling mechanisms and their status.
 - Expression: `*/5 * * * *` (every 5 minutes)
 - Timezone: UTC (node-cron default)
 - Started: after `app.listen()` in client-service
-- What it triggers: Identifies ACTIVE scheduled backup configs that are due and POSTs to backup-service.
+- What it triggers: Identifies ACTIVE scheduled backup configs and POSTs to backup-service. **No due-time check as of 2026-07-17** — see "Scheduling Logic" below.
 
 ### node-cron: Nightly Cron
 - File: `client-service/src/jobs/nightly-cron.ts`
@@ -32,23 +32,44 @@ All scheduling mechanisms and their status.
 - Current reality: node-cron handles all scheduling in-process.
 - Functions: `createAwsEventScheduler`, `updateAwsEventSchedule`, `deleteAwsEventScheduler`.
 
-## Scheduling Logic (isDueByScheduling)
+## Scheduling Logic
 
-Located in `backup-config-cron.ts`:
+**Changed 2026-07-17 — the due-time gate was removed entirely.** `isDueByScheduling()`,
+`hasScheduledStartPassed()` and `buildLastRunMapForConfig()` no longer exist in
+`backup-config-cron.ts` (the `dayjs`/`utc`/`timezone` imports went with them).
 
-```
-frequency: 'HOURLY'  → interval unit = hours
-           'DAILY'   → interval unit = days
-           'WEEKLY'  → interval unit = weeks
-           'MONTHLY' → interval unit = months (uses monthDate field)
-           'ONCE'    → run once only
-           'CUSTOM'  → uses selectedMonths
-```
+What the tick actually does now, for every config the scan returns:
 
-For each config:
-1. `hasScheduledStartPassed(config)` — TZ-aware: `dayjs(startDate + ' ' + startTime).tz(timeZone)` must be in the past.
-2. For INCREMENTAL configs: `isDueByScheduling(config)` checks elapsed time since `lastBackupAt`.
-3. For ARCHIVAL configs: per-object `lastRunByObject` map checked (from last 50 jobs).
+1. `getUser({ userId: config.userId })` — skip if the user is gone.
+2. `type === 'ARCHIVAL'` → `filtereObjects(config.objects)`; if any `scheduledObjects`
+   and `hasActiveBackupJob()` is false, fire **one archival job per scheduled object**
+   (`Promise.all`, `bypassDedup: true`).
+3. Otherwise → `triggerBackupJob({ user, config, lastUpdatedAt: config.lastBackupAt })`.
+
+`scheduleConfig.scheduling` (frequency/interval/startDate/startTime/timeZone) is still
+written and stored on the config, but **nothing in the cron reads it**. The only throttles
+left are the two in the scan/loop itself:
+
+- `getScheduledIncrementalBackupConfigs()`'s `backupStatus` filter — a config whose
+  backupStatus is not SUCCESS/FAILED/PARTIAL_FAILURE/absent (i.e. one currently running)
+  is not returned.
+- `hasActiveBackupJob(backupConfigId)` — archival path only; the NORMAL path has no
+  equivalent guard.
+
+**Consequence:** a SCHEDULE config that reaches a terminal backupStatus is re-fired on the
+next 5-minute tick regardless of its configured HOURLY/DAILY/WEEKLY/MONTHLY frequency, and
+`ONCE` no longer stops after its first run. Whether this is intended (gating moved
+elsewhere / deliberately deferred) or a regression from the refactor is not determinable
+from the code — flagged here rather than silently documented as correct.
+
+### Dead code in this file
+
+`runArchivalConfig()` and `runNormalConfig()` (lines 14–39) are defined but **never
+called** — `runScheduledIncrementalBackups()` inlines its own copy of the logic. The two
+differ in behavior, so they are not interchangeable: `runArchivalConfig` fires a **single**
+job for all due objects ("the backup-service orchestrator already fans out roots
+internally"), while the live inline path fires **one job per object**. The `fired`/`skipped`
+counters are likewise never incremented — the tick-END log always reports `fired=0 skipped=0`.
 
 ## Race Condition in Scheduling
 

@@ -184,8 +184,10 @@ const fetchExistingPermittedPermissionSets = async (
 // reference it in commaSeparatedPermissionSet — so this must run, and
 // succeed, before deployEcaOauthPolicy is ever called (see
 // provisionEcaPermissionSet below). Reuses apex.ts's callApex, the same
-// org-key encrypt-request/decrypt-response wrapper every other call into
-// DataVaultApiGateway uses, rather than reimplementing it here.
+// outbound wrapper every other Node -> Salesforce call uses: auth is the OAuth
+// token carried on `tokens`, and the body is plain JSON. Org-key encryption
+// applies only to the inbound Salesforce -> Node path, so nothing is encrypted
+// here (see callApex's docblock in apex.ts).
 //
 // Deliberately does not accept or forward a userId — DataVaultAssignUserToEcaHandler
 // (Apex) always resolves the admin user itself from
@@ -193,15 +195,14 @@ const fetchExistingPermittedPermissionSets = async (
 // this call to pass beyond which Permission Set was just created.
 const assignUserToEcaViaApex = async (
   instanceUrl: string,
-  tokens: SalesforceTokens,
-  crm: ICrm
+  tokens: SalesforceTokens
 ): Promise<void> => {
   const response = await callApex<{
     success: boolean;
     data?: { assigned?: boolean; assignmentsCreated?: number; assignmentsAlreadyExisted?: number };
     errorCode?: string;
     message?: string;
-  }>(crm, tokens, {
+  }>(tokens, {
     url: `${APEX_BASE(instanceUrl)}/assign-user-to-eca`,
     method: 'POST',
     body: { permissionSetName: ECA_PERMISSION_SET_NAME },
@@ -373,7 +374,7 @@ export const provisionEcaPermissionSet = async (
     // failure already does, so the caller sees one clear failure instead of
     // a deploy error that doesn't explain the real, earlier cause.
     console.log('[eca-permission-set] Permission set not yet assigned to ECA OAuth policy — assigning to admin user first...');
-    await assignUserToEcaViaApex(instanceUrl, tokens, crm);
+    await assignUserToEcaViaApex(instanceUrl, tokens);
 
     console.log('[eca-permission-set] Resolving OAuth policy record...');
     // Salesforce auto-generates this record per-org when the ECA is created —

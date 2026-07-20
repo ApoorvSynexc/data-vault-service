@@ -14,6 +14,7 @@ Index of all major execution flows with links to their detailed documents.
 | Backup Config Create | execution/BACKUP_CONFIG_CREATE.md | Config creation with trigger setup |
 | Destination Create | execution/DESTINATION_CREATE.md | S3 destination + Athena grant |
 | Restore & Retrieve | execution/RESTORE_RETRIEVE.md | Snapshot logs, object list queries |
+| Compression (Spark) | execution/COMPRESSION.md | Post-backup Hudi/Delta compression, 3-service round trip |
 | Token Refresh | execution/TOKEN_REFRESH.md | Salesforce token auto-refresh chain |
 | Stale Job Sweep | execution/STALE_JOB_SWEEP.md | Sweeper recovery mechanism |
 
@@ -51,8 +52,8 @@ Index of all major execution flows with links to their detailed documents.
 ### "Scheduled backup fires automatically"
 1. node-cron ticks every 5 min
 2. startBackupConfigCron() → getScheduledIncrementalBackupConfigs()
-3. isDueByScheduling() check → configs that are due
-4. HTTP POST to backup-service for each due config
+3. getUser() per config — no due-time check as of 2026-07-17 (see SCHEDULERS.md)
+4. HTTP POST to backup-service for every config the scan returned
 5. See execution/SCHEDULED_BACKUP.md
 
 ### "Salesforce token expires mid-backup"

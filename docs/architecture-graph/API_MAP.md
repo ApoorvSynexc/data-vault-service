@@ -6,9 +6,9 @@ Both services mount their routers as `app.use('/api', router)` (`config/app/inde
 
 ## client-service Routes (prefix: /api/v1)
 
-Public routers (mounted in `routes/v1/index.ts` **before** `authenticate`/`aclGateway`): `/auth`, `/internal`, `/public`, `/salesforce`. Everything else requires the dashboard's own JWT auth (`authenticate` + `aclGateway`).
+Public routers (mounted in `routes/v1/index.ts` **before** `authenticate`/`aclGateway`): `/auth`, `/internal`, `/public`, `/spark-job`, `/salesforce`. Everything else requires the dashboard's own JWT auth (`authenticate` + `aclGateway`).
 
-Note: `spark-job.routes.ts` exists but its router registration is **commented out** in `routes/v1/index.ts` — not a live route.
+Note: `/spark-job` went **live 2026-07-17** (previously its router registration was commented out). It is mounted in the public block, so it carries **no `authenticate`, no `aclGateway`, and no `internalAuth`** — its only access control is that the request body must be a valid `ENCRYPTION_KEY`-encrypted transport string. See the Spark Job section below.
 
 ### Auth Routes — /auth (no dashboard auth; individual routes rate-limited/validated)
 | Method | Path | Handler | Notes |
@@ -57,9 +57,9 @@ No `:crmId` path-param routes and no Salesforce object/field metadata sub-routes
 | POST | /backup-config/objects-count | backupConfigController.getObjectsCountHanlder | |
 | GET | /backup-config/fields | backupConfigController.getFieldsHanlder | |
 | POST | /backup-config | backupConfigController.createBackupConfigHandler | `createBackupConfigValidation` |
-| GET | /backup-config/list | backupConfigController.listBackupConfigsHandler | |
+| GET | /backup-config/list | backupConfigController.listBackupConfigsHandler | Query params changed 2026-07-17: `?search=` replaces `?name=`, and `?status=`, `?backupStatus=`, `?schedule=` were added. Always scoped to the caller's `userId` + `type=NORMAL` (the old `crmId`-or-`userId` branch is gone from this handler). `?search=` switches the service to a **Scan** (see SERVICES.md). |
 | GET | /backup-config | backupConfigController.getBackupConfigHandler | Single config, presumably by query param |
-| PUT | /backup-config | backupConfigController.updateBackupConfigHandler | `updateBackupConfigValidation` |
+| PUT | /backup-config | backupConfigController.updateBackupConfigHandler | `updateBackupConfigValidation`. **New branch 2026-07-17**: if the updated config is `schedule === REALTIME` and has no `lastBackupAt`, the handler fires a seed `triggerBackupJob(type:'backup')`, then `realTimeTriggerManagement('create')`, then persists `triggerResults`. So switching an existing config to REALTIME provisions its Apex triggers on update, not only on create — and that now entails a synchronous Metadata API deploy (`RunLocalTests`) inside the request, see EXTERNAL_INTEGRATIONS.md. |
 | DELETE | /backup-config | backupConfigController.deleteBackupConfigHandler | |
 | GET | /backup-config/stats | backupConfigController.getBackupJobStatsHandler | |
 | GET | /backup-config/initalize-payload-transform | backupConfigController.initalizePayloadTransformHandler | |
@@ -73,7 +73,7 @@ No `:id` path segments, and no `/pause`, `/resume`, or `/trigger` sub-routes exi
 | GET | /archival-config/object-childs | archivalConfigController.getObjectChildHanlder | |
 | POST | /archival-config/object-records | archivalConfigController.getObjectRecordsHanlder | |
 | GET | /archival-config/fields | archivalConfigController.getFieldsHanlder | |
-| GET | /archival-config/list | archivalConfigController.listArchivalConfigsHandler | |
+| GET | /archival-config/list | archivalConfigController.listArchivalConfigsHandler | Same 2026-07-17 change as `/backup-config/list`: `?search=`, `?status=`, `?backupStatus=`; scoped to caller's `userId` + `type=ARCHIVAL`. |
 | GET | /archival-config | archivalConfigController.getArchivalConfigHandler | |
 | GET | /archival-config/stats | archivalConfigController.getArchivalJobStatsHandler | |
 | PUT | /archival-config | archivalConfigController.updateArchivalConfigHandler | |
@@ -96,7 +96,7 @@ No `DELETE /backup-job` route exists (the previous version of this doc listed on
 | Method | Path | Handler | Notes |
 |---|---|---|---|
 | POST | /destination | destinationController.createDestinationHandler | `createDestinationValidation` |
-| GET | /destination/list | destinationController.listDestinationsHandler | |
+| GET | /destination/list | destinationController.listDestinationsHandler | **Changed 2026-07-17**: decrypts each row via `getDecryptedDestinationConfig` and attaches `bucketName` + `region` to every document. Only those two fields are lifted — `accessKeyId`/`secretAccessKey` are decrypted in memory but deliberately not attached. Costs one decrypt per row per page. |
 | GET | /destination | destinationController.getDestinationHandler | |
 | GET | /destination/config | destinationController.getDestinationConfigHandler | |
 | PUT | /destination | destinationController.updateDestinationHandler | `updateDestinationValidation` |
@@ -131,6 +131,7 @@ The previous version of this doc used the mount prefix `/restore-retrieve` — t
 | GET | /restore/get-backup-configs-name | restoreRetrieveJobController.getBackupConfigsNameHandler | |
 | POST | /restore/retrieve/fetch-records | restoreRetrieveJobController.fetchRecordsHandler | Query Athena records for given backupJobIds, objectApiName, columnNames |
 | POST | /restore/retrieve/repair-glue | restoreRetrieveJobController.repairGlueTablesHandler | Not documented in the previous version of this file |
+| ~~POST~~ | ~~/restore/fetch-object-fields~~ | restoreRetrieveJobController.fetchObjectFieldsHandler | **Registered but unreachable (added 2026-07-17).** `restore-retrieve.route.ts:28` is `router.post('fetch-object-fields', ...)` — **no leading slash**. Express 5 accepts the registration without throwing, but the route then matches nothing: verified empirically against this repo's own `express@^5.2.1` — `POST /restore/fetch-object-fields` returns **404** with the path as written and **200** once the slash is added. Every other route in this file starts with `/`. The handler and its `fetchObjectFields()` service (~103 lines, S3 schema lookup) are live code with no reachable caller until the slash is added. |
 | GET | /restore/restore | restoreRetrieveJobController.getRestoreRetrieveJobHandler | Single restore/retrieve job (by backupJobId) — note the doubled path segment, it's genuinely `router.get('/restore', ...)` mounted under the `/restore` prefix |
 
 ### Internal Routes — /internal (internalAuth middleware, applied via `router.use`)
@@ -143,11 +144,21 @@ The previous version of this doc used the mount prefix `/restore-retrieve` — t
 ### Public Routes — /public (webhookAuth on the one route that needs it)
 | Method | Path | Handler | Notes |
 |---|---|---|---|
-| GET | /public/payload | publicController.payloadHandler | EMR payload build |
+| POST | /public/payload | publicController.payloadHandler | **Method + contract changed 2026-07-17** (was `GET /public/payload?backupConfigId=`, which returned the built payload as JSON). Now takes `{ payload: "<encrypted-string>" }`, `decryptFromTransport`s it to `{ backupConfigId }`, then **submits the EMR Serverless job** via `initalizePayloadTransform()` and returns only `create` — it no longer returns the payload. The old handler's `fetchAllBackupJobs` / `processObjectOperations` helpers moved into `services/payload`'s `buildPayload`. Returns 400 `invalid_payload` on decrypt failure, 400 `params_required` if `payload` is absent/not a string. |
 | POST | /public/backup-trigger | publicController.eventBridgeHandler | |
 | PUT | /public/webhook/salesforce | publicController.salesForceRealTimeHandler (`webhookAuth`) | Salesforce webhook (respond 200, async fan-out) |
 
 `/public/authorize-org` and `/public/authorize-admin` (the old two-call Bootstrap-only org registration + two-layer admin-URL request) were **removed 2026-07-14**, replaced by the single `/auth/authorize-org` above.
+
+### Spark Job Routes — /spark-job (no dashboard auth — encrypted-body only)
+Live as of 2026-07-17 (`routes/v1/spark-job.routes.ts`, `controller/v1/spark-job/index.ts`, both previously fully commented out). These two routes are the **service side of the Spark compression job** — Spark calls them; a dashboard user never does. Both take/return the same `ENCRYPTION_KEY` transport envelope (see note below).
+
+| Method | Path | Handler | Notes |
+|---|---|---|---|
+| POST | /spark-job/build-payload | sparkJobController.buildPayloadHandler | Body `{ payload }` → `decryptFromTransport` → `{ backupConfigId, backupJobIds? }`. **Contract expanded 2026-07-18.** Calls `buildPayload(backupConfigId, backupJobIds)`, then marks exactly the jobs in the built payload's `objectOperations` (keyed by backupJobId) as `COMPRESSION_JOB_IN_PROGRESS` via `setCompressionStatusBulk` — so calling this route has the **side effect** of moving jobs into the compression lifecycle, it is no longer a pure read. Returns `{ payload: "<encrypted-built-payload>" }`. Does **not** submit an EMR job (that's `/public/payload`). `backupJobIds` omitted → the payload falls back to every uncompressed (`status === SUCCESS`) job on the config. The built payload now carries the destination's **decrypted** credentials (`destination.creds`), which is why the whole response is encrypted. 400 `params_required` (payload missing / `backupJobIds` not an array), `invalid_payload` (decrypt failed), `id_required` (no `backupConfigId`), `compression_status_update_failed` (any job couldn't be marked). |
+| POST | /spark-job/update-spark-job-status | sparkJobController.updateSparkJobStatusHandler | **New 2026-07-18.** Body `{ payload }` → `{ backupConfigId, backupJobIds, success, errorMessage? }`. Terminal step of the compression lifecycle: applies a single all-or-nothing verdict to every job — `success:true` → `COMPRESSED`, `success:false` → `COMPRESSION_JOB_FAILED` (with `errorMessage`) — via `setCompressionStatusBulk` (each write conditioned on the job belonging to `backupConfigId`). On success it then best-effort calls `ensureCompressionGlueTables(backupConfigId)` to create the Hudi/Delta Glue tables (a Glue failure is logged, never fatal). Returns `{ updated, failed }`. 400 `params_required` / `invalid_payload` / `id_required` / `jobs_required` (empty array) / `job_id_required` (blank id) / `backup_config_not_found` / `compression_status_update_failed` (every write failed). |
+
+Both spark routes and `/public/payload` use the same symmetric `ENCRYPTION_KEY` transport envelope (`utils/encryption.ts`'s `encryptToTransport`/`decryptFromTransport` — base64 of the `{ciphertext, iv}` master-key envelope). Possession of that key is the entire authentication story; there is no separate caller identity, replay window, or nonce. Note `/build-payload` and `/update-spark-job-status` now **mutate job status** with no auth beyond that shared key — see SECURITY.md § 5.
 
 ### Salesforce Routes — /salesforce (no dashboard auth — secured per-route via `attachDecryptedSalesforceRequest`, not a `salesforceAuthenticate` middleware; that name is stale/never existed in this file)
 | Method | Path | Handler | Notes |
@@ -177,3 +188,4 @@ Same `app.use('/api', router)` + `router.use('/v1', v1Routers)` mounting as clie
 | GET | /backup-job/archival/resume | backupJobController.resumeArchivalJobHandler | Resume interrupted archival |
 | POST | /realtime-backup | realtimeBackupController.realtimeBackupHandler | Upsert + fire-and-forget runner |
 | POST | /glue/repair | glueController.repairGlueHandler | Not documented in the previous version of this file |
+| POST | /glue/ensure-compression-tables | glueController.ensureCompressionTablesHandler | **New 2026-07-18.** Called by client-service's `ensureCompressionGlueTables` after Spark reports a successful compression. The caller sends `x-internal-secret`, but **backup-service does not verify it** — `glueRouter` is mounted with no auth middleware and the handler doesn't check the header, same as `/glue/repair` and the `/backup-job` routes. So this endpoint accepts a decrypted `destConfig` (customer S3 credentials) in its body from any caller that can reach it. Body `{ crmId, crmName, backupConfigId, objectNames[], destConfig }`. For each object, idempotently creates the current-state **Hudi** and **Delta** Glue tables (`Promise.allSettled`, so a missing delta doesn't block hudi). Reads column/partition schema straight from the committed `.hoodie` metadata on S3 (`hudi-schema.ts`) rather than guessing. Returns `{ ensured[], failed[{objectName,error}] }`. 400 `params_required`. |

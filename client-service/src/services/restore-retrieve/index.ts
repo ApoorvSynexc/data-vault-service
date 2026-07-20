@@ -1,7 +1,7 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
+import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS, COMPRESSION_STATUS, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
 import { getBackupConfigById, getBackupConfigsWithPagination } from '../backup-config';
 import { getBackupJobsByConfig } from '../backup-job';
@@ -608,9 +608,15 @@ const groupRowsByJobId = (
 };
 
 /**
- * BACKUP path: verifies ownership of the supplied job IDs against the caller,
- * resolves the Glue table coordinates from the first job's config, and queries
- * Athena filtering to the requested partitions.
+ * BACKUP path: verifies ownership of every supplied job ID against the caller,
+ * resolves the Glue table coordinates from the first job's config, then queries
+ * Athena for the requested partitions.
+ *
+ * Compressed jobs (status === COMPRESSED) have had their raw CSVs compacted into
+ * the Hudi dataset by the compression pipeline, so their data no longer lives in
+ * the CSV table (cfg_<cfg>_<obj>) — it must be read from the Hudi table
+ * (cfg_<cfg>_<obj>_hudi). A single request can mix both, so job IDs are split by
+ * status and each group is queried against its own table, then merged.
  */
 const fetchRecordsForBackup = async (
   backupJobIds: string[],
@@ -618,29 +624,53 @@ const fetchRecordsForBackup = async (
   columnNames: string[],
   userId: string
 ): Promise<IFetchRecordsResult[] | null> => {
-  const ownerCheck = await docClient.send(
-    new GetCommand({
-      TableName: BACKUP_JOB_TABLE,
-      Key: { backupJobId: backupJobIds[0] },
-      ProjectionExpression: 'userId, backupConfigId',
-    })
+  const jobItems = await runWithConcurrency(
+    backupJobIds,
+    BACKUP_JOB_CONCURRENCY,
+    async (backupJobId) => {
+      const result = await docClient.send(
+        new GetCommand({
+          TableName: BACKUP_JOB_TABLE,
+          Key: { backupJobId },
+          ProjectionExpression: 'userId, backupConfigId, #status',
+          ExpressionAttributeNames: { '#status': 'status' },
+        })
+      );
+      return result.Item as
+        | Pick<IBackupJob, 'userId' | 'backupConfigId' | 'status'>
+        | undefined;
+    }
   );
 
-  const ownerItem = ownerCheck.Item as Pick<IBackupJob, 'userId' | 'backupConfigId'> | undefined;
-  if (!ownerItem || ownerItem.userId !== userId) return null;
+  // Every job must exist and belong to the caller.
+  if (jobItems.some((item) => !item || item.userId !== userId)) return null;
 
-  const config = await getBackupConfigById(ownerItem.backupConfigId);
+  const config = await getBackupConfigById(jobItems[0]!.backupConfigId);
   if (!config) return null;
 
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
-  const tableName = `cfg_${toGlueId(ownerItem.backupConfigId)}_${toGlueId(objectApiName)}`;
+  const csvTable = `cfg_${toGlueId(jobItems[0]!.backupConfigId)}_${toGlueId(objectApiName)}`;
+  const hudiTable = `${csvTable}_hudi`;
 
-  const result = await runAthenaQuery(
-    buildFetchSql(tableName, columnNames, backupJobIds),
-    databaseName
-  );
+  // Partition job IDs by storage: compressed → Hudi table, everything else → CSV.
+  const hudiIds: string[] = [];
+  const csvIds: string[] = [];
+  backupJobIds.forEach((id, i) => {
+    (jobItems[i]!.status === COMPRESSION_STATUS.compressed ? hudiIds : csvIds).push(id);
+  });
 
-  return groupRowsByJobId(result, backupJobIds);
+  const results = await Promise.all([
+    csvIds.length ? runAthenaQuery(buildFetchSql(csvTable, columnNames, csvIds), databaseName) : null,
+    hudiIds.length ? runAthenaQuery(buildFetchSql(hudiTable, columnNames, hudiIds), databaseName) : null,
+  ]);
+
+  const firstResult = results.find((r) => r !== null)!;
+  const merged: IQueryResult = {
+    columns: firstResult.columns,
+    rows: results.flatMap((r) => (r ? r.rows : [])),
+  };
+
+  return groupRowsByJobId(merged, backupJobIds);
 };
 
 /**

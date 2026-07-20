@@ -9,5 +9,6 @@ export * from './crm';
 export * from './internal';
 export * from './public';
 export * from './salesforce';
+export * from './spark-job';
 export * from './storage';
 export * from './user';

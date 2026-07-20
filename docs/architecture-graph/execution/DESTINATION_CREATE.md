@@ -18,7 +18,8 @@ authenticate → aclGateway → destinationValidation joi → createDestinationH
 ### Step 2: Validate AWS credentials (optional early check)
 
 ```typescript
-// validateAwsCredentials(config) — attempts a cheap S3 operation to verify credentials
+// validateS3Credentials(config) — attempts a cheap S3 operation to verify credentials
+//   (utils/validate-aws-credentials.ts — the file is named "aws", the export is "S3")
 // If fails: return 400 invalid_aws_credentials
 ```
 

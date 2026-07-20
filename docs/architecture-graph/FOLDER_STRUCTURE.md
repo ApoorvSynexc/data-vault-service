@@ -86,6 +86,9 @@ data-vault-service/
 │       │   ├── destination/index.ts
 │       │   ├── oauth-state/index.ts
 │       │   ├── otp/index.ts
+│       │   ├── payload/index.ts          # EMR payload build + EMR Serverless submit
+│       │   ├── payload/payload.check.ts  # framework-free assert self-check (compression payload)
+│       │   ├── spark-job/index.ts        # ensureCompressionGlueTables (delegates to backup-service)
 │       │   ├── restore-retrieve/index.ts
 │       │   ├── role/index.ts
 │       │   ├── session/index.ts
@@ -96,7 +99,6 @@ data-vault-service/
 │       │       │   ├── index.ts           # grantAthenaRoleS3Access
 │       │       │   └── query.ts           # runAthenaQuery
 │       │       ├── event-bridge/index.ts  # EventBridge Scheduler CRUD (dormant)
-│       │       ├── payload-transform-service/index.ts  # EMR Serverless job submit
 │       │       └── salesforce/
 │       │           ├── index.ts           # salesforceRequest, PKCE, token refresh
 │       │           ├── apex.ts            # Apex REST endpoints
@@ -148,7 +150,8 @@ data-vault-service/
 │       │   └── third-party/
 │       │       ├── registry.ts            # getCrmHandler, getRealtimeCrmHandler
 │       │       ├── types.ts               # ICrmBackupHandler, ICrmRealtimeHandler
-│       │       ├── glue/index.ts          # GlueClient, createDatabase, createCsvGlueTable
+│       │       ├── glue/index.ts          # GlueClient, createCsvGlueTable, ensureHudi/DeltaTable (compression)
+│       │       ├── glue/hudi-schema.ts     # reads Hudi/Delta schema from committed .hoodie S3 metadata
 │       │       └── salesforce/
 │       │           ├── index.ts           # salesforceHandler (runBackup, runArchival)
 │       │           ├── api-request.ts     # salesforceRequest, makePageFetcher, createBulkQueryJob

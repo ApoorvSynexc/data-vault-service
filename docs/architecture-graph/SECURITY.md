@@ -33,9 +33,26 @@ Corrected 2026-07-14: `salesforceAuthenticate` does not exist — it was removed
 - **Two-layer requests** (`decryptSalesforceRequest` / `attachDecryptedSalesforceRequest`, `utils/salesforce-crypto.ts`): the whole body (or, for GET/DELETE, a single `?envelope=` query param) is Bootstrap-Key-decrypted first to reveal `{ orgId, payload | params }`; `orgId` is looked up to fetch the org's key, which then decrypts the inner `payload`/`params` envelope. Populated onto `req.salesforcePayload` as `{ orgId, crm, plaintext }`.
 - **`/auth/authorize-org` is the one exception that stays single-layer**: there's no org key to wrap with yet on a first-time call (registering the org is what produces one), so its whole body is Bootstrap-Key-decrypted directly, not via `attachDecryptedSalesforceRequest`.
 - **Responses**: `encryptSalesforceResponse(crm, payload)` always encrypts directly with the org's own key once an org is identified — success or business-logic error alike. Apex decrypts these with `DataVaultCryptoService.decryptOrgPayload()` / `decryptPayload(rawBody, orgKey)`.
+- **Direction (corrected 2026-07-17)**: this two-key model covers the **inbound Salesforce → Node** path only. The reverse path — Node → Salesforce Apex REST, via `apex.ts`'s `callApex` — is **not** org-key encrypted: bodies go out as plain JSON and responses are parsed as plain JSON, authenticated by the OAuth bearer token on `tokens`. A prior revision of `apex.ts` wrapped outbound bodies with `encryptOrgDirect`/`decryptOrgDirect` and this document described the scheme as applying "in both directions"; that encryption was removed and `callApex` dropped its `crm` parameter. `utils/salesforce-crypto.ts` still exports `encryptOrgDirect`/`decryptOrgDirect` for the inbound middleware.
 - **`/salesforce/confirm-org-authorized`** is a documented exception: Bootstrap-only (no org key may exist yet), since its purpose is checking whether the org is registered at all.
 
-### 5. Salesforce OAuth (CRM connections, dashboard social login, and admin authorization)
+### 5. Encrypted-Body Transport (EMR / compression routes) — added 2026-07-17, expanded 2026-07-18
+Three routes are mounted in the **public** block (no `authenticate`, no `aclGateway`, no `internalAuth`) and are gated solely by the caller's ability to produce a body encrypted with the master `ENCRYPTION_KEY`:
+
+- `POST /public/payload` — decrypts `{ payload }` → `{ backupConfigId }`, then submits an EMR Serverless job.
+- `POST /spark-job/build-payload` — returns the built payload re-encrypted **and marks the requested jobs `COMPRESSION_JOB_IN_PROGRESS`** (a state mutation, not a pure read).
+- `POST /spark-job/update-spark-job-status` — **new** — writes the terminal `COMPRESSED` / `COMPRESSION_JOB_FAILED` status to the named jobs and triggers Glue table creation.
+
+Mechanism: `encryptToTransport` / `decryptFromTransport` (`utils/encryption.ts`) — base64 of the JSON `{ ciphertext, iv }` master-key envelope. This is framing over the existing AES-256-CBC `encrypt`/`decrypt`, **not** a new algorithm and not authenticated encryption (CBC has no authTag).
+
+Properties worth knowing before relying on this as an auth boundary:
+- Possession of `ENCRYPTION_KEY` is the whole credential — there is no caller identity, so these routes cannot distinguish which service called or attribute an action to a user.
+- No nonce, timestamp or replay window: a captured body stays valid indefinitely and can be resubmitted. Two of the three routes now **mutate backup-job status**, so a replayed `/build-payload` or `/update-spark-job-status` body can move jobs through the compression lifecycle. The per-job `backupConfigId` condition limits writes to jobs on that config but does not stop replay.
+- `/spark-job/build-payload`'s response is encrypted specifically because the built payload now embeds the destination's **fully decrypted** credentials (`destination.creds`, changed 2026-07-18 from the `ciphertext`/`iv`/`salt` envelope) — so anyone holding `ENCRYPTION_KEY` who calls this route gets plaintext S3 credentials back.
+- Separately, backup-service's `POST /glue/ensure-compression-tables` (called by `ensureCompressionGlueTables` after a successful compression) receives those same decrypted `destConfig` credentials in a plain body and **verifies no secret at all** — see § 2 note and API_MAP.md.
+- `ENCRYPTION_KEY` is also the Bootstrap Key of § 4 and the master key for `user.crmCredential` and destination credentials — the same secret now additionally authorizes EMR job submission and compression status writes, so its blast radius grew again with this change.
+
+### 6. Salesforce OAuth (CRM connections, dashboard social login, and admin authorization)
 Corrected 2026-07-14: the previous version of this section referenced `GET /auth/salesforce` / `GET /auth/salesforce/callback`, which don't exist — the actual routes are `/auth/social-login` and `/auth/social-login/callback` (`controller/v1/auth/social-login.ts`). There are three distinct entry points into the same underlying `getSalesforceLoginUrl()`/`getSalesforceToken()` helpers (`services/third-party/salesforce/index.ts`), each building its own `state`/PKCE pair via `createOAuthState`:
 
 - **Dashboard "Sign in with Salesforce"**: `GET /auth/social-login?authProvider=salesforce` → `{ authorizationUrl }` → browser redirect → `GET /auth/social-login/callback?code&state` exchanges the code (PKCE, `code_verifier`), stores `crmCredential` (`{access_token, refresh_token}`, master-key encrypted) and `crmProfile.instanceUrl` (Salesforce's own `instance_url` from the token response — authoritative for later API calls) on the user record, and sets the dashboard's own JWT session cookies.
@@ -80,6 +97,17 @@ Corrected 2026-07-14: the previous version of this section referenced `GET /auth
 - Permissions defined in `defaultPermissions` asset (10 modules × multiple levels).
 - Roles are stored in ROLE_TABLE; permission list is on the role record.
 
+**Shape reconciled 2026-07-17.** `IRolePermissions` has always been typed `Array<string>`, but three call sites were written against a `moduleKey → actionKey[]` **map** instead, which the type never described:
+- `aclGateway` checked `role.permissions?.[moduleKey]?.includes(actionKey)` — indexing an array by a string key, always `undefined`, so every gated route 403'd.
+- `defaultRoles` built Admin's grant with `reduce` into an object, so the Admin role was seeded in the wrong shape.
+- `create-role`'s `normalizePermissions` canonicalized object keys, so the migration's equality check compared the wrong thing.
+
+All three now use the flat `"moduleKey.actionKey"` list the type declares: `aclGateway` does `role.permissions?.includes(permission)`, `defaultRoles` uses `flatMap`, and `normalizePermissions` sorts the flat array.
+
+**Rows persisted under the old map shape are not migrated**, and there are two distinct consequences:
+- `runCreateRole` (`npm run migrate CREATE_ROLE` — a manual CLI command, not a startup hook) iterates `defaultRoles`, i.e. Admin only. Non-default roles stored in map shape are never touched and keep failing every `includes()` check until rewritten by hand.
+- If the persisted **Admin** row is itself in map shape, `runCreateRole` does not repair it — it throws. `normalizePermissions` spreads its argument (`[...(permissions ?? [])]`), and array-spreading a plain object raises `TypeError: (p ?? []) is not iterable` (verified). The repair path the function's own comment advertises is unreachable for exactly the shape it was written to fix; the row must be deleted so the `createRole` branch reseeds it.
+
 ## Password Security
 - bcrypt with 10 salt rounds.
 - Passwords are never returned in API responses (explicitly set to `undefined` before sending).
@@ -89,6 +117,22 @@ Corrected 2026-07-14: the previous version of this section referenced `GET /auth
 - Applied to `/v1/auth/*` routes via `express-rate-limit`.
 - Configuration in `client-service/src/middlewares/rate-limit/index.ts`.
 - Prevents brute-force OTP/password attacks.
+
+## Logging / Data Exposure
+
+`salesforceRequest` (`services/third-party/salesforce/index.ts:102`) logs the full body of
+every **successful** Salesforce response to stdout:
+
+```typescript
+const data = await makeCall(tokens.accessToken);
+console.log('DATA ==> ' + JSON.stringify(data));   // added 2026-07-17
+```
+
+This is the shared wrapper for every client-service → Salesforce call, so it covers object
+metadata, field metadata, preview records, and record counts — i.e. **customer CRM record
+data lands in application logs** wherever stdout is shipped. It is unconditional (no
+env/log-level guard), which reads as leftover debugging rather than intent. Worth removing
+or gating before any log aggregation is pointed at this service.
 
 ## Secrets Management
 - All secrets are environment variables.

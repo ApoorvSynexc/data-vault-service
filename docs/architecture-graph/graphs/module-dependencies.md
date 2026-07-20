@@ -17,6 +17,7 @@ graph TD
         CS_ROUTES --> CS_CTRL_PUB[controller/v1/public]
         CS_ROUTES --> CS_CTRL_SF[controller/v1/salesforce]
         CS_ROUTES --> CS_CTRL_RR[controller/v1/restore-retrieve]
+        CS_ROUTES --> CS_CTRL_SPARK[controller/v1/spark-job]
         CS_CTRL_AUTH --> CS_SVC_USER[services/user]
         CS_CTRL_AUTH --> CS_SVC_SESSION[services/session]
         CS_CTRL_AUTH --> CS_SVC_OTP[services/otp]
@@ -27,7 +28,10 @@ graph TD
         CS_CTRL_DEST --> CS_SVC_DEST[services/destination]
         CS_CTRL_DEST --> CS_SVC_ATHENA[services/third-party/athena]
         CS_CTRL_INT --> CS_SVC_BC
-        CS_CTRL_PUB --> CS_SVC_EMR[services/third-party/payload-transform-service]
+        CS_CTRL_PUB --> CS_SVC_EMR[services/payload]
+        CS_CTRL_SPARK --> CS_SVC_EMR
+        CS_CTRL_SPARK --> CS_SVC_BJ[services/backup-job]
+        CS_CTRL_SPARK --> CS_SVC_SPARK[services/spark-job]
         CS_CRON_BC --> CS_SVC_BC
         CS_SVC_USER --> CS_DB
         CS_SVC_SESSION --> CS_DB
@@ -42,6 +46,8 @@ graph TD
         BS_APP --> BS_ROUTES[routes/v1]
         BS_ROUTES --> BS_CTRL_BJ[controller/v1/backup-job]
         BS_ROUTES --> BS_CTRL_RT[controller/v1/realtime-backup]
+        BS_ROUTES --> BS_CTRL_GLUE[controller/v1/glue]
+        BS_CTRL_GLUE --> BS_SVC_GLUE[services/third-party/glue]
         BS_CTRL_BJ --> BS_SVC_BJ[services/backup-job]
         BS_CTRL_BJ --> BS_RUNNER[services/common/runner]
         BS_CTRL_RT --> BS_SVC_RT[services/realtime-backup-job]
@@ -82,6 +88,7 @@ graph TD
     CS_SVC_SF_TRIG --> SF_API
 
     CS_CTRL_PUB -->|POST /api/v1/realtime-backup| BS_CTRL_RT
+    CS_SVC_SPARK -->|POST /v1/glue/ensure-compression-tables| BS_CTRL_GLUE
     BS_RUNNER -->|POST /v1/internal/backup-payload| CS_CTRL_INT
     BS_SF_HANDLER -->|GET /v1/internal/refresh-token| CS_CTRL_INT
     BS_SF_HANDLER -->|GET /v1/internal/fields| CS_CTRL_INT
