@@ -64,7 +64,8 @@ All DynamoDB tables, keys, GSIs, TTL, and primary access patterns.
 - PK: backupJobId (S)
 - GSI: userId-index (PK: userId, SK: createdAt)
 - GSI: backupConfigId-index (PK: backupConfigId, SK: createdAt)
-- Fields: backupJobId, type (NORMAL|ARCHIVAL|RESTORE), jobType (BULK|REALTIME), userId, backupConfigId, source{ ciphertext, iv } (encrypted), destination{ type, ciphertext, iv, authTag } (encrypted), object[] (IBackupObject tree), status (PENDING|RUNNING|SUCCESS|FAILED), startedAt, completedAt, lastUpdatedAt, errorMessage, recordCount, sizeInBytes, spaceId, createdAt, updatedAt; realtime-only: objectApiName, operation, transactionId, lastCompletedAt, s3Path, schemaChange
+- Fields: backupJobId, type (NORMAL|ARCHIVAL|RESTORE), jobType (BULK|REALTIME), userId, backupConfigId, source{ ciphertext, iv } (encrypted), destination{ type, ciphertext, iv, authTag } (encrypted), object[] (IBackupObject tree), status, startedAt, completedAt, lastUpdatedAt, errorMessage, recordCount, sizeInBytes, spaceId, createdAt, updatedAt; realtime-only: objectApiName, operation, transactionId, lastCompletedAt, s3Path, schemaChange
+- **`status` values (extended 2026-07-18):** the backup lifecycle `PENDING|RUNNING|SUCCESS|FAILED`, then the compression lifecycle **overwrites the same field** with `COMPRESSION_JOB_IN_PROGRESS | COMPRESSED | COMPRESSION_JOB_FAILED`. There is no separate `compressionStatus` attribute, so once compression starts the original backup outcome (SUCCESS vs FAILED) is no longer recoverable from the row — a known one-way door (see BUSINESS_RULES.md § Compression Lifecycle). Written by `setCompressionStatus` (client-service), conditioned on the job belonging to its `backupConfigId`.
 
 ### TABLE_COUNTER_TABLE
 - PK: tableName (S)
