@@ -1,9 +1,9 @@
 import { EMRServerlessClient, StartJobRunCommand, StartJobRunCommandOutput } from '@aws-sdk/client-emr-serverless';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
-import { getDestinationById } from '../destination';
+import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig } from '../backup-job';
-import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION } from '../../constant';
+import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION, JOB_STATUS } from '../../constant';
 import { logger } from '../../middlewares';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
@@ -147,25 +147,46 @@ async function fetchAllBackupJobs(backupConfigId: string) {
     return allJobs;
 }
 
+// Only successful backups that haven't entered the compression lifecycle.
+// Excludes COMPRESSED (done), COMPRESSION_JOB_IN_PROGRESS (Spark already has it),
+// COMPRESSION_JOB_FAILED (no auto-retry), and PENDING/RUNNING/FAILED backups.
+// ponytail: no retry path — a COMPRESSION_JOB_FAILED job, or one stranded in
+// COMPRESSION_JOB_IN_PROGRESS by a crashed Spark run, never re-enters the trigger and
+// can't return to SUCCESS on its own, because compression overwrote `status`. Retry
+// needs the separate `compressionStatus` field (see COMPRESSION_STATUS in constant/),
+// which would leave `status` on SUCCESS and make the filter
+// `compressionStatus IN (null, COMPRESSION_JOB_FAILED)`. Until then, stuck jobs are
+// found by age via lastUpdatedAt, which setCompressionStatus already writes.
+const isCompressible = (job: IBackupJob): boolean => job.status === JOB_STATUS.success;
+
 // ─── Build EMR payload from a backupConfigId ──────────────────────────────────
-// Pure builder: resolves config/crm/destination/jobs and shapes the EMR payload.
-// No behavioral change from the original payload-transform-service.
-async function buildPayload(backupConfigId: string) {
+// Pure builder: resolves config/crm/destination/jobs and shapes the payload Spark
+// reads. objectOperations is keyed by backupJobId so Spark can compress each job's
+// output independently; a job with no operations maps to {}.
+//
+// `backupJobIds` scopes the payload to the jobs Spark asked for. Omitted (older Spark
+// builds), it falls back to every uncompressed job on the config.
+//
+// Destination creds are returned decrypted: this payload only ever leaves the process
+// through /build-payload, which encrypts the whole response via encryptToTransport.
+// Do not hand this to submitEMR — entryPointArguments are base64, not encrypted, and
+// land in CloudTrail.
+async function buildPayload(backupConfigId: string, backupJobIds?: string[]) {
     logger.info(`Building EMR payload for backupConfigId: ${backupConfigId}`);
 
     const backupConfig = await getBackupConfigById(backupConfigId);
     if (!backupConfig) {
-        throw new Error('Backup config not found');
+        throw new Error('backup_config_not_found');
     }
 
     const crm = await getCrmById(backupConfig.crmId);
     if (!crm) {
-        throw new Error('CRM not found');
+        throw new Error('crm_not_found');
     }
 
     const destination = await getDestinationById(backupConfig.destinationId);
     if (!destination) {
-        throw new Error('Destination not found');
+        throw new Error('destination_not_found');
     }
 
     const allBackupJobs = await fetchAllBackupJobs(backupConfigId);
@@ -173,40 +194,61 @@ async function buildPayload(backupConfigId: string) {
         throw new Error('No backup jobs found');
     }
 
-    let objectOperations = backupConfig.type === 'NORMAL' ?
-        processObjectOperations(allBackupJobs ?? []) :
-        processArchivalObjectOperations(allBackupJobs ?? []);
-    objectOperations = backupConfig.type === 'NORMAL' ?
-        schemaChangeDetection(backupConfig, objectOperations) :
-        archivalSchemaChangeDetection(backupConfig, objectOperations);
+    let jobs: IBackupJob[];
+    if (backupJobIds?.length) {
+        const jobsById = new Map(allBackupJobs.map((job) => [job.backupJobId, job]));
+        // Rejecting rather than ignoring: an id that isn't on this config means Spark and
+        // the service disagree about the job set, and silently compressing a subset would
+        // leave the rest stuck in COMPRESSION_JOB_IN_PROGRESS forever.
+        const missing = backupJobIds.filter((id) => !jobsById.has(id));
+        if (missing.length) {
+            throw new Error(`backup_jobs_not_found:${missing.join(',')}`);
+        }
+        jobs = backupJobIds.map((id) => jobsById.get(id)!);
+    } else {
+        jobs = allBackupJobs.filter(isCompressible);
+    }
 
-    logger.info(`Built EMR payload for backupConfigId: ${backupConfigId}`);
+    // processObjectOperations already takes a job array, so a single-job array gives that
+    // job's operations with no change to the merge logic itself.
+    const objectOperations: Record<string, Record<string, string[]>> = {};
+    for (const job of jobs) {
+        const jobOperations = backupConfig.type === 'NORMAL' ?
+            processObjectOperations([job]) :
+            processArchivalObjectOperations([job]);
+        objectOperations[job.backupJobId] = backupConfig.type === 'NORMAL' ?
+            schemaChangeDetection(backupConfig, jobOperations) :
+            archivalSchemaChangeDetection(backupConfig, jobOperations);
+    }
+
+    logger.info(`Built EMR payload for backupConfigId: ${backupConfigId} jobs=${jobs.length}`);
 
     return {
         jobType: backupConfig.type === 'NORMAL' ? 'BACKUP' : 'ARCHIVAL',
         backupConfigId: backupConfigId,
-        details: {
-            clientId: backupConfig.userId,
-            backupType: backupConfig.schedule,
-            sourceDetails: {
-                sourceName: crm.crmName,
-                orgId: crm.crmId,
-            },
-            objectOperations,
-            destinationConfigs: {
-                destinationName: destination.provider,
-                ciphertext: destination.ciphertext,
-                iv: destination.iv,
-                salt: destination.userId,
-            },
+        clientId: backupConfig.userId,
+        backupType: backupConfig.schedule,
+        sourceName: crm.crmName,
+        orgId: crm.crmId,
+        objectOperations,
+        destination: {
+            name: destination.provider,
+            creds: getDecryptedDestinationConfig(destination),
         },
     };
 }
 
 type EmrPayload = Awaited<ReturnType<typeof buildPayload>>;
 
+// What EMR receives as entryPointArguments. Deliberately carries no credentials —
+// Spark calls /build-payload for the rest, and that response is encrypted.
+interface EmrTriggerPayload {
+    backupConfigId: string;
+    backupJobIds: string[];
+}
+
 // ─── Submit a built payload to EMR Serverless ─────────────────────────────────
-async function submitEMR(payload: EmrPayload): Promise<StartJobRunCommandOutput> {
+async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommandOutput> {
     try {
         const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64');
 
@@ -215,9 +257,8 @@ async function submitEMR(payload: EmrPayload): Promise<StartJobRunCommandOutput>
         console.log('  DataVault — EMR Serverless Job Submitter');
         console.log('──────────────────────────────────────────');
         console.log('executionRoleArn:', AWS_EMR_EXECUTION_ROLE_ARN);
-        console.log('Job Type        :', payload.jobType);
         console.log('Backup Config ID:', payload.backupConfigId);
-        console.log('Destination     :', payload.details.destinationConfigs.destinationName);
+        console.log('Backup Jobs     :', payload.backupJobIds.length);
         console.log('──────────────────────────────────────────');
 
         // Spark submit parameters — tuned for 100 GB / 200 objects in 5 minutes.
@@ -336,14 +377,29 @@ async function submitEMR(payload: EmrPayload): Promise<StartJobRunCommandOutput>
     }
 }
 
-// ─── Build + submit in one step (used by /payload and the config trigger) ─────
+// ─── Resolve uncompressed jobs + submit (used by /payload and the config trigger) ─────
+// Sends only the job ids. Spark calls /build-payload with them to get the full payload.
 async function initalizePayloadTransform(backupConfigId: string): Promise<StartJobRunCommandOutput> {
-    return submitEMR(await buildPayload(backupConfigId));
+    const backupJobIds = (await fetchAllBackupJobs(backupConfigId))
+        .filter(isCompressible)
+        .map((job) => job.backupJobId);
+
+    if (!backupJobIds.length) {
+        throw new Error('No backup jobs found');
+    }
+
+    logger.info(`Triggering EMR for backupConfigId: ${backupConfigId} uncompressedJobs=${backupJobIds.length}`);
+    return submitEMR({ backupConfigId, backupJobIds });
 }
 
 export {
     buildPayload,
     submitEMR,
     initalizePayloadTransform,
+    isCompressible,
+    // exported for payload.check.ts — the per-job grouping contract with Spark
+    processObjectOperations,
+    processArchivalObjectOperations,
     EmrPayload,
+    EmrTriggerPayload,
 };

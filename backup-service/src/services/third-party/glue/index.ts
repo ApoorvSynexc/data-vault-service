@@ -17,6 +17,7 @@ import {
 } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
+import { readHudiTableSchema } from './hudi-schema';
 
 // Platform-owned Glue client — always uses our own AWS credentials,
 // never the customer's destination bucket credentials.
@@ -357,3 +358,158 @@ export const repairGlueTableParams = async (params: IRepairGlueTableParamsInput)
 
   logger.info(`[glue] repaired table params | db:${databaseName} table:${tableName}`);
 };
+
+// ===========================================================================
+// Current-State Hudi + Delta Glue tables (compression output)
+// ===========================================================================
+//
+// Both are Hudi Copy-on-Write datasets Spark writes after compressing the raw
+// CSVs. Node does NOT write the data — it only ensures the Glue table exists so
+// Athena can read it. Tables are created ONCE and never updated: schema/location
+// are read straight from the committed `.hoodie` metadata (see hudi-schema.ts),
+// so the table always matches what Spark wrote.
+//
+// Layout (backup pipeline only — archival is a separate workflow):
+//   Hudi : <crmName>/<crmId>/backup/<cfg>/main_backup_files/<Object>/
+//   Delta: <crmName>/<crmId>/backup/<cfg>/delta/<Object>/
+
+// Hudi CoW read format for Athena — parquet data read through Hudi's input format.
+const HUDI_STORAGE_DESCRIPTOR_BASE = {
+  InputFormat: 'org.apache.hudi.hadoop.HoodieParquetInputFormat',
+  OutputFormat: 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
+  SerdeInfo: {
+    SerializationLibrary: 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe',
+  },
+  Compressed: false,
+  NumberOfBuckets: -1,
+} as const;
+
+// Distinct table names so the Hudi/Delta tables never collide with the CSV table
+// (cfg_<cfg>_<obj>).
+const buildHudiTableName = (backupConfigId: string, objectName: string): string =>
+  `${buildGlueTableName(backupConfigId, objectName)}_hudi`;
+
+const buildDeltaTableName = (backupConfigId: string, objectName: string): string =>
+  `${buildGlueTableName(backupConfigId, objectName)}_delta`;
+
+// S3 key prefix (no bucket) of a compression-output table root.
+const buildCompressionRootKey = (
+  crmName: string,
+  crmId: string,
+  backupConfigId: string,
+  objectName: string,
+  dataset: 'main_backup_files' | 'delta'
+): string => `${crmName}/${crmId}/backup/${backupConfigId}/${dataset}/${objectName}/`;
+
+export interface IEnsureCompressionTableParams {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  objectName: string;
+  destConfig: IDestinationConfig;
+}
+
+// Creates one Hudi-format Glue table, idempotently. Reads the committed schema
+// from `.hoodie` on the client bucket, then creates the table pointing at the
+// dataset root. Returns false (no-op) when the table already exists.
+const ensureHudiFormatTable = async (
+  params: IEnsureCompressionTableParams & {
+    tableName: string;
+    dataset: 'main_backup_files' | 'delta';
+  }
+): Promise<boolean> => {
+  const { crmId, crmName, backupConfigId, objectName, destConfig, tableName, dataset } = params;
+
+  const databaseName = buildGlueDatabaseName(crmId);
+
+  await ensureGlueDatabase(databaseName);
+
+  if (await glueTableExists(databaseName, tableName)) {
+    return false;
+  }
+
+  const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset);
+  // Authoritative: matches exactly what Spark committed. Throws if not written yet.
+  const { columns, partitionKeys } = await readHudiTableSchema(destConfig, rootKey);
+
+  // Both tables are partitioned by year/month (Hive-style folders) and carry
+  // backup_job_id as a data column. Guarantee all three regardless of what the
+  // reader found, and keep the invariant that a name is never both a partition
+  // key and a data column (Hive/Athena reject that).
+  const PARTITION_NAMES = new Set(['year', 'month']);
+  const finalPartitionKeys = [
+    ...partitionKeys.filter((p) => !PARTITION_NAMES.has(p.name.toLowerCase())),
+    { name: 'year', type: 'string' },
+    { name: 'month', type: 'string' },
+  ];
+  const partitionNameSet = new Set(finalPartitionKeys.map((p) => p.name.toLowerCase()));
+
+  const glueColumns: Column[] = [
+    // Drop anything the reader surfaced that is actually a partition column, plus
+    // any pre-existing backup_job_id so it isn't added twice.
+    ...columns.filter(
+      (c) => !partitionNameSet.has(c.name.toLowerCase()) && c.name.toLowerCase() !== 'backup_job_id'
+    ),
+    { name: 'backup_job_id', type: 'string' },
+  ].map(({ name, type, comment }) => ({
+    Name: name,
+    Type: type,
+    ...(comment ? { Comment: comment } : {}),
+  }));
+
+  try {
+    await glue.send(
+      new CreateTableCommand({
+        DatabaseName: databaseName,
+        TableInput: {
+          Name: tableName,
+          PartitionKeys: finalPartitionKeys.map((p) => ({ Name: p.name, Type: p.type })),
+          StorageDescriptor: {
+            ...HUDI_STORAGE_DESCRIPTOR_BASE,
+            Columns: glueColumns,
+            Location: `s3://${destConfig.bucketName}/${rootKey}`,
+          },
+          Parameters: {
+            classification: 'parquet',
+            // Let Athena use Hudi's file-listing index for partition discovery so a
+            // partitioned table (e.g. delta) is queryable without a separate
+            // ADD PARTITION step. No-op unless Spark wrote with the metadata table
+            // enabled; harmless either way.
+            'hudi.metadata-listing-enabled': 'TRUE',
+          },
+          TableType: 'EXTERNAL_TABLE',
+        },
+      })
+    );
+  } catch (err: any) {
+    // Concurrent completion events can both pass the GetTable check and race here.
+    // The loser sees AlreadyExistsException — the table exists, so treat as success.
+    if (err.name === 'AlreadyExistsException') {
+      return false;
+    }
+    throw err;
+  }
+
+  logger.info(
+    `[glue] created ${dataset === 'delta' ? 'delta' : 'hudi'} table | db:${databaseName} table:${tableName} columns:${glueColumns.length} partitions:${finalPartitionKeys.length}`
+  );
+  return true;
+};
+
+// Ensures the current-state Hudi Glue table exists for one object. Idempotent.
+export const ensureHudiCurrentStateTable = async (
+  params: IEnsureCompressionTableParams
+): Promise<boolean> =>
+  ensureHudiFormatTable({
+    ...params,
+    tableName: buildHudiTableName(params.backupConfigId, params.objectName),
+    dataset: 'main_backup_files',
+  });
+
+// Ensures the Delta Glue table exists for one object. Idempotent.
+export const ensureDeltaTable = async (params: IEnsureCompressionTableParams): Promise<boolean> =>
+  ensureHudiFormatTable({
+    ...params,
+    tableName: buildDeltaTableName(params.backupConfigId, params.objectName),
+    dataset: 'delta',
+  });

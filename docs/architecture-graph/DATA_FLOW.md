@@ -133,3 +133,24 @@ Three phases:
 2. BFS Upload — top-down: parent must upload before children.
 3. Post-order Delete — bottom-up: children must delete before parents.
    Salesforce Bulk API v2 delete jobs submit CSV with Id column.
+
+## Compression Flow (added 2026-07-18)
+
+Downstream of a completed backup — rewrites raw per-job CSVs into current-state Hudi + Delta
+tables. See execution/COMPRESSION.md for the full 3-service trace.
+
+```
+client-service (trigger)
+  ↓ submitEMR({ backupConfigId, backupJobIds })   // ids only, base64 entryPointArguments
+EMR Serverless / Spark
+  ↓ POST /v1/spark-job/build-payload  → full payload (per-job objectOperations, DECRYPTED creds)
+     ↑ side effect: those jobs → COMPRESSION_JOB_IN_PROGRESS
+  ↓ compress → Hudi CoW to  <crmName>/<crmId>/backup/<cfg>/main_backup_files/<Object>/
+                             <crmName>/<crmId>/backup/<cfg>/delta/<Object>/  (partitioned)
+  ↓ POST /v1/spark-job/update-spark-job-status  → jobs COMPRESSED | COMPRESSION_JOB_FAILED
+client-service (on success)
+  ↓ POST backup-service /v1/glue/ensure-compression-tables  (best-effort)
+backup-service
+  ↓ readHudiTableSchema(.hoodie metadata) → CreateTable  _hudi / _delta   (once, never updated)
+Athena can now query current state.
+```

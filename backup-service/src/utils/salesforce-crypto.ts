@@ -48,7 +48,10 @@ const decryptWithKey = ({ ciphertext, iv }: EncryptedPayload, keyBase64: string)
     Buffer.from(keyBase64, 'base64'),
     Buffer.from(iv, 'base64')
   );
-  return Buffer.concat([decipher.update(Buffer.from(ciphertext, 'base64')), decipher.final()]).toString('utf8');
+  return Buffer.concat([
+    decipher.update(Buffer.from(ciphertext, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
 };
 
 const decryptWithBootstrap = (envelope: EncryptedPayload): string => {

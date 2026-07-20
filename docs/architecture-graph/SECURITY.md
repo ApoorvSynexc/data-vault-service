@@ -36,19 +36,21 @@ Corrected 2026-07-14: `salesforceAuthenticate` does not exist — it was removed
 - **Direction (corrected 2026-07-17)**: this two-key model covers the **inbound Salesforce → Node** path only. The reverse path — Node → Salesforce Apex REST, via `apex.ts`'s `callApex` — is **not** org-key encrypted: bodies go out as plain JSON and responses are parsed as plain JSON, authenticated by the OAuth bearer token on `tokens`. A prior revision of `apex.ts` wrapped outbound bodies with `encryptOrgDirect`/`decryptOrgDirect` and this document described the scheme as applying "in both directions"; that encryption was removed and `callApex` dropped its `crm` parameter. `utils/salesforce-crypto.ts` still exports `encryptOrgDirect`/`decryptOrgDirect` for the inbound middleware.
 - **`/salesforce/confirm-org-authorized`** is a documented exception: Bootstrap-only (no org key may exist yet), since its purpose is checking whether the org is registered at all.
 
-### 5. Encrypted-Body Transport (EMR payload routes) — added 2026-07-17
-Two routes are mounted in the **public** block (no `authenticate`, no `aclGateway`, no `internalAuth`) and are gated solely by the caller's ability to produce a body encrypted with the master `ENCRYPTION_KEY`:
+### 5. Encrypted-Body Transport (EMR / compression routes) — added 2026-07-17, expanded 2026-07-18
+Three routes are mounted in the **public** block (no `authenticate`, no `aclGateway`, no `internalAuth`) and are gated solely by the caller's ability to produce a body encrypted with the master `ENCRYPTION_KEY`:
 
 - `POST /public/payload` — decrypts `{ payload }` → `{ backupConfigId }`, then submits an EMR Serverless job.
-- `POST /spark-job/build-payload` — decrypts the same way, returns the built payload re-encrypted.
+- `POST /spark-job/build-payload` — returns the built payload re-encrypted **and marks the requested jobs `COMPRESSION_JOB_IN_PROGRESS`** (a state mutation, not a pure read).
+- `POST /spark-job/update-spark-job-status` — **new** — writes the terminal `COMPRESSED` / `COMPRESSION_JOB_FAILED` status to the named jobs and triggers Glue table creation.
 
 Mechanism: `encryptToTransport` / `decryptFromTransport` (`utils/encryption.ts`) — base64 of the JSON `{ ciphertext, iv }` master-key envelope. This is framing over the existing AES-256-CBC `encrypt`/`decrypt`, **not** a new algorithm and not authenticated encryption (CBC has no authTag).
 
 Properties worth knowing before relying on this as an auth boundary:
 - Possession of `ENCRYPTION_KEY` is the whole credential — there is no caller identity, so these routes cannot distinguish which service called or attribute an action to a user.
-- No nonce, timestamp or replay window: a captured body stays valid indefinitely and can be resubmitted.
-- `/spark-job/build-payload`'s response is encrypted specifically because the built payload embeds the destination's credential envelope (`ciphertext`/`iv`/`salt`); the raw payload is never returned.
-- `ENCRYPTION_KEY` is also the Bootstrap Key of § 4 and the master key for `user.crmCredential` and destination credentials — the same secret now additionally authorizes EMR job submission, so its blast radius grew with this change.
+- No nonce, timestamp or replay window: a captured body stays valid indefinitely and can be resubmitted. Two of the three routes now **mutate backup-job status**, so a replayed `/build-payload` or `/update-spark-job-status` body can move jobs through the compression lifecycle. The per-job `backupConfigId` condition limits writes to jobs on that config but does not stop replay.
+- `/spark-job/build-payload`'s response is encrypted specifically because the built payload now embeds the destination's **fully decrypted** credentials (`destination.creds`, changed 2026-07-18 from the `ciphertext`/`iv`/`salt` envelope) — so anyone holding `ENCRYPTION_KEY` who calls this route gets plaintext S3 credentials back.
+- Separately, backup-service's `POST /glue/ensure-compression-tables` (called by `ensureCompressionGlueTables` after a successful compression) receives those same decrypted `destConfig` credentials in a plain body and **verifies no secret at all** — see § 2 note and API_MAP.md.
+- `ENCRYPTION_KEY` is also the Bootstrap Key of § 4 and the master key for `user.crmCredential` and destination credentials — the same secret now additionally authorizes EMR job submission and compression status writes, so its blast radius grew again with this change.
 
 ### 6. Salesforce OAuth (CRM connections, dashboard social login, and admin authorization)
 Corrected 2026-07-14: the previous version of this section referenced `GET /auth/salesforce` / `GET /auth/salesforce/callback`, which don't exist — the actual routes are `/auth/social-login` and `/auth/social-login/callback` (`controller/v1/auth/social-login.ts`). There are three distinct entry points into the same underlying `getSalesforceLoginUrl()`/`getSalesforceToken()` helpers (`services/third-party/salesforce/index.ts`), each building its own `state`/PKCE pair via `createOAuthState`:

@@ -107,9 +107,11 @@ backup-service caches one S3Client per `{region}:{accessKeyId}:{bucketName}` in 
 
 - Glue client uses dedicated `AWS_GLUE_ACCESS_KEY` / `AWS_GLUE_SECRET_KEY` credentials (not the default `AWS_ACCESS_KEY_ID`).
 - One database per CRM: `datavault_{crmId}`.
-- One table per config×object: `cfg_{backupConfigId}_{objectName}`.
-- Tables use CSV SerDe (OpenCSVSerde).
-- Partition key: `backup_job_id`.
+- Three table shapes per config×object:
+  - **CSV** (raw, per-job): `cfg_{backupConfigId}_{objectName}` — OpenCSVSerde, partition key `backup_job_id`. The as-written backup output.
+  - **Hudi current-state** (compression output, 2026-07-18): `..._hudi`, location `.../main_backup_files/{objectName}/`.
+  - **Delta** (compression output, 2026-07-18): `..._delta`, location `.../delta/{objectName}/`, partitioned.
+- Both compression tables use `HoodieParquetInputFormat` (Hudi Copy-on-Write, read by Athena) with `hudi.metadata-listing-enabled=TRUE` for partition discovery.
 
 ### Operations
 
@@ -117,6 +119,7 @@ backup-service caches one S3Client per `{region}:{accessKeyId}:{bucketName}` in 
 - `createCsvGlueTable(params)` — idempotent (AlreadyExistsException swallowed).
 - `registerBackupJobPartition(params)` — addPartitions with backup_job_id value.
 - `updateGlueTableSchema(params)` — updates column definitions on schema change.
+- **Compression tables (2026-07-18):** `ensureHudiCurrentStateTable` / `ensureDeltaTable` — created once, never updated; columns/partitions read verbatim from the committed `.hoodie` S3 metadata via `readHudiTableSchema` (`hudi-schema.ts`), so the Glue table always matches what Spark wrote. Invoked by backup-service's `POST /glue/ensure-compression-tables`, which client-service calls after a successful compression (`ensureCompressionGlueTables`). Best-effort — a Glue failure never fails the compression, which is already committed.
 
 ## AWS Athena
 
@@ -146,15 +149,23 @@ On destination creation, `grantAthenaRoleS3Access` is called (non-fatal):
 - JAR: `s3://jar-files-360datavault/JAR/DEV/latest/datavault-1.0.0.jar`.
 - Main class: `com.example.Main`.
 - Spark config: dynamic allocation up to 200 executors, 16GB driver + executors. The `minExecutors=20` / `initialExecutors=50` floor was **removed 2026-07-17**, along with a general S3A throughput reduction (`connection.maximum` 1000→100, `threads.max` 500→64, `fast.upload.active.blocks` 8→4).
-- Payload: base64(JSON) passed as `entryPointArguments[0]`.
+- Payload passed to EMR as base64(JSON) `entryPointArguments[0]`. **Changed 2026-07-18:** what's submitted is now the credential-free `EmrTriggerPayload` — just `{ backupConfigId, backupJobIds }`, not the full built payload. Deliberate: `entryPointArguments` are base64 (not encrypted) and land in CloudTrail, so no credentials go through them.
 - ENCRYPTION_KEY forwarded via `sparkExecutorEnv.ENCRYPTION_KEY`.
 - Code lives in `services/payload/index.ts` (moved 2026-07-17 out of `services/third-party/payload-transform-service/`), split into `buildPayload` (pure builder) and `submitEMR` (submitter); `initalizePayloadTransform` composes the two.
 
+### Two-hop payload handoff (Spark ↔ client-service)
+
+Because the trigger carries only ids, Spark fetches the real work from client-service:
+
+1. `initalizePayloadTransform` → `submitEMR({ backupConfigId, backupJobIds })` — submits the EMR job with just the uncompressed job ids.
+2. Spark reads the ids, then calls `POST /v1/spark-job/build-payload` with them → gets the full built payload (per-job `objectOperations` + **decrypted** `destination.creds`), encrypted with `ENCRYPTION_KEY`. This call also flips those jobs to `COMPRESSION_JOB_IN_PROGRESS`.
+3. Spark compresses, writes Hudi/Delta output to the destination bucket, then calls `POST /v1/spark-job/update-spark-job-status` with the verdict → jobs go `COMPRESSED`/`COMPRESSION_JOB_FAILED`, and on success client-service asks backup-service to create the Glue tables.
+
 ### When Called
 
-- From `public.payloadHandler` (**POST** /v1/public/payload — the method changed from GET on 2026-07-17, and the handler now submits the job rather than returning the payload).
-- `POST /v1/spark-job/build-payload` calls `buildPayload` only — it returns the payload re-encrypted and submits nothing.
-- Both are gated only by the encrypted request body (see SECURITY.md § 5).
+- `initalizePayloadTransform` from `public.payloadHandler` (**POST** /v1/public/payload — method changed from GET on 2026-07-17; the handler submits the job).
+- `POST /v1/spark-job/build-payload` and `POST /v1/spark-job/update-spark-job-status` are the Spark-callback routes above.
+- All are gated only by the encrypted request body (see SECURITY.md § 5).
 
 ## AWS EventBridge Scheduler (DORMANT)
 
