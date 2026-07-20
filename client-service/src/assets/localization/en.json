@@ -61,5 +61,8 @@
   "backup_id_required": "backupId is required",
   "backup_job_not_found": "Backup job not found",
   "multiple_backup_configs": "All selected backup jobs must belong to a single backup configuration",
-  "invalid_payload": "The encrypted payload is invalid or could not be decrypted"
+  "invalid_payload": "The encrypted payload is invalid or could not be decrypted",
+  "jobs_required": "jobs must be a non-empty array",
+  "job_id_required": "Every job requires an id",
+  "compression_status_update_failed": "Failed to update the compression status of the backup jobs"
 }

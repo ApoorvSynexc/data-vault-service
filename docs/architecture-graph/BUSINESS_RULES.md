@@ -76,6 +76,18 @@ Schema changes are detected by comparing the current object schema against the l
 - Field set different → schema changed.
 - On schema change: upload new `fields_{timestamp}.json`, update Glue table columns, notify client-service via internal event.
 
+## Compression Lifecycle (added 2026-07-18)
+
+After a backup completes, its raw CSV output can be compressed by a Spark (EMR Serverless) job into current-state Hudi + Delta tables so Athena queries read current state instead of replaying every job partition.
+
+- **Eligibility:** only a job with `status === SUCCESS` is compressible (`isCompressible`). Anything already in the compression lifecycle, and any non-successful backup, is excluded.
+- **Whole-config, all-or-nothing:** Spark compresses a config as one ACID unit (records are shared across jobs). A single verdict applies to every job in the run — all `COMPRESSED`, or all `COMPRESSION_JOB_FAILED` with the same error.
+- **Status is overwritten, not annotated:** the compression status is written to the job's `status` field, destroying the prior SUCCESS/FAILED value. This is a deliberate but consequential one-way door:
+  - No auto-retry. A `COMPRESSION_JOB_FAILED` job, or one stranded in `COMPRESSION_JOB_IN_PROGRESS` by a crashed Spark run, cannot return to SUCCESS on its own and never re-enters `isCompressible`. Recovery today is manual/age-based via `lastUpdatedAt`; a proper fix needs a separate `compressionStatus` attribute.
+  - A backup that FAILED and was later compressed is indistinguishable from a successful one afterward, so it counts as "completed" in job stats (`isBackupCompleted`).
+- **Ordering (three service hops):** `POST /spark-job/build-payload` marks the requested jobs `COMPRESSION_JOB_IN_PROGRESS` *before* returning the payload (so a bad request can't strand jobs — the build validates every id belongs to the config first). Spark does the work, then `POST /spark-job/update-spark-job-status` applies the terminal verdict and, on success, best-effort ensures the Hudi/Delta Glue tables via backup-service.
+- **Glue tables are created once, never updated:** schema is read verbatim from the committed `.hoodie` S3 metadata, so the table always matches what Spark wrote; retries and duplicate completion events are safe (idempotent).
+
 ## Stale Job Threshold
 
 Jobs stuck in RUNNING, TRANSFER_IN_PROGRESS, or BULK_QUERY_IN_PROGRESS for more than 360 minutes (6 hours) are marked FAILED by the sweeper.

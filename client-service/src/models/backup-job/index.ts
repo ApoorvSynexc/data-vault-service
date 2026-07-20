@@ -37,7 +37,9 @@ export interface IBackupJob {
   source: { ciphertext: string; iv: string }; // encrypted — never expose
   destination: { type: string; ciphertext: string; iv: string; authTag: string }; // encrypted — never expose
   object?: IBackupObject[];
-  status: string; // PENDING | RUNNING | SUCCESS | FAILED
+  // PENDING | RUNNING | SUCCESS | FAILED, then the compression lifecycle overwrites it:
+  // COMPRESSION_JOB_IN_PROGRESS | COMPRESSED | COMPRESSION_JOB_FAILED
+  status: string;
   lastUpdatedAt?: string;
   startedAt?: string;
   completedAt?: string;

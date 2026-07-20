@@ -85,6 +85,22 @@ backup-service requests field names + schema for a Salesforce object.
 client-service calls Apex REST `object-fields-metadata` and returns the field list.
 `mode` is required: 'schedule', 'realtime', or 'archival'.
 
+## Forward Flow: client-service calling backup-service (2026-07-18)
+
+Beyond the fire-and-forget job triggers, the compression flow adds one request/response call
+from client-service into backup-service (opposite direction to the internal calls above):
+
+### Ensure Compression Glue Tables
+```
+POST {BACKUP_SERVICE}/v1/glue/ensure-compression-tables
+x-internal-secret: {secret}      // sent, but backup-service does NOT verify it
+body: { crmId, crmName, backupConfigId, objectNames[], destConfig }   // destConfig = decrypted S3 creds
+```
+Sent by `ensureCompressionGlueTables` after Spark reports a successful compression (via
+`/spark-job/update-spark-job-status`). backup-service creates the Hudi/Delta Glue tables and
+returns `{ ensured[], failed[] }`. Best-effort — a failure never rolls back the compression.
+See execution/COMPRESSION.md.
+
 ## Salesforce → client-service Events
 
 ### Realtime Webhook

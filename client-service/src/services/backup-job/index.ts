@@ -1,8 +1,8 @@
 import dayjs from 'dayjs';
-import { BatchWriteCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, JOB_STATUS } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
@@ -194,6 +194,75 @@ const triggerBackupJob = async (params: {
 
   await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
   return result;
+};
+
+// A job only enters the compression lifecycle once its backup has finished, so every
+// compression status still represents a backup that completed. Compression overwrites
+// `status`, so without this the stats readers below would stop counting compressed jobs.
+// Note: a job that FAILED its backup and was then compressed also lands here — the
+// original outcome is no longer on the record to distinguish it.
+const isBackupCompleted = (status: string): boolean =>
+  status === JOB_STATUS.success || Object.values(COMPRESSION_STATUS).includes(status);
+
+// Single writer for the compression lifecycle. The condition is what makes an unknown
+// or foreign backupJobId fail loudly: UpdateCommand upserts by default, so without it a
+// bad id from Spark would silently create a phantom job row.
+const setCompressionStatus = async (params: {
+  backupJobId: string;
+  backupConfigId: string;
+  status: string;
+  errorMessage?: string;
+}): Promise<void> => {
+  const { backupJobId, backupConfigId, status, errorMessage } = params;
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId },
+      UpdateExpression: `SET #status = :status, lastUpdatedAt = :now${errorMessage ? ', errorMessage = :errorMessage' : ''}`,
+      ConditionExpression: 'attribute_exists(backupJobId) AND backupConfigId = :backupConfigId',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':status': status,
+        ':now': new Date().toISOString(),
+        ':backupConfigId': backupConfigId,
+        ...(errorMessage ? { ':errorMessage': errorMessage } : {}),
+      },
+    })
+  );
+};
+
+// Applies a compression status to many jobs, tolerating per-job failures so one bad id
+// doesn't strand the rest. Returns the ids that failed for the caller to report on.
+const setCompressionStatusBulk = async (params: {
+  backupConfigId: string;
+  jobs: Array<{ backupJobId: string; status: string; errorMessage?: string }>;
+}): Promise<{ updated: string[]; failed: Array<{ backupJobId: string; reason: string }> }> => {
+  const { backupConfigId, jobs } = params;
+
+  const results = await Promise.allSettled(
+    jobs.map((job) => setCompressionStatus({ ...job, backupConfigId }))
+  );
+
+  const updated: string[] = [];
+  const failed: Array<{ backupJobId: string; reason: string }> = [];
+
+  results.forEach((result, index) => {
+    const { backupJobId, status } = jobs[index];
+    if (result.status === 'fulfilled') {
+      logger.info(`[COMPRESSION] status set | backupJobId=${backupJobId} status=${status}`);
+      updated.push(backupJobId);
+      return;
+    }
+    // ConditionalCheckFailedException means the job doesn't exist or belongs to another config.
+    const reason = result.reason?.name === 'ConditionalCheckFailedException'
+      ? 'not_found_for_config'
+      : result.reason?.message ?? 'update_failed';
+    logger.error(`[COMPRESSION] status update FAILED | backupJobId=${backupJobId} status=${status} reason=${reason}`);
+    failed.push({ backupJobId, reason });
+  });
+
+  return { updated, failed };
 };
 
 const getBackupJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
@@ -404,7 +473,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
       const jobSizeBytes = (job.object ?? []).reduce((sum, obj) => sum + (obj.sizeInBytes ?? 0), 0);
       const jobRecordCount = job.recordCount ?? 0;
 
-      if (job.status === JOB_STATUS.success) {
+      if (isBackupCompleted(job.status)) {
         completedCount++;
         totalRecordCount += jobRecordCount;
         const completedAt = job.completedAt ? dayjs(job.completedAt) : null;
@@ -512,7 +581,7 @@ const computeArchivalJobStats = async (query: { indexName: string; keyName: stri
       });
 
       totalArchival++;
-      if (job.status === JOB_STATUS.success) {
+      if (isBackupCompleted(job.status)) {
         completedArchival++;
       }
     }
@@ -592,6 +661,9 @@ export {
   getBackupJobsByConfig,
   getLastBackupJobByCrm,
   deleteBackupJobsByConfig,
+  isBackupCompleted,
+  setCompressionStatus,
+  setCompressionStatusBulk,
   computeJobStats,
   computeArchivalJobStats,
   getMonthlyStatsByCrmCurrentYear,

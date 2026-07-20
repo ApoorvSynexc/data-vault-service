@@ -26,7 +26,7 @@ Every module, what it owns, and where it lives.
 | src/controller/v1/internal/index.ts | backup.completed/failed/size/schema events, token refresh, field metadata |
 | src/controller/v1/public/index.ts | Salesforce realtime webhook fan-out, EMR job submit |
 | src/controller/v1/salesforce/index.ts | User sync from Salesforce, permission list |
-| src/controller/v1/spark-job/index.ts | EMR payload build (encrypted in/out). Live 2026-07-17 — previously fully commented out |
+| src/controller/v1/spark-job/index.ts | Spark compression: build-payload (marks jobs COMPRESSION_JOB_IN_PROGRESS) + update-spark-job-status (COMPRESSED/FAILED + ensure Glue tables). Encrypted in/out. Live 2026-07-17, update-status added 2026-07-18 |
 
 ### Routes
 | Path | Prefix |
@@ -79,7 +79,8 @@ Every module, what it owns, and where it lives.
 | src/services/backup-job/index.ts | BACKUP_JOB_TABLE CRUD |
 | src/services/restore-retrieve/index.ts | Snapshot logs, object list queries |
 | src/services/counter/index.ts | TABLE_COUNTER_TABLE atomic increments |
-| src/services/payload/index.ts | EMR payload build + EMR Serverless submit. **Moved 2026-07-17** from `services/third-party/payload-transform-service/` — it is not a third-party integration wrapper; re-exported from `services/index.ts`, dropped from `services/third-party/index.ts` |
+| src/services/payload/index.ts | EMR payload build (per-job `objectOperations`, decrypted `destination.creds`) + EMR Serverless submit (ids-only `EmrTriggerPayload`). **Moved 2026-07-17** from `services/third-party/payload-transform-service/`; reworked for compression 2026-07-18. Re-exported from `services/index.ts` |
+| src/services/spark-job/index.ts | `ensureCompressionGlueTables` — post-compression, delegates Hudi/Delta Glue table creation to backup-service over HTTP. **New 2026-07-18, not exported from `services/index.ts`** (imported directly by the spark-job controller) |
 | src/services/space/index.ts | SPACE_TABLE CRUD |
 | src/services/third-party/salesforce/index.ts | Salesforce OAuth, salesforceRequest, PKCE |
 | src/services/third-party/salesforce/apex.ts | Apex REST endpoints (objects, fields, count) |
@@ -171,7 +172,8 @@ Every module, what it owns, and where it lives.
 |---|---|
 | src/services/third-party/registry.ts | getCrmHandler, getRealtimeCrmHandler |
 | src/services/third-party/types.ts | ICrmBackupHandler, ICrmRealtimeHandler interfaces |
-| src/services/third-party/glue/index.ts | GlueClient, createDatabase, createCsvGlueTable, registerBackupJobPartition, updateGlueTableSchema |
+| src/services/third-party/glue/index.ts | GlueClient, createDatabase, createCsvGlueTable, registerBackupJobPartition, updateGlueTableSchema, ensureHudiCurrentStateTable, ensureDeltaTable (compression tables, 2026-07-18) |
+| src/services/third-party/glue/hudi-schema.ts | `readHudiTableSchema` — reads Hudi/Delta schema from committed `.hoodie` S3 metadata; Avro→Hive type mapping. New 2026-07-18 |
 | src/services/third-party/salesforce/index.ts | salesforceHandler (runBackup, runArchival) |
 | src/services/third-party/salesforce/api-request.ts | salesforceRequest, makePageFetcher, getObjectMetadata, createBulkQueryJob |
 | src/services/third-party/salesforce/schedule/backup/index.ts | exportFirstTime, exportIncremental |
