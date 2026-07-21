@@ -3,17 +3,13 @@ import {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
-  getJobActivityLogs,
-  getSnapshotActivityLogs,
   getObjectListByConfigId,
   getObjectListByBackupJobIds,
-  getBackupConfigNamesByDestination,
   fetchRecordsByBackupJobs,
   fetchObjectFields,
   repairGlueTables,
   getTableCounter,
   ConfigType,
-  BackupScheduleType,
   FetchRecordsConfigType,
   IFetchRecordsFilters,
   IChangedSinceRange,
@@ -29,12 +25,6 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
-const VALID_BACKUP_SCHEDULE_TYPES: BackupScheduleType[] = ['REALTIME', 'SCHEDULE'];
-
-const VALID_SNAPSHOT_TYPES = ['BACKUP', 'ARCHIVAL'] as const;
-type SnapshotType = typeof VALID_SNAPSHOT_TYPES[number];
-
-const DEFAULT_PAGE_SIZE = 10;
 
 // Strips encrypted fields before sending a job to the client.
 // source and destination contain ciphertext — exposing them would leak encrypted credentials.
@@ -42,30 +32,6 @@ const sanitize = ({ source, destination, ...rest }: IBackupJob) => ({
   ...rest,
   destination: { type: destination.type },
 });
-
-/**
- * GET /fetch-logs?backupJobId=
- * Returns the activity log (object[]) for a specific job.
- * Ownership is verified by comparing the job's userId to the authenticated user —
- * prevents users from reading logs of jobs that don't belong to them.
- */
-const fetchLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupJobId } = req.query;
-
-  if (!backupJobId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const logs = await getJobActivityLogs(String(backupJobId));
-
-  if (!logs || logs.userId !== req.user!.userId) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', logs.object ?? []);
-};
 
 /**
  * GET /list?backupConfigId=&limit=&cursor=&status=
@@ -128,67 +94,6 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
   }
 
   makeResponse(req, res, 200, true, 'fetch', sanitize(job!));
-};
-
-/**
- * GET /snapshot-logs?snapshotType=&destinationId=&scheduleType=&limit=&cursor=&backupConfigId=&crmId=&name=&dateFrom=&dateTo=
- *
- * snapshotType=BACKUP   — returns paginated job-level log entries (one row per completed job).
- *                         scheduleType (REALTIME | SCHEDULE) optionally filters by execution mode.
- *                         backupConfigId optionally scopes results to a single config.
- *                         crmId optionally filters configs by CRM.
- *                         dateFrom / dateTo (ISO strings) optionally filter jobs by createdAt range.
- *                         Cursor encodes per-config DynamoDB resume keys.
- *
- * snapshotType=ARCHIVAL — returns paginated config-level entries (one row per archival config).
- *                         scheduleType is not accepted for ARCHIVAL (archival has no schedule mode).
- *                         backupConfigId optionally scopes results to a single config.
- *                         crmId optionally filters configs by CRM.
- *                         name optionally filters configs by substring match.
- *                         dateFrom / dateTo are not applicable to ARCHIVAL.
- *                         Cursor encodes a DynamoDB LastEvaluatedKey.
- */
-const getSnapshotActivityLogsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { snapshotType, destinationId, scheduleType, backupConfigId, crmId, name, dateFrom, dateTo, limit, cursor } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
-
-  if (!snapshotType || !VALID_SNAPSHOT_TYPES.includes(snapshotType as SnapshotType)) {
-    makeResponse(req, res, 400, false, 'invalid_snapshot_type');
-    return;
-  }
-
-  if (!destinationId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  if (scheduleType && snapshotType !== 'BACKUP') {
-    makeResponse(req, res, 400, false, 'invalid_schedule_type_for_snapshot');
-    return;
-  }
-
-  if (scheduleType && !VALID_BACKUP_SCHEDULE_TYPES.includes(scheduleType as BackupScheduleType)) {
-    makeResponse(req, res, 400, false, 'invalid_schedule_type');
-    return;
-  }
-
-  const limitNum = Math.max(1, parseInt(limit ?? String(DEFAULT_PAGE_SIZE), 10));
-
-  const { entries, nextCursor } = await getSnapshotActivityLogs({
-    userId,
-    destinationId,
-    snapshotType: snapshotType as SnapshotType,
-    scheduleType: scheduleType as BackupScheduleType | undefined,
-    backupConfigId,
-    crmId,
-    name,
-    dateFrom,
-    dateTo,
-    limit: limitNum,
-    cursor,
-  });
-
-  makeResponse(req, res, 200, true, 'fetch', entries, { limit: limitNum, nextCursor });
 };
 
 /**
@@ -259,26 +164,6 @@ const getObjectListByBackupJobIdsHandler = async (req: IRequest, res: IResponse)
   const objectsByJobId = await getObjectListByBackupJobIds(ids, userId);
 
   makeResponse(req, res, 200, true, 'fetch', objectsByJobId);
-};
-
-/**
- * GET /get-backup-configs-name?destinationId=
- * Returns a lightweight list of { backupConfigId, name } for all configs
- * belonging to the authenticated user that are tied to the given destination.
- * Used by the UI to populate config-name dropdowns without fetching full config payloads.
- */
-const getBackupConfigsNameHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { destinationId } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
-
-  if (!destinationId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const configNames = await getBackupConfigNamesByDestination(userId, destinationId);
-
-  makeResponse(req, res, 200, true, 'fetch', configNames);
 };
 
 const VALID_FETCH_CONFIG_TYPES: FetchRecordsConfigType[] = ['BACKUP', 'ARCHIVAL'];
@@ -607,13 +492,10 @@ const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<v
 };
 
 export const restoreRetrieveJobController = wrapController({
-  fetchLogsHandler,
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
-  getSnapshotActivityLogsHandler,
   getObjectListByConfigIdHandler,
   getObjectListByBackupJobIdsHandler,
-  getBackupConfigsNameHandler,
   fetchRecordsHandler,
   fetchObjectFieldsHandler,
   repairGlueTablesHandler,

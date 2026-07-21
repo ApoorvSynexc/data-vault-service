@@ -147,24 +147,6 @@ const getBackupConfigsByUserAndCrm = async (
   return (result.Items as IBackupConfig[] | undefined) ?? [];
 };
 
-const getBackupConfigNamesByDestination = async (
-  userId: string,
-  destinationId: string
-): Promise<Pick<IBackupConfig, 'backupConfigId' | 'name'>[]> => {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_CONFIG_TABLE,
-      IndexName: 'userId-index',
-      KeyConditionExpression: 'userId = :uid',
-      FilterExpression: 'destinationId = :destinationId',
-      ProjectionExpression: 'backupConfigId, #name',
-      ExpressionAttributeNames: { '#name': 'name' },
-      ExpressionAttributeValues: { ':uid': userId, ':destinationId': destinationId },
-    })
-  );
-  return (result.Items as Pick<IBackupConfig, 'backupConfigId' | 'name'>[] | undefined) ?? [];
-};
-
 const getBackupConfigsByCrm = async (crmId: string, limit?: number): Promise<IBackupConfig[]> => {
   const result = await docClient.send(
     new ScanCommand({
@@ -544,7 +526,6 @@ export {
   getBackupConfigBySlug,
   getBackupConfigsByUser,
   getBackupConfigsByUserAndCrm,
-  getBackupConfigNamesByDestination,
   getBackupConfigsByCrm,
   getLastNBackupConfigByCrm,
   getBackupConfigSizeRecordByCrmId,
