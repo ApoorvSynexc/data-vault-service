@@ -19,7 +19,7 @@ router.post('/', createRestoreValidation, restoreRetrieveJobController.createRes
 router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler);
 router.get('/get-objectlist-by-configid', restoreRetrieveJobController.getObjectListByConfigIdHandler);
 router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);
-router.post('fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
+router.post('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
 router.post('/retrieve/repair-glue', restoreRetrieveJobController.repairGlueTablesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 
