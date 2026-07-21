@@ -301,10 +301,20 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
-  filter: { userId?: string; crmId?: string; type?: string; name?: string; status?: string; destinationId?: string; schedule?: string, backupStatus?: string, search?: string },
+  filter: {
+    userId?: string;
+    crmId?: string;
+    type?: string;
+    name?: string;
+    status?: string;
+    destinationId?: string;
+    schedule?: string;
+    backupStatus?: string;
+    search?: string;
+  },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, crmId, type, status, schedule, backupStatus, search } = filter;
+  const { userId, crmId, type, name, status, destinationId, schedule, backupStatus, search } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
@@ -312,9 +322,16 @@ const getBackupConfigsWithPagination = async (
     throw new Error('Either userId or crmId must be provided');
   }
 
-  const isCrmQuery = !!crmId && !userId;
-  const indexName = isCrmQuery ? 'crmId-index' : 'userId-index';
-  const keyValue = isCrmQuery ? crmId : userId;
+  // userId-index is preferred whenever userId is available; crmId (if also passed)
+  // then becomes a plain equality filter instead of the query key.
+  const useUserIdKey = !!userId;
+  const indexName = useUserIdKey ? 'userId-index' : 'crmId-index';
+  const keyAttribute = useUserIdKey ? 'userId' : 'crmId';
+  const keyValue = useUserIdKey ? userId : crmId;
+  const isSearch = !!search && search.length > 0;
+
+  const projectionExpression =
+    'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, createdAt, updatedAt';
 
   const expressionAttributeNames: Record<string, string> = {
     '#name': 'name',
@@ -324,34 +341,46 @@ const getBackupConfigsWithPagination = async (
     ...(backupStatus && { '#backupStatus': 'backupStatus' }),
   };
 
-  const buildCommonFilters = (expressionAttributeValues: Record<string, any>): string[] => {
-    const filterExpressions: string[] = [];
+  // Equality/contains filters shared by both the Query and Scan paths.
+  const buildFilters = (expressionAttributeValues: Record<string, any>): string[] => {
+    const expressions: string[] = [];
 
+    if (isSearch) {
+      expressionAttributeValues[':search'] = search!.toLowerCase();
+      expressions.push('contains(#name, :search)');
+    } else if (name) {
+      expressionAttributeValues[':name'] = name;
+      expressions.push('#name = :name');
+    }
     if (type) {
       expressionAttributeValues[':type'] = type;
-      filterExpressions.push('#type = :type');
+      expressions.push('#type = :type');
     }
     if (status) {
       expressionAttributeValues[':status'] = status;
-      filterExpressions.push('#status = :status');
+      expressions.push('#status = :status');
     }
     if (backupStatus) {
       expressionAttributeValues[':backupStatus'] = backupStatus;
-      filterExpressions.push('#backupStatus = :backupStatus');
+      expressions.push('#backupStatus = :backupStatus');
     }
     if (schedule) {
       expressionAttributeValues[':schedule'] = schedule;
-      filterExpressions.push('#schedule = :schedule');
+      expressions.push('#schedule = :schedule');
+    }
+    if (destinationId) {
+      expressionAttributeValues[':destinationId'] = destinationId;
+      expressions.push('destinationId = :destinationId');
     }
 
-    return filterExpressions;
+    return expressions;
   };
 
   // DynamoDB's Limit bounds items read per request, not items matched by FilterExpression,
   // so a single page can under-fill (or fully empty out) once a filter is applied. Keep
   // paging with ExclusiveStartKey until `limit` filtered documents are collected or the
-  // table is exhausted, capping each request's Limit to the remaining need so we never
-  // over-fetch past the page boundary we report back via nextCursor.
+  // table is exhausted, capping each request's Limit to the remaining need so results
+  // never overshoot the page boundary reported back via nextCursor.
   const collectPage = async (
     sendPage: (pageLimit: number, startKey?: Record<string, any>) => Promise<{ Items?: any[]; LastEvaluatedKey?: Record<string, any> }>
   ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
@@ -372,21 +401,26 @@ const getBackupConfigsWithPagination = async (
     };
   };
 
-  if (search && search.length > 0) {
-    const expressionAttributeValues: Record<string, any> = {
-      ':search': search.toLowerCase(),
-    };
-    const filterExpressions: string[] = ['contains(#name, :search)', ...buildCommonFilters(expressionAttributeValues)];
+  if (isSearch) {
+    // Scan has no key condition, so both identity attributes (when present) must be
+    // filtered explicitly instead of relying on an index key.
+    const expressionAttributeValues: Record<string, any> = {};
+    const filterExpressions = buildFilters(expressionAttributeValues);
 
-
-    expressionAttributeValues[':userId'] = userId;
-    filterExpressions.push('userId = :userId');
+    if (userId) {
+      expressionAttributeValues[':userId'] = userId;
+      filterExpressions.push('userId = :userId');
+    }
+    if (crmId) {
+      expressionAttributeValues[':crmId'] = crmId;
+      filterExpressions.push('crmId = :crmId');
+    }
 
     return collectPage((pageLimit, startKey) =>
       docClient.send(
         new ScanCommand({
           TableName: BACKUP_CONFIG_TABLE,
-          ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+          ProjectionExpression: projectionExpression,
           ExpressionAttributeNames: expressionAttributeNames,
           ExpressionAttributeValues: expressionAttributeValues,
           FilterExpression: filterExpressions.join(' AND '),
@@ -398,15 +432,22 @@ const getBackupConfigsWithPagination = async (
   }
 
   const expressionAttributeValues: Record<string, any> = { ':key': keyValue };
-  const filterExpressions = buildCommonFilters(expressionAttributeValues);
+  const filterExpressions = buildFilters(expressionAttributeValues);
+
+  // When both userId and crmId are supplied, the key condition only covers the one used
+  // for the index (userId), so the other one is added as a plain equality filter.
+  if (useUserIdKey && crmId) {
+    expressionAttributeValues[':crmId'] = crmId;
+    filterExpressions.push('crmId = :crmId');
+  }
 
   return collectPage((pageLimit, startKey) =>
     docClient.send(
       new QueryCommand({
         TableName: BACKUP_CONFIG_TABLE,
         IndexName: indexName,
-        KeyConditionExpression: isCrmQuery ? 'crmId = :key' : 'userId = :key',
-        ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, spaceId, createdAt, updatedAt',
+        KeyConditionExpression: `${keyAttribute} = :key`,
+        ProjectionExpression: projectionExpression,
         ExpressionAttributeNames: expressionAttributeNames,
         ExpressionAttributeValues: expressionAttributeValues,
         ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),

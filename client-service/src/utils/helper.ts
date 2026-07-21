@@ -11,6 +11,14 @@ import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
 import { IBackupObject, IObject } from '../models';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
+type S3KeyType = 'backup' | 'archival';
+interface ISchemaS3KeyParams {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  objectName: string;
+  type: S3KeyType;
+}
 
 const randomNumber = (digits: number = 6): string => {
   const min = Math.pow(10, digits - 1);
@@ -39,26 +47,26 @@ const parseExpiryToSeconds = (expiry: string): number => {
 
 const asyncHandler =
   (fn: IHandler): IHandler =>
-  async (req: IRequest, res: IResponse): Promise<void> => {
-    try {
-      await fn(req, res);
-    } catch (error: unknown) {
-      if (error instanceof SalesforceAuthExpiredError) {
-        makeResponse(req, res, 401, false, 'salesforce_reauth_required');
-        return;
+    async (req: IRequest, res: IResponse): Promise<void> => {
+      try {
+        await fn(req, res);
+      } catch (error: unknown) {
+        if (error instanceof SalesforceAuthExpiredError) {
+          makeResponse(req, res, 401, false, 'salesforce_reauth_required');
+          return;
+        }
+        const message = error instanceof Error ? error.message : 'unknown_error';
+        console.log("Error: ", message);
+        console.log("Stack: ", error instanceof Error ? error.stack : 'no stack trace');
+        makeResponse(
+          req,
+          res,
+          400,
+          false,
+          (message || 'unknown_error') as Parameters<typeof makeResponse>[4]
+        );
       }
-      const message = error instanceof Error ? error.message : 'unknown_error';
-      console.log("Error: ", message);
-      console.log("Stack: ", error instanceof Error ? error.stack : 'no stack trace');
-      makeResponse(
-        req,
-        res,
-        400,
-        false,
-        (message || 'unknown_error') as Parameters<typeof makeResponse>[4]
-      );
-    }
-  };
+    };
 
 const wrapController = <T extends Record<string, IHandler>>(controller: T): T =>
   Object.fromEntries(Object.entries(controller).map(([key, fn]) => [key, asyncHandler(fn)])) as T;
@@ -88,7 +96,7 @@ const timer = (ms: number): Promise<void> => {
 
 // Flatten all nested objects (children at any depth) into a single array
 const flattenBackupObjects = (objects: IBackupObject[]): IBackupObject[] => {
-  if(!objects.length) return [];
+  if (!objects.length) return [];
   return objects.flatMap((obj) => [obj, ...(obj.children ? flattenBackupObjects(obj.children) : [])]);
 };
 
@@ -173,26 +181,35 @@ const formatDateTime = (dateString: string): string => {
 };
 
 const filtereObjects = (objects: IObject[]) => {
-    const immediateObjects: IObject[] = [];
-    const scheduledObjects: IObject[] = [];
+  const immediateObjects: IObject[] = [];
+  const scheduledObjects: IObject[] = [];
 
-    objects.forEach((obj: IObject) => {
-        const isOnceImmediate = obj.scheduleConfig?.type === SCHEDULE_TYPE.oneTime
-            && obj.scheduleConfig.scheduling?.frequency === 'ONCE'
-            && !obj.scheduleConfig.scheduling?.startDate
-            && !obj.scheduleConfig.scheduling?.startTime;
-        if (isOnceImmediate) {
-            immediateObjects.push(obj);
-        } else {
-            scheduledObjects.push(obj);
-        }
-    });
-
-    return {
-        immediateObjects,
-        scheduledObjects
+  objects.forEach((obj: IObject) => {
+    const isOnceImmediate = obj.scheduleConfig?.type === SCHEDULE_TYPE.oneTime
+      && obj.scheduleConfig.scheduling?.frequency === 'ONCE'
+      && !obj.scheduleConfig.scheduling?.startDate
+      && !obj.scheduleConfig.scheduling?.startTime;
+    if (isOnceImmediate) {
+      immediateObjects.push(obj);
+    } else {
+      scheduledObjects.push(obj);
     }
+  });
+
+  return {
+    immediateObjects,
+    scheduledObjects
+  }
 }
+
+const buildSchemaS3Key = ({
+  crmId,
+  crmName,
+  backupConfigId,
+  objectName,
+  type,
+}: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
+
 
 export {
   filtereObjects,
@@ -206,5 +223,6 @@ export {
   timer,
   formatSalesforceValueByDataType,
   formatFieldValuesForSOQL,
-  flattenBackupObjects
+  flattenBackupObjects,
+  buildSchemaS3Key
 };
