@@ -11,6 +11,18 @@ import { runAthenaQuery, IQueryResult } from '../third-party/athena/query';
 import { httpRequest } from '../../utils/http-request';
 import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
 
+export { buildAthenaFilterWhere, FilterError } from './athena-filter';
+export { validateColumns, buildLatestHudiRecordSql, buildDeltasAfterSql } from './athena-fetch';
+export { reconstructRecord, RESTORE_TYPES } from './restore-reconstruct';
+export type { RestoreType, IDeltaRecord } from './restore-reconstruct';
+import type { RestoreType } from './restore-reconstruct';
+import {
+  buildRawSql,
+  buildCompressedLiveSql,
+  buildCompressedDeletedSql,
+  outputColumns,
+} from './athena-fetch';
+
 const RESTORE_JOB_TYPE = 'RESTORE';
 const BACKUP_JOB_TYPE = 'NORMAL';
 const BACKUP_JOB_CONCURRENCY = 5;
@@ -588,70 +600,60 @@ export interface IFetchRecordsParams {
   backupJobIds?: string[];
   // ARCHIVAL: caller supplies the config ID; we resolve the most recent successful job.
   backupConfigId?: string;
-  // ── Accepted but not yet applied to the Athena query ────────────────────────
-  // The controller validates and threads these through; SQL wiring is a follow-up.
+  // Precompiled Athena WHERE body (AND/OR/SOQL) from the filter module. Built and
+  // validated in the controller so filter errors map to 400 before hitting Athena.
+  filterWhere?: string | null;
+  deletedOnly?: boolean;
+  // Validated by the controller, not yet applied to the query (deferred).
   filters?: IFetchRecordsFilters;
   changedSince?: IChangedSinceRange;
   bulkCsvIds?: string[];
-  deletedOnly?: boolean;
-}
-
-export interface IFetchRecordsResult {
-  backupJobId: string;
-  records: IQueryResult;
+  // Governs how a selected version is reconstructed (see restore-reconstruct.ts).
+  // Accepted on the fetch config; the reconstruction runs in the restore flow.
+  restoreType?: RestoreType;
 }
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
 const toGlueId = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
-// Builds the Athena SQL for a given table, column list, and set of job IDs.
-// backup_job_id is always prepended — it is a Glue partition key that Athena
-// exposes as a virtual column, so groupRowsByJobId can correlate rows to jobs.
-const buildFetchSql = (
-  tableName: string,
-  columnNames: string[],
-  jobIds: string[]
-): string => {
-  const cols = ['backup_job_id', ...columnNames.map((c) => `"${c}"`)].join(', ');
-  const ids = jobIds.map((id) => `'${id}'`).join(', ');
-  return `SELECT ${cols} FROM "${tableName}" WHERE backup_job_id IN (${ids})`;
-};
+// Global cap: at most 50 records, newest-first by LastModifiedDate across all jobs.
+const FETCH_LIMIT = 50;
 
-// Groups flat Athena result rows by their backup_job_id column value.
-const groupRowsByJobId = (
-  result: IQueryResult,
-  jobIds: string[]
-): IFetchRecordsResult[] => {
-  const byJobId = new Map<string, IQueryResult['rows']>();
-  for (const row of result.rows) {
-    const jobId = row['backup_job_id'] ?? '';
-    if (!byJobId.has(jobId)) byJobId.set(jobId, []);
-    byJobId.get(jobId)!.push(row);
-  }
-  return jobIds.map((id) => ({
-    backupJobId: id,
-    records: { columns: result.columns, rows: byJobId.get(id) ?? [] },
-  }));
+// Merges per-source result sets into one newest-first, capped set. Each source
+// already applies the same ORDER BY LastModifiedDate DESC + LIMIT, and the global
+// top-N is contained in the union of the per-source top-N, so a merge-sort-slice
+// here yields the correct global result.
+const mergeOrderLimit = (results: IQueryResult[], columnNames: string[]): IQueryResult => {
+  const rows = results.flatMap((r) => r.rows);
+  const lmd = (row: Record<string, string>): number => Date.parse(row['LastModifiedDate'] ?? '') || 0;
+  rows.sort((a, b) => lmd(b) - lmd(a));
+  const columns = results.find((r) => r.columns.length)?.columns ?? outputColumns(columnNames);
+  return { columns, rows: rows.slice(0, FETCH_LIMIT) };
 };
 
 /**
  * BACKUP path: verifies ownership of every supplied job ID against the caller,
  * resolves the Glue table coordinates from the first job's config, then queries
- * Athena for the requested partitions.
+ * Athena and returns a single flat, LastModifiedDate-ordered, 50-row-capped set.
  *
- * Compressed jobs (status === COMPRESSED) have had their raw CSVs compacted into
- * the Hudi dataset by the compression pipeline, so their data no longer lives in
- * the CSV table (cfg_<cfg>_<obj>) — it must be read from the Hudi table
- * (cfg_<cfg>_<obj>_hudi). A single request can mix both, so job IDs are split by
- * status and each group is queried against its own table, then merged.
+ * A request can mix compressed and uncompressed jobs:
+ *   - uncompressed → the CSV table (cfg_<cfg>_<obj>).
+ *   - compressed   → the Hudi main table (cfg_<cfg>_<obj>_hudi) + delta CDC table
+ *     (cfg_<cfg>_<obj>_delta). Live records come from _hudi (owned by the job, or
+ *     reached via an UPDATE delta's record_id when the record has since moved to a
+ *     later job). deletedOnly instead reads deleted records from the DELETE delta's
+ *     change_data JSON.
+ * Deleted records only exist in the delta model, so deletedOnly skips CSV jobs.
  */
 const fetchRecordsForBackup = async (
   backupJobIds: string[],
   objectApiName: string,
   columnNames: string[],
-  userId: string
-): Promise<IFetchRecordsResult[] | null> => {
+  userId: string,
+  filterWhere: string | null,
+  deletedOnly: boolean
+): Promise<IQueryResult | null> => {
   const jobItems = await runWithConcurrency(
     backupJobIds,
     BACKUP_JOB_CONCURRENCY,
@@ -679,40 +681,47 @@ const fetchRecordsForBackup = async (
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
   const csvTable = `cfg_${toGlueId(jobItems[0]!.backupConfigId)}_${toGlueId(objectApiName)}`;
   const hudiTable = `${csvTable}_hudi`;
+  const deltaTable = `${csvTable}_delta`;
 
-  // Partition job IDs by storage: compressed → Hudi table, everything else → CSV.
-  const hudiIds: string[] = [];
+  // Partition job IDs by storage: compressed → Hudi/delta, everything else → CSV.
+  const compressedIds: string[] = [];
   const csvIds: string[] = [];
   backupJobIds.forEach((id, i) => {
-    (jobItems[i]!.status === COMPRESSION_STATUS.compressed ? hudiIds : csvIds).push(id);
+    (jobItems[i]!.status === COMPRESSION_STATUS.compressed ? compressedIds : csvIds).push(id);
   });
 
-  const results = await Promise.all([
-    csvIds.length ? runAthenaQuery(buildFetchSql(csvTable, columnNames, csvIds), databaseName) : null,
-    hudiIds.length ? runAthenaQuery(buildFetchSql(hudiTable, columnNames, hudiIds), databaseName) : null,
-  ]);
+  const run = (sql: string): Promise<IQueryResult> => runAthenaQuery(sql, databaseName);
+  const queries: Promise<IQueryResult>[] = [];
 
-  const firstResult = results.find((r) => r !== null)!;
-  const merged: IQueryResult = {
-    columns: firstResult.columns,
-    rows: results.flatMap((r) => (r ? r.rows : [])),
-  };
+  if (compressedIds.length) {
+    const p = { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT };
+    queries.push(
+      run(deletedOnly ? buildCompressedDeletedSql(deltaTable, p) : buildCompressedLiveSql(hudiTable, deltaTable, p))
+    );
+  }
+  // Deleted records live only in the delta model, so CSV jobs contribute nothing.
+  if (csvIds.length && !deletedOnly) {
+    queries.push(run(buildRawSql(csvTable, { columnNames, jobIds: csvIds, filterWhere, limit: FETCH_LIMIT })));
+  }
 
-  return groupRowsByJobId(merged, backupJobIds);
+  return mergeOrderLimit(await Promise.all(queries), columnNames);
 };
 
 /**
  * ARCHIVAL path: resolves the most recent successful ARCHIVAL job for the given
  * config ID, verifies the config belongs to the caller, then queries Athena for
- * that single job's partition. Returns null when the config doesn't exist, is not
- * owned by the caller, or has no completed archival job yet.
+ * that single job's partition (CSV table). deletedOnly has no meaning for an
+ * archival snapshot, so it returns nothing. Returns null when the config doesn't
+ * exist, is not owned by the caller, or has no completed archival job yet.
  */
 const fetchRecordsForArchival = async (
   backupConfigId: string,
   objectApiName: string,
   columnNames: string[],
-  userId: string
-): Promise<IFetchRecordsResult[] | null> => {
+  userId: string,
+  filterWhere: string | null,
+  deletedOnly: boolean
+): Promise<IQueryResult | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) return null;
 
@@ -723,17 +732,17 @@ const fetchRecordsForArchival = async (
   });
 
   if (items.length === 0) return null;
+  if (deletedOnly) return { columns: outputColumns(columnNames), rows: [] };
 
   const latestJob = items[0];
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
   const tableName = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
 
   const result = await runAthenaQuery(
-    buildFetchSql(tableName, columnNames, [latestJob.backupJobId]),
+    buildRawSql(tableName, { columnNames, jobIds: [latestJob.backupJobId], filterWhere, limit: FETCH_LIMIT }),
     databaseName
   );
-
-  return groupRowsByJobId(result, [latestJob.backupJobId]);
+  return mergeOrderLimit([result], columnNames);
 };
 
 /**
@@ -742,17 +751,19 @@ const fetchRecordsForArchival = async (
  */
 const fetchRecordsByBackupJobs = async (
   params: IFetchRecordsParams
-): Promise<IFetchRecordsResult[] | null> => {
+): Promise<IQueryResult | null> => {
   const { configType, objectApiName, columnNames, userId, backupJobIds, backupConfigId } = params;
+  const filterWhere = params.filterWhere ?? null;
+  const deletedOnly = params.deletedOnly ?? false;
 
   if (configType === 'ARCHIVAL') {
     if (!backupConfigId) return null;
-    return fetchRecordsForArchival(backupConfigId, objectApiName, columnNames, userId);
+    return fetchRecordsForArchival(backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly);
   }
 
   // BACKUP
   if (!backupJobIds || backupJobIds.length === 0) return null;
-  return fetchRecordsForBackup(backupJobIds, objectApiName, columnNames, userId);
+  return fetchRecordsForBackup(backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly);
 };
 
 // ---------------------------------------------------------------------------
