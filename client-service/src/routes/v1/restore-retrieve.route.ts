@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { restoreRetrieveJobController } from '../../controller';
+import { createRestoreValidation } from '../../middlewares';
 
 /**
  * Restore & Retrieve routes — all require authentication (applied at the parent router level).
@@ -18,6 +19,7 @@ import { restoreRetrieveJobController } from '../../controller';
  */
 const router = Router();
 
+router.post('/', createRestoreValidation, restoreRetrieveJobController.createRestoreHandler);
 router.get('/fetch-logs', restoreRetrieveJobController.fetchLogsHandler);
 router.get('/snapshot-logs', restoreRetrieveJobController.getSnapshotActivityLogsHandler);
 router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler);
