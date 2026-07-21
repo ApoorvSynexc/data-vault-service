@@ -34,7 +34,13 @@ const toTime = (value: string): number => {
 
 // Overwrites, in place, each field named in the delta with its pre-change value.
 // Only {old,new}-shaped entries are touched — non-UPDATE payloads are no-ops.
-const applyOldValues = (record: Record<string, string>, changeData: string): void => {
+// When `allow` is set, fields outside it are skipped, so a restore scoped to a
+// column list never reintroduces an unrequested field via a delta.
+const applyOldValues = (
+  record: Record<string, string>,
+  changeData: string,
+  allow: Set<string> | null
+): void => {
   let changes: Record<string, unknown>;
   try {
     changes = JSON.parse(changeData) as Record<string, unknown>;
@@ -42,6 +48,7 @@ const applyOldValues = (record: Record<string, string>, changeData: string): voi
     return; // malformed payload — nothing to undo
   }
   for (const field of Object.keys(changes)) {
+    if (allow && !allow.has(field)) continue;
     const entry = changes[field] as IFieldChange;
     if (entry && typeof entry === 'object' && 'old' in entry) {
       record[field] = entry.old == null ? '' : String(entry.old);
@@ -61,15 +68,25 @@ const applyOldValues = (record: Record<string, string>, changeData: string): voi
  *
  * Callers pass the deltas already identified: the single selected delta for
  * ONLY_CHANGED, or all deltas with change_time > target for ENTIRE.
+ *
+ * `columnNames` scopes the reconstruction to those fields (both modes): deltas
+ * touch only those fields and any other field is pruned from the result. Empty
+ * means the full record (every Hudi column). Pass the same list used to project
+ * `latestRecord` so the base query fetches only what's needed.
  */
 export const reconstructRecord = (
   latestRecord: Record<string, string>,
   deltas: IDeltaRecord[],
-  restoreType: RestoreType
+  restoreType: RestoreType,
+  columnNames: string[] = []
 ): Record<string, string> => {
+  const allow = columnNames.length ? new Set(columnNames) : null;
   const ordered = [...deltas].sort((a, b) => toTime(b.changeTime) - toTime(a.changeTime));
   const toApply = restoreType === 'RESTORE_ONLY_CHANGED_FIELDS' ? ordered.slice(0, 1) : ordered;
-  for (const delta of toApply) applyOldValues(latestRecord, delta.changeData);
+  for (const delta of toApply) applyOldValues(latestRecord, delta.changeData, allow);
+  if (allow) {
+    for (const key of Object.keys(latestRecord)) if (!allow.has(key)) delete latestRecord[key];
+  }
   return latestRecord;
 };
 
@@ -127,6 +144,42 @@ if (require.main === module) {
   assert.strictEqual(
     reconstructRecord({ Phone: '555' }, [{ changeTime: '1', changeData: JSON.stringify({ Phone: { old: null, new: '555' } }) }], 'RESTORE_ENTIRE_RECORD').Phone,
     ''
+  );
+
+  // columnNames scopes ENTIRE: only Name reverts; Status delta skipped, Status pruned from base.
+  assert.deepStrictEqual(
+    reconstructRecord(
+      { Name: 'Johnny', Status: 'Inactive' },
+      [
+        { changeTime: '5', changeData: upd({ Status: ['Active', 'Inactive'] }) },
+        { changeTime: '4', changeData: upd({ Name: ['John', 'Johnny'] }) },
+      ],
+      'RESTORE_ENTIRE_RECORD',
+      ['Name']
+    ),
+    { Name: 'John' }
+  );
+
+  // columnNames scopes ONLY_CHANGED the same way.
+  assert.deepStrictEqual(
+    reconstructRecord(
+      { Name: 'Johnny', Salary: '1500' },
+      [{ changeTime: '8', changeData: upd({ Name: ['John', 'Johnny'], Salary: ['1000', '1500'] }) }],
+      'RESTORE_ONLY_CHANGED_FIELDS',
+      ['Name']
+    ),
+    { Name: 'John' }
+  );
+
+  // Empty columnNames → full record (all fields kept).
+  assert.deepStrictEqual(
+    reconstructRecord(
+      { Name: 'Johnny', Status: 'Inactive' },
+      [{ changeTime: '4', changeData: upd({ Name: ['John', 'Johnny'] }) }],
+      'RESTORE_ENTIRE_RECORD',
+      []
+    ),
+    { Name: 'John', Status: 'Inactive' }
   );
 
   console.log('restore-reconstruct self-check passed');

@@ -14,6 +14,16 @@ const restorePermissions = [
         method: 'POST',
         permissions: ['restore.read']
     },
+    {
+        path : '/restore/get-objectlist-by-configid',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/fetch-object-fields',
+        method: 'GET',
+        permissions: ['restore.read']
+    }
 ];
 
 export { restorePermissions };

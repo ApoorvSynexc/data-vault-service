@@ -130,26 +130,47 @@ export const buildCompressedDeletedSql = (deltaTable: string, p: IFetchSqlParams
 
 // ── Restore reconstruction sources ────────────────────────────────────────────
 
-// Read the full current record once — all Hudi columns, not just changed fields —
-// for a single Id. The starting point for both restore modes.
-export const buildLatestHudiRecordSql = (hudiTable: string, recordId: string): string =>
-  `SELECT * FROM "${hudiTable}" WHERE "Id" = '${recordId.replace(/'/g, "''")}' LIMIT 1`;
+// Read the current record once for a single Id — the starting point for both
+// restore modes. Projects only `columnNames` when given (else all Hudi columns),
+// and ANDs the filter so a restore is scoped to records matching it.
+export const buildLatestHudiRecordSql = (
+  hudiTable: string,
+  recordId: string,
+  opts: { columnNames?: string[]; filterWhere?: string | null } = {}
+): string => {
+  const cols = opts.columnNames && opts.columnNames.length
+    ? opts.columnNames.map(quoteCol).join(', ')
+    : '*';
+  const filter = opts.filterWhere ? ` AND (${opts.filterWhere})` : '';
+  return `SELECT ${cols} FROM "${hudiTable}" WHERE "Id" = '${recordId.replace(/'/g, "''")}'${filter} LIMIT 1`;
+};
+
+// Presence predicate: true when change_data's JSON carries this field. Lets the
+// delta query skip changes that touch none of the requested columns.
+const jsonHasKey = (col: string): string => {
+  quoteCol(col); // validate the identifier (throws on injection); path uses the raw name
+  return `json_extract(change_data, '$["${col}"]') IS NOT NULL`;
+};
 
 // Fetch only the deltas needed for reconstruction: this record's changes strictly
 // after the target version, newest-first so reconstruction runs in a single pass
-// without re-reading the main table.
+// without re-reading the main table. When `columnNames` is given, deltas that
+// change none of those fields are filtered out at the source — no point querying a
+// delta whose fields aren't in the requested set.
 // ponytail: change_time compared as a string literal. If the Glue column is a
 // timestamp type rather than string, wrap the bound in `timestamp '...'`.
 export const buildDeltasAfterSql = (
   deltaTable: string,
   recordId: string,
-  targetChangeTime: string
+  targetChangeTime: string,
+  columnNames: string[] = []
 ): string => {
   const id = recordId.replace(/'/g, "''");
   const target = targetChangeTime.replace(/'/g, "''");
+  const relevant = columnNames.length ? ` AND (${columnNames.map(jsonHasKey).join(' OR ')})` : '';
   return (
     `SELECT change_time, change_type, change_data FROM "${deltaTable}" ` +
-    `WHERE record_id = '${id}' AND change_time > '${target}' ` +
+    `WHERE record_id = '${id}' AND change_time > '${target}'${relevant} ` +
     `ORDER BY change_time DESC`
   );
 };
@@ -195,10 +216,24 @@ if (require.main === module) {
   }
 
   // Restore reconstruction sources.
-  assert.ok(buildLatestHudiRecordSql('cfg_x_account_hudi', "0'1").includes(`WHERE "Id" = '0''1' LIMIT 1`));
+  assert.ok(buildLatestHudiRecordSql('cfg_x_account_hudi', "0'1").includes(`SELECT * FROM "cfg_x_account_hudi" WHERE "Id" = '0''1' LIMIT 1`));
+  // columnNames → projected; filterWhere → ANDed.
+  assert.ok(
+    buildLatestHudiRecordSql('h', 'r1', { columnNames: ['Name', 'Salary'], filterWhere: `"Status" = 'Active'` }).includes(
+      `SELECT "Name", "Salary" FROM "h" WHERE "Id" = 'r1' AND ("Status" = 'Active') LIMIT 1`
+    )
+  );
   const after = buildDeltasAfterSql('cfg_x_account_delta', 'r1', 't5');
   assert.ok(after.includes(`record_id = 'r1' AND change_time > 't5'`));
   assert.ok(after.includes('ORDER BY change_time DESC'));
+  assert.ok(!after.includes('json_extract'), 'no column filter when columnNames omitted');
+  // columnNames → only deltas touching one of those fields are queried.
+  const afterCols = buildDeltasAfterSql('d', 'r1', 't5', ['Name', 'Salary']);
+  assert.ok(
+    afterCols.includes(
+      `AND (json_extract(change_data, '$["Name"]') IS NOT NULL OR json_extract(change_data, '$["Salary"]') IS NOT NULL)`
+    )
+  );
 
   console.log('athena-fetch self-check passed');
 }

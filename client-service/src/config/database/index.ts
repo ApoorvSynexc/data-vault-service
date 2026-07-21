@@ -11,6 +11,7 @@ import {
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
   DESTINATION_TABLE,
+  RESTORE_TABLE,
   TABLE_COUNTER_TABLE,
   COUNTER_TABLE,
   OTP_TABLE,
@@ -158,6 +159,35 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         KeySchema: [
           { AttributeName: 'crmId', KeyType: 'HASH' },
           { AttributeName: 'sizeInBytes', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  {
+    TableName: RESTORE_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'restoreId', AttributeType: 'S' },
+      { AttributeName: 'userId', AttributeType: 'S' },
+      { AttributeName: 'crmId', AttributeType: 'S' },
+      { AttributeName: 'createdAt', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'restoreId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'userId-index',
+        KeySchema: [
+          { AttributeName: 'userId', KeyType: 'HASH' },
+          { AttributeName: 'createdAt', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'crmId-index',
+        KeySchema: [
+          { AttributeName: 'crmId', KeyType: 'HASH' },
+          { AttributeName: 'createdAt', KeyType: 'RANGE' },
         ],
         Projection: { ProjectionType: 'ALL' },
       },

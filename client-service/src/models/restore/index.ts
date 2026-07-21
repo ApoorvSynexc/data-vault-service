@@ -55,6 +55,11 @@ export interface IRestoreJobDetail {
 }
 
 export interface IRestore {
+  restoreId: string; // PK
+  userId: string; // GSI: userId-index
+  crmId?: string; // GSI: crmId-index
+  status: string; // DRAFT | PENDING | RUNNING | SUCCESS | FAILED
+
   source: {
     backupJobIds: string[];
   };
@@ -65,4 +70,7 @@ export interface IRestore {
   conflict: IRestoreConflict;
   jobDetail: IRestoreJobDetail;
   schedule: IScheduleConfig;
+
+  createdAt: string;
+  updatedAt: string;
 }
