@@ -2,9 +2,10 @@ import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { wrapController } from "../../../utils/helper";
 
 const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { id } = req.query as { id: string };
+  const { restoreId } = req.query as { restoreId: string };
+  
 
-  makeResponse(req, res, 200, true, 'job_resume');
+  makeResponse(req, res, 200, true, 'create');
 };
 
 export const createRestoreController = wrapController({
