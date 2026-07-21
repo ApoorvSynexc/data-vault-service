@@ -361,10 +361,10 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 };
 
 /**
- * POST /retrieve/fetch-object-fields
- * Body: {
- *   objectApiName: string
- *   backupJobIds:  string[]
+ * GET /fetch-object-fields
+ * Query: {
+ *   objectApiName:  string
+ *   backupConfigId: string
  * }
  *
  * Returns the latest schema JSON stored on S3 for objectApiName under the given
@@ -374,7 +374,7 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
  * owned by the caller) or no schema has been written for the object yet.
  */
 const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { objectApiName, backupConfigId } = req.body as {
+  const { objectApiName, backupConfigId } = req.query as {
     objectApiName?: unknown;
     backupConfigId?: unknown;
   };
