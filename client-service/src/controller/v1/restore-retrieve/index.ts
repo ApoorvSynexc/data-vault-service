@@ -18,6 +18,11 @@ import {
   IFetchRecordsFilters,
   IChangedSinceRange,
   IFetchRecordsFilterField,
+  buildAthenaFilterWhere,
+  FilterError,
+  validateColumns,
+  RESTORE_TYPES,
+  RestoreType,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -287,6 +292,7 @@ interface IFetchRecordsExtras {
   changedSince?: IChangedSinceRange;
   bulkCsvIds?: string[];
   deletedOnly?: boolean;
+  restoreType?: RestoreType;
 }
 
 /**
@@ -368,6 +374,13 @@ const parseFetchExtras = (
     extras.deletedOnly = body.deletedOnly;
   }
 
+  if (body.restoreType !== undefined) {
+    if (!RESTORE_TYPES.includes(body.restoreType as RestoreType)) {
+      return { ok: false, error: 'invalid_restore_type' };
+    }
+    extras.restoreType = body.restoreType as RestoreType;
+  }
+
   return { ok: true, value: extras };
 };
 
@@ -427,6 +440,20 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
   }
   const extras = parsedExtras.value;
 
+  // Validate columns and compile the filter block to an Athena WHERE body here so
+  // bad columns / operators / unsupported SOQL surface as a 400 before we hit Athena.
+  let filterWhere: string | null = null;
+  try {
+    validateColumns((columnNames as unknown[]).map((c) => String(c)));
+    if (extras.filters) filterWhere = buildAthenaFilterWhere(extras.filters);
+  } catch (e) {
+    if (e instanceof FilterError) {
+      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
+      return;
+    }
+    throw e;
+  }
+
   if (configType === 'ARCHIVAL') {
     if (!backupConfigId || typeof backupConfigId !== 'string') {
       makeResponse(req, res, 400, false, 'id_required');
@@ -440,6 +467,7 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
       columnNames: (columnNames as unknown[]).map((c) => String(c)),
       userId,
       ...extras,
+      filterWhere,
     });
 
     if (!result) {
@@ -471,6 +499,7 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
     columnNames: (columnNames as unknown[]).map((c) => String(c)),
     userId,
     ...extras,
+    filterWhere,
   });
 
   if (!result) {
