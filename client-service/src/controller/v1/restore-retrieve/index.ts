@@ -4,7 +4,6 @@ import {
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
   getObjectListByConfigId,
-  getObjectListByBackupJobIds,
   fetchRecordsByBackupJobs,
   fetchObjectFields,
   repairGlueTables,
@@ -130,41 +129,6 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   }
 
   makeResponse(req, res, 200, true, 'fetch', objects);
-};
-
-/**
- * GET /get-objectlist-by-backup-jobids?backupJobIds=
- * Accepts a comma-separated list of backup job IDs (SCHEDULE/BULK or REALTIME) and
- * returns { [backupJobId]: string[] } of the object names recorded on each job.
- *
- * Each job is fetched with a projected GetCommand (userId, type, jobType, object,
- * objectApiName only) so encrypted source/destination payloads never leave the
- * database. Jobs that don't exist, aren't owned by the requester, or aren't backup
- * jobs (type=NORMAL with jobType ∈ BULK | REALTIME) are silently skipped — a single
- * bad ID can't fail the whole request.
- *
- * REALTIME jobs surface their single root-level `objectApiName`; BULK jobs flatten
- * the selected-objects tree stored under `object[]`.
- */
-const getObjectListByBackupJobIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupJobIds } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
-
-  if (!backupJobIds) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const ids = [...new Set(backupJobIds.split(',').map((id) => id.trim()).filter(Boolean))];
-
-  if (ids.length === 0) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const objectsByJobId = await getObjectListByBackupJobIds(ids, userId);
-
-  makeResponse(req, res, 200, true, 'fetch', objectsByJobId);
 };
 
 const VALID_FETCH_CONFIG_TYPES: FetchRecordsConfigType[] = ['BACKUP', 'ARCHIVAL'];
@@ -403,18 +367,16 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
  *   backupJobIds:  string[]
  * }
  *
- * Resolves the single backup config shared by the given jobs (enforcing the
- * one-config rule), then returns the latest schema JSON stored on S3 for
- * objectApiName under that config — exactly as stored, without transformation.
+ * Returns the latest schema JSON stored on S3 for objectApiName under the given
+ * backup config — exactly as stored, without transformation.
  *
- * Returns 400 multiple_backup_configs when the jobs span more than one config,
- * and 400 not_exist when a job/config/destination can't be resolved (or isn't
+ * Returns 400 not_exist when the config/destination can't be resolved (or isn't
  * owned by the caller) or no schema has been written for the object yet.
  */
 const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { objectApiName, backupJobIds } = req.body as {
+  const { objectApiName, backupConfigId } = req.body as {
     objectApiName?: unknown;
-    backupJobIds?: unknown;
+    backupConfigId?: unknown;
   };
   const userId = req.user!.userId;
 
@@ -423,32 +385,19 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
     return;
   }
 
-  if (!Array.isArray(backupJobIds) || backupJobIds.length === 0) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const ids = [...new Set((backupJobIds as unknown[]).map((id) => String(id).trim()).filter(Boolean))];
-
-  if (ids.length === 0) {
+  if (!backupConfigId || typeof backupConfigId !== 'string') {
     makeResponse(req, res, 400, false, 'id_required');
     return;
   }
 
   const result = await fetchObjectFields({
     objectApiName: String(objectApiName),
-    backupJobIds: ids,
+    backupConfigId,
     userId,
   });
 
   if (!result.ok) {
-    makeResponse(
-      req,
-      res,
-      400,
-      false,
-      result.reason === 'multiple_configs' ? 'multiple_backup_configs' : 'not_exist'
-    );
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
@@ -507,7 +456,6 @@ export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
   getObjectListByConfigIdHandler,
-  getObjectListByBackupJobIdsHandler,
   fetchRecordsHandler,
   fetchObjectFieldsHandler,
   repairGlueTablesHandler,

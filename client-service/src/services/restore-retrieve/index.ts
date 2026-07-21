@@ -24,7 +24,6 @@ import {
 } from './athena-fetch';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
-const BACKUP_JOB_TYPE = 'NORMAL';
 const BACKUP_JOB_CONCURRENCY = 5;
 
 // Runs an async task for each item with at most `concurrency` tasks in-flight at once.
@@ -163,62 +162,6 @@ const getObjectListByConfigId = async (
   const allNames = flattenObjectNames((config.objects ?? []) as IObject[]);
   const uniqueNames = [...new Set(allNames)];
   return { objects: uniqueNames, found: true };
-};
-
-// Fetches one backup job's object names using a projection that excludes encrypted
-// source/destination payloads — only the fields needed to validate ownership and
-// extract object names are read. Ownership, job kind (type=NORMAL), and execution
-// mode (jobType ∈ BULK | REALTIME) are validated here so the caller can treat the
-// result as authoritative.
-//
-// BULK jobs store the user's selection as a tree under `object[]`; REALTIME jobs
-// instead record a single `objectApiName` at the root (one object changed per job),
-// so both shapes are normalised into a flat string[] here.
-const getBackupJobObjectNames = async (
-  backupJobId: string,
-  userId: string
-): Promise<{ objects: string[]; found: boolean }> => {
-  const result = await docClient.send(
-    new GetCommand({
-      TableName: BACKUP_JOB_TABLE,
-      Key: { backupJobId },
-      ProjectionExpression: 'userId, #type, jobType, #object, objectApiName',
-      ExpressionAttributeNames: { '#type': 'type', '#object': 'object' },
-    })
-  );
-
-  const item = result.Item as
-    | Pick<IBackupJob, 'userId' | 'type' | 'jobType' | 'object' | 'objectApiName'>
-    | undefined;
-
-  if (!item || item.userId !== userId || item.type !== BACKUP_JOB_TYPE) {
-    return { objects: [], found: false };
-  }
-
-  const names = item.jobType === 'REALTIME'
-    ? (item.objectApiName ? [item.objectApiName] : [])
-    : flattenObjectNames(item.object ?? []);
-
-  return { objects: [...new Set(names)], found: true };
-};
-
-const getObjectListByBackupJobIds = async (
-  backupJobIds: string[],
-  userId: string
-): Promise<Record<string, string[]>> => {
-  const results = await runWithConcurrency(
-    backupJobIds,
-    BACKUP_JOB_CONCURRENCY,
-    async (id) => {
-      const { objects, found } = await getBackupJobObjectNames(id, userId);
-      return { id, objects, found };
-    }
-  );
-
-  return results.reduce<Record<string, string[]>>((acc, { id, objects, found }) => {
-    if (found) acc[id] = objects;
-    return acc;
-  }, {});
 };
 
 // ---------------------------------------------------------------------------
@@ -509,13 +452,13 @@ const repairGlueTables = async (
 
 export interface IFetchObjectFieldsParams {
   objectApiName: string;
-  backupJobIds: string[];
+  backupConfigId: string;
   userId: string;
 }
 
 export type FetchObjectFieldsResult =
   | { ok: true; schema: unknown }
-  | { ok: false; reason: 'not_exist' | 'multiple_configs' };
+  | { ok: false; reason: 'not_exist' };
 
 /**
  * Returns the latest schema JSON stored on S3 for an object, exactly as written
@@ -523,12 +466,8 @@ export type FetchObjectFieldsResult =
  * so the controller can map each failure to the right status/message.
  *
  * Flow:
- *   1. Resolve each job's owner + backupConfigId (projection keeps encrypted
- *      source/destination blobs out of memory).
- *   2. Enforce the one-config rule: every selected job must share a single
- *      backupConfigId, else 'multiple_configs'.
- *   3. Resolve the config's CRM and destination, decrypt the S3 credentials.
- *   4. Read the most recent schema file from S3 and return its parsed contents.
+ *   1. Resolve the config's CRM and destination, decrypt the S3 credentials.
+ *   2. Read the most recent schema file from S3 and return its parsed contents.
  *
  * Schema S3 layout (written by backup-service): every schema version is stored
  * as a new fields_<timestamp>.json — fields.json is the original and is never
@@ -538,34 +477,7 @@ export type FetchObjectFieldsResult =
 const fetchObjectFields = async (
   params: IFetchObjectFieldsParams
 ): Promise<FetchObjectFieldsResult> => {
-  const { objectApiName, backupJobIds, userId } = params;
-
-  const jobItems = await runWithConcurrency(
-    backupJobIds,
-    BACKUP_JOB_CONCURRENCY,
-    async (backupJobId) => {
-      const result = await docClient.send(
-        new GetCommand({
-          TableName: BACKUP_JOB_TABLE,
-          Key: { backupJobId },
-          ProjectionExpression: 'userId, backupConfigId',
-        })
-      );
-      return result.Item as Pick<IBackupJob, 'userId' | 'backupConfigId'> | undefined;
-    }
-  );
-
-  // Every job must exist and belong to the caller.
-  if (jobItems.some((item) => !item || item.userId !== userId)) {
-    return { ok: false, reason: 'not_exist' };
-  }
-
-  // Business rule: all selected jobs must belong to a single backup configuration.
-  const configIds = [...new Set(jobItems.map((item) => item!.backupConfigId))];
-  if (configIds.length !== 1) {
-    return { ok: false, reason: 'multiple_configs' };
-  }
-  const backupConfigId = configIds[0];
+  const { objectApiName, backupConfigId, userId } = params;
 
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) {
@@ -609,7 +521,6 @@ export {
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
   getObjectListByConfigId,
-  getObjectListByBackupJobIds,
   fetchRecordsByBackupJobs,
   repairGlueTables,
   fetchObjectFields,
