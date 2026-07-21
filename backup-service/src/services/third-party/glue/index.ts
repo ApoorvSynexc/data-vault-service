@@ -74,10 +74,15 @@ const buildPartitionS3Location = (
 const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
   try {
     await glue.send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
+    logger.info(`[glue] created database | db:${databaseName}`);
   } catch (err: any) {
     if (err.name !== 'AlreadyExistsException') {
+      logger.error(
+        `[glue] ensureGlueDatabase failed | db:${databaseName} err:${err.name}: ${err.message}`
+      );
       throw err;
     }
+    logger.info(`[glue] database already exists | db:${databaseName}`);
   }
 };
 
@@ -90,6 +95,9 @@ const glueTableExists = async (databaseName: string, tableName: string): Promise
     if (err instanceof EntityNotFoundException || err.name === 'EntityNotFoundException') {
       return false;
     }
+    logger.error(
+      `[glue] glueTableExists failed | db:${databaseName} table:${tableName} err:${err.name}: ${err.message}`
+    );
     throw err;
   }
 };
@@ -176,10 +184,17 @@ export const createCsvGlueTable = async (params: ICreateCsvGlueTableParams): Pro
   const databaseName = buildGlueDatabaseName(crmId);
   const tableName = buildGlueTableName(backupConfigId, objectName);
 
+  logger.info(
+    `[glue] createCsvGlueTable start | db:${databaseName} table:${tableName} type:${type} columns:${columns.length}`
+  );
+
   await ensureGlueDatabase(databaseName);
 
   const exists = await glueTableExists(databaseName, tableName);
   if (exists) {
+    logger.info(
+      `[glue] table already exists, skipping create | db:${databaseName} table:${tableName}`
+    );
     return;
   }
 
@@ -226,6 +241,10 @@ export const registerBackupJobPartition = async (
   const databaseName = buildGlueDatabaseName(crmId);
   const tableName = buildGlueTableName(backupConfigId, objectName);
 
+  logger.info(
+    `[glue] registerBackupJobPartition start | table:${tableName} backupJobId:${backupJobId} type:${type}`
+  );
+
   const partitionInput: PartitionInput = {
     Values: [backupJobId],
     StorageDescriptor: {
@@ -255,8 +274,14 @@ export const registerBackupJobPartition = async (
     // AlreadyExistsException from BatchCreatePartition surfaces inside the response
     // errors array, not as a thrown exception — but guard the thrown path too.
     if (err.name === 'AlreadyExistsException') {
+      logger.info(
+        `[glue] partition already exists | table:${tableName} backupJobId:${backupJobId}`
+      );
       return;
     }
+    logger.error(
+      `[glue] registerBackupJobPartition failed | table:${tableName} backupJobId:${backupJobId} err:${err.name}: ${err.message}`
+    );
     throw err;
   }
 };
@@ -279,6 +304,10 @@ export const updateGlueTableSchema = async (
 
   const databaseName = buildGlueDatabaseName(crmId);
   const tableName = buildGlueTableName(backupConfigId, objectName);
+
+  logger.info(
+    `[glue] updateGlueTableSchema start | db:${databaseName} table:${tableName} columns:${columns.length}`
+  );
 
   const glueColumns: Column[] = columns.map(({ name, type, comment }) => ({
     Name: toGlueIdentifier(name),
@@ -328,6 +357,8 @@ export const repairGlueTableParams = async (params: IRepairGlueTableParamsInput)
 
   const databaseName = buildGlueDatabaseName(crmId);
   const tableName = buildGlueTableName(backupConfigId, objectName);
+
+  logger.info(`[glue] repairGlueTableParams start | db:${databaseName} table:${tableName}`);
 
   const { Table } = await glue.send(
     new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
@@ -422,9 +453,16 @@ const ensureHudiFormatTable = async (
 
   const databaseName = buildGlueDatabaseName(crmId);
 
+  logger.info(
+    `[glue] ensure ${dataset === 'delta' ? 'delta' : 'hudi'} table start | db:${databaseName} table:${tableName}`
+  );
+
   await ensureGlueDatabase(databaseName);
 
   if (await glueTableExists(databaseName, tableName)) {
+    logger.info(
+      `[glue] ${dataset === 'delta' ? 'delta' : 'hudi'} table already exists, skipping | db:${databaseName} table:${tableName}`
+    );
     return false;
   }
 
@@ -485,8 +523,14 @@ const ensureHudiFormatTable = async (
     // Concurrent completion events can both pass the GetTable check and race here.
     // The loser sees AlreadyExistsException — the table exists, so treat as success.
     if (err.name === 'AlreadyExistsException') {
+      logger.info(
+        `[glue] ${dataset === 'delta' ? 'delta' : 'hudi'} table created concurrently | db:${databaseName} table:${tableName}`
+      );
       return false;
     }
+    logger.error(
+      `[glue] ensure ${dataset === 'delta' ? 'delta' : 'hudi'} table failed | db:${databaseName} table:${tableName} err:${err.name}: ${err.message}`
+    );
     throw err;
   }
 
