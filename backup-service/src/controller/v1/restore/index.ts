@@ -1,5 +1,5 @@
-import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { wrapController } from "../../../utils/helper";
+import { IRequest, IResponse, makeResponse } from '../../../lib';
+import { wrapController } from '../../../utils/helper';
 
 const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { id } = req.query as { id: string };
