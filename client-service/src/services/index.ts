@@ -1,5 +1,6 @@
 export * from './backup-config';
 export * from './backup-job';
+export * from './restore';
 export * from './restore-retrieve';
 export * from './destination';
 export * from './counter';
