@@ -8,6 +8,7 @@ const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
 const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
+const RESTORE_TABLE = String(process.env.RESTORE_TABLE || 'data-vault-restores');
 const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
 const CRM_TABLE = String(process.env.CRM_TABLE || 'data-vault-crms');
 
@@ -125,6 +126,7 @@ export {
   AWS_GLUE_SECRET_KEY,
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
+  RESTORE_TABLE,
   TABLE_COUNTER_TABLE,
   CRM_TABLE,
 
