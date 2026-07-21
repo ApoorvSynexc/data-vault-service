@@ -7,7 +7,7 @@ type IAclGatewayPermissions = keyof typeof aclGatewayPermissions;
 
 const aclGateway = async (req: IRequest, res: IResponse, next: NextFunction): Promise<void> => {
     try {
-        const allowedModules = ["user", "crm", "/crm-metadata", "backup-job", "dashboard", "destination"];
+        const allowedModules = ["user", "crm", "crm-metadata", "backup-job", "dashboard", "destination"];
         const requestaPath = req.path;
         const requestMethod = req.method;
         const user = req.user;
