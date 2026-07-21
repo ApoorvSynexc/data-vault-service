@@ -7,6 +7,7 @@ const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELET
 const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
 const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT'];
 const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP'];
+const RESTORE_TYPE = ['RESTORE_ONLY_CHANGED_FIELDS', 'RESTORE_ENTIRE_RECORD'];
 
 const scopeRecordSchema = Joi.object({
   objectName: Joi.string().required(),
@@ -166,6 +167,7 @@ export const createRestoreValidation = (req: Request, res: Response, next: NextF
     }).required(),
     destination: destinationSchema.required(),
     conflict: conflictSchema.required(),
+    restoreType: Joi.string().valid(...RESTORE_TYPE).optional(),
     jobDetail: jobDetailSchema.optional(),
     schedule: scheduleConfigSchema.required(),
   });
