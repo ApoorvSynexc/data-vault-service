@@ -69,6 +69,16 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       throw new Error(`Backup job ${backupJobId}: source credentials are missing`);
     }
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
+    // crmId is stored top-level on the job (createBackupJob strips it out of the
+    // encrypted source), so restore it here — glue table/partition naming needs it.
+    source.crmId = source.crmId ?? (job.crmId as string);
+    // Fail loud before any S3/Glue work — a missing id would otherwise silently
+    // produce `undefined/` S3 paths and a cryptic toLowerCase crash in Glue.
+    if (!source.crmId || !backupConfigId) {
+      throw new Error(
+        `Backup job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
+      );
+    }
     const destConfig = JSON.parse(
       decrypt({
         ciphertext: destination.ciphertext,
@@ -136,6 +146,16 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       throw new Error(`Archival job ${backupJobId}: source credentials are missing`);
     }
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
+    // crmId is stored top-level on the job (createArchivalJob strips it out of the
+    // encrypted source), so restore it here — glue table/partition naming needs it.
+    source.crmId = source.crmId ?? (job.crmId as string);
+    // Fail loud before any S3/Glue work — a missing id would otherwise silently
+    // produce `undefined/` S3 paths and a cryptic toLowerCase crash in Glue.
+    if (!source.crmId || !backupConfigId) {
+      throw new Error(
+        `Archival job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
+      );
+    }
     const destConfig = JSON.parse(
       decrypt({
         ciphertext: destination.ciphertext,

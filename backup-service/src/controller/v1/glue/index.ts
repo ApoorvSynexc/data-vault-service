@@ -5,6 +5,7 @@ import {
   ensureHudiCurrentStateTable,
   ensureDeltaTable,
 } from '../../../services/third-party/glue';
+import { logger } from '../../../middlewares/logger';
 import { wrapController } from '../../../utils/helper';
 
 /**
@@ -88,6 +89,13 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
     }
   });
 
+  logger.info(
+    `[glue] repair done | cfg:${backupConfigId} repaired:${repaired.length} failed:${failed.length}`
+  );
+  if (failed.length) {
+    logger.error(`[glue] repair failures | cfg:${backupConfigId} ${JSON.stringify(failed)}`);
+  }
+
   makeResponse(req, res, 200, true, 'repair', { repaired, failed });
 };
 
@@ -169,6 +177,15 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
       });
     }
   });
+
+  logger.info(
+    `[glue] ensure-compression-tables done | cfg:${backupConfigId} ensured:${ensured.length} failed:${failed.length}`
+  );
+  if (failed.length) {
+    logger.error(
+      `[glue] ensure-compression-tables failures | cfg:${backupConfigId} ${JSON.stringify(failed)}`
+    );
+  }
 
   makeResponse(req, res, 200, true, 'create', { ensured, failed });
 };
