@@ -6,6 +6,7 @@ export * from './restore-retrieve';
 export * from './dashboard';
 export * from './destination';
 export * from './crm';
+export * from './crm-meatadata';
 export * from './internal';
 export * from './public';
 export * from './salesforce';
