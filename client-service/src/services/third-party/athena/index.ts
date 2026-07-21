@@ -51,6 +51,21 @@ const fetchCurrentPolicy = async (s3: S3Client, bucketName: string): Promise<Buc
 const hasAthenaStatement = (policy: BucketPolicy): boolean =>
   policy.Statement.some((statement) => statement.Sid === ATHENA_POLICY_SID);
 
+// Checks whether the client's bucket policy already carries our Athena statement.
+// Used when the client claims they granted access manually — we verify rather
+// than modify their policy. Uses the CLIENT'S credentials.
+export const checkAthenaRoleS3Access = async (creds: IS3Config): Promise<boolean> => {
+  const { bucketName, region, accessKeyId, secretAccessKey } = creds;
+
+  const s3 = new S3Client({
+    region,
+    credentials: { accessKeyId, secretAccessKey },
+  });
+
+  const currentPolicy = await fetchCurrentPolicy(s3, bucketName);
+  return hasAthenaStatement(currentPolicy);
+};
+
 // Grants our Athena Role ARN read access on the client's S3 bucket by
 // appending a single statement to their existing bucket policy.
 //

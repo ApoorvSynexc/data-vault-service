@@ -9,12 +9,26 @@ import {
   updateDestination,
 } from '../../../services';
 import { wrapController } from '../../../utils/helper';
-import { grantAthenaRoleS3Access } from '../../../services/third-party/athena';
+import { grantAthenaRoleS3Access, checkAthenaRoleS3Access } from '../../../services/third-party/athena';
 import { logger } from '../../../middlewares';
 
 const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { name, provider, type, config } = req.body;
+  const { name, provider, type, config, isAlreadyGranted } = req.body;
   const userId = req.user!.userId;
+
+  const athenaCreds = { bucketName: config?.bucketName, region: config?.region, accessKeyId: config?.accessKeyId, secretAccessKey: config?.secretAccessKey };
+  const isS3WithCreds = type === 'S3' && athenaCreds.bucketName && athenaCreds.region && athenaCreds.accessKeyId && athenaCreds.secretAccessKey;
+
+  // Client claims they granted Athena access manually — verify their bucket
+  // policy actually carries our statement before creating the destination.
+  // Bail out (no dangling destination) if it's missing.
+  if (isAlreadyGranted && isS3WithCreds) {
+    const granted = await checkAthenaRoleS3Access(athenaCreds).catch(() => false);
+    if (!granted) {
+      makeResponse(req, res, 400, false, 'athena_access_not_granted');
+      return;
+    }
+  }
 
   const destination = await createDestination({
     userId,
@@ -27,14 +41,10 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
 
   // Grant our Athena Role ARN read access to the client's S3 bucket so Athena
   // can query their data. Non-fatal — destination is already saved, policy can
-  // be retried. Only applies to S3 destinations that carry bucket credentials.
-  if (type === 'S3' && config?.bucketName && config?.region && config?.accessKeyId && config?.secretAccessKey) {
-    grantAthenaRoleS3Access({
-      bucketName: config.bucketName,
-      region: config.region,
-      accessKeyId: config.accessKeyId,
-      secretAccessKey: config.secretAccessKey,
-    }).catch((err) =>
+  // be retried. Only applies to S3 destinations that carry bucket credentials,
+  // and skipped when the client already granted it themselves.
+  if (!isAlreadyGranted && isS3WithCreds) {
+    grantAthenaRoleS3Access(athenaCreds).catch((err) =>
       logger.error(`[destination] failed to grant Athena role S3 access | destinationId:${destination.destinationId} err:${err?.message ?? err}`)
     );
   }
