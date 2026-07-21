@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { buildPayload } from '../../../services/payload';
+import { buildPayload, buildRestorePayload } from '../../../services/payload';
 import { getBackupConfigById } from '../../../services/backup-config';
 import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
@@ -39,11 +39,24 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
     return makeResponse(req, res, 400, false, 'params_required');
   }
 
-  const decrypted = decryptRequest<{ backupConfigId?: string; backupJobIds?: string[] }>(payload);
+  const decrypted = decryptRequest<{
+    backupConfigId?: string;
+    backupJobIds?: string[];
+    restoreConfigId?: string;
+  }>(payload);
   if (!decrypted) {
     return makeResponse(req, res, 400, false, 'invalid_payload');
   }
   logger.info('payload decrypted');
+
+  // Restore builds have a distinct payload shape and no compression lifecycle:
+  // there are no jobs to mark COMPRESSION_JOB_IN_PROGRESS, so this returns early.
+  if (decrypted.restoreConfigId) {
+    const builtRestore = await buildRestorePayload(decrypted.restoreConfigId);
+    const encryptedRestore = encryptToTransport(JSON.stringify(builtRestore));
+    logger.info(`[RESTORE] build-payload complete | restoreConfigId=${decrypted.restoreConfigId}`);
+    return makeResponse(req, res, 200, true, 'fetch', { payload: encryptedRestore });
+  }
 
   const { backupConfigId, backupJobIds } = decrypted;
   if (!backupConfigId) {

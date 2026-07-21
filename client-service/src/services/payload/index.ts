@@ -2,7 +2,8 @@ import { EMRServerlessClient, StartJobRunCommand, StartJobRunCommandOutput } fro
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
-import { getBackupJobsByConfig } from '../backup-job';
+import { getBackupJobsByConfig, getBackupJobById } from '../backup-job';
+import { getRestoreById } from '../restore';
 import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION, JOB_STATUS } from '../../constant';
 import { logger } from '../../middlewares';
 import { IBackupConfig, IBackupJob } from '../../models';
@@ -238,14 +239,97 @@ async function buildPayload(backupConfigId: string, backupJobIds?: string[]) {
     };
 }
 
+// ─── Build EMR RESTORE payload from a restoreConfigId ─────────────────────────
+// Restore mirrors buildPayload's resolve-then-shape contract, but reads a restore
+// config instead of backup jobs. The stored restore already carries selection and
+// conflict in the exact shape Spark expects; the rest is resolved:
+//   - backupConfig.id: restores reference backup jobs, not a config, so we recover
+//     the owning config from the first selected job (all jobs share one config).
+//   - sourceDetails: the CRM the backup came from.
+//   - destinationConfigs: the user's restore destination + the S3 creds Spark needs
+//     to read the backup files (the source config's destination bucket).
+//
+// Same credential rule as buildPayload: decrypted creds only ever leave through
+// /build-payload, which encrypts the whole response. Never hand this to submitEMR.
+async function buildRestorePayload(restoreConfigId: string) {
+    logger.info(`Building EMR RESTORE payload for restoreConfigId: ${restoreConfigId}`);
+
+    const restore = await getRestoreById(restoreConfigId);
+    if (!restore) {
+        throw new Error('restore_config_not_found');
+    }
+
+    const backupJobIds = restore.source?.backupJobIds ?? [];
+    if (!backupJobIds.length) {
+        throw new Error('restore_config_has_no_backup_jobs');
+    }
+
+    const firstJob = await getBackupJobById(backupJobIds[0]);
+    if (!firstJob) {
+        throw new Error(`backup_job_not_found:${backupJobIds[0]}`);
+    }
+    const backupConfigId = firstJob.backupConfigId;
+
+    const backupConfig = await getBackupConfigById(backupConfigId);
+    if (!backupConfig) {
+        throw new Error('backup_config_not_found');
+    }
+
+    const crm = await getCrmById(backupConfig.crmId);
+    if (!crm) {
+        throw new Error('crm_not_found');
+    }
+
+    const destination = await getDestinationById(backupConfig.destinationId);
+    if (!destination) {
+        throw new Error('destination_not_found');
+    }
+
+    logger.info(`Built EMR RESTORE payload for restoreConfigId: ${restoreConfigId} jobs=${backupJobIds.length}`);
+
+    return {
+        jobType: 'RESTORE',
+        restoreConfigId,
+        details: {
+            clientId: restore.userId,
+            sourceDetails: {
+                sourceName: crm.crmName,
+                orgId: crm.crmId,
+            },
+            'restore-configs': {
+                source: {
+                    backupConfig: {
+                        id: backupConfigId,
+                        backupJobIds,
+                    },
+                },
+                // Stored as-is in the shape Spark reads.
+                selection: restore.selection,
+                conflict: restore.conflict,
+                restoreType: restore.restoreType ?? 'RESTORE_ONLY_CHANGED_FIELDS',
+            },
+            // ponytail: destinationConfigs = restore destination descriptor + the S3
+            // creds Spark reads the backup from. Exact Spark contract for this block
+            // was elided in the spec ("..."); revisit if Spark expects a different shape.
+            destinationConfigs: {
+                ...restore.destination,
+                storage: {
+                    name: destination.provider,
+                    creds: getDecryptedDestinationConfig(destination),
+                },
+            },
+        },
+    };
+}
+
 type EmrPayload = Awaited<ReturnType<typeof buildPayload>>;
 
 // What EMR receives as entryPointArguments. Deliberately carries no credentials —
 // Spark calls /build-payload for the rest, and that response is encrypted.
-interface EmrTriggerPayload {
-    backupConfigId: string;
-    backupJobIds: string[];
-}
+// Backup runs send the config + jobs; restore runs send only the restore config id.
+type EmrTriggerPayload =
+    | { backupConfigId: string; backupJobIds: string[] }
+    | { restoreConfigId: string };
 
 // ─── Submit a built payload to EMR Serverless ─────────────────────────────────
 async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommandOutput> {
@@ -257,8 +341,12 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
         console.log('  DataVault — EMR Serverless Job Submitter');
         console.log('──────────────────────────────────────────');
         console.log('executionRoleArn:', AWS_EMR_EXECUTION_ROLE_ARN);
-        console.log('Backup Config ID:', payload.backupConfigId);
-        console.log('Backup Jobs     :', payload.backupJobIds.length);
+        if ('restoreConfigId' in payload) {
+            console.log('Restore Config ID:', payload.restoreConfigId);
+        } else {
+            console.log('Backup Config ID:', payload.backupConfigId);
+            console.log('Backup Jobs     :', payload.backupJobIds.length);
+        }
         console.log('──────────────────────────────────────────');
 
         // Spark submit parameters — tuned for 100 GB / 200 objects in 5 minutes.
@@ -341,7 +429,7 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             executionRoleArn: AWS_EMR_EXECUTION_ROLE_ARN,
             jobDriver: {
                 sparkSubmit: {
-                    entryPoint: "s3://jar-files-360datavault/JAR/DEV/latest/datavault-1.0.0.jar",
+                    entryPoint: "s3://jar-files-360datavault/TEST/datavault-1.0.0.jar",
                     entryPointArguments: [payloadB64],
                     sparkSubmitParameters,
                 },
@@ -355,6 +443,8 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                             "spark.yarn.appMasterEnv.ENCRYPTION_KEY": AWS_EMR_ENCRYPTION_KEY,
                             "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${AWS_EMR_ENCRYPTION_KEY}`,
                             "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${AWS_EMR_ENCRYPTION_KEY}`,
+                            "spark.executorEnv.NODE_SERVER_URL": "https://deport-shady-fantastic.ngrok-free.dev",
+                            "spark.yarn.appMasterEnv.NODE_SERVER_URL": "https://deport-shady-fantastic.ngrok-free.dev",
                         },
                     },
                 ],
@@ -392,10 +482,20 @@ async function initalizePayloadTransform(backupConfigId: string): Promise<StartJ
     return submitEMR({ backupConfigId, backupJobIds });
 }
 
+// ─── Trigger a restore run ────────────────────────────────────────────────────
+// Sends only the restore config id. Spark calls /build-payload with it to get the
+// full RESTORE payload (buildRestorePayload).
+async function initalizeRestoreTransform(restoreConfigId: string): Promise<StartJobRunCommandOutput> {
+    logger.info(`Triggering EMR RESTORE for restoreConfigId: ${restoreConfigId}`);
+    return submitEMR({ restoreConfigId });
+}
+
 export {
     buildPayload,
+    buildRestorePayload,
     submitEMR,
     initalizePayloadTransform,
+    initalizeRestoreTransform,
     isCompressible,
     // exported for payload.check.ts — the per-job grouping contract with Spark
     processObjectOperations,

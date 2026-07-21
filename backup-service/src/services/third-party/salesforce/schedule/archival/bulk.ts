@@ -389,6 +389,54 @@ async function uploadSingleObject(
       logger.info(
         `[archival:child] no records — skipping upload | backupJobId:${backupJobId} objectName:${object.name}`
       );
+
+      // Even with zero records we still persist the object schema (and create its
+      // Glue table) so restore-retrieve's fetch-object-fields works for archived-
+      // but-empty objects. Mirrors the first-time branch of the schema block below;
+      // guarded on existing keys so retries don't rewrite fields.json.
+      try {
+        const schemaKey = buildSchemaS3Key({
+          crmId: ctx.crmId,
+          crmName: ctx.crmName,
+          backupConfigId: ctx.backupConfigId,
+          objectName: object.name,
+          type: 'archival',
+        });
+        const schemaFolder = schemaKey.replace('/fields.json', '/');
+        const existingSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
+        if (!existingSchemaKeys.length) {
+          const schemaWithParquet = schema.map((field: { dataType: string }) => ({
+            ...field,
+            parquetDataType: toParquetDataType(field.dataType),
+          }));
+          await uploadToS3(
+            ctx.destConfig,
+            schemaKey,
+            Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
+          );
+          await createCsvGlueTable({
+            crmId: ctx.crmId,
+            crmName: ctx.crmName,
+            backupConfigId: ctx.backupConfigId,
+            objectName: object.name,
+            type: 'archival',
+            destConfig: ctx.destConfig,
+            columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
+          }).catch((err) =>
+            logger.error(
+              `[glue] failed to create table | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
+            )
+          );
+          logger.info(
+            `[archival:child] schema persisted for empty object | backupJobId:${backupJobId} objectName:${object.name} key:${schemaKey}`
+          );
+        }
+      } catch (err: any) {
+        logger.error(
+          `[archival:child] failed to persist schema for empty object | backupJobId:${backupJobId} objectName:${object.name} error:${err?.message ?? err}`
+        );
+      }
+
       await updateArchivalObject({
         backupJobId,
         object: {
