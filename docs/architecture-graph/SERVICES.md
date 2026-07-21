@@ -76,7 +76,6 @@ Every service function, what it does, and its side effects.
   - `isBackupCompleted(status)` — `true` for `JOB_STATUS.success` **or any `COMPRESSION_STATUS` value**. Compression overwrites `status`, so the stats readers (`computeJobStats`, `computeArchivalJobStats`) now count via this helper instead of `=== SUCCESS` — otherwise a compressed job would drop out of "completed" totals. ⚠ Consequence: a job that **FAILED** its backup and was later compressed also passes `isBackupCompleted`, because the original outcome is no longer on the record to distinguish it.
 
 ### services/restore-retrieve/index.ts
-- `getSnapshotActivityLogs(params)` — For BACKUP type: fans out to all matching configs (concurrency 5), multi-cursor pagination. For ARCHIVAL type: returns config-level entries.
 - `getObjectListByConfigId(configId)` — Returns object list from latest job for the config.
 - `getObjectListByBackupJobIds(jobIds[])` — Batch fetch jobs, extract object lists.
 - `fetchRecordsByBackupJobs(params)` — Queries Athena for records. Two paths based on `configType`:
