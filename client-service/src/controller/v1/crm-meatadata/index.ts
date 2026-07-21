@@ -71,7 +71,7 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
   }
 
   const objects = await getApexObjects({ user, mode: mode ? String(mode) : undefined })
-  const result = objects?.data ?? []
+  const result = objects?.data ? objects.data : []
   return makeResponse(req, res, 200, true, 'fetch', result);
 }
 
