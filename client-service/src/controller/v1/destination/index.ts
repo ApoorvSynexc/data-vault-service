@@ -13,7 +13,7 @@ import { grantAthenaRoleS3Access, checkAthenaRoleS3Access } from '../../../servi
 import { logger } from '../../../middlewares';
 
 const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { name, provider, type, config, isAlreadyGranted } = req.body;
+  const { name, provider, type, config, is_already_granted } = req.body;
   const userId = req.user!.userId;
 
   const athenaCreds = { bucketName: config?.bucketName, region: config?.region, accessKeyId: config?.accessKeyId, secretAccessKey: config?.secretAccessKey };
@@ -22,7 +22,7 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   // Client claims they granted Athena access manually — verify their bucket
   // policy actually carries our statement before creating the destination.
   // Bail out (no dangling destination) if it's missing.
-  if (isAlreadyGranted && isS3WithCreds) {
+  if (is_already_granted && isS3WithCreds) {
     const granted = await checkAthenaRoleS3Access(athenaCreds).catch(() => false);
     if (!granted) {
       makeResponse(req, res, 400, false, 'athena_access_not_granted');
@@ -43,7 +43,7 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   // can query their data. Non-fatal — destination is already saved, policy can
   // be retried. Only applies to S3 destinations that carry bucket credentials,
   // and skipped when the client already granted it themselves.
-  if (!isAlreadyGranted && isS3WithCreds) {
+  if (!is_already_granted && isS3WithCreds) {
     grantAthenaRoleS3Access(athenaCreds).catch((err) =>
       logger.error(`[destination] failed to grant Athena role S3 access | destinationId:${destination.destinationId} err:${err?.message ?? err}`)
     );
