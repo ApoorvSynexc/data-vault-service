@@ -15,6 +15,7 @@ import { sparkRouter } from './spark-job.routes';
 import { salesforceRouter } from './salesforce.route';
 import { aclGateway } from '../../middlewares/gateway';
 import { storageRouter } from './storage.routes';
+import { crmMetadataRouter } from './crm-metadata.route';
 
 const router = Router();
 
@@ -29,6 +30,7 @@ router.use('/salesforce', salesforceRouter);
 router.use(authenticate);
 router.use(aclGateway);
 router.use('/user', userRouter);
+router.use('/crm-metadata', crmMetadataRouter);
 router.use('/crm', crmRouter);
 router.use('/backup-config', backupRouter);
 router.use('/archival-config', archivalRouter);

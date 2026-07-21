@@ -3,6 +3,7 @@ export * from './auth';
 export * from './backup-config';
 export * from './crm';
 export * from './public';
+export * from './restore';
 export * from './salesforce';
 export * from './destination';
 export * from './user';

@@ -11,6 +11,7 @@ import {
   getTableCounter,
   ConfigType,
   FetchRecordsConfigType,
+  createRestore,
   IFetchRecordsFilters,
   IChangedSinceRange,
   IFetchRecordsFilterField,
@@ -491,6 +492,17 @@ const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<v
   makeResponse(req, res, 200, true, 'repair', result);
 };
 
+const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const body = req.body;
+  const created = await createRestore(body);
+  if (!created) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  makeResponse(req, res, 201, true, 'create');
+}
+
 export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
@@ -499,4 +511,5 @@ export const restoreRetrieveJobController = wrapController({
   fetchRecordsHandler,
   fetchObjectFieldsHandler,
   repairGlueTablesHandler,
+  createRestoreHandler
 });
