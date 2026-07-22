@@ -208,7 +208,7 @@ const buildSchemaS3Key = ({
   backupConfigId,
   objectName,
   type,
-}: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
+}: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields/fields.json`;
 
 
 export {

@@ -159,8 +159,8 @@ This mirrors Salesforce referential integrity: you can't delete a parent with ch
 
 Schema evolution is tracked as `fields_{timestamp}.json` files on S3:
 ```
-schema/Account/fields.json           (original)
-schema/Account/fields_1718000000000.json  (first change)
-schema/Account/fields_1718100000000.json  (second change)
+schema/Account/fields/fields.json           (original)
+schema/Account/fields/fields_1718000000000.json  (first change)
+schema/Account/fields/fields_1718100000000.json  (second change)
 ```
 Latest version = last entry when sorted alphabetically (timestamps are fixed-width, so alpha = chrono).

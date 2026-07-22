@@ -45,7 +45,7 @@ salesforceHandler.runBackup()
           → each page: PutObjectCommand → s3://{bucket}/{crmName}/{crmId}/backup/{configId}/raw_data/{jobId}/{object}/inserts/{locator}.csv
           → after each page: updateBackupObject(completedRecordCount, sizeInBytes, currentLocator)
           → when last page: updateBackupObject(status = COMPLETED)
-      ↓ uploadToS3: schema JSON → {crmName}/{crmId}/backup/{configId}/schema/{object}/fields.json
+      ↓ uploadToS3: schema JSON → {crmName}/{crmId}/backup/{configId}/schema/{object}/fields/fields.json
       ↓ createCsvGlueTable (idempotent):
           → createDatabase if not exists: datavault_{crmId}
           → createTable: cfg_{backupConfigId}_{objectName}

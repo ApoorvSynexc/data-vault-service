@@ -2,7 +2,7 @@ import { IDestinationConfig, IRealtimePayload } from '../../../../models';
 import { logger } from '../../../../middlewares/logger';
 import { httpRequest } from '../../../../utils/http-request';
 import { CORE_SERVICE, INTERNAL_SECRET } from '../../../../constant';
-import { buildSchemaS3Key, toParquetDataType, schemasAreEqual } from '../../../../utils/helper';
+import { buildSchemaS3Key, schemasAreEqual } from '../../../../utils/helper';
 import { downloadFromS3, uploadToS3, listS3Objects } from '../../../destination/s3';
 import { ICrmRealtimeHandler } from '../../types';
 import { createCsvGlueTable, registerBackupJobPartition, updateGlueTableSchema } from '../../glue';
@@ -54,18 +54,6 @@ const recordsToCsv = (records: Record<string, any>[]): Buffer => {
 };
 
 // ---------------------------------------------------------------------------
-// Convert schema from payload to include parquetDataType
-// ---------------------------------------------------------------------------
-const enrichSchemaWithParquetTypes = (
-  payloadSchema: { label: string; dataType: string; apiName: string }[]
-): { apiName: string; dataType: string; parquetDataType: string }[] => {
-  return payloadSchema.map((field) => ({
-    ...field,
-    parquetDataType: toParquetDataType(field.dataType),
-  }));
-};
-
-// ---------------------------------------------------------------------------
 // Real-time schema comparison: compare payload schema with stored schema
 // Returns { schemaChanged, latestSchema }
 // ---------------------------------------------------------------------------
@@ -78,10 +66,9 @@ const compareSchemaInRealtime = async (
   payloadSchema: { label: string; dataType: string; apiName: string }[]
 ): Promise<{
   schemaChanged: boolean;
-  latestSchema: { apiName: string; dataType: string; parquetDataType: string }[];
+  latestSchema: { label: string; dataType: string; apiName: string }[];
 }> => {
-  // Enrich payload schema with parquetDataType
-  const latestSchema = enrichSchemaWithParquetTypes(payloadSchema);
+  const latestSchema = payloadSchema;
 
   // Get existing schema from S3
   // Compare against the latest versioned file (fields_<timestamp>.json with the

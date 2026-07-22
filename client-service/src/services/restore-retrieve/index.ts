@@ -496,7 +496,7 @@ const fetchObjectFields = async (
 
   const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
   const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
-  const schemaFolder = `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/${objectApiName}/`;
+  const schemaFolder = `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/${objectApiName}/fields/`;
 
   const keys = await listS3Keys(destConfig, schemaFolder);
   const versionedKeys = keys.filter((k) => /fields_\d+\.json$/.test(k));
