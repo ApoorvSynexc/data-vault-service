@@ -39,7 +39,7 @@ flowchart TD
     BS_RUNNER -->|"Bulk query"| SF_BULK
     SF_BULK -->|CSV pages| BS_EXPORTER
     BS_EXPORTER -->|"PutObject\n.../raw_data/jobId/object/inserts/"| S3_USER
-    BS_EXPORTER -->|"schema JSON\n.../schema/object/fields.json"| S3_USER
+    BS_EXPORTER -->|"schema JSON\n.../schema/object/fields/fields.json"| S3_USER
     BS_EXPORTER -->|"CreateTable / BatchCreatePartition"| GLUE
 
     SF_TRIGGER -->|"POST /v1/public/salesforce-real-time\n{records, schema, transactionId}"| CS_WEBHOOK

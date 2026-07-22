@@ -156,10 +156,7 @@ Additional helpers for the backup-service:
 
 ### buildSchemaS3Key(params)
 Constructs the S3 key for schema JSON files:
-`{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields.json`
-
-### toParquetDataType(sfDataType)
-Maps Salesforce field data types to Parquet/Glue types (STRING, DOUBLE, BOOLEAN, etc.).
+`{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields.json`
 
 ### schemasAreEqual(schema1, schema2)
 Compares two schema arrays for field set equality (used in realtime schema change detection).
