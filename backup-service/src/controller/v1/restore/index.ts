@@ -1,5 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { getRestoreJobById } from "../../../services";
+import { runRestoreJob } from "../../../services/common/runner";
 import { wrapController } from "../../../utils/helper";
 
 const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -14,7 +15,8 @@ const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<v
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  return makeResponse(req, res, 200, true, 'create');
+  makeResponse(req, res, 200, true, 'create');
+  runRestoreJob(restoreJob).catch(() => {});
 };
 
 export const createRestoreController = wrapController({

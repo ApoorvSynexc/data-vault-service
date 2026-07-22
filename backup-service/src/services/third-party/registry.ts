@@ -21,6 +21,11 @@ export const getCrmHandler = (crmName: string): ICrmBackupHandler => {
   return handler;
 };
 
+// Restore reuses the same crmRegistry as backup/archival — one handler per CRM
+// implementing ICrmBackupHandler (runBackup + runArchival + runRestore). This
+// accessor just gives restore call sites a name that matches their intent.
+export const getRestoreCrmHandler = (crmName: string): ICrmBackupHandler => getCrmHandler(crmName);
+
 export const getRealtimeCrmHandler = (crmName: string): ICrmRealtimeHandler => {
   const handler = realtimeCrmRegistry[crmName];
   if (!handler) {

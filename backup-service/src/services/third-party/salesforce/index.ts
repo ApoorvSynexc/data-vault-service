@@ -1,6 +1,6 @@
 import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
-import { IBackupObject, IDestinationConfig, ISource } from '../../../models';
+import { IBackupObject, IDestinationConfig, IRestoreConflict, IRestoreScope, ISource } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { updateBackupConfig } from '../../backup-config';
 import { getBackupJob } from '../../backup-job';
@@ -8,6 +8,7 @@ import { getBackupJob } from '../../backup-job';
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { archiveAndHardDelete } from './schedule/archival';
+import { runSalesforceRestore } from './restore';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -272,6 +273,36 @@ const salesforceHandler: ICrmBackupHandler = {
     );
 
     return hasAnyFailure ? 'PARTIAL_FAILURE' : 'SUCCESS';
+  },
+  runRestore: async (
+    restoreId: string,
+    restoreJobId: string,
+    source: ISource,
+    destinationType: string,
+    destConfig: IDestinationConfig,
+    restoreScope: IRestoreScope,
+    conflict: IRestoreConflict
+  ): Promise<'SUCCESS' | 'FAILED'> => {
+    try {
+      const result = await runSalesforceRestore(
+        restoreId,
+        restoreJobId,
+        source,
+        destinationType,
+        destConfig,
+        restoreScope,
+        conflict
+      );
+      logger.info(`Restore job completed`, { restoreId, restoreJobId, result });
+      return result;
+    } catch (err: any) {
+      logger.error(`Restore job failed`, {
+        restoreId,
+        restoreJobId,
+        error: err?.message ?? err,
+      });
+      throw err;
+    }
   },
 };
 
