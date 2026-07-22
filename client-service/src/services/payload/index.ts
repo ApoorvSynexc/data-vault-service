@@ -4,12 +4,19 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig, getBackupJobById } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_REGION, JOB_STATUS } from '../../constant';
+import { AWS_EMR_ACCESS_KEY_ID, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_EMR_SECRET_ACCESS_KEY, AWS_REGION, JOB_STATUS } from '../../constant';
 import { logger } from '../../middlewares';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
 
-const client = new EMRServerlessClient({ region: AWS_REGION });
+// EMR runs in a separate AWS account — use its dedicated credentials, not the default chain.
+const client = new EMRServerlessClient({
+    region: AWS_REGION,
+    credentials: {
+        accessKeyId: AWS_EMR_ACCESS_KEY_ID,
+        secretAccessKey: AWS_EMR_SECRET_ACCESS_KEY,
+    },
+});
 
 // ─── Process object operations from backup jobs ────────────────────────────────
 function processArchivalObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
