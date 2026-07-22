@@ -6,6 +6,7 @@ export * from './oauth-state';
 export * from './table-counter';
 export * from './otp';
 export * from './restore';
+export * from './restore-job';
 export * from './role';
 export * from './session';
 export * from './shared';
