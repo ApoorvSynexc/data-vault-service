@@ -8,6 +8,7 @@ import { AWS_EMR_ACCESS_KEY_ID, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, 
 import { logger } from '../../middlewares';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
+import { encryptWithKey } from '../../utils/encryption';
 
 // EMR runs in a separate AWS account — use its dedicated credentials, not the default chain.
 const client = new EMRServerlessClient({
@@ -177,8 +178,7 @@ const isCompressible = (job: IBackupJob): boolean => job.status === JOB_STATUS.s
 //
 // Destination creds are returned decrypted: this payload only ever leaves the process
 // through /build-payload, which encrypts the whole response via encryptToTransport.
-// Do not hand this to submitEMR — entryPointArguments are base64, not encrypted, and
-// land in CloudTrail.
+// Do not hand this to submitEMR — its trigger payload is intentionally id-only.
 async function buildPayload(backupConfigId: string, backupJobIds?: string[]) {
     logger.info(`Building EMR payload for backupConfigId: ${backupConfigId}`);
 
@@ -341,7 +341,11 @@ type EmrTriggerPayload =
 // ─── Submit a built payload to EMR Serverless ─────────────────────────────────
 async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommandOutput> {
     try {
-        const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64');
+        // Encrypted with AWS_EMR_ENCRYPTION_KEY (the same key Spark gets as ENCRYPTION_KEY),
+        // framed like encryptToTransport: base64(JSON({ ciphertext, iv })).
+        const payloadB64 = Buffer.from(
+            JSON.stringify(encryptWithKey(JSON.stringify(payload), AWS_EMR_ENCRYPTION_KEY))
+        ).toString('base64');
 
         logger.info('Initializing EMR job...');
         console.log('──────────────────────────────────────────');
