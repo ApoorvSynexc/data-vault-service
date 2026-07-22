@@ -1,4 +1,11 @@
-import { IBackupObject, IDestinationConfig, IRealtimePayload, ISource } from '../../models';
+import {
+  IBackupObject,
+  IDestinationConfig,
+  IRealtimePayload,
+  IRestoreConflict,
+  IRestoreScope,
+  ISource,
+} from '../../models';
 
 export interface ICrmBackupHandler {
   runBackup(
@@ -19,6 +26,15 @@ export interface ICrmBackupHandler {
     object?: IBackupObject[],
     lastUpdatedAt?: string
   ): Promise<'SUCCESS' | 'PARTIAL_FAILURE'>;
+  runRestore(
+    restoreId: string,
+    restoreJobId: string,
+    source: ISource,
+    destinationType: string,
+    destConfig: IDestinationConfig,
+    restoreScope: IRestoreScope,
+    conflict: IRestoreConflict
+  ): Promise<'SUCCESS' | 'FAILED'>;
 }
 
 export interface ICrmRealtimeHandler {
