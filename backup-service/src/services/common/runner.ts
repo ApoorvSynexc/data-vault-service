@@ -218,7 +218,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
 // Entry point for restore jobs — call this fire-and-forget from the controller
 // ---------------------------------------------------------------------------
 export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
-  const { restoreId, restoreJobId, source: encryptedSource, destination } = job;
+  const { restoreId, restoreJobId, source, destination, conflict } = job;
   const startedAt = dayjs().toISOString();
 
   activeJobs.add(restoreJobId);
@@ -242,7 +242,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
   }
 
   try {
-    if (!encryptedSource) {
+    if (!source) {
       throw new Error(`Restore job ${restoreJobId}: source credentials are missing`);
     }
 
@@ -251,24 +251,14 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       throw new Error(`Restore job ${restoreJobId}: parent restore ${restoreId} not found`);
     }
 
-    const source = JSON.parse(decrypt(encryptedSource)) as ISource;
-    const destConfig = JSON.parse(
-      decrypt({
-        ciphertext: destination.ciphertext,
-        iv: destination.iv,
-        authTag: destination.authTag,
-      })
-    ) as IDestinationConfig;
 
     const handler = getRestoreCrmHandler(source.crmName);
     const result = await handler.runRestore(
       restoreId,
       restoreJobId,
       source,
-      destination.type,
-      destConfig,
-      restore.selection.restoreScope,
-      restore.conflict
+      destination,
+      conflict
     );
 
     await updateRestoreJobStatus({
