@@ -32,6 +32,7 @@ export const createDestinationValidation = async (
       then: s3ConfigSchema.required(),
       otherwise: Joi.object().required(),
     }),
+    is_already_granted: Joi.boolean().optional(),
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });
