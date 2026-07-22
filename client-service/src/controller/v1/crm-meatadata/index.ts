@@ -96,11 +96,13 @@ const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
     }
 
     const objects = await getApexFields({ user: crmUser, objectName: String(objectName), mode: mode ? String(mode) : undefined })
-    return makeResponse(req, res, 200, true, 'fetch', objects);
+    const result = objects?.data ? objects.data : [];
+    return makeResponse(req, res, 200, true, 'fetch', result);
   }
 
   const objects = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined })
-  return makeResponse(req, res, 200, true, 'fetch', objects);
+  const result = objects?.data ? objects.data : [];
+  return makeResponse(req, res, 200, true, 'fetch', result);
 }
 
 export const crmMetadataController = wrapController({
