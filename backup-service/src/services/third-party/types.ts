@@ -3,6 +3,8 @@ import {
   IDestinationConfig,
   IRealtimePayload,
   IRestoreConflict,
+  IRestoreJobDestination,
+  IRestoreJobSource,
   IRestoreScope,
   ISource,
 } from '../../models';
@@ -29,10 +31,8 @@ export interface ICrmBackupHandler {
   runRestore(
     restoreId: string,
     restoreJobId: string,
-    source: ISource,
-    destinationType: string,
-    destConfig: IDestinationConfig,
-    restoreScope: IRestoreScope,
+    source: IRestoreJobSource,
+    destination: IRestoreJobDestination,
     conflict: IRestoreConflict
   ): Promise<'SUCCESS' | 'FAILED'>;
 }

@@ -1,6 +1,6 @@
 import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
-import { IBackupObject, IDestinationConfig, IRestoreConflict, IRestoreScope, ISource } from '../../../models';
+import { IBackupObject, IDestinationConfig, IRestoreConflict, IRestoreJobDestination, IRestoreJobSource, IRestoreScope, ISource } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { updateBackupConfig } from '../../backup-config';
 import { getBackupJob } from '../../backup-job';
@@ -277,21 +277,14 @@ const salesforceHandler: ICrmBackupHandler = {
   runRestore: async (
     restoreId: string,
     restoreJobId: string,
-    source: ISource,
-    destinationType: string,
-    destConfig: IDestinationConfig,
-    restoreScope: IRestoreScope,
+    source: IRestoreJobSource,
+    destination: IRestoreJobDestination,
     conflict: IRestoreConflict
   ): Promise<'SUCCESS' | 'FAILED'> => {
     try {
       const result = await runSalesforceRestore(
         restoreId,
-        restoreJobId,
-        source,
-        destinationType,
-        destConfig,
-        restoreScope,
-        conflict
+        restoreJobId
       );
       logger.info(`Restore job completed`, { restoreId, restoreJobId, result });
       return result;
