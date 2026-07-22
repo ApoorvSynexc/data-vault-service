@@ -112,7 +112,7 @@ const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?
   );
 };
 
-const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
+const getApexObjectChilds = async ({ user, objectName, mode, relationshipDepth }: { user?: IUser; objectName?: string; mode?: string; relationshipDepth?: number } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -129,6 +129,9 @@ const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; o
   let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-children?apiName=${objectName}`;
   if (mode) {
     url += `&mode=${mode}`;
+  }
+  if (relationshipDepth !== undefined) {
+    url += `&relationshipDepth=${relationshipDepth}`;
   }
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
