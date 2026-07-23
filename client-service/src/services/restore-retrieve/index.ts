@@ -614,29 +614,44 @@ export type FetchObjectFieldsResult =
  * overwritten — so the highest-timestamped versioned file is the latest schema,
  * falling back to fields.json when no versioned files exist yet.
  */
+// Resolves a caller-owned config down to its decrypted S3 destination and the
+// schema root prefix (.../schema/) — shared by the fields and picklist readers.
+const resolveSchemaS3 = async (
+  backupConfigId: string,
+  userId: string
+): Promise<{ destConfig: S3Config; schemaRoot: string } | null> => {
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config || config.userId !== userId) {
+    return null;
+  }
+
+  const crm = await getCrmById(config.crmId);
+  if (!crm) {
+    return null;
+  }
+
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) {
+    return null;
+  }
+
+  const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
+  const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
+  return { destConfig, schemaRoot: `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/` };
+};
+
 const fetchObjectFields = async (
   params: IFetchObjectFieldsParams
 ): Promise<FetchObjectFieldsResult> => {
   const { objectApiName, backupConfigId, userId } = params;
 
-  const config = await getBackupConfigById(backupConfigId);
-  if (!config || config.userId !== userId) {
+  const resolved = await resolveSchemaS3(backupConfigId, userId);
+  if (!resolved) {
     return { ok: false, reason: 'not_exist' };
   }
 
-  const crm = await getCrmById(config.crmId);
-  if (!crm) {
-    return { ok: false, reason: 'not_exist' };
-  }
-
-  const destination = await getDestinationById(config.destinationId);
-  if (!destination) {
-    return { ok: false, reason: 'not_exist' };
-  }
-
-  const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
-  const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
-  const schemaFolder = `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/${objectApiName}/fields/`;
+  const { destConfig, schemaRoot } = resolved;
+  const schemaFolder = `${schemaRoot}${objectApiName}/fields/`;
 
   const keys = await listS3Keys(destConfig, schemaFolder);
   const versionedKeys = keys.filter((k) => /fields_\d+\.json$/.test(k));
@@ -656,6 +671,43 @@ const fetchObjectFields = async (
   return { ok: true, schema: JSON.parse(raw) };
 };
 
+/**
+ * Returns the picklist values persisted on S3 by backup-service at
+ * .../schema/{objectApiName}/picklist/{fieldApiName}/values.json — exactly as
+ * stored. { ok:false } when the config isn't resolvable/owned or no values
+ * file exists for the field.
+ */
+const fetchPicklistValues = async (params: {
+  objectApiName: string;
+  fieldApiName: string;
+  backupConfigId: string;
+  userId: string;
+}): Promise<{ ok: true; values: unknown } | { ok: false; reason: 'not_exist' }> => {
+  const { objectApiName, fieldApiName, backupConfigId, userId } = params;
+
+  const resolved = await resolveSchemaS3(backupConfigId, userId);
+  if (!resolved) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  const key = `${resolved.schemaRoot}${objectApiName}/picklist/${fieldApiName}/values.json`;
+  let raw: string;
+  try {
+    raw = await getS3Text(resolved.destConfig, key);
+  } catch (err: any) {
+    // No values.json for this field (not a picklist / not backed up yet).
+    if (err?.name === 'NoSuchKey') {
+      return { ok: false, reason: 'not_exist' };
+    }
+    throw err;
+  }
+  if (!raw) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  return { ok: true, values: JSON.parse(raw) };
+};
+
 export {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
@@ -664,4 +716,5 @@ export {
   fetchRecordsByBackupJobs,
   repairGlueTables,
   fetchObjectFields,
+  fetchPicklistValues,
 };

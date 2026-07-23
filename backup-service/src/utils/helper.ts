@@ -95,6 +95,14 @@ const buildSchemaS3Key = ({
 }: ISchemaS3KeyParams): string =>
   `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields/fields.json`;
 
+// Picklist values live beside the field schema:
+// .../schema/{objectName}/picklist/{fieldApiName}/values.json
+const buildPicklistS3Key = (params: ISchemaS3KeyParams & { fieldApiName: string }): string =>
+  buildSchemaS3Key(params).replace(
+    '/fields/fields.json',
+    `/picklist/${params.fieldApiName}/values.json`
+  );
+
 interface IErrorLogsS3PrefixParams {
   crmId: string;
   crmName: string;
@@ -292,6 +300,7 @@ export {
   wrapController,
   buildS3KeyPrefix,
   buildSchemaS3Key,
+  buildPicklistS3Key,
   buildErrorLogsS3Prefix,
   schemasAreEqual,
   splitCSVRows,

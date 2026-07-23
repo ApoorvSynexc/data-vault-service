@@ -2,6 +2,7 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   getCrmById,
   getApexFields,
+  getApexPicklistValues,
   updateBackupConfig,
   getBackupConfigById,
   getUser,
@@ -37,6 +38,32 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
   }
 
   const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
+  makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
+};
+
+// Backup-service fetches picklist values through here — same auth chain as getFieldsHanlder.
+const getPicklistValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupConfigId, objectApiName, fieldApiName } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+  if (!objectApiName || !fieldApiName) {
+    return makeResponse(req, res, 400, false, 'params_required');
+  }
+
+  const backupConfig = await getBackupConfigById(String(backupConfigId));
+  if (!backupConfig) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  const user = await getUser({ userId: backupConfig.userId });
+  if (!user) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  const result = await getApexPicklistValues({ user, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
   makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
@@ -160,6 +187,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
 
 export const internalController = wrapController({
   getFieldsHanlder,
+  getPicklistValuesHandler,
   crmRefreshTokenHandler,
   getBackupServicePayloadHandler,
 });
