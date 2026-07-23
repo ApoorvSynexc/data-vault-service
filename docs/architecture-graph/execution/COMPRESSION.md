@@ -49,6 +49,10 @@ Spark reads `objectOperations` per job, writes Hudi Copy-on-Write output to the 
 bucket:
 - current state → `.../backup/<cfg>/main_backup_files/<Object>/`
 - change data   → `.../backup/<cfg>/delta/<Object>/` (partitioned)
+- every 20 delta versions → snapshot `.../backup/<cfg>/checkpoints/<Object>/` (see CHECKPOINT_FLOW.md)
+
+Inside the run, each object's pipeline is crash-resumable via a per-object
+`.pipeline_checkpoint` stage file — details and source pointers in CHECKPOINT_FLOW.md.
 
 Compression is one ACID unit per config (records are shared across jobs) — all-or-nothing.
 
@@ -64,7 +68,9 @@ Spark → POST /v1/spark-job/update-spark-job-status
     setCompressionStatusBulk(backupJobIds → status[, errorMessage])
       // each write conditioned on job.backupConfigId === backupConfigId
     if !updated.length → 400 compression_status_update_failed   // every write failed = infra
-    if success → ensureCompressionGlueTables(backupConfigId)    // best-effort, see Step 4
+    if success → ensureCompressionGlueTables(backupConfigId, isCheckpointsCreated===true)
+                 // best-effort, see Step 4; flag set by Spark when a checkpoint
+                 // snapshot was written this run (CHECKPOINT_FLOW.md § B)
     → 200 { updated, failed }
 ```
 
@@ -80,6 +86,7 @@ client-service ensureCompressionGlueTables(backupConfigId)
 backup-service ensureCompressionTablesHandler
   for each object (Promise.allSettled):
     ensureHudiCurrentStateTable + ensureDeltaTable   (independent; missing delta ≠ block hudi)
+    + ensureCheckpointTable when isCheckpointsCreated (cfg_<cfg>_<obj>_checkpoints, CHECKPOINT_FLOW.md § C)
       readHudiTableSchema(destConfig, rootKey)   // from committed .hoodie S3 metadata
       CreateTable (HoodieParquetInputFormat, hudi.metadata-listing-enabled=TRUE)
       // created once, never updated → schema always matches what Spark wrote

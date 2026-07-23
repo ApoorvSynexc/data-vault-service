@@ -18,6 +18,7 @@ import {
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
 import { readHudiTableSchema } from './hudi-schema';
+import { listS3Prefixes } from '../../destination/s3';
 
 // Platform-owned Glue client — always uses our own AWS credentials,
 // never the customer's destination bucket credentials.
@@ -444,9 +445,78 @@ export interface IEnsureCompressionTableParams {
   destConfig: IDestinationConfig;
 }
 
+// Registers the year=YYYY/month=MM partitions that exist on S3 for a
+// Hudi-format table. Athena silently returns ZERO rows for a partitioned table
+// with no registered partitions — `hudi.metadata-listing-enabled` only covers
+// engine v3 with the Hudi metadata table intact, so explicit registration is
+// the deterministic path. Two delimiter listings (years, then months) — never
+// a full object enumeration. Idempotent: already-registered partitions come
+// back as AlreadyExistsException entries in the batch response and are ignored.
+const syncHudiTablePartitions = async (
+  databaseName: string,
+  tableName: string,
+  destConfig: IDestinationConfig,
+  rootKey: string
+): Promise<void> => {
+  const partitionInputs: PartitionInput[] = [];
+
+  const yearPrefixes = (await listS3Prefixes(destConfig, rootKey)).filter((p) =>
+    /\/year=\d+\/$/.test(p)
+  );
+  for (const yearPrefix of yearPrefixes) {
+    const monthPrefixes = (await listS3Prefixes(destConfig, yearPrefix)).filter((p) =>
+      /\/month=\d+\/$/.test(p)
+    );
+    for (const monthPrefix of monthPrefixes) {
+      const year = /year=(\d+)\//.exec(yearPrefix)![1];
+      const month = /month=(\d+)\/$/.exec(monthPrefix)![1];
+      partitionInputs.push({
+        Values: [year, month],
+        // Same pattern as registerBackupJobPartition: no Columns on the
+        // partition SD — Athena falls back to the table's columns.
+        StorageDescriptor: {
+          ...HUDI_STORAGE_DESCRIPTOR_BASE,
+          Location: `s3://${destConfig.bucketName}/${monthPrefix}`,
+        },
+      });
+    }
+  }
+
+  if (partitionInputs.length === 0) {
+    logger.info(`[glue] no hive-style partitions found on S3 | table:${tableName} root:${rootKey}`);
+    return;
+  }
+
+  // BatchCreatePartition caps at 100 inputs per call.
+  for (let i = 0; i < partitionInputs.length; i += 100) {
+    const batch = partitionInputs.slice(i, i + 100);
+    const result = await glue.send(
+      new BatchCreatePartitionCommand({
+        DatabaseName: databaseName,
+        TableName: tableName,
+        PartitionInputList: batch,
+      })
+    );
+    const realErrors = (result.Errors ?? []).filter(
+      (e) => e.ErrorDetail?.ErrorCode !== 'AlreadyExistsException'
+    );
+    if (realErrors.length) {
+      logger.warn(
+        `[glue] partition sync had errors | table:${tableName} errors:${JSON.stringify(realErrors)}`
+      );
+    }
+  }
+
+  logger.info(
+    `[glue] partition sync complete | table:${tableName} partitions:${partitionInputs.length}`
+  );
+};
+
 // Creates one Hudi-format Glue table, idempotently. Reads the committed schema
 // from `.hoodie` on the client bucket, then creates the table pointing at the
 // dataset root. Returns false (no-op) when the table already exists.
+// In BOTH cases it then syncs the year/month partitions from S3 — new
+// partitions appear as compression runs land, and Athena needs them registered.
 const ensureHudiFormatTable = async (
   params: IEnsureCompressionTableParams & {
     tableName: string;
@@ -462,14 +532,24 @@ const ensureHudiFormatTable = async (
 
   await ensureGlueDatabase(databaseName);
 
+  const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset);
+
+  // Partition sync is best-effort in both branches: a failure must not undo the
+  // COMPRESSED status handoff this call rides on.
+  const syncPartitions = (): Promise<void> =>
+    syncHudiTablePartitions(databaseName, tableName, destConfig, rootKey).catch((err: any) => {
+      logger.warn(
+        `[glue] partition sync failed | table:${tableName} err:${err.name}: ${err.message}`
+      );
+    });
+
   if (await glueTableExists(databaseName, tableName)) {
     logger.info(
-      `[glue] ${label} table already exists, skipping | db:${databaseName} table:${tableName}`
+      `[glue] ${label} table already exists, syncing partitions | db:${databaseName} table:${tableName}`
     );
+    await syncPartitions();
     return false;
   }
-
-  const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset);
   // Authoritative: matches exactly what Spark committed. Throws if not written yet.
   const { columns, partitionKeys } = await readHudiTableSchema(destConfig, rootKey);
 
@@ -540,6 +620,7 @@ const ensureHudiFormatTable = async (
   logger.info(
     `[glue] created ${label} table | db:${databaseName} table:${tableName} columns:${glueColumns.length} partitions:${finalPartitionKeys.length}`
   );
+  await syncPartitions();
   return true;
 };
 

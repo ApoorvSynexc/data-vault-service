@@ -28,7 +28,10 @@ const POLL_MAX_MS = 2000;
 const RESULT_REUSE_MINUTES = 5;
 
 // Maximum total time to wait for a query to finish before giving up (ms).
-const QUERY_TIMEOUT_MS = 60_000;
+// Bulk-restore scans (delta chain over hundreds of jobs) can legitimately run
+// past a minute; polling backs off to 2s so the extra headroom costs nothing
+// when queries are fast.
+const QUERY_TIMEOUT_MS = 300_000;
 
 const TERMINAL_STATES = new Set<QueryExecutionState>([
   QueryExecutionState.SUCCEEDED,

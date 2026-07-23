@@ -19,7 +19,7 @@ storage shapes:
 | CSV     | `cfg_<cfg>_<obj>`                     | Raw per-job backup rows. **Multiple rows per record Id** (one per job).  |
 | Hudi    | `cfg_<cfg>_<obj>_hudi`                | Current state after compression. **One row per Id.** Deletes removed.    |
 | Delta   | `cfg_<cfg>_<obj>_delta`               | CDC history: `record_id, change_type, change_time, change_data, backup_job_id`. `change_data` for UPDATE = `{ Field: { old, new } }`. |
-| Checkpoint | `cfg_<cfg>_<obj>_checkpoints`      | Optional. **Same schema as the Hudi table** — each row is a full record snapshot for a `backup_job_id`, built from **old** delta values. May not exist; may not cover every record. |
+| Checkpoint | `cfg_<cfg>_<obj>_checkpoints`      | Optional. **Same schema as the Hudi table** — each row is a full record snapshot for a `backup_job_id`, built from **old** delta values. May not exist; may not cover every record. How/when Spark produces it: CHECKPOINT_FLOW.md. |
 
 Inserts write **no** delta row. Compression is what creates `_hudi`/`_delta`;
 a job that is not yet `COMPRESSED` only has CSV rows.
@@ -196,43 +196,35 @@ entire point of checkpoints: pre-computed answers for frequently restored jobs.
 
 ### 4.3 Scenario B, nearest-newer checkpoint
 
-Now suppose the only checkpoint for 001A was written **for JOB_4** (not a
-requested job), and the request anchors at JOB_3:
+Now suppose the only checkpoint for 001A is the state **as of JOB_4** (the
+Spark snapshot ran then), and the request anchors at JOB_2:
 
-| Id   | Name | Phone | Amount | backup_job_id | LastModifiedDate |
-| ---- | ---- | ----- | ------ | ------------- | ---------------- |
-| 001A | Acme | 222   | 2000   | JOB_4         | T3''             |
+| Id   | Name      | Phone | Amount | backup_job_id | LastModifiedDate |
+| ---- | --------- | ----- | ------ | ------------- | ---------------- |
+| 001A | Acme Corp | 333   | 2000   | JOB_4         | T4               |
 
-Selection: not exact (JOB_4 ≠ anchor JOB_3), but its time is newer than the
+Selection: not exact (JOB_4 ≠ anchor JOB_2), but its time is newer than the
 anchor → chosen as **nearest newer checkpoint** (if several qualify, the
 lowest checkpoint time wins).
 
-Assembly: base = the checkpoint row, then **undo the deltas newer than the
-checkpoint** against it (bulk-filtered in memory from query 1's rows — no
-extra Athena call):
+Assembly: base = the checkpoint row, then undo the deltas **baked into it since
+the anchor** — `change_time ∈ (t0, checkpoint_time]` — rewinding the checkpoint
+to the anchor state (bulk-filtered in memory from query 1's rows — no extra
+Athena call). Deltas newer than the checkpoint (T5) are not part of its state
+and are ignored:
 
 ```
-base (ckpt):   Name=Acme  Phone=222  Amount=2000
-undo T5:                  Phone=333
-undo T4:       Name=Acme  Phone=222      ← oldest-wins snaps it back
-final row:     Name=Acme  Phone=222  Amount=2000
+base (ckpt @T4):  Name=Acme Corp  Phone=333  Amount=2000
+undo T4:          Name=Acme       Phone=222
+undo T3:                                     Amount=1000
+final row:        Name=Acme  Phone=222  Amount=1000   = state at JOB_2  ✓
 ```
 
-The replay is a *reconciliation*: when the checkpoint already encodes the
-old-values state, undoing the newer deltas is idempotent (the oldest
-newer-delta's old values coincide with the checkpoint's values). It matters
-when a checkpoint is stale or was written mid-stream — the replay drags it
-back onto the delta chain's truth.
-
-> ⚠ **Behavior note worth knowing:** deltas *between the anchor and the
-> checkpoint* are **not** replayed in this branch. In the example that is
-> harmless (the JOB_4 checkpoint already carries pre-JOB_4 values). But if a
-> checkpoint's snapshot ever represents a state *later* than
-> `anchor + 1 job` — e.g. a JOB_5 checkpoint used for a JOB_2 request — the
-> intermediate changes (T3, T4) stay baked in. If exact anchor-state fidelity
-> is required from far-away checkpoints, the replay bound must widen to
-> `(anchor, checkpoint]`. Current behavior follows the spec: checkpoints are
-> authoritative, only newer deltas replay.
+The Spark side (CheckpointService.java) writes the main table's **pre-update
+snapshot** — the state including every delta up to the checkpoint's own
+LastModifiedDate — which is why the rewind bound is `(anchor, checkpoint]`.
+The benefit over Scenario A: only the deltas inside that window are needed,
+not the whole tail of history since the anchor.
 
 ### 4.4 Mixed fallback in one request
 
@@ -331,7 +323,10 @@ by `record_id`, checkpoint bounding, and delta replay all happen in memory in
 | Checkpoint exists but not for this record | Per-record Scenario A. |
 | Malformed `change_data` JSON | That delta is a no-op during replay (`reconstructRecord` guards). |
 | Requested record ids | Inlined into `IN (...)` lists — fine into the low thousands; Athena's 256 KB query cap is the ceiling (`ponytail:` marker in athena-fetch.ts — chunk the queries beyond that). |
-| Time comparability | Nearest-newer checkpoint selection compares delta `change_time` against checkpoint `LastModifiedDate` as strings — assumes one consistent format (`ponytail:` marker; normalise in SQL if they diverge). |
+| Time comparability | Nearest-newer checkpoint selection compares delta `change_time` against checkpoint `LastModifiedDate` as strings — verified same domain: `change_time` IS the record's LastModifiedDate (DeltaService.java:863). |
+| Null→value changes | Spark's `to_json` drops null struct fields, so such a delta arrives as `{new: …}` with no `old` key — replay still reverts the field (to empty), matching the Java reconstructor's `map<string,struct<old,new>>` semantics. |
+| Partition visibility | `_hudi`/`_delta`/`_checkpoints` Glue tables are partitioned by year/month; partitions are explicitly registered from S3 prefixes on every `ensureCompressionGlueTables` call (`syncHudiTablePartitions`) — no reliance on `hudi.metadata-listing-enabled`. |
+| Query runtime | Athena wait capped at 300 s (`QUERY_TIMEOUT_MS`) with 250 ms→2 s poll backoff. |
 | Response size | Capped at 10 000 rows (`RESTORE_ENTIRE_LIMIT`) — page the endpoint if restores outgrow it. |
 
 ## 8. Self-checks
@@ -345,5 +340,5 @@ npm run build && node dist/services/restore-retrieve/restore-reconstruct.js
 ```
 
 The assembly self-check encodes §4's example shapes directly: oldest-wins
-double-change, untouched record, checkpoint + newer-delta replay, exact
-checkpoint, and the skipped-record case.
+double-change, untouched record, checkpoint rewound via `(anchor, checkpoint]`
+deltas, exact checkpoint, null-old revert, and the skipped-record case.
