@@ -20,6 +20,7 @@ import {
   RESTORE_TYPES,
   RestoreType,
   getApexPicklistValues,
+  getUserForCrm,
   unwrapApex,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
@@ -75,17 +76,24 @@ const listRestoreRetrieveJobsHandler = async (req: IRequest, res: IResponse): Pr
 };
 
 /**
- * GET /get-picklist-field-values?objectApiName=&fieldApiName=
+ * GET /get-picklist-field-values?crmId=&objectApiName=&fieldApiName=
  * Picklist values for a field, straight from the Salesforce apex endpoint.
  * Mirrors archival-config's handler — shared logic lives in getApexPicklistValues.
  */
 const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  const { objectApiName, fieldApiName } = req.query;
+  const { crmId, objectApiName, fieldApiName } = req.query;
+  if (!crmId) {
+    return makeResponse(req, res, 400, false, 'crm_id_required');
+  }
   if (!objectApiName || !fieldApiName) {
     return makeResponse(req, res, 400, false, 'params_required');
   }
-  const result = await getApexPicklistValues({ user, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
+  // A person can have one user record per connected CRM — resolve the record for this crmId.
+  const crmUser = await getUserForCrm(req.user!, String(crmId));
+  if (!crmUser) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+  const result = await getApexPicklistValues({ user: crmUser, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
   makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 

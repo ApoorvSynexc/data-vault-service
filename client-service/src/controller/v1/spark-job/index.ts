@@ -93,7 +93,7 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
 /**
  * POST /spark-job/update-spark-job-status
  * Body:     { payload: "<encrypted-string>" }
- *           → decrypts to { backupConfigId, backupJobIds, success, errorMessage? }
+ *           → decrypts to { backupConfigId, backupJobIds, success, errorMessage?, isCheckpointsCreated? }
  * Response: { updated: [...], failed: [{ backupJobId, reason }] }
  *
  * Terminal step of the compression lifecycle. Spark compresses the whole config as one
@@ -111,13 +111,14 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     backupJobIds?: string[];
     success?: boolean;
     errorMessage?: string;
+    isCheckpointsCreated?: boolean;
   }>(payload);
   if (!decrypted) {
     return makeResponse(req, res, 400, false, 'invalid_payload');
   }
   logger.info('payload decrypted');
 
-  const { backupConfigId, backupJobIds, success, errorMessage } = decrypted;
+  const { backupConfigId, backupJobIds, success, errorMessage, isCheckpointsCreated } = decrypted;
   if (!backupConfigId) {
     return makeResponse(req, res, 400, false, 'id_required');
   }
@@ -160,12 +161,16 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
   }
 
   // Compression succeeded — ensure the current-state Hudi and Delta Glue tables
-  // exist so Athena can query the compressed output. Best-effort: the job status
-  // is already committed, so a Glue failure is logged, never fatal to the response.
+  // (plus checkpoints, when Spark reports it wrote them) exist so Athena can
+  // query the compressed output. Best-effort: the job status is already
+  // committed, so a Glue failure is logged, never fatal to the response.
   // Idempotent, so retries / duplicate completion events are safe.
   if (success) {
     try {
-      const glueResult = await ensureCompressionGlueTables(backupConfigId);
+      const glueResult = await ensureCompressionGlueTables(
+        backupConfigId,
+        isCheckpointsCreated === true
+      );
       if (glueResult?.failed.length) {
         logger.warn(
           `[COMPRESSION] glue ensure partial | configId=${backupConfigId} ensured=${glueResult.ensured.length} failed=${JSON.stringify(glueResult.failed)}`

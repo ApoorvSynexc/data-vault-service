@@ -401,8 +401,9 @@ export const repairGlueTableParams = async (params: IRepairGlueTableParamsInput)
 // so the table always matches what Spark wrote.
 //
 // Layout (backup pipeline only — archival is a separate workflow):
-//   Hudi : <crmName>/<crmId>/backup/<cfg>/main_backup_files/<Object>/
-//   Delta: <crmName>/<crmId>/backup/<cfg>/delta/<Object>/
+//   Hudi       : <crmName>/<crmId>/backup/<cfg>/main_backup_files/<Object>/
+//   Delta      : <crmName>/<crmId>/backup/<cfg>/delta/<Object>/
+//   Checkpoints: <crmName>/<crmId>/backup/<cfg>/checkpoints/<Object>/
 
 // Hudi CoW read format for Athena — parquet data read through Hudi's input format.
 const HUDI_STORAGE_DESCRIPTOR_BASE = {
@@ -423,13 +424,16 @@ const buildHudiTableName = (backupConfigId: string, objectName: string): string 
 const buildDeltaTableName = (backupConfigId: string, objectName: string): string =>
   `${buildGlueTableName(backupConfigId, objectName)}_delta`;
 
+const buildCheckpointTableName = (backupConfigId: string, objectName: string): string =>
+  `${buildGlueTableName(backupConfigId, objectName)}_checkpoints`;
+
 // S3 key prefix (no bucket) of a compression-output table root.
 const buildCompressionRootKey = (
   crmName: string,
   crmId: string,
   backupConfigId: string,
   objectName: string,
-  dataset: 'main_backup_files' | 'delta'
+  dataset: 'main_backup_files' | 'delta' | 'checkpoints'
 ): string => `${crmName}/${crmId}/backup/${backupConfigId}/${dataset}/${objectName}/`;
 
 export interface IEnsureCompressionTableParams {
@@ -446,22 +450,21 @@ export interface IEnsureCompressionTableParams {
 const ensureHudiFormatTable = async (
   params: IEnsureCompressionTableParams & {
     tableName: string;
-    dataset: 'main_backup_files' | 'delta';
+    dataset: 'main_backup_files' | 'delta' | 'checkpoints';
   }
 ): Promise<boolean> => {
   const { crmId, crmName, backupConfigId, objectName, destConfig, tableName, dataset } = params;
 
   const databaseName = buildGlueDatabaseName(crmId);
+  const label = dataset === 'main_backup_files' ? 'hudi' : dataset;
 
-  logger.info(
-    `[glue] ensure ${dataset === 'delta' ? 'delta' : 'hudi'} table start | db:${databaseName} table:${tableName}`
-  );
+  logger.info(`[glue] ensure ${label} table start | db:${databaseName} table:${tableName}`);
 
   await ensureGlueDatabase(databaseName);
 
   if (await glueTableExists(databaseName, tableName)) {
     logger.info(
-      `[glue] ${dataset === 'delta' ? 'delta' : 'hudi'} table already exists, skipping | db:${databaseName} table:${tableName}`
+      `[glue] ${label} table already exists, skipping | db:${databaseName} table:${tableName}`
     );
     return false;
   }
@@ -524,18 +527,18 @@ const ensureHudiFormatTable = async (
     // The loser sees AlreadyExistsException — the table exists, so treat as success.
     if (err.name === 'AlreadyExistsException') {
       logger.info(
-        `[glue] ${dataset === 'delta' ? 'delta' : 'hudi'} table created concurrently | db:${databaseName} table:${tableName}`
+        `[glue] ${label} table created concurrently | db:${databaseName} table:${tableName}`
       );
       return false;
     }
     logger.error(
-      `[glue] ensure ${dataset === 'delta' ? 'delta' : 'hudi'} table failed | db:${databaseName} table:${tableName} err:${err.name}: ${err.message}`
+      `[glue] ensure ${label} table failed | db:${databaseName} table:${tableName} err:${err.name}: ${err.message}`
     );
     throw err;
   }
 
   logger.info(
-    `[glue] created ${dataset === 'delta' ? 'delta' : 'hudi'} table | db:${databaseName} table:${tableName} columns:${glueColumns.length} partitions:${finalPartitionKeys.length}`
+    `[glue] created ${label} table | db:${databaseName} table:${tableName} columns:${glueColumns.length} partitions:${finalPartitionKeys.length}`
   );
   return true;
 };
@@ -556,4 +559,16 @@ export const ensureDeltaTable = async (params: IEnsureCompressionTableParams): P
     ...params,
     tableName: buildDeltaTableName(params.backupConfigId, params.objectName),
     dataset: 'delta',
+  });
+
+// Ensures the checkpoints Glue table exists for one object. Same Hudi layout and
+// schema source (its own `.hoodie`) as the main table — only the dataset folder
+// and table suffix differ. Idempotent.
+export const ensureCheckpointTable = async (
+  params: IEnsureCompressionTableParams
+): Promise<boolean> =>
+  ensureHudiFormatTable({
+    ...params,
+    tableName: buildCheckpointTableName(params.backupConfigId, params.objectName),
+    dataset: 'checkpoints',
   });
