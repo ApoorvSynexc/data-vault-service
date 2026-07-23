@@ -166,7 +166,7 @@ data-vault-service/
 │       │                   └── delete-bulk.ts  # Bulk delete job
 │       └── utils/
 │           ├── encryption.ts              # AES-256-GCM (hex key)
-│           ├── helper.ts                  # buildSchemaS3Key, toParquetDataType, schemasAreEqual
+│           ├── helper.ts                  # buildSchemaS3Key, schemasAreEqual
 │           └── http-request.ts            # Generic fetch wrapper
 
 ├── docs/

@@ -161,7 +161,9 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
 
 
   const { url, codeVerifier, state } = getSalesforceLoginUrl(undefined, SALESFORCE_LOGIN_REDIRECT_URI, environment, instanceUrl);
-  await createOAuthState(state, codeVerifier, '', 'salesforce', environment, instanceUrl);
+  // Pin the state to this Salesforce user — the callback rejects the login if
+  // someone else's credentials complete the OAuth flow.
+  await createOAuthState(state, codeVerifier, crmUserId, 'salesforce', environment, instanceUrl);
 
   return { authorizationUrl: url };
 };

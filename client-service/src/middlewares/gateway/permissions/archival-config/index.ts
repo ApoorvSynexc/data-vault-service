@@ -10,6 +10,11 @@ const archivalConfigPermissions = [
         permissions: ['archival.read']
     },
     {
+        path: '/archival-config/get-picklist-field-values',
+        method: 'GET',
+        permissions: ['archival.read']
+    },
+    {
         path: '/archival-config/object-childs',
         method: 'GET',
         permissions: ['archival.read']

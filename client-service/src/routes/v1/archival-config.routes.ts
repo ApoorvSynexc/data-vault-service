@@ -7,6 +7,7 @@ const router = Router();
 router.get('/object-childs', archivalConfigController.getObjectChildHanlder);
 router.post('/object-records', archivalConfigController.getObjectRecordsHanlder);
 router.get('/fields', archivalConfigController.getFieldsHanlder);
+router.get('/get-picklist-field-values', archivalConfigController.getPicklistFieldValuesHandler);
 
 router.get('/list', archivalConfigController.listArchivalConfigsHandler);
 router.get('/', archivalConfigController.getArchivalConfigHandler);

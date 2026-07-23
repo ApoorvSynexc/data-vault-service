@@ -30,7 +30,6 @@ import { updateArchivalObject } from '../../../../backup-job';
 import {
   buildS3KeyPrefix,
   buildSchemaS3Key,
-  toParquetDataType,
   formatFieldValuesForSOQL,
   formatValueByDataType,
 } from '../../../../../utils/helper';
@@ -905,14 +904,10 @@ export const archiveAndHardDelete = async (
       `[archival:orchestrator] phase 3 complete | backupJobId:${backupJobId} objectName:${objectName}`
     );
 
-    const schemaWithParquet = schema.map((field: { dataType: string }) => ({
-      ...field,
-      parquetDataType: toParquetDataType(field.dataType),
-    }));
     await uploadToS3(
       destConfig,
       buildSchemaS3Key({ crmId, crmName, backupConfigId, objectName, type: 'archival' }),
-      Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
+      Buffer.from(JSON.stringify(schema, null, 2))
     );
     logger.info(
       `[archival:orchestrator] schema uploaded | backupJobId:${backupJobId} objectName:${objectName}`

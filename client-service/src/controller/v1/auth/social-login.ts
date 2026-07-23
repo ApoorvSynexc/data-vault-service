@@ -53,7 +53,7 @@ const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> 
   switch (authProviderStr) {
     case 'salesforce': {
       const { url, codeVerifier, state } = getSalesforceLoginUrl(undefined, SALESFORCE_LOGIN_REDIRECT_URI, environment, customUrl);
-      await createOAuthState(state, codeVerifier, '', authProviderStr, undefined, environment, customUrl);
+      await createOAuthState(state, codeVerifier, '', authProviderStr, environment, customUrl);
       authorizationUrl = url;
       break;
     }
@@ -133,6 +133,15 @@ const socialLoginCallbackHandler = async (
 
   if (!token || !sfProfile) {
     makeResponse(req, res, 500, false, 'unknown_error');
+    return;
+  }
+
+  // State created by the admin authorize flow is pinned to a specific Salesforce
+  // user id; reject the callback if a different user's credentials completed the
+  // login. Plain social-login states carry userId '' and skip this check.
+  if (oauthState.userId && oauthState.userId !== sfProfile.user_id) {
+    console.log('[social-login-callback] 401: state pinned to different user:', { expected: oauthState.userId, actual: sfProfile.user_id });
+    makeResponse(req, res, 401, false, 'unauthorized');
     return;
   }
 

@@ -160,6 +160,26 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   );
 };
 
+const getApexPicklistValues = async ({ user, objectApiName, fieldApiName }: { user?: IUser; objectApiName?: string; fieldApiName?: string } = {}) => {
+  if (!user || !user.crmId) {
+    return [];
+  }
+  const crm = await getCrmById(user.crmId);
+  if (!crm) {
+    throw new Error('CRM not found');
+  }
+  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const instanceUrl = user.crmProfile?.instanceUrl;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/get-picklist-values?objectApiName=${encodeURIComponent(objectApiName!)}&fieldApiName=${encodeURIComponent(fieldApiName!)}`;
+  return callApex(
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+    { url, method: 'GET' }
+  );
+};
+
 const APEX_BASE = (instanceUrl?: string) =>
   `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault`;
 
@@ -249,4 +269,4 @@ export const apexCountOne = async (
   }
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, getApexPicklistValues, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
