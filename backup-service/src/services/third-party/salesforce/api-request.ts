@@ -129,6 +129,22 @@ const getObjectMetadata = async (
   }
 };
 
+// Picklist values for a single field, fetched via the core service (which owns
+// the Salesforce apex credentials). Throws on failure — callers decide whether
+// picklist metadata is worth failing over.
+const getPicklistValues = async (
+  backupConfigId: string,
+  objectApiName: string,
+  fieldApiName: string
+): Promise<any> => {
+  const params = new URLSearchParams({ backupConfigId, objectApiName, fieldApiName });
+  const res = await httpRequest({
+    url: `${CORE_SERVICE}/v1/internal/picklist-values?${params.toString()}`,
+    headers: { 'x-internal-secret': INTERNAL_SECRET },
+  });
+  return res?.data;
+};
+
 // ---------------------------------------------------------------------------
 // Bulk API 2.0 — create
 // ---------------------------------------------------------------------------
@@ -153,4 +169,10 @@ const createBulkQueryJob = async (payload: ICreateBulkQueryJob): Promise<string>
   return res.id;
 };
 
-export { salesforceRequest, makePageFetcher, getObjectMetadata, createBulkQueryJob };
+export {
+  salesforceRequest,
+  makePageFetcher,
+  getObjectMetadata,
+  getPicklistValues,
+  createBulkQueryJob,
+};

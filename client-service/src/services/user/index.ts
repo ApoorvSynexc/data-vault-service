@@ -310,6 +310,20 @@ const getUsersByContactEmail = async (params: IGetUsersByContactEmailParams): Pr
   return (result.Items ?? []) as IUser[];
 };
 
+// Resolves the caller's user record for a specific CRM — a person (contactEmail)
+// can have one user record per connected CRM. Returns null when the caller has
+// no record on that CRM.
+const getUserForCrm = async (user: IUser, crmId: string): Promise<IUser | null> => {
+  if (user.crmId === crmId) {
+    return user;
+  }
+  if (!user.contactEmail) {
+    return null;
+  }
+  const crmUsers = await getUsersByContactEmail({ contactEmail: user.contactEmail });
+  return crmUsers.find((u) => u.crmId === crmId) ?? null;
+};
+
 // ---------------------------------------------------------------------------
 // Converts a MongoDB-style projection { firstName: 1, email: 1 } into
 // DynamoDB ProjectionExpression params.  Returns null when projection is empty.
@@ -464,4 +478,4 @@ const deleteUser = async (userId: string): Promise<boolean> => {
   return true;
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser };
+export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUserForCrm, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser };

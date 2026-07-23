@@ -19,8 +19,7 @@ import {
   validateColumns,
   RESTORE_TYPES,
   RestoreType,
-  getApexPicklistValues,
-  unwrapApex,
+  fetchPicklistValues,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -75,18 +74,28 @@ const listRestoreRetrieveJobsHandler = async (req: IRequest, res: IResponse): Pr
 };
 
 /**
- * GET /get-picklist-field-values?objectApiName=&fieldApiName=
- * Picklist values for a field, straight from the Salesforce apex endpoint.
- * Mirrors archival-config's handler — shared logic lives in getApexPicklistValues.
+ * GET /get-picklist-field-values?backupConfigId=&objectApiName=&fieldApiName=
+ * Picklist values for a field, read from the values.json persisted on S3 by
+ * backup-service — no Salesforce callout (archival-config's handler still hits apex).
  */
 const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  const { objectApiName, fieldApiName } = req.query;
+  const { backupConfigId, objectApiName, fieldApiName } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
   if (!objectApiName || !fieldApiName) {
     return makeResponse(req, res, 400, false, 'params_required');
   }
-  const result = await getApexPicklistValues({ user, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
-  makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
+  const result = await fetchPicklistValues({
+    objectApiName: String(objectApiName),
+    fieldApiName: String(fieldApiName),
+    backupConfigId: String(backupConfigId),
+    userId: req.user!.userId,
+  });
+  if (!result.ok) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+  makeResponse(req, res, 200, true, 'fetch', result.values);
 };
 
 /**

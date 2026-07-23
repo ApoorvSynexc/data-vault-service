@@ -24,6 +24,7 @@ import {
   getObjectMetadata,
   createBulkQueryJob,
 } from '../../api-request';
+import { uploadPicklistValues } from '../../picklist';
 import { uploadToS3, downloadFromS3, listS3Objects } from '../../../../destination';
 import { buildS3KeyPrefix, buildSchemaS3Key, schemasAreEqual } from '../../../../../utils/helper';
 import {
@@ -328,6 +329,15 @@ async function uploadSingleObject(
     object.name,
     'archival'
   );
+  await uploadPicklistValues({
+    schema,
+    destConfig: ctx.destConfig,
+    crmId: ctx.crmId,
+    crmName: ctx.crmName,
+    backupConfigId: ctx.backupConfigId,
+    objectName: object.name,
+    type: 'archival',
+  });
   // Exclude soft-deleted records from every level of the archival query — see
   // the matching comment in archival/index.ts for the rationale.
   const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE IsDeleted = false AND (${effectiveWhereBody}) ORDER BY Id ASC`;
