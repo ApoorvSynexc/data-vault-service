@@ -252,7 +252,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
     }
 
 
-    const handler = getRestoreCrmHandler(source.crmName);
+    const handler = getRestoreCrmHandler(destination.crmName);
     const result = await handler.runRestore(
       restoreId,
       restoreJobId,

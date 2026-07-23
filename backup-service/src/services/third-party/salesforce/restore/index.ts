@@ -5,7 +5,7 @@ interface RunSalesforceRestorePayload {
   restoreId: string;
   restoreJobId: string;
   object: { id: string; name: string; status: string };
-  sourceS3Credentials: { accessKeyId: string; secretAccessKey: string };
+  sourceS3Credentials: { accessKeyId: string; secretAccessKey: string; bucketName: string; region: string; folderPath: string };
   destinationSalesforceCredentials: { access_token: string; refresh_token: string; instanceUrl: string };
   conflict: IRestoreConflict;
 }
