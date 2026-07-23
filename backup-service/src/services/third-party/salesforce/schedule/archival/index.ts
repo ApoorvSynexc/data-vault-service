@@ -36,6 +36,7 @@ import {
 import { listS3Objects, uploadToS3 } from '../../../../destination/s3';
 import { uploadSingleObject, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
+import { uploadPicklistValues } from '../../picklist';
 import { buildFailedRecordsIdCsv, bulkDeleteRecords } from './delete-bulk';
 import {
   // getBackupConfigById,
@@ -611,6 +612,15 @@ export const archiveAndHardDelete = async (
       objectName,
       'archival'
     );
+    await uploadPicklistValues({
+      schema,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'archival',
+    });
 
     let jobId: string;
     let totalRecordCount: number;
