@@ -12,13 +12,11 @@ import {
   FetchRecordsConfigType,
   createRestore,
   IFetchRecordsFilters,
-  IChangedSinceRange,
   IFetchRecordsFilterField,
+  IFetchRecordsParams,
   buildAthenaFilterWhere,
   FilterError,
   validateColumns,
-  RESTORE_TYPES,
-  RestoreType,
   fetchPicklistValues,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
@@ -163,26 +161,37 @@ const VALID_FETCH_FILTER_TYPES = ['AND', 'OR', 'SOQL'] as const;
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-interface IFetchRecordsExtras {
-  filters?: IFetchRecordsFilters;
-  changedSince?: IChangedSinceRange;
-  bulkCsvIds?: string[];
-  deletedOnly?: boolean;
-  restoreType?: RestoreType;
-}
-
 /**
- * Validates and normalises the optional query-refinement fields on the request
- * body. These are accepted and threaded through to the service but not yet
- * applied to the Athena query — SQL wiring is a follow-up. Returns an error
- * message string when a supplied field is malformed, so the caller can 400.
+ * Validates and normalises the entire /fetch-records body into a single
+ * IFetchRecordsParams — one interface, one service call, no side-channel
+ * "extras" object. Column names and the filter block are compiled here too, so
+ * every request-shape error (including FilterError codes) maps to a 400 before
+ * Athena is touched. The handler only relays the result.
  */
-const parseFetchExtras = (
-  body: Record<string, unknown>
+const parseFetchRecordsParams = (
+  body: Record<string, unknown>,
+  userId: string
 ):
-  | { ok: true; value: IFetchRecordsExtras }
+  | { ok: true; value: IFetchRecordsParams }
   | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  const extras: IFetchRecordsExtras = {};
+  const { configType, backupConfigId, objectApiName, columnNames, backupJobIds } = body;
+
+  if (!configType || !VALID_FETCH_CONFIG_TYPES.includes(configType as FetchRecordsConfigType)) {
+    return { ok: false, error: 'invalid_config_type' };
+  }
+  if (!objectApiName || typeof objectApiName !== 'string') {
+    return { ok: false, error: 'object_api_name_required' };
+  }
+  if (!Array.isArray(columnNames) || columnNames.length === 0) {
+    return { ok: false, error: 'column_names_required' };
+  }
+
+  const value: IFetchRecordsParams = {
+    configType: configType as FetchRecordsConfigType,
+    objectApiName,
+    columnNames: (columnNames as unknown[]).map((c) => String(c)),
+    userId,
+  };
 
   if (body.filters !== undefined) {
     const f = body.filters;
@@ -196,7 +205,7 @@ const parseFetchExtras = (
       if (typeof f.soqlQuery !== 'string' || f.soqlQuery.trim() === '') {
         return { ok: false, error: 'soql_query_required' };
       }
-      extras.filters = { type, soqlQuery: f.soqlQuery.trim() };
+      value.filters = { type, soqlQuery: f.soqlQuery.trim() };
     } else {
       if (!Array.isArray(f.fields)) return { ok: false, error: 'filter_fields_required' };
       const fields: IFetchRecordsFilterField[] = [];
@@ -217,7 +226,7 @@ const parseFetchExtras = (
           value: raw.value,
         });
       }
-      extras.filters = { type, fields };
+      value.filters = { type, fields };
     }
   }
 
@@ -232,7 +241,7 @@ const parseFetchExtras = (
     ) {
       return { ok: false, error: 'invalid_changed_since' };
     }
-    extras.changedSince = {
+    value.changedSince = {
       ...(startDate !== undefined && { startDate }),
       ...(endDate !== undefined && { endDate }),
     };
@@ -240,24 +249,49 @@ const parseFetchExtras = (
 
   if (body.bulkCsvIds !== undefined) {
     if (!Array.isArray(body.bulkCsvIds)) return { ok: false, error: 'invalid_bulk_csv_ids' };
-    extras.bulkCsvIds = [
+    value.bulkCsvIds = [
       ...new Set(body.bulkCsvIds.map((id) => String(id).trim()).filter(Boolean)),
     ];
   }
 
   if (body.deletedOnly !== undefined) {
     if (typeof body.deletedOnly !== 'boolean') return { ok: false, error: 'invalid_deleted_only' };
-    extras.deletedOnly = body.deletedOnly;
+    value.deletedOnly = body.deletedOnly;
   }
 
-  if (body.restoreType !== undefined) {
-    if (!RESTORE_TYPES.includes(body.restoreType as RestoreType)) {
-      return { ok: false, error: 'invalid_restore_type' };
+  if (body.filteringFields !== undefined && body.filteringFields !== null) {
+    if (!Array.isArray(body.filteringFields)) return { ok: false, error: 'invalid_filtering_fields' };
+    const fields = [...new Set(body.filteringFields.map((f) => String(f).trim()).filter(Boolean))];
+    if (fields.length) value.filteringFields = fields;
+  }
+
+  // Compile columns + filter to the Athena WHERE body — bad columns, operators,
+  // or unsupported SOQL become 400 codes here instead of Athena failures.
+  // filteringFields are validated as identifiers by the same rule.
+  try {
+    validateColumns(value.columnNames);
+    if (value.filteringFields) validateColumns(value.filteringFields);
+    if (value.filters) value.filterWhere = buildAthenaFilterWhere(value.filters);
+  } catch (e) {
+    if (e instanceof FilterError) {
+      return { ok: false, error: e.code as Parameters<typeof makeResponse>[4] };
     }
-    extras.restoreType = body.restoreType as RestoreType;
+    throw e;
   }
 
-  return { ok: true, value: extras };
+  if (value.configType === 'ARCHIVAL') {
+    if (!backupConfigId || typeof backupConfigId !== 'string') {
+      return { ok: false, error: 'id_required' };
+    }
+    value.backupConfigId = backupConfigId;
+  } else {
+    if (!Array.isArray(backupJobIds)) return { ok: false, error: 'id_required' };
+    const ids = [...new Set((backupJobIds as unknown[]).map((id) => String(id).trim()).filter(Boolean))];
+    if (ids.length === 0) return { ok: false, error: 'id_required' };
+    value.backupJobIds = ids;
+  }
+
+  return { ok: true, value };
 };
 
 /**
@@ -269,13 +303,13 @@ const parseFetchExtras = (
  *   columnNames:    string[]
  *   backupJobIds?:  string[]                (required for BACKUP, ignored for ARCHIVAL)
  *
- *   // Optional query refinements — validated and threaded through, not yet
- *   // applied to the Athena query (SQL wiring is a follow-up):
- *   filters?:      { type: 'AND'|'OR'|'SOQL', soqlQuery?: string,
- *                    fields?: { name, dataType, operator, value }[] }
- *   changedSince?: { startDate?: string, endDate?: string }
- *   bulkCsvIds?:   string[]
- *   deletedOnly?:  boolean
+ *   filters?:         { type: 'AND'|'OR'|'SOQL', soqlQuery?: string,
+ *                       fields?: { name, dataType, operator, value }[] }
+ *   changedSince?:    { startDate?: string, endDate?: string }
+ *   bulkCsvIds?:      string[]   (record scope for the entire-record flow)
+ *   deletedOnly?:     boolean
+ *   filteringFields?: string[]   (non-empty → by-field mode: only these fields
+ *                                 are reverted; absent → entire-record default)
  * }
  *
  * BACKUP  — queries Athena for the supplied backupJobIds filtered to the given object and columns.
@@ -285,98 +319,13 @@ const parseFetchExtras = (
  * Returns not_exist when ownership cannot be confirmed or no qualifying job is found.
  */
 const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { configType, backupConfigId, objectApiName, columnNames, backupJobIds } = req.body as {
-    configType?: unknown;
-    backupConfigId?: unknown;
-    objectApiName?: unknown;
-    columnNames?: unknown;
-    backupJobIds?: unknown;
-  };
-  const userId = req.user!.userId;
-
-  if (!configType || !VALID_FETCH_CONFIG_TYPES.includes(configType as FetchRecordsConfigType)) {
-    makeResponse(req, res, 400, false, 'invalid_config_type');
+  const parsed = parseFetchRecordsParams(req.body as Record<string, unknown>, req.user!.userId);
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
     return;
   }
 
-  if (!objectApiName || typeof objectApiName !== 'string') {
-    makeResponse(req, res, 400, false, 'object_api_name_required');
-    return;
-  }
-
-  if (!Array.isArray(columnNames) || columnNames.length === 0) {
-    makeResponse(req, res, 400, false, 'column_names_required');
-    return;
-  }
-
-  const parsedExtras = parseFetchExtras(req.body as Record<string, unknown>);
-  if (!parsedExtras.ok) {
-    makeResponse(req, res, 400, false, parsedExtras.error);
-    return;
-  }
-  const extras = parsedExtras.value;
-
-  // Validate columns and compile the filter block to an Athena WHERE body here so
-  // bad columns / operators / unsupported SOQL surface as a 400 before we hit Athena.
-  let filterWhere: string | null = null;
-  try {
-    validateColumns((columnNames as unknown[]).map((c) => String(c)));
-    if (extras.filters) filterWhere = buildAthenaFilterWhere(extras.filters);
-  } catch (e) {
-    if (e instanceof FilterError) {
-      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
-      return;
-    }
-    throw e;
-  }
-
-  if (configType === 'ARCHIVAL') {
-    if (!backupConfigId || typeof backupConfigId !== 'string') {
-      makeResponse(req, res, 400, false, 'id_required');
-      return;
-    }
-
-    const result = await fetchRecordsByBackupJobs({
-      configType: 'ARCHIVAL',
-      backupConfigId: String(backupConfigId),
-      objectApiName: String(objectApiName),
-      columnNames: (columnNames as unknown[]).map((c) => String(c)),
-      userId,
-      ...extras,
-      filterWhere,
-    });
-
-    if (!result) {
-      makeResponse(req, res, 400, false, 'not_exist');
-      return;
-    }
-
-    makeResponse(req, res, 200, true, 'fetch', result);
-    return;
-  }
-
-  // BACKUP path
-  if (!Array.isArray(backupJobIds) || backupJobIds.length === 0) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const ids = [...new Set((backupJobIds as unknown[]).map((id) => String(id).trim()).filter(Boolean))];
-
-  if (ids.length === 0) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const result = await fetchRecordsByBackupJobs({
-    configType: 'BACKUP',
-    backupJobIds: ids,
-    objectApiName: String(objectApiName),
-    columnNames: (columnNames as unknown[]).map((c) => String(c)),
-    userId,
-    ...extras,
-    filterWhere,
-  });
+  const result = await fetchRecordsByBackupJobs(parsed.value);
 
   if (!result) {
     makeResponse(req, res, 400, false, 'not_exist');
@@ -467,6 +416,35 @@ const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<v
   makeResponse(req, res, 200, true, 'repair', result);
 };
 
+/**
+ * POST /validate-soql
+ * Body: { soqlQuery: string } — a SOQL WHERE clause body (leading "WHERE" optional).
+ *
+ * Validates the clause via the same compiler used by /fetch-records
+ * (buildAthenaFilterWhere): rejects malformed SOQL, relationship paths
+ * (Owner.Name), subqueries, SOQL date literals, and unsupported operators.
+ * Returns the equivalent Athena/Presto WHERE body on success.
+ */
+const validateSoqlHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { soqlQuery } = req.body as { soqlQuery?: unknown };
+
+  if (!soqlQuery || typeof soqlQuery !== 'string' || soqlQuery.trim() === '') {
+    makeResponse(req, res, 400, false, 'soql_query_required');
+    return;
+  }
+
+  try {
+    const sqlWhere = buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: soqlQuery.trim() });
+    makeResponse(req, res, 200, true, 'fetch', { valid: true, sqlWhere });
+  } catch (e) {
+    if (e instanceof FilterError) {
+      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
+      return;
+    }
+    throw e;
+  }
+};
+
 const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const body = req.body;
   const created = await createRestore(body);
@@ -486,5 +464,6 @@ export const restoreRetrieveJobController = wrapController({
   fetchObjectFieldsHandler,
   repairGlueTablesHandler,
   createRestoreHandler,
-  getPicklistFieldValuesHandler
+  getPicklistFieldValuesHandler,
+  validateSoqlHandler,
 });
