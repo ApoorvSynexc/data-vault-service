@@ -37,3 +37,4 @@ This directory is the canonical reference for the full system architecture of da
 - `modules/` — One file per major module/service. Covers imports, exports, side effects, DynamoDB calls.
 - `execution/` — One file per major user flow. Step-by-step trace from API hit to DB write.
 - `graphs/` — Mermaid diagrams: module dependencies, request flow, data flow, execution flow.
+- `java/` — The Spark/Java middleware (sibling repo `DataValut-Middleware-App`). Start at java/JAVA_OVERVIEW.md; every doc carries file:line source pointers. Covers bootstrap (JAVA_BOOTSTRAP), payload models (JAVA_MODELS), retry framework (JAVA_RETRY), the backup pipeline (JAVA_BACKUP_FLOW), CDC deltas (JAVA_DELTA_MODEL), schema evolution (JAVA_SCHEMA_EVOLUTION), Hudi/paths (JAVA_HUDI_STORAGE), archival (JAVA_ARCHIVAL), and restore (JAVA_RESTORE). Checkpoints live in execution/CHECKPOINT_FLOW.md.
