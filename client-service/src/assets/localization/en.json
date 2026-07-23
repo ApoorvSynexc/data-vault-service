@@ -66,7 +66,7 @@
   "invalid_changed_since": "changedSince must be an object with optional string startDate and endDate",
   "invalid_bulk_csv_ids": "bulkCsvIds must be an array",
   "invalid_deleted_only": "deletedOnly must be a boolean",
-  "invalid_restore_type": "restoreType must be RESTORE_ONLY_CHANGED_FIELDS or RESTORE_ENTIRE_RECORD",
+  "invalid_filtering_fields": "filteringFields must be an array of field names",
   "invalid_filter_operator": "filter operator is not supported",
   "invalid_column_name": "a requested column name is invalid",
   "invalid_soql": "filters.soqlQuery could not be parsed",

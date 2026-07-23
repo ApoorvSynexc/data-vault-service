@@ -1,6 +1,7 @@
 import {
   AthenaClient,
   StartQueryExecutionCommand,
+  StartQueryExecutionCommandInput,
   GetQueryExecutionCommand,
   GetQueryResultsCommand,
   QueryExecutionState,
@@ -16,8 +17,15 @@ const athena = new AthenaClient({
   },
 });
 
-// How long to wait between each poll for query completion (ms).
-const POLL_INTERVAL_MS = 1000;
+// Adaptive polling: most queries finish in well under a second, so poll fast
+// first and back off toward POLL_MAX_MS for long-running scans.
+const POLL_INITIAL_MS = 250;
+const POLL_MAX_MS = 2000;
+
+// Serve byte-identical repeat queries from Athena's result cache instead of
+// re-scanning S3. Backup data only changes when a job/compression run lands,
+// so a short reuse window is safe and turns repeat fetches into ~instant.
+const RESULT_REUSE_MINUTES = 5;
 
 // Maximum total time to wait for a query to finish before giving up (ms).
 const QUERY_TIMEOUT_MS = 60_000;
@@ -30,25 +38,37 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
 
 // Submits a query to Athena and returns the queryExecutionId.
 const startQuery = async (sql: string, database: string): Promise<string> => {
-  const { QueryExecutionId } = await athena.send(
-    new StartQueryExecutionCommand({
-      QueryString: sql,
-      QueryExecutionContext: { Database: database },
-      ResultConfiguration: { OutputLocation: AWS_ATHENA_OUTPUT_LOCATION },
-    })
-  );
+  const input: StartQueryExecutionCommandInput = {
+    QueryString: sql,
+    QueryExecutionContext: { Database: database },
+    ResultConfiguration: { OutputLocation: AWS_ATHENA_OUTPUT_LOCATION },
+    ResultReuseConfiguration: {
+      ResultReuseByAgeConfiguration: { Enabled: true, MaxAgeInMinutes: RESULT_REUSE_MINUTES },
+    },
+  };
 
-  if (!QueryExecutionId) {
+  let response;
+  try {
+    response = await athena.send(new StartQueryExecutionCommand(input));
+  } catch (e) {
+    // Engine v2 workgroups reject ResultReuseConfiguration — retry without it.
+    if (!/ResultReuse/i.test(String((e as Error).message))) throw e;
+    delete input.ResultReuseConfiguration;
+    response = await athena.send(new StartQueryExecutionCommand(input));
+  }
+
+  if (!response.QueryExecutionId) {
     throw new Error('[athena] StartQueryExecution returned no QueryExecutionId');
   }
 
-  return QueryExecutionId;
+  return response.QueryExecutionId;
 };
 
 // Polls Athena until the query reaches a terminal state or the timeout is exceeded.
 // Throws if the query fails, is cancelled, or times out.
 const waitForQuery = async (queryExecutionId: string): Promise<void> => {
   const deadline = Date.now() + QUERY_TIMEOUT_MS;
+  let interval = POLL_INITIAL_MS;
 
   while (Date.now() < deadline) {
     const { QueryExecution } = await athena.send(
@@ -69,7 +89,8 @@ const waitForQuery = async (queryExecutionId: string): Promise<void> => {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    await new Promise((resolve) => setTimeout(resolve, interval));
+    interval = Math.min(interval * 2, POLL_MAX_MS);
   }
 
   throw new Error(`[athena] query timed out after ${QUERY_TIMEOUT_MS}ms`);

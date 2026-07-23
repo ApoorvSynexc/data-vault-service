@@ -74,55 +74,7 @@ export const buildRawSql = (tableName: string, p: IFetchSqlParams): string => {
   );
 };
 
-// ── Live records from Hudi (deletedOnly = false) ──────────────────────────────
-// _hudi is never queried standalone: a record qualifies only when its id appears
-// in a job-scoped path —
-//   - compressed jobs (p.jobIds)  → id present in the _delta CDC rows for those jobs.
-//   - uncompressed jobs (csv.jobIds) → id present in the raw CSV table rows for
-//     those jobs; the full current record then comes from _hudi.
-// change_type: UPDATE when the record's newest delta for the compressed jobs is
-// an UPDATE, else INSERT.
-export const buildCompressedLiveSql = (
-  hudiTable: string,
-  deltaTable: string,
-  p: IFetchSqlParams,
-  csv?: { table: string; jobIds: string[] }
-): string => {
-  const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
-  const membership: string[] = [];
-  let withClause = '';
-  let changeType = `'INSERT'`;
-  if (p.jobIds.length) {
-    const ids = idList(p.jobIds);
-    const deltaUpd =
-      `SELECT record_id FROM (` +
-      `SELECT record_id, change_type, ` +
-      `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
-      `FROM "${deltaTable}" WHERE backup_job_id IN (${ids})` +
-      `) t WHERE rn = 1 AND change_type = 'UPDATE'`;
-    withClause = `WITH delta_upd AS (${deltaUpd}) `;
-    changeType = `CASE WHEN "Id" IN (SELECT record_id FROM delta_upd) THEN 'UPDATE' ELSE 'INSERT' END`;
-    membership.push(
-      `"Id" IN (SELECT record_id FROM "${deltaTable}" WHERE backup_job_id IN (${ids}))`
-    );
-  }
-  if (csv?.jobIds.length) {
-    membership.push(
-      `"Id" IN (SELECT "Id" FROM "${csv.table}" WHERE backup_job_id IN (${idList(csv.jobIds)}))`
-    );
-  }
-  if (!membership.length) throw new FilterError('invalid_filter_field');
-  return (
-    `${withClause}` +
-    `SELECT ${cols}, backup_job_id, ${changeType} AS change_type ` +
-    `FROM "${hudiTable}" ` +
-    `WHERE (${membership.join(' OR ')})` +
-    `${filterClause(p.filterWhere, 'AND')} ` +
-    `ORDER BY ${quoteCol(LMD)} DESC LIMIT ${p.limit}`
-  );
-};
-
-// ── RESTORE_ONLY_CHANGED_FIELDS (restore-by-field) sources ────────────────────
+// ── By-field (filteringFields) sources ────────────────────────────────────────
 // Both builders emit one flat row per record with `r_`-prefixed columns; the
 // service strips the prefix back into a { record } object. Everything is CAST
 // to varchar so Hudi-typed and CSV-string columns can share a projection —
@@ -336,53 +288,6 @@ export const buildCsvEitherSql = (
   );
 };
 
-// ── Restore reconstruction sources ────────────────────────────────────────────
-
-// Read the current record once for a single Id — the starting point for both
-// restore modes. Projects only `columnNames` when given (else all Hudi columns),
-// and ANDs the filter so a restore is scoped to records matching it.
-export const buildLatestHudiRecordSql = (
-  hudiTable: string,
-  recordId: string,
-  opts: { columnNames?: string[]; filterWhere?: string | null } = {}
-): string => {
-  const cols = opts.columnNames && opts.columnNames.length
-    ? opts.columnNames.map(quoteCol).join(', ')
-    : '*';
-  const filter = opts.filterWhere ? ` AND (${opts.filterWhere})` : '';
-  return `SELECT ${cols} FROM "${hudiTable}" WHERE "Id" = '${recordId.replace(/'/g, "''")}'${filter} LIMIT 1`;
-};
-
-// Presence predicate: true when change_data's JSON carries this field. Lets the
-// delta query skip changes that touch none of the requested columns.
-const jsonHasKey = (col: string): string => {
-  quoteCol(col); // validate the identifier (throws on injection); path uses the raw name
-  return `json_extract(change_data, '$["${col}"]') IS NOT NULL`;
-};
-
-// Fetch only the deltas needed for reconstruction: this record's changes strictly
-// after the target version, newest-first so reconstruction runs in a single pass
-// without re-reading the main table. When `columnNames` is given, deltas that
-// change none of those fields are filtered out at the source — no point querying a
-// delta whose fields aren't in the requested set.
-// ponytail: change_time compared as a string literal. If the Glue column is a
-// timestamp type rather than string, wrap the bound in `timestamp '...'`.
-export const buildDeltasAfterSql = (
-  deltaTable: string,
-  recordId: string,
-  targetChangeTime: string,
-  columnNames: string[] = []
-): string => {
-  const id = recordId.replace(/'/g, "''");
-  const target = targetChangeTime.replace(/'/g, "''");
-  const relevant = columnNames.length ? ` AND (${columnNames.map(jsonHasKey).join(' OR ')})` : '';
-  return (
-    `SELECT change_time, change_type, change_data FROM "${deltaTable}" ` +
-    `WHERE record_id = '${id}' AND change_time > '${target}'${relevant} ` +
-    `ORDER BY change_time DESC`
-  );
-};
-
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npx ts-node src/services/restore-retrieve/athena-fetch.ts
 if (require.main === module) {
@@ -398,24 +303,6 @@ if (require.main === module) {
   assert.ok(raw.includes(`backup_job_id IN ('j1', 'j2')`));
   assert.ok(raw.includes(`ORDER BY "LastModifiedDate" DESC LIMIT 50`));
   assert.ok(raw.includes(`"LastModifiedDate"`), 'LMD projected even when unrequested');
-
-  const live = buildCompressedLiveSql('cfg_x_account_hudi', 'cfg_x_account_delta', p);
-  assert.ok(live.includes('ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC)'));
-  assert.ok(live.includes(`change_type = 'UPDATE'`));
-  assert.ok(live.includes(`CASE WHEN "Id" IN (SELECT record_id FROM delta_upd) THEN 'UPDATE' ELSE 'INSERT' END`));
-  // Hudi never standalone: membership only via delta/CSV ids, no direct ownership arm.
-  assert.ok(live.includes(`WHERE ("Id" IN (SELECT record_id FROM "cfg_x_account_delta" WHERE backup_job_id IN ('j1', 'j2')))`));
-  assert.ok(!live.includes('SELECT "Id" FROM'), 'no CSV membership without csv jobs');
-
-  // Mixed compressed + CSV jobs: CSV ids become hudi candidates too.
-  const mixed = buildCompressedLiveSql('h', 'd', p, { table: 'c', jobIds: ['j3'] });
-  assert.ok(mixed.includes(`OR "Id" IN (SELECT "Id" FROM "c" WHERE backup_job_id IN ('j3'))`));
-
-  // CSV-only jobs: no delta CTE, change_type constant, membership via CSV ids.
-  const csvOnly = buildCompressedLiveSql('h', 'd', { ...p, jobIds: [] }, { table: 'c', jobIds: ['j3'] });
-  assert.ok(!csvOnly.includes('WITH delta_upd'));
-  assert.ok(csvOnly.includes(`'INSERT' AS change_type`));
-  assert.ok(csvOnly.includes(`WHERE ("Id" IN (SELECT "Id" FROM "c" WHERE backup_job_id IN ('j3')))`));
 
   const del = buildCompressedDeletedSql('cfg_x_account_delta', p);
   assert.ok(del.includes(`json_extract_scalar(change_data, '$["Name"]') AS "Name"`));
@@ -497,26 +384,6 @@ if (require.main === module) {
   assert.ok(ce.includes(`AND "Id" IN ('r1')`), 'CSV side scoped to requested records');
   // Without explicit record ids, the Hudi side is bounded to CSV candidates.
   assert.ok(buildCsvEitherSql('c', 'h', p).includes(`"Id" IN (SELECT "Id" FROM m)`));
-
-  // Restore reconstruction sources.
-  assert.ok(buildLatestHudiRecordSql('cfg_x_account_hudi', "0'1").includes(`SELECT * FROM "cfg_x_account_hudi" WHERE "Id" = '0''1' LIMIT 1`));
-  // columnNames → projected; filterWhere → ANDed.
-  assert.ok(
-    buildLatestHudiRecordSql('h', 'r1', { columnNames: ['Name', 'Salary'], filterWhere: `"Status" = 'Active'` }).includes(
-      `SELECT "Name", "Salary" FROM "h" WHERE "Id" = 'r1' AND ("Status" = 'Active') LIMIT 1`
-    )
-  );
-  const after = buildDeltasAfterSql('cfg_x_account_delta', 'r1', 't5');
-  assert.ok(after.includes(`record_id = 'r1' AND change_time > 't5'`));
-  assert.ok(after.includes('ORDER BY change_time DESC'));
-  assert.ok(!after.includes('json_extract'), 'no column filter when columnNames omitted');
-  // columnNames → only deltas touching one of those fields are queried.
-  const afterCols = buildDeltasAfterSql('d', 'r1', 't5', ['Name', 'Salary']);
-  assert.ok(
-    afterCols.includes(
-      `AND (json_extract(change_data, '$["Name"]') IS NOT NULL OR json_extract(change_data, '$["Salary"]') IS NOT NULL)`
-    )
-  );
 
   console.log('athena-fetch self-check passed');
 }

@@ -10,8 +10,6 @@
 
 export type RestoreType = 'RESTORE_ONLY_CHANGED_FIELDS' | 'RESTORE_ENTIRE_RECORD';
 
-export const RESTORE_TYPES: RestoreType[] = ['RESTORE_ONLY_CHANGED_FIELDS', 'RESTORE_ENTIRE_RECORD'];
-
 export interface IDeltaRecord {
   changeTime: string; // delta.change_time — orders the history
   changeData: string; // delta.change_data — UPDATE payload JSON: { field: { old, new } }
