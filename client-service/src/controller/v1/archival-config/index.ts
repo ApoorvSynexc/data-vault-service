@@ -162,7 +162,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
     makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
-// Shared by both /archival-config and /restore routes — same apex callout either way.
+// Same apex callout also exposed on /restore (see restore-retrieve controller) — shared logic lives in getApexPicklistValues.
 const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
     const { crm, objectApiName, fieldApiName } = req.query;

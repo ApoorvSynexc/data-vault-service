@@ -19,6 +19,8 @@ import {
   validateColumns,
   RESTORE_TYPES,
   RestoreType,
+  getApexPicklistValues,
+  unwrapApex,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -70,6 +72,24 @@ const listRestoreRetrieveJobsHandler = async (req: IRequest, res: IResponse): Pr
     totalRecords: counter?.count ?? 0,
     totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
   });
+};
+
+/**
+ * GET /get-picklist-field-values?crm=&objectApiName=&fieldApiName=
+ * Picklist values for a field, straight from the Salesforce apex endpoint.
+ * Mirrors archival-config's handler — shared logic lives in getApexPicklistValues.
+ */
+const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
+  const { crm, objectApiName, fieldApiName } = req.query;
+  if (!crm) {
+    return makeResponse(req, res, 400, false, 'crm_id_required');
+  }
+  if (!objectApiName || !fieldApiName) {
+    return makeResponse(req, res, 400, false, 'params_required');
+  }
+  const result = await getApexPicklistValues({ user, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
+  makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
 /**
@@ -459,5 +479,6 @@ export const restoreRetrieveJobController = wrapController({
   fetchRecordsHandler,
   fetchObjectFieldsHandler,
   repairGlueTablesHandler,
-  createRestoreHandler
+  createRestoreHandler,
+  getPicklistFieldValuesHandler
 });
