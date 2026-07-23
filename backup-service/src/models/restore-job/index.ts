@@ -1,4 +1,5 @@
 import { EncryptedPayload } from '../../utils/encryption';
+import { IRestoreConflict } from '../restore';
 
 export interface IRestoreJobSource {
   backupConfigId: string;
@@ -11,10 +12,7 @@ export interface IRestoreJobSource {
   encryptedKeys: {
     accessKeyId: string;
     secretAccessKey: string;
-  } | {
-    ciphertext: string;
-    iv: string;
-  }
+  } | EncryptedPayload;
 }
 
 export interface IRestoreJobDestination {
@@ -30,15 +28,7 @@ export interface IRestoreJobDestination {
     access_token: EncryptedPayload;
     refresh_token: EncryptedPayload;
     instanceUrl: EncryptedPayload;
-  } | {
-    ciphertext: string;
-    iv: string;
-  }
-
-}
-
-export interface IRestoreConflict {
-  restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
+  } | EncryptedPayload;
 }
 
 export interface IRestoreJob {
