@@ -45,7 +45,7 @@ const OPERATORS: Record<string, string> = {
 };
 
 const resolveOperator = (raw: string): string => {
-  const op = OPERATORS[raw.toUpperCase()] ?? OPERATORS[raw];
+  const op = OPERATORS[raw.toUpperCase()];
   if (!op) throw new FilterError('invalid_filter_operator');
   return op;
 };
@@ -146,7 +146,7 @@ const renderSoqlWhere = (n: WhereNode | null | undefined): string => {
   if (!n) return '';
   if (n.field) return renderSoqlLeaf(n);
   const left = renderSoqlWhere(n.left);
-  const right = n.right ? renderSoqlWhere(n.right) : '';
+  const right = renderSoqlWhere(n.right);
   if (!right) return left;
   // At a branch node the operator is the AND / OR connective.
   return `${left} ${n.operator} ${right}`;
