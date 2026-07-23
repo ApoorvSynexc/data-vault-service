@@ -90,6 +90,75 @@ export const reconstructRecord = (
   return latestRecord;
 };
 
+// ── RESTORE_ENTIRE_RECORD bulk assembly ───────────────────────────────────────
+
+/**
+ * Assembles RESTORE_ENTIRE_RECORD rows from the three bulk query results — all
+ * grouping happens here in memory, no per-record I/O.
+ *
+ *   chainRows      — record_id, t0, change_time, change_data: the anchor (newest
+ *                    delta per record for the requested jobs) left-joined to all
+ *                    strictly-newer deltas; empty change_time = no newer delta.
+ *   checkpointRows — c_<col> record fields + checkpoint_time + is_exact: the
+ *                    chosen checkpoint per record. A checkpoint row shares the
+ *                    Hudi schema, so it is a complete snapshot base on its own.
+ *   hudiRows       — current state per Id, projected to `columns`.
+ *
+ * Per record (the checkpoint decision tree):
+ *   exact checkpoint     → the checkpoint row is the record, no replay.
+ *   newer checkpoint     → base = checkpoint row, then deltas newer than the
+ *                          checkpoint are undone against it.
+ *   no checkpoint        → Scenario A: every newer delta undone on the Hudi base.
+ *   no Hudi + no ckpt    → skipped (nothing to build on — e.g. deleted record).
+ */
+export const assembleEntireRecords = (
+  columns: string[],
+  hudiRows: Record<string, string>[],
+  chainRows: Record<string, string>[],
+  checkpointRows: Record<string, string>[]
+): { record: Record<string, string> }[] => {
+  const hudiById = new Map(hudiRows.map((r) => [r['Id'], r]));
+  const ckptById = new Map(checkpointRows.map((r) => [r['c_Id'], r]));
+
+  const deltasById = new Map<string, IDeltaRecord[]>();
+  const recordIds: string[] = [];
+  for (const row of chainRows) {
+    const id = row['record_id'];
+    if (!id) continue;
+    if (!deltasById.has(id)) {
+      deltasById.set(id, []);
+      recordIds.push(id);
+    }
+    if (row['change_time']) {
+      deltasById.get(id)!.push({ changeTime: row['change_time'], changeData: row['change_data'] ?? '' });
+    }
+  }
+
+  const out: { record: Record<string, string> }[] = [];
+  for (const id of recordIds) {
+    const hudi = hudiById.get(id);
+    const ckpt = ckptById.get(id);
+    if (!hudi && !ckpt) continue;
+
+    const record: Record<string, string> = {};
+    let deltas = deltasById.get(id) ?? [];
+    if (ckpt) {
+      for (const c of columns) record[c] = ckpt[`c_${c}`] ?? '';
+      deltas =
+        ckpt['is_exact'] === '1'
+          ? []
+          : deltas.filter((d) => toTime(d.changeTime) > toTime(ckpt['checkpoint_time'] ?? ''));
+    } else {
+      for (const c of columns) record[c] = hudi![c] ?? '';
+    }
+    record['Id'] = id;
+
+    if (deltas.length) reconstructRecord(record, deltas, 'RESTORE_ENTIRE_RECORD', columns);
+    out.push({ record });
+  }
+  return out;
+};
+
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npm run build && node dist/services/restore-retrieve/restore-reconstruct.js
 if (require.main === module) {
@@ -181,6 +250,48 @@ if (require.main === module) {
     ),
     { Name: 'John', Status: 'Inactive' }
   );
+
+  // ── assembleEntireRecords — bulk assembly across mixed checkpoint states ────
+  const cols = ['Id', 'Name', 'LastModifiedDate'];
+  const hudiRows = [
+    { Id: 'r1', Name: 'Bob', LastModifiedDate: '2026-07-20' },
+    { Id: 'r2', Name: 'Ann', LastModifiedDate: '2026-07-19' },
+    { Id: 'r3', Name: 'Cat', LastModifiedDate: '2026-07-18' },
+  ];
+  const chainRows = [
+    // r1 (Scenario A): two newer deltas — oldest old value must win.
+    { record_id: 'r1', t0: '5', change_time: '7', change_data: upd({ Name: ['Johnny', 'Bob'] }) },
+    { record_id: 'r1', t0: '5', change_time: '6', change_data: upd({ Name: ['John', 'Johnny'] }) },
+    // r2: anchor with no newer deltas — Hudi state returned untouched.
+    { record_id: 'r2', t0: '4', change_time: '', change_data: '' },
+    // r3: non-exact checkpoint at t=7 — the delta at t=8 (newer than the
+    // checkpoint) is undone against it; the t=6 delta (older) is ignored.
+    { record_id: 'r3', t0: '5', change_time: '8', change_data: upd({ Name: ['CkptCat', 'Cat'] }) },
+    { record_id: 'r3', t0: '5', change_time: '6', change_data: upd({ Name: ['OldCat', 'MidCat'] }) },
+    // r4: no Hudi row and no checkpoint — skipped entirely.
+    { record_id: 'r4', t0: '1', change_time: '2', change_data: upd({ Name: ['x', 'y'] }) },
+  ];
+  const ckptRows = [
+    { c_Id: 'r3', c_Name: 'MidCat', c_LastModifiedDate: '7', checkpoint_time: '7', t0: '5', is_exact: '0' },
+  ];
+  const assembled = assembleEntireRecords(cols, hudiRows, chainRows, ckptRows);
+  const byId = new Map(assembled.map((r) => [r.record['Id'], r.record]));
+  assert.strictEqual(byId.get('r1')!.Name, 'John', 'Scenario A: oldest newer-delta old value wins');
+  assert.strictEqual(byId.get('r2')!.Name, 'Ann', 'no newer deltas → Hudi untouched');
+  assert.strictEqual(byId.get('r3')!.Name, 'CkptCat', 'checkpoint base + newer-than-checkpoint replay');
+  assert.ok(!byId.has('r4'), 'no Hudi + no checkpoint → skipped');
+  assert.strictEqual(assembled.length, 3);
+
+  // Exact checkpoint: the checkpoint row is the record — no replay, no Hudi needed.
+  const exact = assembleEntireRecords(
+    cols,
+    [],
+    [{ record_id: 'r9', t0: '3', change_time: '4', change_data: upd({ Name: ['a', 'b'] }) }],
+    [{ c_Id: 'r9', c_Name: 'Snap', c_LastModifiedDate: '3', checkpoint_time: '3', t0: '3', is_exact: '1' }]
+  );
+  assert.strictEqual(exact.length, 1);
+  assert.strictEqual(exact[0].record.Name, 'Snap');
+  assert.strictEqual(exact[0].record.Id, 'r9');
 
   console.log('restore-reconstruct self-check passed');
 }

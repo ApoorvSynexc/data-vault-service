@@ -6,6 +6,7 @@ import { buildS3KeyPrefix, buildSchemaS3Key, schemasAreEqual } from '../../../..
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destination/s3';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
+import { uploadPicklistValues } from '../../picklist';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 import {
   createCsvGlueTable,
@@ -119,6 +120,15 @@ export const exportFirstTime = async (
       objectName,
       'schedule'
     );
+    await uploadPicklistValues({
+      schema,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
@@ -297,6 +307,15 @@ export const exportIncremental = async (
       objectName,
       'schedule'
     );
+    await uploadPicklistValues({
+      schema: latestSchema,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
 
     // ── Phase 1: query new + updated + deleted records in one queryAll job ────
     let bulkJobId = object.bulkJobId;

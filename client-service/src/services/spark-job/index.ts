@@ -39,7 +39,8 @@ export interface IEnsureCompressionGlueResult {
  * when the config/crm/destination can't be resolved.
  */
 export const ensureCompressionGlueTables = async (
-  backupConfigId: string
+  backupConfigId: string,
+  isCheckpointsCreated = false
 ): Promise<IEnsureCompressionGlueResult | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config) return null;
@@ -71,6 +72,7 @@ export const ensureCompressionGlueTables = async (
       backupConfigId,
       objectNames,
       destConfig,
+      isCheckpointsCreated,
     }),
   });
 
