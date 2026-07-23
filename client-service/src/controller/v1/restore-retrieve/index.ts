@@ -416,35 +416,6 @@ const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<v
   makeResponse(req, res, 200, true, 'repair', result);
 };
 
-/**
- * POST /validate-soql
- * Body: { soqlQuery: string } — a SOQL WHERE clause body (leading "WHERE" optional).
- *
- * Validates the clause via the same compiler used by /fetch-records
- * (buildAthenaFilterWhere): rejects malformed SOQL, relationship paths
- * (Owner.Name), subqueries, SOQL date literals, and unsupported operators.
- * Returns the equivalent Athena/Presto WHERE body on success.
- */
-const validateSoqlHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { soqlQuery } = req.body as { soqlQuery?: unknown };
-
-  if (!soqlQuery || typeof soqlQuery !== 'string' || soqlQuery.trim() === '') {
-    makeResponse(req, res, 400, false, 'soql_query_required');
-    return;
-  }
-
-  try {
-    const sqlWhere = buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: soqlQuery.trim() });
-    makeResponse(req, res, 200, true, 'fetch', { valid: true, sqlWhere });
-  } catch (e) {
-    if (e instanceof FilterError) {
-      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
-      return;
-    }
-    throw e;
-  }
-};
-
 const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const body = req.body;
   const created = await createRestore(body);
@@ -465,5 +436,4 @@ export const restoreRetrieveJobController = wrapController({
   repairGlueTablesHandler,
   createRestoreHandler,
   getPicklistFieldValuesHandler,
-  validateSoqlHandler,
 });
