@@ -16,12 +16,17 @@ export { validateColumns, buildLatestHudiRecordSql, buildDeltasAfterSql } from '
 export { reconstructRecord, RESTORE_TYPES } from './restore-reconstruct';
 export type { RestoreType, IDeltaRecord } from './restore-reconstruct';
 import type { RestoreType } from './restore-reconstruct';
+import { reconstructRecord, assembleEntireRecords } from './restore-reconstruct';
 import {
   buildRawSql,
   buildCompressedLiveSql,
   buildCompressedDeletedSql,
-  buildCompressedPairedSql,
-  buildCsvPairedSql,
+  buildCompressedByFieldSql,
+  buildCsvByFieldSql,
+  buildEntireDeltaChainSql,
+  buildEntireCheckpointSql,
+  buildHudiBulkSql,
+  buildCsvEitherSql,
   pairedColumns,
   outputColumns,
 } from './athena-fetch';
@@ -224,6 +229,10 @@ const toGlueId = (value: string): string =>
 // Global cap: at most 50 records, newest-first by LastModifiedDate across all jobs.
 const FETCH_LIMIT = 50;
 
+// RESTORE_ENTIRE_RECORD is a bulk restore, not a preview grid — cap high.
+// ponytail: single-response ceiling; page the endpoint if restores outgrow 10k rows.
+const RESTORE_ENTIRE_LIMIT = 10_000;
+
 // Merges per-source result sets into one newest-first, capped set. Each source
 // already applies the same ORDER BY LastModifiedDate DESC + LIMIT, and the global
 // top-N is contained in the union of the per-source top-N, so a merge-sort-slice
@@ -236,47 +245,36 @@ const mergeOrderLimit = (results: IQueryResult[], columnNames: string[]): IQuery
   return { columns, rows: rows.slice(0, FETCH_LIMIT) };
 };
 
-// ── RESTORE_ONLY_CHANGED_FIELDS paired shape ───────────────────────────────────
+// ── RESTORE_ONLY_CHANGED_FIELDS (restore-by-field) shape ───────────────────────
 
-export interface IPairedRow {
+export interface IByFieldRow {
   record: Record<string, string>;
-  // COMPRESSED jobs: per-field old values from the winning delta's change_data.
-  delta?: Record<string, string>;
-  // Uncompressed jobs: the previous version (2nd-newest CSV row, else Hudi).
-  older?: Record<string, string>;
 }
 
-export interface IPairedResult {
+export interface IByFieldResult {
   columns: string[];
-  rows: IPairedRow[];
+  rows: IByFieldRow[];
 }
 
-// Splits the flat prefixed SQL rows (r_* / o_* / d_change_data) back into
-// { record, delta | older } objects. For the delta kind, change_data JSON is
-// { field: { old, new } } — only fields present in the delta land on the object,
-// scoped to the projected columns.
-const toPairedRows = (result: IQueryResult, kind: 'delta' | 'older'): IPairedRow[] =>
+// Strips the r_ prefix off the flat SQL row into a { record } object. For
+// compressed rows, the winning delta's old values are overlaid onto the Hudi
+// record (via reconstructRecord — the single-delta undo), so the row is the
+// record's previous version. Fields outside the projection never leak in.
+const toByFieldRows = (result: IQueryResult, kind: 'compressed' | 'csv'): IByFieldRow[] =>
   result.rows.map((flat) => {
     const record: Record<string, string> = {};
-    const other: Record<string, string> = {};
     for (const [key, value] of Object.entries(flat)) {
       if (key.startsWith('r_')) record[key.slice(2)] = value;
-      else if (key.startsWith('o_')) other[key.slice(2)] = value;
     }
-    if (kind === 'delta') {
-      try {
-        const changes = JSON.parse(flat['d_change_data'] ?? '') as Record<string, unknown>;
-        for (const [field, entry] of Object.entries(changes)) {
-          if (field in record && entry && typeof entry === 'object' && 'old' in entry) {
-            const old = (entry as { old?: unknown }).old;
-            other[field] = old == null ? '' : String(old);
-          }
-        }
-      } catch {
-        // malformed change_data — empty delta object
-      }
+    if (kind === 'compressed') {
+      reconstructRecord(
+        record,
+        [{ changeTime: '0', changeData: flat['d_change_data'] ?? '' }],
+        'RESTORE_ONLY_CHANGED_FIELDS',
+        Object.keys(record)
+      );
     }
-    return kind === 'delta' ? { record, delta: other } : { record, older: other };
+    return { record };
   });
 
 /**
@@ -300,8 +298,9 @@ const fetchRecordsForBackup = async (
   userId: string,
   filterWhere: string | null,
   deletedOnly: boolean,
-  restoreByField: boolean
-): Promise<IQueryResult | IPairedResult | null> => {
+  restoreType: RestoreType | undefined,
+  recordIds: string[] | undefined
+): Promise<IQueryResult | IByFieldResult | null> => {
   const jobItems = await runWithConcurrency(
     backupJobIds,
     BACKUP_JOB_CONCURRENCY,
@@ -349,23 +348,64 @@ const fetchRecordsForBackup = async (
       throw e;
     });
 
-  if (restoreByField && !deletedOnly) {
-    // Paired shape: one row per record with its previous version alongside.
-    const tasks: Promise<IPairedRow[]>[] = [];
+  if (restoreType === 'RESTORE_ENTIRE_RECORD' && !deletedOnly) {
+    // Fully bulkified: a fixed number of Athena queries regardless of how many
+    // jobs/records are requested. Grouping and reconstruction happen in memory
+    // (assembleEntireRecords).
+    const cols = pairedColumns(columnNames);
+    const tasks: Promise<IByFieldRow[]>[] = [];
     if (compressedIds.length) {
+      const scope = { jobIds: compressedIds, recordIds };
       tasks.push(
-        run(buildCompressedPairedSql(hudiTable, deltaTable, { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT }))
-          .then((r) => toPairedRows(r, 'delta'))
+        (async () => {
+          // 3 bulk queries: delta chain (Scenario A data for every record),
+          // chosen checkpoints, then the Hudi base for the ids the chain found.
+          // A missing _checkpoints table → empty result via `run` → every
+          // record falls back to Scenario A; a checkpoint-less record falls
+          // back individually inside assembleEntireRecords.
+          const [chain, checkpoints] = await Promise.all([
+            run(buildEntireDeltaChainSql(deltaTable, scope)),
+            run(buildEntireCheckpointSql(`${csvTable}_checkpoints`, deltaTable, scope, columnNames, filterWhere)),
+          ]);
+          const ids = [...new Set(chain.rows.map((r) => r['record_id']).filter(Boolean))];
+          const hudi = ids.length
+            ? await run(buildHudiBulkSql(hudiTable, ids, columnNames, filterWhere))
+            : { columns: [], rows: [] };
+          return assembleEntireRecords(cols, hudi.rows, chain.rows, checkpoints.rows);
+        })()
       );
     }
     if (csvIds.length) {
       tasks.push(
-        run(buildCsvPairedSql(csvTable, hudiTable, { columnNames, jobIds: csvIds, filterWhere, limit: FETCH_LIMIT }))
-          .then((r) => toPairedRows(r, 'older'))
+        run(buildCsvEitherSql(csvTable, hudiTable, { columnNames, jobIds: csvIds, filterWhere, limit: RESTORE_ENTIRE_LIMIT }, recordIds))
+          .then((r) => toByFieldRows(r, 'csv'))
       );
     }
     const rows = (await Promise.all(tasks)).flat();
-    const lmd = (r: IPairedRow): number => Date.parse(r.record['LastModifiedDate'] ?? '') || 0;
+    const lmd = (r: IByFieldRow): number => Date.parse(r.record['LastModifiedDate'] ?? '') || 0;
+    rows.sort((a, b) => lmd(b) - lmd(a));
+    return { columns: cols, rows: rows.slice(0, RESTORE_ENTIRE_LIMIT) };
+  }
+
+  if (restoreType === 'RESTORE_ONLY_CHANGED_FIELDS' && !deletedOnly) {
+    // One { record } row per record: compressed jobs yield the previous version
+    // (Hudi with delta old values overlaid); uncompressed jobs yield the newer of
+    // the CSV/Hudi versions.
+    const tasks: Promise<IByFieldRow[]>[] = [];
+    if (compressedIds.length) {
+      tasks.push(
+        run(buildCompressedByFieldSql(hudiTable, deltaTable, { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT }))
+          .then((r) => toByFieldRows(r, 'compressed'))
+      );
+    }
+    if (csvIds.length) {
+      tasks.push(
+        run(buildCsvByFieldSql(csvTable, hudiTable, { columnNames, jobIds: csvIds, filterWhere, limit: FETCH_LIMIT }))
+          .then((r) => toByFieldRows(r, 'csv'))
+      );
+    }
+    const rows = (await Promise.all(tasks)).flat();
+    const lmd = (r: IByFieldRow): number => Date.parse(r.record['LastModifiedDate'] ?? '') || 0;
     rows.sort((a, b) => lmd(b) - lmd(a));
     return { columns: pairedColumns(columnNames), rows: rows.slice(0, FETCH_LIMIT) };
   }
@@ -447,22 +487,24 @@ const fetchRecordsForArchival = async (
  */
 const fetchRecordsByBackupJobs = async (
   params: IFetchRecordsParams
-): Promise<IQueryResult | IPairedResult | null> => {
+): Promise<IQueryResult | IByFieldResult | null> => {
   const { configType, objectApiName, columnNames, userId, backupJobIds, backupConfigId } = params;
   const filterWhere = params.filterWhere ?? null;
   const deletedOnly = params.deletedOnly ?? false;
-  // RESTORE_ONLY_CHANGED_FIELDS pairs each record with its previous version
-  // (BACKUP only — an archival snapshot has no Hudi/delta history to pair against).
-  const restoreByField = params.restoreType === 'RESTORE_ONLY_CHANGED_FIELDS';
 
   if (configType === 'ARCHIVAL') {
     if (!backupConfigId) return null;
     return fetchRecordsForArchival(backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly);
   }
 
-  // BACKUP
+  // BACKUP. restoreType shapes the result (BACKUP only — an archival snapshot has
+  // no Hudi/delta history): RESTORE_ONLY_CHANGED_FIELDS → previous version per
+  // record; RESTORE_ENTIRE_RECORD → bulk reconstruction (bulkCsvIds = record scope).
   if (!backupJobIds || backupJobIds.length === 0) return null;
-  return fetchRecordsForBackup(backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly, restoreByField);
+  return fetchRecordsForBackup(
+    backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly,
+    params.restoreType, params.bulkCsvIds
+  );
 };
 
 // ---------------------------------------------------------------------------
