@@ -165,10 +165,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
 // Same apex callout also exposed on /restore (see restore-retrieve controller) — shared logic lives in getApexPicklistValues.
 const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
-    const { crm, objectApiName, fieldApiName } = req.query;
-    if (!crm) {
-        return makeResponse(req, res, 400, false, 'crm_id_required');
-    }
+    const { objectApiName, fieldApiName } = req.query;
     if (!objectApiName || !fieldApiName) {
         return makeResponse(req, res, 400, false, 'params_required');
     }
