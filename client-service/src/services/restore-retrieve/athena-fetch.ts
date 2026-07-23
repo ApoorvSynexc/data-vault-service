@@ -74,35 +74,125 @@ export const buildRawSql = (tableName: string, p: IFetchSqlParams): string => {
   );
 };
 
-// ── Compressed, live records (deletedOnly = false) ────────────────────────────
-// A record changed by these jobs is:
-//   (a) still owned by them in _hudi (backup_job_id match) — inserts + updates, or
-//   (b) updated by them but since re-changed by a later job, so _hudi.backup_job_id
-//       has moved — found via the delta's record_id (the "UPDATE → look up the
-//       record in main_backup" step). Deletes are gone from _hudi (excluded here).
-// change_type: UPDATE when the record's newest delta for these jobs is an UPDATE,
-// else INSERT (inserts leave no delta).
+// ── Live records from Hudi (deletedOnly = false) ──────────────────────────────
+// _hudi is never queried standalone: a record qualifies only when its id appears
+// in a job-scoped path —
+//   - compressed jobs (p.jobIds)  → id present in the _delta CDC rows for those jobs.
+//   - uncompressed jobs (csv.jobIds) → id present in the raw CSV table rows for
+//     those jobs; the full current record then comes from _hudi.
+// change_type: UPDATE when the record's newest delta for the compressed jobs is
+// an UPDATE, else INSERT.
 export const buildCompressedLiveSql = (
+  hudiTable: string,
+  deltaTable: string,
+  p: IFetchSqlParams,
+  csv?: { table: string; jobIds: string[] }
+): string => {
+  const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
+  const membership: string[] = [];
+  let withClause = '';
+  let changeType = `'INSERT'`;
+  if (p.jobIds.length) {
+    const ids = idList(p.jobIds);
+    const deltaUpd =
+      `SELECT record_id FROM (` +
+      `SELECT record_id, change_type, ` +
+      `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
+      `FROM "${deltaTable}" WHERE backup_job_id IN (${ids})` +
+      `) t WHERE rn = 1 AND change_type = 'UPDATE'`;
+    withClause = `WITH delta_upd AS (${deltaUpd}) `;
+    changeType = `CASE WHEN "Id" IN (SELECT record_id FROM delta_upd) THEN 'UPDATE' ELSE 'INSERT' END`;
+    membership.push(
+      `"Id" IN (SELECT record_id FROM "${deltaTable}" WHERE backup_job_id IN (${ids}))`
+    );
+  }
+  if (csv?.jobIds.length) {
+    membership.push(
+      `"Id" IN (SELECT "Id" FROM "${csv.table}" WHERE backup_job_id IN (${idList(csv.jobIds)}))`
+    );
+  }
+  if (!membership.length) throw new FilterError('invalid_filter_field');
+  return (
+    `${withClause}` +
+    `SELECT ${cols}, backup_job_id, ${changeType} AS change_type ` +
+    `FROM "${hudiTable}" ` +
+    `WHERE (${membership.join(' OR ')})` +
+    `${filterClause(p.filterWhere, 'AND')} ` +
+    `ORDER BY ${quoteCol(LMD)} DESC LIMIT ${p.limit}`
+  );
+};
+
+// ── RESTORE_ONLY_CHANGED_FIELDS paired sources ────────────────────────────────
+// Both builders emit one flat row per record with `r_`-prefixed columns for the
+// main record and (CSV path) `o_`-prefixed columns for the older version; the
+// service splits the prefixes back into { record, delta | older } objects.
+// Everything is CAST to varchar so Hudi-typed and CSV-string columns can share
+// a projection — Athena results are strings end-to-end anyway.
+
+// Requested cols + Id (needed for pairing) + LastModifiedDate (ordering).
+export const pairedColumns = (columnNames: string[]): string[] => {
+  const cols = projectionColumns(columnNames);
+  if (!cols.some((c) => c.toLowerCase() === 'id')) cols.unshift('Id');
+  return cols;
+};
+
+// COMPRESSED jobs: newest delta per record_id wins (change_time is the CDC order;
+// LastModifiedDate isn't a flat field inside UPDATE change_data). The Hudi record
+// rides along only via the join — no delta row, no Hudi read. change_data is
+// returned raw; the service extracts per-field old values in JS, which keeps
+// "field absent from this delta" distinguishable from "old value was empty".
+export const buildCompressedPairedSql = (
   hudiTable: string,
   deltaTable: string,
   p: IFetchSqlParams
 ): string => {
-  const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
-  const ids = idList(p.jobIds);
-  const deltaUpd =
-    `SELECT record_id FROM (` +
-    `SELECT record_id, change_type, ` +
-    `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
-    `FROM "${deltaTable}" WHERE backup_job_id IN (${ids})` +
-    `) t WHERE rn = 1 AND change_type = 'UPDATE'`;
+  const rCols = pairedColumns(p.columnNames)
+    .map((c) => `CAST(h.${quoteCol(c)} AS varchar) AS ${quoteCol(`r_${c}`)}`)
+    .join(', ');
   return (
-    `WITH delta_upd AS (${deltaUpd}) ` +
-    `SELECT ${cols}, backup_job_id, ` +
-    `CASE WHEN "Id" IN (SELECT record_id FROM delta_upd) THEN 'UPDATE' ELSE 'INSERT' END AS change_type ` +
-    `FROM "${hudiTable}" ` +
-    `WHERE (backup_job_id IN (${ids}) OR "Id" IN (SELECT record_id FROM delta_upd))` +
-    `${filterClause(p.filterWhere, 'AND')} ` +
-    `ORDER BY ${quoteCol(LMD)} DESC LIMIT ${p.limit}`
+    `WITH d AS (` +
+    `SELECT record_id, change_data, ` +
+    `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
+    `FROM "${deltaTable}" WHERE backup_job_id IN (${idList(p.jobIds)})` +
+    `) ` +
+    `SELECT ${rCols}, d.change_data AS "d_change_data" ` +
+    `FROM d JOIN "${hudiTable}" h ON d.rn = 1 AND h."Id" = d.record_id` +
+    `${filterClause(p.filterWhere, 'WHERE')} ` +
+    `ORDER BY ${quoteCol(`r_${LMD}`)} DESC LIMIT ${p.limit}`
+  );
+};
+
+// Uncompressed jobs: main record = newest CSV row per Id, kept only when the id
+// exists in _hudi (inner join — the Hudi existence gate, never standalone).
+// older = the second-newest CSV row when one exists, else the Hudi record.
+export const buildCsvPairedSql = (
+  csvTable: string,
+  hudiTable: string,
+  p: IFetchSqlParams
+): string => {
+  const cols = pairedColumns(p.columnNames);
+  const colList = cols.map(quoteCol).join(', ');
+  const rCols = cols
+    .map((c) => `CAST(m.${quoteCol(c)} AS varchar) AS ${quoteCol(`r_${c}`)}`)
+    .join(', ');
+  const oCols = cols
+    .map(
+      (c) =>
+        `CASE WHEN p."Id" IS NOT NULL THEN CAST(p.${quoteCol(c)} AS varchar) ` +
+        `ELSE CAST(h.${quoteCol(c)} AS varchar) END AS ${quoteCol(`o_${c}`)}`
+    )
+    .join(', ');
+  return (
+    `WITH ranked AS (` +
+    `SELECT ${colList}, ` +
+    `ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY ${quoteCol(LMD)} DESC) AS rn ` +
+    `FROM "${csvTable}" WHERE backup_job_id IN (${idList(p.jobIds)})` +
+    `), m AS (SELECT * FROM ranked WHERE rn = 1${filterClause(p.filterWhere, 'AND')}) ` +
+    `SELECT ${rCols}, ${oCols} ` +
+    `FROM m ` +
+    `JOIN "${hudiTable}" h ON h."Id" = m."Id" ` +
+    `LEFT JOIN ranked p ON p."Id" = m."Id" AND p.rn = 2 ` +
+    `ORDER BY ${quoteCol(`r_${LMD}`)} DESC LIMIT ${p.limit}`
   );
 };
 
@@ -195,7 +285,19 @@ if (require.main === module) {
   assert.ok(live.includes('ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC)'));
   assert.ok(live.includes(`change_type = 'UPDATE'`));
   assert.ok(live.includes(`CASE WHEN "Id" IN (SELECT record_id FROM delta_upd) THEN 'UPDATE' ELSE 'INSERT' END`));
-  assert.ok(live.includes(`backup_job_id IN ('j1', 'j2') OR "Id" IN (SELECT record_id FROM delta_upd)`));
+  // Hudi never standalone: membership only via delta/CSV ids, no direct ownership arm.
+  assert.ok(live.includes(`WHERE ("Id" IN (SELECT record_id FROM "cfg_x_account_delta" WHERE backup_job_id IN ('j1', 'j2')))`));
+  assert.ok(!live.includes('SELECT "Id" FROM'), 'no CSV membership without csv jobs');
+
+  // Mixed compressed + CSV jobs: CSV ids become hudi candidates too.
+  const mixed = buildCompressedLiveSql('h', 'd', p, { table: 'c', jobIds: ['j3'] });
+  assert.ok(mixed.includes(`OR "Id" IN (SELECT "Id" FROM "c" WHERE backup_job_id IN ('j3'))`));
+
+  // CSV-only jobs: no delta CTE, change_type constant, membership via CSV ids.
+  const csvOnly = buildCompressedLiveSql('h', 'd', { ...p, jobIds: [] }, { table: 'c', jobIds: ['j3'] });
+  assert.ok(!csvOnly.includes('WITH delta_upd'));
+  assert.ok(csvOnly.includes(`'INSERT' AS change_type`));
+  assert.ok(csvOnly.includes(`WHERE ("Id" IN (SELECT "Id" FROM "c" WHERE backup_job_id IN ('j3')))`));
 
   const del = buildCompressedDeletedSql('cfg_x_account_delta', p);
   assert.ok(del.includes(`json_extract_scalar(change_data, '$["Name"]') AS "Name"`));
@@ -206,6 +308,28 @@ if (require.main === module) {
   const filtered = { ...p, filterWhere: `"Name" = 'Acme'` };
   assert.ok(buildRawSql('t', filtered).includes(`WHERE backup_job_id IN ('j1', 'j2') AND ("Name" = 'Acme')`));
   assert.ok(buildCompressedDeletedSql('d', filtered).includes(`) w WHERE ("Name" = 'Acme')`));
+
+  // Paired projection: Id + LastModifiedDate always present.
+  assert.deepStrictEqual(pairedColumns(['Name']), ['Id', 'Name', 'LastModifiedDate']);
+  assert.deepStrictEqual(pairedColumns(['Id', 'Name']), ['Id', 'Name', 'LastModifiedDate']);
+
+  // Compressed paired: Hudi only via join to newest delta; raw change_data returned.
+  const cp = buildCompressedPairedSql('cfg_x_account_hudi', 'cfg_x_account_delta', p);
+  assert.ok(cp.includes(`FROM d JOIN "cfg_x_account_hudi" h ON d.rn = 1 AND h."Id" = d.record_id`));
+  assert.ok(cp.includes(`CAST(h."Name" AS varchar) AS "r_Name"`));
+  assert.ok(cp.includes(`d.change_data AS "d_change_data"`));
+  assert.ok(cp.includes(`ORDER BY "r_LastModifiedDate" DESC LIMIT 50`));
+  assert.ok(buildCompressedPairedSql('h', 'd', filtered).includes(`d.record_id WHERE ("Name" = 'Acme')`));
+
+  // CSV paired: newest CSV row gated by Hudi join; older = rn=2 CSV else Hudi.
+  const cv = buildCsvPairedSql('cfg_x_account', 'cfg_x_account_hudi', p);
+  assert.ok(cv.includes(`ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY "LastModifiedDate" DESC)`));
+  assert.ok(cv.includes(`JOIN "cfg_x_account_hudi" h ON h."Id" = m."Id"`));
+  assert.ok(cv.includes(`LEFT JOIN ranked p ON p."Id" = m."Id" AND p.rn = 2`));
+  assert.ok(cv.includes(`CAST(m."Name" AS varchar) AS "r_Name"`));
+  assert.ok(cv.includes(`CASE WHEN p."Id" IS NOT NULL THEN CAST(p."Name" AS varchar) ELSE CAST(h."Name" AS varchar) END AS "o_Name"`));
+  // Filter scopes the main record only (inside m, no join ambiguity).
+  assert.ok(buildCsvPairedSql('c', 'h', filtered).includes(`WHERE rn = 1 AND ("Name" = 'Acme')`));
 
   // Injection defence on column names.
   try {
