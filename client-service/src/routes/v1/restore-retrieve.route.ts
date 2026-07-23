@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { restoreRetrieveJobController } from '../../controller';
+import { archivalConfigController, restoreRetrieveJobController } from '../../controller';
 import { createRestoreValidation } from '../../middlewares';
 
 /**
@@ -20,6 +20,8 @@ router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler)
 router.get('/get-objectlist-by-configid', restoreRetrieveJobController.getObjectListByConfigIdHandler);
 router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);
 router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
+// Same handler as /archival-config/get-picklist-field-values — identical apex callout.
+router.get('/get-picklist-field-values', archivalConfigController.getPicklistFieldValuesHandler);
 router.post('/retrieve/repair-glue', restoreRetrieveJobController.repairGlueTablesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 

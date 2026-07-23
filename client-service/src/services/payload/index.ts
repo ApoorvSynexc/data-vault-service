@@ -173,13 +173,16 @@ const isCompressible = (job: IBackupJob): boolean => job.status === JOB_STATUS.s
 // reads. objectOperations is keyed by backupJobId so Spark can compress each job's
 // output independently; a job with no operations maps to {}.
 //
-// `backupJobIds` scopes the payload to the jobs Spark asked for. Omitted (older Spark
-// builds), it falls back to every uncompressed job on the config.
+// The job set is resolved here, not by the caller: every job on the config that
+// isCompressible admits (status SUCCESS — excludes failed backups and all
+// compression states, which overwrite `status`).
 //
-// Destination creds are returned decrypted: this payload only ever leaves the process
-// through /build-payload, which encrypts the whole response via encryptToTransport.
+// Shape matches Spark's parser exactly (JsonUtils.java): everything but jobType and
+// backupConfigId nests under `details`, creds under details.destinationConfigs.
+// Destination creds are returned decrypted — this payload only ever leaves the
+// process through /build-payload, whose body Spark reads as Base64(JSON) over TLS.
 // Do not hand this to submitEMR — its trigger payload is intentionally id-only.
-async function buildPayload(backupConfigId: string, backupJobIds?: string[]) {
+async function buildPayload(backupConfigId: string) {
     logger.info(`Building EMR payload for backupConfigId: ${backupConfigId}`);
 
     const backupConfig = await getBackupConfigById(backupConfigId);
@@ -202,20 +205,7 @@ async function buildPayload(backupConfigId: string, backupJobIds?: string[]) {
         throw new Error('No backup jobs found');
     }
 
-    let jobs: IBackupJob[];
-    if (backupJobIds?.length) {
-        const jobsById = new Map(allBackupJobs.map((job) => [job.backupJobId, job]));
-        // Rejecting rather than ignoring: an id that isn't on this config means Spark and
-        // the service disagree about the job set, and silently compressing a subset would
-        // leave the rest stuck in COMPRESSION_JOB_IN_PROGRESS forever.
-        const missing = backupJobIds.filter((id) => !jobsById.has(id));
-        if (missing.length) {
-            throw new Error(`backup_jobs_not_found:${missing.join(',')}`);
-        }
-        jobs = backupJobIds.map((id) => jobsById.get(id)!);
-    } else {
-        jobs = allBackupJobs.filter(isCompressible);
-    }
+    const jobs = allBackupJobs.filter(isCompressible);
 
     // processObjectOperations already takes a job array, so a single-job array gives that
     // job's operations with no change to the merge logic itself.
@@ -231,19 +221,25 @@ async function buildPayload(backupConfigId: string, backupJobIds?: string[]) {
 
     logger.info(`Built EMR payload for backupConfigId: ${backupConfigId} jobs=${jobs.length}`);
 
-    return {
+    const payload = {
         jobType: backupConfig.type === 'NORMAL' ? 'BACKUP' : 'ARCHIVAL',
         backupConfigId: backupConfigId,
-        clientId: backupConfig.userId,
-        backupType: backupConfig.schedule,
-        sourceName: crm.crmName,
-        orgId: crm.crmId,
-        objectOperations,
-        destination: {
-            name: destination.provider,
-            creds: getDecryptedDestinationConfig(destination),
+        details: {
+            clientId: backupConfig.userId,
+            backupType: backupConfig.schedule,
+            sourceDetails: {
+                sourceName: crm.crmName,
+                orgId: crm.crmId,
+            },
+            objectOperations,
+            destinationConfigs: {
+                destinationName: destination.provider,
+                destinationRequiredCreds: getDecryptedDestinationConfig(destination),
+            },
         },
     };
+    console.log("PAYLOAD ==> " + JSON.stringify(payload));
+    return payload;
 }
 
 // ─── Build EMR RESTORE payload from a restoreConfigId ─────────────────────────
@@ -332,10 +328,11 @@ async function buildRestorePayload(restoreConfigId: string) {
 type EmrPayload = Awaited<ReturnType<typeof buildPayload>>;
 
 // What EMR receives as entryPointArguments. Deliberately carries no credentials —
-// Spark calls /build-payload for the rest, and that response is encrypted.
-// Backup runs send the config + jobs; restore runs send only the restore config id.
+// Spark calls /build-payload with this id for the rest, and that response is
+// encrypted. Job resolution happens server-side in buildPayload (isCompressible),
+// so the trigger is id-only for both backup and restore runs.
 type EmrTriggerPayload =
-    | { backupConfigId: string; backupJobIds: string[] }
+    | { backupConfigId: string }
     | { restoreConfigId: string };
 
 // ─── Submit a built payload to EMR Serverless ─────────────────────────────────
@@ -356,7 +353,6 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             console.log('Restore Config ID:', payload.restoreConfigId);
         } else {
             console.log('Backup Config ID:', payload.backupConfigId);
-            console.log('Backup Jobs     :', payload.backupJobIds.length);
         }
         console.log('──────────────────────────────────────────');
 
@@ -478,19 +474,18 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
     }
 }
 
-// ─── Resolve uncompressed jobs + submit (used by /payload and the config trigger) ─────
-// Sends only the job ids. Spark calls /build-payload with them to get the full payload.
+// ─── Trigger a compression run (used by /payload and the config trigger) ──────
+// Sends only the config id. Spark calls /build-payload with it to get the full
+// payload; the eligible job set is resolved there. The fetch here is only a guard
+// against spinning up EMR for a config with no jobs at all.
 async function initalizePayloadTransform(backupConfigId: string): Promise<StartJobRunCommandOutput> {
-    const backupJobIds = (await fetchAllBackupJobs(backupConfigId))
-        .filter(isCompressible)
-        .map((job) => job.backupJobId);
-
-    if (!backupJobIds.length) {
+    const backupJobs = await fetchAllBackupJobs(backupConfigId);
+    if (!backupJobs.length) {
         throw new Error('No backup jobs found');
     }
 
-    logger.info(`Triggering EMR for backupConfigId: ${backupConfigId} uncompressedJobs=${backupJobIds.length}`);
-    return submitEMR({ backupConfigId, backupJobIds });
+    logger.info(`Triggering EMR for backupConfigId: ${backupConfigId}`);
+    return submitEMR({ backupConfigId });
 }
 
 // ─── Trigger a restore run ────────────────────────────────────────────────────
