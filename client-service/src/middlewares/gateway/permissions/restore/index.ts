@@ -23,6 +23,11 @@ const restorePermissions = [
         path : '/restore/fetch-object-fields',
         method: 'GET',
         permissions: ['restore.read']
+    },
+    {
+        path : '/restore/get-picklist-field-values',
+        method: 'GET',
+        permissions: ['restore.read']
     }
 ];
 

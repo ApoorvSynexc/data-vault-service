@@ -20,6 +20,9 @@ import {
   buildRawSql,
   buildCompressedLiveSql,
   buildCompressedDeletedSql,
+  buildCompressedPairedSql,
+  buildCsvPairedSql,
+  pairedColumns,
   outputColumns,
 } from './athena-fetch';
 
@@ -233,6 +236,49 @@ const mergeOrderLimit = (results: IQueryResult[], columnNames: string[]): IQuery
   return { columns, rows: rows.slice(0, FETCH_LIMIT) };
 };
 
+// ── RESTORE_ONLY_CHANGED_FIELDS paired shape ───────────────────────────────────
+
+export interface IPairedRow {
+  record: Record<string, string>;
+  // COMPRESSED jobs: per-field old values from the winning delta's change_data.
+  delta?: Record<string, string>;
+  // Uncompressed jobs: the previous version (2nd-newest CSV row, else Hudi).
+  older?: Record<string, string>;
+}
+
+export interface IPairedResult {
+  columns: string[];
+  rows: IPairedRow[];
+}
+
+// Splits the flat prefixed SQL rows (r_* / o_* / d_change_data) back into
+// { record, delta | older } objects. For the delta kind, change_data JSON is
+// { field: { old, new } } — only fields present in the delta land on the object,
+// scoped to the projected columns.
+const toPairedRows = (result: IQueryResult, kind: 'delta' | 'older'): IPairedRow[] =>
+  result.rows.map((flat) => {
+    const record: Record<string, string> = {};
+    const other: Record<string, string> = {};
+    for (const [key, value] of Object.entries(flat)) {
+      if (key.startsWith('r_')) record[key.slice(2)] = value;
+      else if (key.startsWith('o_')) other[key.slice(2)] = value;
+    }
+    if (kind === 'delta') {
+      try {
+        const changes = JSON.parse(flat['d_change_data'] ?? '') as Record<string, unknown>;
+        for (const [field, entry] of Object.entries(changes)) {
+          if (field in record && entry && typeof entry === 'object' && 'old' in entry) {
+            const old = (entry as { old?: unknown }).old;
+            other[field] = old == null ? '' : String(old);
+          }
+        }
+      } catch {
+        // malformed change_data — empty delta object
+      }
+    }
+    return kind === 'delta' ? { record, delta: other } : { record, older: other };
+  });
+
 /**
  * BACKUP path: verifies ownership of every supplied job ID against the caller,
  * resolves the Glue table coordinates from the first job's config, then queries
@@ -253,8 +299,9 @@ const fetchRecordsForBackup = async (
   columnNames: string[],
   userId: string,
   filterWhere: string | null,
-  deletedOnly: boolean
-): Promise<IQueryResult | null> => {
+  deletedOnly: boolean,
+  restoreByField: boolean
+): Promise<IQueryResult | IPairedResult | null> => {
   const jobItems = await runWithConcurrency(
     backupJobIds,
     BACKUP_JOB_CONCURRENCY,
@@ -291,18 +338,66 @@ const fetchRecordsForBackup = async (
     (jobItems[i]!.status === COMPRESSION_STATUS.compressed ? compressedIds : csvIds).push(id);
   });
 
-  const run = (sql: string): Promise<IQueryResult> => runAthenaQuery(sql, databaseName);
+  // Every Hudi-touching query tolerates a missing _hudi/_delta table — those only
+  // exist after the first compression run, so absence just means "no compressed
+  // state yet", not an error.
+  const run = (sql: string): Promise<IQueryResult> =>
+    runAthenaQuery(sql, databaseName).catch((e: unknown) => {
+      if (/TABLE_NOT_FOUND|does not exist/i.test(String((e as Error).message))) {
+        return { columns: [], rows: [] };
+      }
+      throw e;
+    });
+
+  if (restoreByField && !deletedOnly) {
+    // Paired shape: one row per record with its previous version alongside.
+    const tasks: Promise<IPairedRow[]>[] = [];
+    if (compressedIds.length) {
+      tasks.push(
+        run(buildCompressedPairedSql(hudiTable, deltaTable, { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT }))
+          .then((r) => toPairedRows(r, 'delta'))
+      );
+    }
+    if (csvIds.length) {
+      tasks.push(
+        run(buildCsvPairedSql(csvTable, hudiTable, { columnNames, jobIds: csvIds, filterWhere, limit: FETCH_LIMIT }))
+          .then((r) => toPairedRows(r, 'older'))
+      );
+    }
+    const rows = (await Promise.all(tasks)).flat();
+    const lmd = (r: IPairedRow): number => Date.parse(r.record['LastModifiedDate'] ?? '') || 0;
+    rows.sort((a, b) => lmd(b) - lmd(a));
+    return { columns: pairedColumns(columnNames), rows: rows.slice(0, FETCH_LIMIT) };
+  }
+
   const queries: Promise<IQueryResult>[] = [];
 
-  if (compressedIds.length) {
-    const p = { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT };
+  if (deletedOnly) {
+    // Deleted records live only in the delta model, so CSV jobs contribute nothing.
+    if (compressedIds.length) {
+      queries.push(
+        run(buildCompressedDeletedSql(deltaTable, { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT }))
+      );
+    }
+  } else {
+    // Current state from Hudi for every record the requested jobs touched — via
+    // delta CDC membership (compressed jobs) or CSV id membership (uncompressed
+    // jobs). Never queried standalone.
     queries.push(
-      run(deletedOnly ? buildCompressedDeletedSql(deltaTable, p) : buildCompressedLiveSql(hudiTable, deltaTable, p))
+      run(
+        buildCompressedLiveSql(
+          hudiTable,
+          deltaTable,
+          { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT },
+          { table: csvTable, jobIds: csvIds }
+        )
+      )
     );
-  }
-  // Deleted records live only in the delta model, so CSV jobs contribute nothing.
-  if (csvIds.length && !deletedOnly) {
-    queries.push(run(buildRawSql(csvTable, { columnNames, jobIds: csvIds, filterWhere, limit: FETCH_LIMIT })));
+    // CSV rows carry per-job history (multiple rows per record id) — included
+    // alongside the Hudi current state and merged by LastModifiedDate.
+    if (csvIds.length) {
+      queries.push(run(buildRawSql(csvTable, { columnNames, jobIds: csvIds, filterWhere, limit: FETCH_LIMIT })));
+    }
   }
 
   return mergeOrderLimit(await Promise.all(queries), columnNames);
@@ -352,10 +447,13 @@ const fetchRecordsForArchival = async (
  */
 const fetchRecordsByBackupJobs = async (
   params: IFetchRecordsParams
-): Promise<IQueryResult | null> => {
+): Promise<IQueryResult | IPairedResult | null> => {
   const { configType, objectApiName, columnNames, userId, backupJobIds, backupConfigId } = params;
   const filterWhere = params.filterWhere ?? null;
   const deletedOnly = params.deletedOnly ?? false;
+  // RESTORE_ONLY_CHANGED_FIELDS pairs each record with its previous version
+  // (BACKUP only — an archival snapshot has no Hudi/delta history to pair against).
+  const restoreByField = params.restoreType === 'RESTORE_ONLY_CHANGED_FIELDS';
 
   if (configType === 'ARCHIVAL') {
     if (!backupConfigId) return null;
@@ -364,7 +462,7 @@ const fetchRecordsByBackupJobs = async (
 
   // BACKUP
   if (!backupJobIds || backupJobIds.length === 0) return null;
-  return fetchRecordsForBackup(backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly);
+  return fetchRecordsForBackup(backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly, restoreByField);
 };
 
 // ---------------------------------------------------------------------------
@@ -496,7 +594,7 @@ const fetchObjectFields = async (
 
   const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
   const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
-  const schemaFolder = `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/${objectApiName}/`;
+  const schemaFolder = `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/${objectApiName}/fields/`;
 
   const keys = await listS3Keys(destConfig, schemaFolder);
   const versionedKeys = keys.filter((k) => /fields_\d+\.json$/.test(k));

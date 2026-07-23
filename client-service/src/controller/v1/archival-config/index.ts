@@ -5,6 +5,7 @@ import {
     createBackupConfig,
     deleteBackupConfig,
     getApexFields,
+    getApexPicklistValues,
     getApexObjectChilds,
     getDestinationById,
     getBackupConfigsWithPagination,
@@ -158,6 +159,20 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
         return makeResponse(req, res, 400, false, 'object_name_required');
     }
     const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
+    makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
+};
+
+// Shared by both /archival-config and /restore routes — same apex callout either way.
+const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
+    const { crm, objectApiName, fieldApiName } = req.query;
+    if (!crm) {
+        return makeResponse(req, res, 400, false, 'crm_id_required');
+    }
+    if (!objectApiName || !fieldApiName) {
+        return makeResponse(req, res, 400, false, 'params_required');
+    }
+    const result = await getApexPicklistValues({ user, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
     makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
@@ -602,6 +617,7 @@ const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<vo
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
     getFieldsHanlder,
+    getPicklistFieldValuesHandler,
     getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,
