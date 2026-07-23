@@ -48,7 +48,12 @@ const applyOldValues = (
   for (const field of Object.keys(changes)) {
     if (allow && !allow.has(field)) continue;
     const entry = changes[field] as IFieldChange;
-    if (entry && typeof entry === 'object' && 'old' in entry) {
+    // An UPDATE entry is an {old,new} struct — but Spark's to_json drops null
+    // fields, so a null→value change arrives as {new:...} with no `old` key.
+    // Match the Java reconstructor (RestoreReconstructor.java:110): any field
+    // present in change_data reverts to its old value, null when absent.
+    // DELETE/SCHEMA payloads have string values here, so they stay untouched.
+    if (entry && typeof entry === 'object' && ('old' in entry || 'new' in entry)) {
       record[field] = entry.old == null ? '' : String(entry.old);
     }
   }
@@ -104,8 +109,12 @@ export const reconstructRecord = (
  *
  * Per record (the checkpoint decision tree):
  *   exact checkpoint     → the checkpoint row is the record, no replay.
- *   newer checkpoint     → base = checkpoint row, then deltas newer than the
- *                          checkpoint are undone against it.
+ *   newer checkpoint     → base = checkpoint row, then the deltas BAKED INTO it
+ *                          since the anchor — change_time in (t0, checkpoint_time]
+ *                          — are undone, rewinding the checkpoint to the anchor
+ *                          state. (The Spark snapshot is the main table's state
+ *                          as of the checkpoint, so deltas newer than it are not
+ *                          part of its state and need no undo.)
  *   no checkpoint        → Scenario A: every newer delta undone on the Hudi base.
  *   no Hudi + no ckpt    → skipped (nothing to build on — e.g. deleted record).
  */
@@ -145,7 +154,7 @@ export const assembleEntireRecords = (
       deltas =
         ckpt['is_exact'] === '1'
           ? []
-          : deltas.filter((d) => toTime(d.changeTime) > toTime(ckpt['checkpoint_time'] ?? ''));
+          : deltas.filter((d) => toTime(d.changeTime) <= toTime(ckpt['checkpoint_time'] ?? ''));
     } else {
       for (const c of columns) record[c] = hudi![c] ?? '';
     }
@@ -213,6 +222,13 @@ if (require.main === module) {
     ''
   );
 
+  // Spark to_json drops null fields: a null→value change arrives as {new} only.
+  // Field presence still reverts it (to empty) — matches the Java reconstructor.
+  assert.strictEqual(
+    reconstructRecord({ Phone: '555' }, [{ changeTime: '1', changeData: JSON.stringify({ Phone: { new: '555' } }) }], 'RESTORE_ENTIRE_RECORD').Phone,
+    ''
+  );
+
   // columnNames scopes ENTIRE: only Name reverts; Status delta skipped, Status pruned from base.
   assert.deepStrictEqual(
     reconstructRecord(
@@ -262,9 +278,10 @@ if (require.main === module) {
     { record_id: 'r1', t0: '5', change_time: '6', change_data: upd({ Name: ['John', 'Johnny'] }) },
     // r2: anchor with no newer deltas — Hudi state returned untouched.
     { record_id: 'r2', t0: '4', change_time: '', change_data: '' },
-    // r3: non-exact checkpoint at t=7 — the delta at t=8 (newer than the
-    // checkpoint) is undone against it; the t=6 delta (older) is ignored.
-    { record_id: 'r3', t0: '5', change_time: '8', change_data: upd({ Name: ['CkptCat', 'Cat'] }) },
+    // r3: non-exact checkpoint at t=7 — the delta at t=6 (baked into the
+    // checkpoint, ≤7) is undone to rewind it to the anchor; the t=8 delta
+    // (newer than the checkpoint, not part of its state) is ignored.
+    { record_id: 'r3', t0: '5', change_time: '8', change_data: upd({ Name: ['MidCat', 'NewCat'] }) },
     { record_id: 'r3', t0: '5', change_time: '6', change_data: upd({ Name: ['OldCat', 'MidCat'] }) },
     // r4: no Hudi row and no checkpoint — skipped entirely.
     { record_id: 'r4', t0: '1', change_time: '2', change_data: upd({ Name: ['x', 'y'] }) },
@@ -276,7 +293,7 @@ if (require.main === module) {
   const byId = new Map(assembled.map((r) => [r.record['Id'], r.record]));
   assert.strictEqual(byId.get('r1')!.Name, 'John', 'Scenario A: oldest newer-delta old value wins');
   assert.strictEqual(byId.get('r2')!.Name, 'Ann', 'no newer deltas → Hudi untouched');
-  assert.strictEqual(byId.get('r3')!.Name, 'CkptCat', 'checkpoint base + newer-than-checkpoint replay');
+  assert.strictEqual(byId.get('r3')!.Name, 'OldCat', 'checkpoint rewound to anchor via (t0, ckpt] deltas');
   assert.ok(!byId.has('r4'), 'no Hudi + no checkpoint → skipped');
   assert.strictEqual(assembled.length, 3);
 

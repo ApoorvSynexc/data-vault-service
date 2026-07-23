@@ -289,7 +289,10 @@ const toByFieldRows = (
       try {
         const changes = JSON.parse(flat['d_change_data'] ?? '') as Record<string, unknown>;
         for (const [field, entry] of Object.entries(changes)) {
-          if (allow.has(field) && field in record && entry && typeof entry === 'object' && 'old' in entry) {
+          // Spark's to_json drops null struct fields — a null→value change has no
+          // `old` key. Any {old,new}-shaped entry reverts (old absent = was null),
+          // matching the Java reconstructor's map<string,struct<old,new>> semantics.
+          if (allow.has(field) && field in record && entry && typeof entry === 'object' && ('old' in entry || 'new' in entry)) {
             const old = (entry as { old?: unknown }).old;
             record[field] = old == null ? '' : String(old);
           }
