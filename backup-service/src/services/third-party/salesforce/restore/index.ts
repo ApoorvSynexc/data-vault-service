@@ -1,13 +1,26 @@
 import { logger } from '../../../../middlewares/logger';
-import { IDestinationConfig, IRestoreConflict, IRestoreScope, ISource } from '../../../../models';
+import { IRestoreConflict } from '../../../../models';
+
+interface RunSalesforceRestorePayload {
+  restoreId: string;
+  restoreJobId: string;
+  object: { id: string; name: string; status: string };
+  sourceS3Credentials: { accessKeyId: string; secretAccessKey: string };
+  destinationSalesforceCredentials: { access_token: string; refresh_token: string; instanceUrl: string };
+  conflict: IRestoreConflict;
+}
 
 export const runSalesforceRestore = async (
-  restoreId: string,
-  restoreJobId: string,
+  payload: RunSalesforceRestorePayload
 ): Promise<'SUCCESS' | 'FAILED'> => {
+  const { restoreId, restoreJobId, object, conflict } = payload;
+
   logger.info(`[restore] execution requested`, {
     restoreId,
-    restoreJobId
+    restoreJobId,
+    objectId: object.id,
+    objectName: object.name,
+    restoreMode: conflict.restoreMode,
   });
 
   throw new Error('Salesforce restore execution is not implemented yet');
