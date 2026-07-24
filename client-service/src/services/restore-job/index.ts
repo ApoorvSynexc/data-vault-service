@@ -5,17 +5,71 @@ import { RESTORE_JOB_TABLE } from '../../constant';
 import { IRestore, IRestoreConflict, IRestoreJob } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
+import { getBackupConfigById } from '../backup-config';
+import { getCrmById } from '../crm';
+import { getDecryptedDestinationConfig, getDestinationById } from '../destination';
+import { getUser } from '../user';
 
 const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
-  const { userId, restoreId, status = 'PENDING', source, destination, conflict } = params;
+  const { userId, crmId, restoreId, status = 'PENDING', source, destination, conflict, selection } = params;
   const now = new Date().toISOString();
+  let destinationCrmId = crmId!;
+  let destinationObjects: Array<{ id: string, name: string, status: "PENDING" }> = [];
+
+  const sourceBackupConfig = await getBackupConfigById(source?.backupConfigId);
+  if (!sourceBackupConfig) throw new Error(`backup_config_not_found:${source?.backupConfigId}`);
+
+  const sourceBackupCrm = await getCrmById(sourceBackupConfig.crmId);
+  if (!sourceBackupCrm) throw new Error(`crm_not_found:${sourceBackupConfig.crmId}`);
+
+  const soruceBackupDestination = await getDestinationById(sourceBackupConfig.destinationId);
+  if (!soruceBackupDestination) throw new Error(`destination_not_found:${sourceBackupConfig.destinationId}`);
+  const sourceDecryptedDestination = getDecryptedDestinationConfig(soruceBackupDestination);
+  const sourceEncryptedKeys = encrypt(JSON.stringify({ accessKeyId: sourceDecryptedDestination.accessKeyId, secretAccessKey: sourceDecryptedDestination.secretAccessKey, }));
+
+  if (params.destination.type === 'DIFFERENT') {
+    destinationCrmId = destination?.crmId!;
+  }
+
+  const destinationCrm = await getCrmById(destinationCrmId);
+  if (!destinationCrm) throw new Error(`crm_not_found:${destinationCrmId}`);
+
+  const destinationUser = await getUser({ userId });
+  if (!destinationUser) throw new Error(`user_not_found:${userId}`);
+
+  if (selection.restoreScope.type === 'ALL') {
+    destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "PENDING" })) ?? [];
+  } else if(selection.restoreScope.type === 'OBJECT' &&  selection.restoreScope.objects) {
+    destinationObjects = selection.restoreScope.objects.map(name => ({ id: uuidv4(), name, status: "PENDING" }));
+  } else if(selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
+    destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "PENDING" })); 
+  }
+
+  const updatedSource = {
+    backupConfigId: source?.backupConfigId,
+    crmId: sourceBackupCrm?.crmId,
+    crmName: sourceBackupCrm?.crmName,
+
+    bucketName: sourceDecryptedDestination.bucketName,
+    region: sourceDecryptedDestination?.region,
+    folderPath: sourceDecryptedDestination?.folderPath,
+    encryptedKeys: sourceEncryptedKeys
+  };
+
+  const updatedDestination = {
+    crmId: destinationCrm?.crmId,
+    crmName: destinationCrm?.crmName,
+    objects: destinationObjects,
+    instanceUrl: destinationUser?.crmProfile?.instanceUrl!,
+    encryptedTokens: destinationUser.crmCredential!,
+  }
 
   const item: IRestoreJob = {
     restoreJobId: uuidv4(),
     restoreId,
     userId,
-    // source,
-    // destination,
+    source: updatedSource,
+    destination: updatedDestination,
     conflict,
     status,
     createdAt: now,

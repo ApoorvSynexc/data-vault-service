@@ -61,6 +61,7 @@ export interface IRestore {
   status: string; // DRAFT | PENDING | RUNNING | SUCCESS | FAILED
 
   source: {
+    backupConfigId: string;
     backupJobIds: string[];
   };
   selection: {
