@@ -12,6 +12,7 @@ import {
 } from '../../models';
 
 interface CreateRestoreParams {
+  restoreId?: string;
   userId: string;
   crmId?: string;
   status?: string;
@@ -29,6 +30,7 @@ interface CreateRestoreParams {
 
 const createRestore = async (params: CreateRestoreParams): Promise<IRestore> => {
   const {
+    restoreId,
     userId,
     crmId,
     status = 'PENDING',
@@ -42,7 +44,7 @@ const createRestore = async (params: CreateRestoreParams): Promise<IRestore> => 
   const now = new Date().toISOString();
 
   const item: IRestore = {
-    restoreId: uuidv4(),
+    restoreId: restoreId ?? uuidv4(),
     userId,
     ...(crmId && { crmId }),
     status,
