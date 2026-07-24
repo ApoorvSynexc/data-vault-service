@@ -177,8 +177,9 @@ const triggerBackupJob = async (params: {
   config: IBackupConfig;
   lastUpdatedAt?: string;
   type?: 'backup' | 'archival';
+  schemaSync?: boolean;
 }) => {
-  const { config, lastUpdatedAt, type = 'backup', user } = params;
+  const { config, lastUpdatedAt, type = 'backup', user, schemaSync } = params;
   const active = await hasActiveBackupJob(config.backupConfigId);
   if (active) {
     return null;
@@ -211,6 +212,7 @@ const triggerBackupJob = async (params: {
     },
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     ...(config.spaceId && { spaceId: config.spaceId }),
+    ...(schemaSync ? { schemaSync: true } : {}),
   };
 
   const endpoint = type === 'archival' ? '/archival' : '';
