@@ -12,6 +12,7 @@ const sourceSchema = Joi.object({
     accessKeyId: Joi.string().required(),
     secretAccessKey: Joi.string().required(),
     folderPath: Joi.string().optional(),
+    csvFilePath: Joi.string().optional(),
 })
 
 const destinationSchema = Joi.object({
@@ -34,7 +35,7 @@ const conflictSchema = Joi.object({
     type: Joi.string().valid('OVERWRITE', 'APPEND_NEW').required(),
 })
 
-export const createJobValidation = (req: Request, res: Response, next: NextFunction) => {
+export const createRestoreJobValidation = (req: Request, res: Response, next: NextFunction) => {
     const schema = Joi.object({
         userId: Joi.string().required(),
         source: sourceSchema.required(),
