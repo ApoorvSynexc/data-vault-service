@@ -101,6 +101,32 @@ export const fetchCsvFromS3 = async (
   }
 };
 
+// Streams a CSV object from S3 one line at a time instead of buffering the whole
+// file into memory — needed for restore, where a single backed-up file can be
+// anywhere from 1 KB to multiple GB. Only ever holds the current network chunk
+// plus one partial trailing line ("carry") in memory, regardless of file size.
+export const streamCsvLinesFromS3 = async function* (
+  config: IDestinationConfig,
+  key: string
+): AsyncGenerator<string> {
+  const client = getS3Client(config);
+  const result = await client.send(new GetObjectCommand({ Bucket: config.bucketName, Key: key }));
+
+  let carry = '';
+  for await (const chunk of result.Body as AsyncIterable<Uint8Array>) {
+    carry += Buffer.from(chunk).toString('utf8');
+    let newlineIndex = carry.indexOf('\n');
+    while (newlineIndex !== -1) {
+      yield carry.slice(0, newlineIndex).replace(/\r$/, '');
+      carry = carry.slice(newlineIndex + 1);
+      newlineIndex = carry.indexOf('\n');
+    }
+  }
+  if (carry.length > 0) {
+    yield carry.replace(/\r$/, '');
+  }
+};
+
 // Deletes all keys listed in `keys` from the bucket, batched at 1,000 per request.
 export const deleteS3Objects = async (
   config: IDestinationConfig,
