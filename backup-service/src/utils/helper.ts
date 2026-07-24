@@ -103,6 +103,11 @@ const buildPicklistS3Key = (params: ISchemaS3KeyParams & { fieldApiName: string 
     `/picklist/${params.fieldApiName}/values.json`
   );
 
+// Record-type metadata lives beside the field schema, single unversioned file:
+// .../schema/{objectName}/record-types.json — latest values win, same as picklists.
+const buildRecordTypeS3Key = (params: ISchemaS3KeyParams): string =>
+  buildSchemaS3Key(params).replace('/fields/fields.json', '/record-types.json');
+
 interface IErrorLogsS3PrefixParams {
   crmId: string;
   crmName: string;
@@ -301,6 +306,7 @@ export {
   buildS3KeyPrefix,
   buildSchemaS3Key,
   buildPicklistS3Key,
+  buildRecordTypeS3Key,
   buildErrorLogsS3Prefix,
   schemasAreEqual,
   splitCSVRows,

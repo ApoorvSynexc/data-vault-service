@@ -145,6 +145,18 @@ const getPicklistValues = async (
   return res?.data;
 };
 
+// Record-type metadata for one object, fetched via the core service (which owns
+// the Salesforce apex credentials). Throws on failure — the caller (record-type
+// upload) swallows it so metadata never fails a backup job.
+const getRecordTypeValues = async (backupConfigId: string, objectApiName: string): Promise<any> => {
+  const params = new URLSearchParams({ backupConfigId, objectApiName });
+  const res = await httpRequest({
+    url: `${CORE_SERVICE}/v1/internal/record-types?${params.toString()}`,
+    headers: { 'x-internal-secret': INTERNAL_SECRET },
+  });
+  return res?.data;
+};
+
 // Managed-package namespace for the DataVault apex REST endpoints.
 const SALESFORCE_NAMESPACE = 'SYX_DVV';
 
@@ -200,5 +212,6 @@ export {
   getObjectMetadata,
   getMasterChildApiNames,
   getPicklistValues,
+  getRecordTypeValues,
   createBulkQueryJob,
 };

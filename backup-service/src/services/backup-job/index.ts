@@ -59,10 +59,12 @@ interface CreateBackupJobParams {
   destination: { type: string; config: IDestinationConfig };
   lastUpdatedAt?: string;
   spaceId?: string;
+  schemaSync?: boolean;
 }
 
 const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination, lastUpdatedAt, spaceId } = params;
+  const { userId, backupConfigId, source, destination, lastUpdatedAt, spaceId, schemaSync } =
+    params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
@@ -90,6 +92,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     status: JOB_STATUS.pending,
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     ...(spaceId && { spaceId }),
+    ...(schemaSync ? { schemaSync: true } : {}),
     createdAt: now,
     updatedAt: now,
   };

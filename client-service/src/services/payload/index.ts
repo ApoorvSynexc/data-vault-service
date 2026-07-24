@@ -4,7 +4,8 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig, getBackupJobById } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_EMR_ACCESS_KEY_ID, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_EMR_REGION, AWS_EMR_SECRET_ACCESS_KEY, JOB_STATUS } from '../../constant';
+import { AWS_EMR_ACCESS_KEY_ID, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_EMR_REGION, AWS_EMR_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE } from '../../constant';
+import { runRealtimeSchemaSync } from './schema-sync';
 import { logger } from '../../middlewares';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
@@ -478,7 +479,25 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
 // Sends only the config id. Spark calls /build-payload with it to get the full
 // payload; the eligible job set is resolved there. The fetch here is only a guard
 // against spinning up EMR for a config with no jobs at all.
-async function initalizePayloadTransform(backupConfigId: string): Promise<StartJobRunCommandOutput> {
+async function initalizePayloadTransform(
+    backupConfigId: string,
+    opts: { skipRealtimeSync?: boolean } = {}
+): Promise<StartJobRunCommandOutput | void> {
+    // REALTIME configs: sync schema/picklist/record-type before compressing. On drift a
+    // Schema-Sync backup job runs first and compression resumes via the
+    // 'schema.sync.completed' callback (skipRealtimeSync bypasses this gate on that
+    // resume so a still-changing metadata read can't loop it).
+    if (!opts.skipRealtimeSync) {
+        const backupConfig = await getBackupConfigById(backupConfigId);
+        if (backupConfig?.schedule === SCHEDULE_MODE.realtime) {
+            const deferred = await runRealtimeSchemaSync(backupConfig);
+            if (deferred) {
+                logger.info(`Deferred EMR for backupConfigId: ${backupConfigId} — Schema-Sync backup in progress`);
+                return;
+            }
+        }
+    }
+
     const backupJobs = await fetchAllBackupJobs(backupConfigId);
     if (!backupJobs.length) {
         throw new Error('No backup jobs found');

@@ -7,6 +7,7 @@ import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destinati
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { uploadPicklistValues } from '../../picklist';
+import { uploadRecordTypeMetadata } from '../../record-type';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 import {
   createCsvGlueTable,
@@ -122,6 +123,14 @@ export const exportFirstTime = async (
     );
     await uploadPicklistValues({
       schema,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
+    await uploadRecordTypeMetadata({
       destConfig,
       crmId,
       crmName,
@@ -309,6 +318,14 @@ export const exportIncremental = async (
     );
     await uploadPicklistValues({
       schema: latestSchema,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
+    await uploadRecordTypeMetadata({
       destConfig,
       crmId,
       crmName,

@@ -3,10 +3,12 @@ import {
   getCrmById,
   getApexFields,
   getApexPicklistValues,
+  getRecordTypeMetadata,
   updateBackupConfig,
   getBackupConfigById,
   getUser,
   unwrapApex,
+  initalizePayloadTransform,
 } from '../../../services';
 import { BACKUP_STATUS, STATUS } from '../../../constant';
 import {
@@ -64,6 +66,32 @@ const getPicklistValuesHandler = async (req: IRequest, res: IResponse): Promise<
   }
 
   const result = await getApexPicklistValues({ user, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
+  makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
+};
+
+// Backup-service fetches record-type metadata through here — same auth chain as picklists.
+const getRecordTypesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupConfigId, objectApiName } = req.query;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+  if (!objectApiName) {
+    return makeResponse(req, res, 400, false, 'params_required');
+  }
+
+  const backupConfig = await getBackupConfigById(String(backupConfigId));
+  if (!backupConfig) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  const user = await getUser({ userId: backupConfig.userId });
+  if (!user) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  const result = await getRecordTypeMetadata({ user, objectApiName: String(objectApiName) });
   makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
@@ -158,6 +186,13 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         await updateBackupConfig(backupConfigId, updateParams, eventId);
       }
         break;
+      case 'schema.sync.completed': {
+        // The Schema-Sync backup job finished and refreshed the stored metadata.
+        // Resume the deferred compression, forcing it past the realtime drift gate
+        // (metadata now matches) so it can't re-trigger another Schema-Sync loop.
+        await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
+      }
+        break;
       case 'schema.updated': {
         const { objectName, schemaChange } = req.body;
 
@@ -188,6 +223,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
 export const internalController = wrapController({
   getFieldsHanlder,
   getPicklistValuesHandler,
+  getRecordTypesHandler,
   crmRefreshTokenHandler,
   getBackupServicePayloadHandler,
 });
