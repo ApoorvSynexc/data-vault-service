@@ -1,12 +1,48 @@
+import { EncryptedPayload } from '../../utils/encryption';
+import { IRestoreConflict } from '../restore';
+
+export interface IRestoreJobSource {
+  backupConfigId: string;
+  crmId: string;
+  crmName: string;
+
+  bucketName: string;
+  region: string;
+  folderPath: string;
+  csvFilePath: string;
+  encryptedKeys: {
+    accessKeyId: string;
+    secretAccessKey: string;
+  } | EncryptedPayload;
+}
+
+export interface IRestoreJobDestination {
+  crmId: string;
+  crmName: string;
+  objects: Array<{
+    id: string;
+    name: string;
+    status: "PENDING" | "SUCCESS" | "FAILED";
+  }>;
+
+  encryptedTokens: {
+    access_token: EncryptedPayload;
+    refresh_token: EncryptedPayload;
+    instanceUrl: EncryptedPayload;
+  } | EncryptedPayload;
+}
+
 export interface IRestoreJob {
   restoreJobId: string; // PK
   restoreId: string; // GSI: restoreId-index — parent restore request this job belongs to
   userId: string; // GSI: userId-index
-  source: { ciphertext: string; iv: string }; // encrypted — never expose
-  destination: { type: string; ciphertext: string; iv: string; authTag: string }; // encrypted — never expose
-  status: string; // PENDING | SUCCESS | FAILED
+  source: IRestoreJobSource; // encrypted — never expose
+  destination: IRestoreJobDestination; // encrypted — never expose
+  conflict: IRestoreConflict;
+  status: string; // PENDING | RUNNING | SUCCESS | FAILED
   startedAt?: string;
   completedAt?: string;
+  errorMessage?: string;
   createdAt: string;
   updatedAt: string;
 }
