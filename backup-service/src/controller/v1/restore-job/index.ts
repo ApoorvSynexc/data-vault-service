@@ -19,6 +19,6 @@ const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<v
   runRestoreJob(restoreJob).catch(() => {});
 };
 
-export const createRestoreController = wrapController({
+export const restoreController = wrapController({
   createRestoreJobHandler,
 });

@@ -9,6 +9,7 @@ export interface IRestoreJobSource {
   bucketName: string;
   region: string;
   folderPath: string;
+  csvFilePath: string;
   encryptedKeys: {
     accessKeyId: string;
     secretAccessKey: string;

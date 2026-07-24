@@ -8,7 +8,7 @@ interface RunSalesforceRestorePayload {
   restoreId: string;
   restoreJobId: string;
   object: { id: string; name: string; status: string };
-  sourceS3Credentials: { accessKeyId: string; secretAccessKey: string; bucketName: string; region: string; folderPath: string };
+  sourceS3Credentials: { accessKeyId: string; secretAccessKey: string; bucketName: string; region: string; csvFilePath: string };
   destinationSalesforceCredentials: { access_token: string; refresh_token: string; instanceUrl: string };
   conflict: IRestoreConflict;
 }
@@ -54,15 +54,15 @@ const submitIngestChunk = async (
 // files, not per-file.
 const restoreObjectData = async (
   s3Config: IDestinationConfig,
-  folderPath: string,
+  csvFilePath: string,
   objectName: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
   operation: 'insert' | 'update' | 'upsert'
 ): Promise<string[]> => {
-  const keys = await listS3Objects(s3Config, `${folderPath}/${objectName}`);
+  const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}`);
   if (!keys.length) {
-    throw new Error(`No backed-up data found for object ${objectName} under ${folderPath}`);
+    throw new Error(`No backed-up data found for object ${objectName} under ${csvFilePath}`);
   }
 
   const submittedJobIds: string[] = [];
@@ -164,7 +164,7 @@ export const runSalesforceRestore = async (
 
   const jobIds = await restoreObjectData(
     s3Config,
-    sourceS3Credentials.folderPath,
+    sourceS3Credentials.csvFilePath,
     object.name,
     destinationSalesforceCredentials.instanceUrl,
     tokens,
