@@ -111,10 +111,11 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
  *     objectNames:    string[]
  *     destConfig:     IDestinationConfig
  *     isCheckpointsCreated?: boolean — when true, also ensures the checkpoints table
+ *     isArchival?: boolean — when true, only the Hudi table is created (no Delta, no checkpoints)
  *   }
  *
  * Called after Spark reports a successful compression. For each object, ensures
- * the current-state Hudi table and the Delta table exist in the Glue Catalog —
+ * the current-state Hudi table and (for non-archival configs) the Delta table exist in the Glue Catalog —
  * created once from the committed `.hoodie` schema, never updated. Fully
  * idempotent: existing tables are left untouched, so retries and concurrent
  * completion events are safe.
@@ -124,15 +125,23 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
  * the rest.
  */
 const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, crmName, backupConfigId, objectNames, destConfig, isCheckpointsCreated } =
-    req.body as {
-      crmId: string;
-      crmName: string;
-      backupConfigId: string;
-      objectNames: string[];
-      destConfig: any;
-      isCheckpointsCreated?: boolean;
-    };
+  const {
+    crmId,
+    crmName,
+    backupConfigId,
+    objectNames,
+    destConfig,
+    isCheckpointsCreated,
+    isArchival,
+  } = req.body as {
+    crmId: string;
+    crmName: string;
+    backupConfigId: string;
+    objectNames: string[];
+    destConfig: any;
+    isCheckpointsCreated?: boolean;
+    isArchival?: boolean;
+  };
 
   if (
     !crmId ||
@@ -152,10 +161,13 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
       // All independent; a missing/not-yet-written dataset must not block the others.
       const tasks: [string, Promise<boolean>][] = [
         ['hudi', ensureHudiCurrentStateTable(tableParams)],
-        ['delta', ensureDeltaTable(tableParams)],
       ];
-      if (isCheckpointsCreated) {
-        tasks.push(['checkpoints', ensureCheckpointTable(tableParams)]);
+      // ARCHIVAL keeps Hudi only — Delta and checkpoints are skipped entirely.
+      if (!isArchival) {
+        tasks.push(['delta', ensureDeltaTable(tableParams)]);
+        if (isCheckpointsCreated) {
+          tasks.push(['checkpoints', ensureCheckpointTable(tableParams)]);
+        }
       }
 
       const settled = await Promise.allSettled(tasks.map(([, task]) => task));

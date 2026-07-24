@@ -1,11 +1,9 @@
-import { IDestinationConfig, IRealtimePayload } from '../../../../models';
+import { IDestinationConfig, IRealtimePayload, ISchemaField } from '../../../../models';
 import { logger } from '../../../../middlewares/logger';
-import { httpRequest } from '../../../../utils/http-request';
-import { CORE_SERVICE, INTERNAL_SECRET } from '../../../../constant';
-import { buildSchemaS3Key, schemasAreEqual } from '../../../../utils/helper';
+import { buildSchemaS3Key } from '../../../../utils/helper';
 import { downloadFromS3, uploadToS3, listS3Objects } from '../../../destination/s3';
 import { ICrmRealtimeHandler } from '../../types';
-import { createCsvGlueTable, registerBackupJobPartition, updateGlueTableSchema } from '../../glue';
+import { createCsvGlueTable, registerBackupJobPartition } from '../../glue';
 
 // ---------------------------------------------------------------------------
 // Map Salesforce CDC operation to the S3 folder convention used by bulk jobs
@@ -24,16 +22,15 @@ const operationToFolder = (operation: string): 'inserts' | 'updates' | 'deletes'
 };
 
 // ---------------------------------------------------------------------------
-// Convert a records array to a CSV Buffer.
-// Drops the Salesforce `attributes` meta field.
-// Cells with commas, quotes, or newlines are double-quoted and escaped.
+// Convert a records array to a CSV Buffer using an explicit column list.
+// Columns come from the stored S3 schema (see loadStoredSchema) so every CSV
+// has the same, schema-defined shape regardless of which fields a given CDC
+// record carries. Cells with commas, quotes, or newlines are double-quoted and escaped.
 // ---------------------------------------------------------------------------
-const recordsToCsv = (records: Record<string, any>[]): Buffer => {
-  if (!records.length) {
+const recordsToCsv = (records: Record<string, any>[], columns: string[]): Buffer => {
+  if (!records.length || !columns.length) {
     return Buffer.alloc(0);
   }
-
-  const headers = Object.keys(records[0]).filter((k) => k !== 'attributes');
 
   const escapeCell = (val: unknown): string => {
     if (val === null || val === undefined) {
@@ -46,34 +43,29 @@ const recordsToCsv = (records: Record<string, any>[]): Buffer => {
   };
 
   const lines = [
-    headers.join(','),
-    ...records.map((r) => headers.map((h) => escapeCell(r[h])).join(',')),
+    columns.join(','),
+    ...records.map((r) => columns.map((h) => escapeCell(r[h])).join(',')),
   ];
 
   return Buffer.from(lines.join('\n'), 'utf8');
 };
 
 // ---------------------------------------------------------------------------
-// Real-time schema comparison: compare payload schema with stored schema
-// Returns { schemaChanged, latestSchema }
+// Load the schema already stored in S3 for this object — written by the initial /
+// scheduled backup. This is the authoritative schema for realtime CSVs; the schema
+// Salesforce ships on each webhook hit is ignored. Returns null when no stored schema
+// exists yet (e.g. a webhook arriving before the first backup finished), letting the
+// caller fall back to the record's own keys so a hit is never dropped.
 // ---------------------------------------------------------------------------
-const compareSchemaInRealtime = async (
+const loadStoredSchema = async (
   crmId: string,
   crmName: string,
   backupConfigId: string,
   objectApiName: string,
-  destConfig: IDestinationConfig,
-  payloadSchema: { label: string; dataType: string; apiName: string }[]
-): Promise<{
-  schemaChanged: boolean;
-  latestSchema: { label: string; dataType: string; apiName: string }[];
-}> => {
-  const latestSchema = payloadSchema;
-
-  // Get existing schema from S3
-  // Compare against the latest versioned file (fields_<timestamp>.json with the
-  // highest timestamp). Fall back to the original fields.json only when no
-  // versioned files exist yet.
+  destConfig: IDestinationConfig
+): Promise<ISchemaField[] | null> => {
+  // Prefer the latest versioned file (fields_<timestamp>.json with the highest
+  // timestamp); fall back to the original fields.json when none exist yet.
   const schemaKey = buildSchemaS3Key({
     crmId,
     crmName,
@@ -88,25 +80,17 @@ const compareSchemaInRealtime = async (
   // last entry is also the most recent.
   const currentSchemaKey =
     versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
-  let existingSchemaBuffer: Buffer | null = null;
 
   try {
-    existingSchemaBuffer = await downloadFromS3(destConfig, currentSchemaKey);
+    const buffer = await downloadFromS3(destConfig, currentSchemaKey);
+    if (!buffer) {
+      return null;
+    }
+    return JSON.parse(buffer.toString()) as ISchemaField[];
   } catch {
-    logger.debug(`No existing schema found for ${objectApiName}, treating as new`);
+    logger.debug(`No stored schema found for ${objectApiName}, falling back to record keys`);
+    return null;
   }
-
-  // Compare schemas - only mark as changed if existing schema differs
-  const schemaChanged = existingSchemaBuffer
-    ? !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchema)
-    : false;
-
-  logger.info(`Real-time schema comparison for ${objectApiName}: changed=${schemaChanged}`);
-
-  return {
-    schemaChanged,
-    latestSchema,
-  };
 };
 
 // ---------------------------------------------------------------------------
@@ -124,12 +108,26 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
   ) {
     const { records, operation, objectApiName } = payload;
 
+    // Columns come from the schema already stored in S3 — never from the schema
+    // Salesforce ships on the webhook. Fall back to the record's own keys only when
+    // no stored schema exists yet, so an early hit is never dropped for lack of columns.
+    const storedSchema = await loadStoredSchema(
+      crmId,
+      crmName,
+      backupConfigId,
+      objectApiName,
+      destConfig
+    );
+    const columns = storedSchema?.length
+      ? storedSchema.map((f) => f.apiName)
+      : Object.keys(records[0] ?? {}).filter((k) => k !== 'attributes');
+
     // ── Upload CSV ──────────────────────────────────────────────────────────
     // All hits for the same job share the same backupJobId folder.
     // Each hit gets a unique UUID filename so concurrent uploads never overwrite each other.
     const folder = operationToFolder(operation);
     const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.csv`;
-    const csvBuffer = recordsToCsv(records);
+    const csvBuffer = recordsToCsv(records, columns);
     const sizeInBytes = csvBuffer.length;
     const s3Path = await uploadToS3(destConfig, s3Key, csvBuffer);
 
@@ -152,24 +150,11 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
       )
     );
 
-    // ── Real-time schema comparison using payload schema ────────────────────
-    let schemaChanged = false;
-
-    try {
-      const schemaComparison = await compareSchemaInRealtime(
-        crmId,
-        crmName,
-        backupConfigId,
-        objectApiName,
-        destConfig,
-        payload.schema
-      );
-
-      schemaChanged = schemaComparison.schemaChanged;
-
-      // Ensure the Glue table exists on every invocation — createCsvGlueTable is
-      // idempotent (skips silently if already created). This handles first-time
-      // table creation without a separate first-hit detection branch.
+    // Ensure the Glue table exists using the stored schema (idempotent — the
+    // initial/scheduled backup normally created it already). No schema comparison
+    // in realtime: schema evolution is owned by the scheduled backup that rewrites
+    // fields.json, so realtime just mirrors whatever schema is already stored.
+    if (columns.length) {
       createCsvGlueTable({
         crmId,
         crmName,
@@ -177,70 +162,15 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
         objectName: objectApiName,
         type: 'backup',
         destConfig,
-        columns: schemaComparison.latestSchema.map((f: { apiName: string }) => ({
-          name: f.apiName,
-          type: 'string',
-        })),
+        columns: columns.map((name) => ({ name, type: 'string' })),
       }).catch((err) =>
         logger.error(
           `[glue] failed to create table | realtimeJobId:${realtimeJobId} objectApiName:${objectApiName} err:${err?.message ?? err}`
         )
       );
-
-      if (schemaChanged) {
-        const schemaKey = buildSchemaS3Key({
-          crmId,
-          crmName,
-          backupConfigId,
-          objectName: objectApiName,
-          type: 'backup',
-        });
-        const newSchemaBuffer = Buffer.from(JSON.stringify(schemaComparison.latestSchema, null, 2));
-        const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
-        await uploadToS3(destConfig, versionedKey, newSchemaBuffer);
-
-        logger.info(
-          `Realtime job ${realtimeJobId}: schema changed for ${objectApiName}, uploaded to ${versionedKey}`
-        );
-
-        updateGlueTableSchema({
-          crmId,
-          backupConfigId,
-          objectName: objectApiName,
-          columns: schemaComparison.latestSchema.map((f: { apiName: string }) => ({
-            name: f.apiName,
-            type: 'string',
-          })),
-        }).catch((err) =>
-          logger.error(
-            `[glue] failed to update table schema | realtimeJobId:${realtimeJobId} objectApiName:${objectApiName} err:${err?.message ?? err}`
-          )
-        );
-
-        await httpRequest({
-          url: `${CORE_SERVICE}/v1/internal/backup-payload`,
-          method: 'POST',
-          body: JSON.stringify({
-            eventType: 'schema.updated',
-            crmId,
-            objectName: objectApiName,
-            backupJobId: realtimeJobId,
-            backupConfigId,
-            schemaChange: true,
-          }),
-          headers: {
-            'x-internal-secret': INTERNAL_SECRET,
-          },
-        });
-
-        logger.info(`Realtime job ${realtimeJobId}: core service notified of schema changes`);
-      }
-    } catch (err: any) {
-      logger.error(
-        `Realtime job ${realtimeJobId}: schema comparison failed for ${objectApiName}: ${err?.message}`
-      );
     }
 
-    return { s3Path, schemaChanged, sizeInBytes };
+    // schemaChanged is always false now — realtime no longer detects schema drift.
+    return { s3Path, schemaChanged: false, sizeInBytes };
   },
 };

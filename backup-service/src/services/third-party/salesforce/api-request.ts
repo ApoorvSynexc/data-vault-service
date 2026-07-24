@@ -145,6 +145,31 @@ const getPicklistValues = async (
   return res?.data;
 };
 
+// Managed-package namespace for the DataVault apex REST endpoints.
+const SALESFORCE_NAMESPACE = 'SYX_DVV';
+
+// Master-Detail child object api names for one object, via the object-children
+// apex endpoint (type=MASTER). The reply is { success, data: { childs: [{ apiName }] } };
+// `apiName` is the object api name. Best-effort — throws on transport failure so the
+// caller decides whether a missing children lookup is fatal (for backup, it isn't).
+const getMasterChildApiNames = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectName: string,
+  mode: 'SCHEDULE' | 'REALTIME' = 'SCHEDULE'
+): Promise<string[]> => {
+  const url =
+    `${instanceUrl}/services/apexrest/${SALESFORCE_NAMESPACE}/v1/data-vault/object-children` +
+    `?apiName=${encodeURIComponent(objectName)}&mode=${mode}&type=MASTER`;
+  const res = await salesforceRequest<{ data?: { childs?: Array<{ apiName?: string }> } }>(
+    { url, method: 'GET' },
+    tokens
+  );
+  return (res?.data?.childs ?? [])
+    .map((child) => child?.apiName)
+    .filter((name): name is string => !!name);
+};
+
 // ---------------------------------------------------------------------------
 // Bulk API 2.0 — create
 // ---------------------------------------------------------------------------
@@ -173,6 +198,7 @@ export {
   salesforceRequest,
   makePageFetcher,
   getObjectMetadata,
+  getMasterChildApiNames,
   getPicklistValues,
   createBulkQueryJob,
 };
