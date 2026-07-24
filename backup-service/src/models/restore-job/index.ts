@@ -25,10 +25,10 @@ export interface IRestoreJobDestination {
     status: "PENDING" | "SUCCESS" | "FAILED";
   }>;
 
+  instanceUrl: string;
   encryptedTokens: {
-    access_token: EncryptedPayload;
-    refresh_token: EncryptedPayload;
-    instanceUrl: EncryptedPayload;
+    access_token: string;
+    refresh_token: string;
   } | EncryptedPayload;
 }
 

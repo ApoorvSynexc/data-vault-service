@@ -8,8 +8,8 @@ export interface IRestoreJobSource {
 
   bucketName: string;
   region: string;
-  folderPath: string;
-  csvFilePath: string;
+  folderPath?: string;
+  csvFilePath?: string;
   encryptedKeys: {
     accessKeyId: string;
     secretAccessKey: string;
@@ -25,10 +25,10 @@ export interface IRestoreJobDestination {
     status: "PENDING" | "SUCCESS" | "FAILED";
   }>;
 
+  instanceUrl: string;
   encryptedTokens: {
-    access_token: EncryptedPayload;
-    refresh_token: EncryptedPayload;
-    instanceUrl: EncryptedPayload;
+    access_token: string;
+    refresh_token: string;
   } | EncryptedPayload;
 }
 

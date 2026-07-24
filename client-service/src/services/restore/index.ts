@@ -17,6 +17,7 @@ interface CreateRestoreParams {
   crmId?: string;
   status?: string;
   source: {
+    backupConfigId: string;
     backupJobIds: string[];
   };
   selection: {
