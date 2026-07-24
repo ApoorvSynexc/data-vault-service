@@ -18,7 +18,7 @@ interface ICreateJob {
 const createBulkJob = async (
     payload: ICreateJob
 ): Promise<IBulkDeleteJob> => {
-    const { instanceUrl, tokens, objectName } = payload;
+    const { instanceUrl, tokens, objectName, operation } = payload;
     const response = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`, {
         method: 'POST',
         headers: {
@@ -28,7 +28,7 @@ const createBulkJob = async (
         body: JSON.stringify({
             object: objectName,
             contentType: 'CSV',
-            operation: 'delete'
+            operation
         }),
     });
 
@@ -69,4 +69,28 @@ const uploadDataToJob = async (
   }
 };
 
-export { createBulkJob, uploadDataToJob };
+// Bulk API 2.0 ingest jobs don't start processing on their own — after the CSV
+// is uploaded via uploadDataToJob, the job must be explicitly closed
+// (state: UploadComplete) or it just sits open indefinitely and Salesforce
+// never touches the data.
+const closeBulkJob = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  jobId: string
+): Promise<void> => {
+  const response = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${tokens.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ state: 'UploadComplete' }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to close bulk ingest job: ${errorText}`);
+  }
+};
+
+export { createBulkJob, uploadDataToJob, closeBulkJob };
