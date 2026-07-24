@@ -12,6 +12,39 @@ import { incrementTableCounter } from '../counter';
 import { flattenBackupObjects } from '../../utils/helper';
 import { logger } from '../../middlewares';
 import { decrypt } from '../../utils/encryption';
+import { getMasterChildApiNames } from '../third-party/salesforce/apex';
+import { SCHEDULE_MODE } from '../../constant';
+
+// Expand each selected object with its SCHEDULE/MASTER children, merged into one
+// deduplicated list — a child reachable from two parents appears once. Selected
+// objects keep their filters; auto-added children back up in full (field: []).
+const expandWithScheduleChildren = async (
+  user?: IUser,
+  objects?: IObject[]
+): Promise<IObject[] | undefined> => {
+  if (!user || !objects?.length) return objects;
+
+  const byName = new Map<string, IObject>();
+  for (const obj of objects) byName.set(obj.name.toLowerCase(), obj);
+
+  await Promise.all(
+    objects.map(async (obj) => {
+      try {
+        const childNames = await getMasterChildApiNames(user, obj.name, SCHEDULE_MODE.schedule);
+        for (const name of childNames) {
+          const key = name.toLowerCase();
+          if (!byName.has(key)) {
+            byName.set(key, { id: name, name, type: '', field: [] });
+          }
+        }
+      } catch (error) {
+        logger.error(`[SCHEDULE-CHILD] children fetch failed for ${obj.name}: ${(error as Error)?.message ?? String(error)}`);
+      }
+    })
+  );
+
+  return Array.from(byName.values());
+};
 
 const getSourceObjects = (objects?: IObject[]) => {
   if (objects?.length) {
@@ -161,6 +194,7 @@ const triggerBackupJob = async (params: {
 
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
   const credentials = user?.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
+  const expandedObjects = await expandWithScheduleChildren(user, config?.objects);
   const payload = {
     userId: config.userId,
     backupConfigId: config.backupConfigId,
@@ -169,7 +203,7 @@ const triggerBackupJob = async (params: {
       crmId: crm.crmId,
       crmName: crm.crmName,
       instanceUrl: user?.crmProfile?.instanceUrl,
-      object: getSourceObjects(config?.objects),
+      object: getSourceObjects(expandedObjects),
     },
     destination: {
       type: destination.type,

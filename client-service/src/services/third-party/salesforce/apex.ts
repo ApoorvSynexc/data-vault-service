@@ -112,7 +112,7 @@ const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?
   );
 };
 
-const getApexObjectChilds = async ({ user, objectName, mode, relationshipDepth }: { user?: IUser; objectName?: string; mode?: string; relationshipDepth?: number } = {}) => {
+const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipDepth }: { user?: IUser; objectName?: string; mode?: string; type?: string; relationshipDepth?: number } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -130,6 +130,9 @@ const getApexObjectChilds = async ({ user, objectName, mode, relationshipDepth }
   if (mode) {
     url += `&mode=${mode}`;
   }
+  if (type) {
+    url += `&type=${type}`;
+  }
   if (relationshipDepth !== undefined) {
     url += `&relationshipDepth=${relationshipDepth}`;
   }
@@ -137,6 +140,22 @@ const getApexObjectChilds = async ({ user, objectName, mode, relationshipDepth }
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
   );
+};
+
+// Fetch the api names of an object's Master-Detail children via object-children
+// (type=MASTER). SCHEDULE and REALTIME modes share the same eligibility, so either
+// backup mode returns the same set. Throws on transport/parse failure — callers
+// decide whether a missing children lookup is fatal (it isn't, for backup/trigger).
+const getMasterChildApiNames = async (
+  user: IUser,
+  objectName: string,
+  mode: string
+): Promise<string[]> => {
+  const reply = await getApexObjectChilds({ user, objectName, mode, type: 'MASTER' });
+  const data = unwrapApex<{ childs?: Array<{ apiName?: string }> }>(reply);
+  return (data?.childs ?? [])
+    .map((child) => child?.apiName)
+    .filter((name): name is string => !!name);
 };
 
 const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
@@ -269,4 +288,4 @@ export const apexCountOne = async (
   }
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, getApexPicklistValues, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getMasterChildApiNames, getApexObjectRecords, getApexFields, getApexPicklistValues, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
