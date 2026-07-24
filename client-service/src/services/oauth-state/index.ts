@@ -12,7 +12,9 @@ const createOAuthState = async (
   crmName: string,
   environment?: 'production' | 'sandbox' | 'custom',
   customUrl?: string,
-  name?: string
+  name?: string,
+  isAdminUser?: boolean,
+  adminUserSfProfile?: IOAuthState['adminUserSfProfile']
 ): Promise<void> => {
   const item: IOAuthState = {
     state,
@@ -22,6 +24,8 @@ const createOAuthState = async (
     environment,
     customUrl,
     name,
+    isAdminUser,
+    adminUserSfProfile,
     ttl: Math.floor(Date.now() / 1000) + OAUTH_STATE_TTL_SECONDS,
     createdAt: new Date().toISOString(),
   };
