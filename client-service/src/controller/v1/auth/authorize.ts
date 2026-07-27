@@ -6,17 +6,13 @@ import {
   upsertCrm,
   updateCrm,
   getUserByCrmProfileUserId,
-  createUser,
   updateUser,
   createOAuthState,
   getSalesforceLoginUrl,
-  createRole,
 } from '../../../services';
 import { decrypt, encrypt, generateOrgEncryptionKey, readEnvelope } from '../../../utils/encryption';
 import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
 import { STATUS, SALESFORCE_LOGIN_REDIRECT_URI } from '../../../constant';
-import { defaultPermissions, defaultRoles } from '../../../assets';
-import { ICrm, IRolePermissions } from '../../../models';
 
 interface IAuthorizeOrganizationPayload {
   orgId: string;
@@ -130,40 +126,24 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
       { userId: existingUser.userId },
       { crmProfile: { ...existingUser.crmProfile, instanceUrl, organizationId: orgId, crmUserId } }
     );
-  } else {
-    const permissions: IRolePermissions = [];
-      defaultPermissions.forEach((module) => {
-        module.permissions.forEach((permission) => {
-          permissions.push(`${module.value}.${permission.value}`);
-        });
-    });
-
-    const roleName = 'Custom';
-    const roleId = uuidv4();
-    await createRole({ roleId, name: roleName, permissions });
-
-    const userId = uuidv4();
-    console.log('[authorize-admin] Creating new user for CRM profile:', { userId, orgId, userEmail });
-    let crmId = uuidv4();
-    const crmExist = await getCrmByOrgId(orgId);
-    if (crmExist) {
-      crmId = crmExist.crmId;
-    }
-    await createUser({ crmProfile: { username, email: userEmail, userId: crmUserId, instanceUrl, organizationId: orgId }, role: { name: roleName, roleId }, userId, crmId });
-    await upsertCrm({
-        userId,
-        crmId,
-        environment,
-        organizationId: orgId,
-        crmName: 'salesforce',
-      });
   }
-
 
   const { url, codeVerifier, state } = getSalesforceLoginUrl(undefined, SALESFORCE_LOGIN_REDIRECT_URI, environment, instanceUrl);
   // Pin the state to this Salesforce user — the callback rejects the login if
-  // someone else's credentials complete the OAuth flow.
-  await createOAuthState(state, codeVerifier, crmUserId, 'salesforce', environment, instanceUrl);
+  // someone else's credentials complete the OAuth flow. For a first-time admin
+  // the user record is NOT created here: the profile rides along in the state
+  // and the callback creates role + user only after Salesforce confirms the login.
+  await createOAuthState(
+    state,
+    codeVerifier,
+    crmUserId,
+    'salesforce',
+    environment,
+    instanceUrl,
+    undefined,
+    existingUser ? undefined : true,
+    existingUser ? undefined : { username, email: userEmail, instanceUrl, organizationId: orgId }
+  );
 
   return { authorizationUrl: url };
 };

@@ -22,6 +22,7 @@ import {
   buildEntireDeltaChainSql,
   buildEntireCheckpointSql,
   buildHudiBulkSql,
+  buildHudiRawSql,
   buildCsvEitherSql,
   pairedColumns,
   outputColumns,
@@ -454,11 +455,17 @@ const fetchRecordsForBackup = async (
 };
 
 /**
- * ARCHIVAL path: resolves the most recent successful ARCHIVAL job for the given
+ * ARCHIVAL path: resolves the most recent retrievable ARCHIVAL job for the given
  * config ID, verifies the config belongs to the caller, then queries Athena for
- * that single job's partition (CSV table). deletedOnly has no meaning for an
- * archival snapshot, so it returns nothing. Returns null when the config doesn't
- * exist, is not owned by the caller, or has no completed archival job yet.
+ * that snapshot. An archival job's `status` is single-valued — SUCCESS while
+ * uncompressed, then COMPRESSED once Spark compresses it — so both are candidates.
+ * Routing by that status (never delta/checkpoint, archival is a point-in-time
+ * snapshot):
+ *   - COMPRESSED → the Hudi current-state table (_hudi), one row per Id.
+ *   - SUCCESS    → the raw CSV table (cfg_<cfg>_<obj>), scoped to the job.
+ * deletedOnly has no meaning for an archival snapshot, so it returns nothing.
+ * Returns null when the config doesn't exist, is not owned by the caller, or has
+ * no retrievable archival job yet.
  */
 interface IFetchRecordsForArchivalParams {
   backupConfigId: string;
@@ -473,28 +480,33 @@ const fetchRecordsForArchival = async (
   params: IFetchRecordsForArchivalParams
 ): Promise<IQueryResult | null> => {
   const { backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly } = params;
-  // Independent lookups — one DynamoDB round trip instead of two.
-  const [config, { items }] = await Promise.all([
+  // A single status equality per query is all getBackupJobsByConfig supports, and
+  // SUCCESS/COMPRESSED are mutually exclusive on the same job — query both and keep
+  // the newest, so a re-run (fresh SUCCESS) wins over an older COMPRESSED snapshot.
+  const [config, success, compressed] = await Promise.all([
     getBackupConfigById(backupConfigId),
-    getBackupJobsByConfig(backupConfigId, {
-      limit: 1,
-      status: JOB_STATUS.success,
-      type: 'ARCHIVAL',
-    }),
+    getBackupJobsByConfig(backupConfigId, { limit: 1, status: JOB_STATUS.success, type: 'ARCHIVAL' }),
+    getBackupJobsByConfig(backupConfigId, { limit: 1, status: COMPRESSION_STATUS.compressed, type: 'ARCHIVAL' }),
   ]);
 
   if (!config || config.userId !== userId) return null;
-  if (items.length === 0) return null;
+
+  const candidates = [...success.items, ...compressed.items];
+  if (candidates.length === 0) return null;
   if (deletedOnly) return { columns: outputColumns(columnNames), rows: [] };
 
-  const latestJob = items[0];
+  const latestJob = candidates.sort(
+    (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+  )[0];
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
   const tableName = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
 
-  const result = await runAthenaQuery(
-    buildRawSql(tableName, { columnNames, jobIds: [latestJob.backupJobId], filterWhere, limit: FETCH_LIMIT }),
-    databaseName
-  );
+  const sql =
+    latestJob.status === COMPRESSION_STATUS.compressed
+      ? buildHudiRawSql(`${tableName}_hudi`, { columnNames, filterWhere, limit: FETCH_LIMIT })
+      : buildRawSql(tableName, { columnNames, jobIds: [latestJob.backupJobId], filterWhere, limit: FETCH_LIMIT });
+
+  const result = await runAthenaQuery(sql, databaseName);
   return mergeOrderLimit([result], columnNames);
 };
 

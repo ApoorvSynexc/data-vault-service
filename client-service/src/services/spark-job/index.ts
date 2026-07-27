@@ -1,7 +1,7 @@
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
-import { BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
+import { BACKUP_SERVICE, INTERNAL_SECRET, BACKUP_TYPE } from '../../constant';
 import { httpRequest } from '../../utils/http-request';
 import { IObject } from '../../models';
 
@@ -73,6 +73,8 @@ export const ensureCompressionGlueTables = async (
       objectNames,
       destConfig,
       isCheckpointsCreated,
+      // ARCHIVAL configs get the Hudi table only — no Delta, no checkpoints.
+      isArchival: config.type === BACKUP_TYPE.archival,
     }),
   });
 
