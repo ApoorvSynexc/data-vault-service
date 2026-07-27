@@ -39,26 +39,14 @@ const uploadDataToJob = async (
   jobId: string,
   csvData: string
 ): Promise<void> => {
-  try {
-    const response = await fetch(
-      `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/batches`,
-      {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${tokens.accessToken}`,
-          'Content-Type': 'text/csv',
-        },
-        body: csvData,
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to upload data to bulk ingest job: ${errorText}`);
-    }
-  } catch (err: any) {
-    throw new Error(`Failed to upload data: ${err.message}`, { cause: err });
-  }
+  await salesforceRequest(
+    {
+      url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/batches`,
+      method: 'PUT',
+      body: csvData,
+    },
+    tokens
+  );
 };
 
 // Bulk API 2.0 ingest jobs don't start processing on their own — after the CSV
@@ -70,22 +58,14 @@ const closeBulkJob = async (
   tokens: SalesforceTokens,
   jobId: string
 ): Promise<void> => {
-  const response = await fetch(
-    `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
+  await salesforceRequest(
     {
+      url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
       method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify({ state: 'UploadComplete' }),
-    }
+    },
+    tokens
   );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to close bulk ingest job: ${errorText}`);
-  }
 };
 
 export { createBulkJob, uploadDataToJob, closeBulkJob };
