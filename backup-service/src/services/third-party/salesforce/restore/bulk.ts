@@ -1,44 +1,42 @@
-import { SalesforceTokens } from "../api-request";
+import { SalesforceTokens } from '../api-request';
 
 const SF_API_VERSION = 'v65.0';
 
 export interface IBulkDeleteJob {
-    id: string;
-    state: string;
-    object: string;
+  id: string;
+  state: string;
+  object: string;
 }
 
 interface ICreateJob {
-    instanceUrl: string;
-    tokens: SalesforceTokens;
-    objectName: string
-    operation: 'insert' | 'update' | 'upsert'
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  objectName: string;
+  operation: 'insert' | 'update' | 'upsert';
 }
 
-const createBulkJob = async (
-    payload: ICreateJob
-): Promise<IBulkDeleteJob> => {
-    const { instanceUrl, tokens, objectName, operation } = payload;
-    const response = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${tokens.accessToken}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            object: objectName,
-            contentType: 'CSV',
-            operation
-        }),
-    });
+const createBulkJob = async (payload: ICreateJob): Promise<IBulkDeleteJob> => {
+  const { instanceUrl, tokens, objectName, operation } = payload;
+  const response = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${tokens.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      object: objectName,
+      contentType: 'CSV',
+      operation,
+    }),
+  });
 
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to create bulk ingest job: ${errorText}`);
-    }
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create bulk ingest job: ${errorText}`);
+  }
 
-    const job = (await response.json()) as IBulkDeleteJob;
-    return job;
+  const job = (await response.json()) as IBulkDeleteJob;
+  return job;
 };
 
 const uploadDataToJob = async (
@@ -78,14 +76,17 @@ const closeBulkJob = async (
   tokens: SalesforceTokens,
   jobId: string
 ): Promise<void> => {
-  const response = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${tokens.accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ state: 'UploadComplete' }),
-  });
+  const response = await fetch(
+    `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${tokens.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ state: 'UploadComplete' }),
+    }
+  );
 
   if (!response.ok) {
     const errorText = await response.text();

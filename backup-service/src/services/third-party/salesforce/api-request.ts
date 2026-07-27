@@ -160,26 +160,30 @@ const getRecordTypeValues = async (backupConfigId: string, objectApiName: string
 // Managed-package namespace for the DataVault apex REST endpoints.
 const SALESFORCE_NAMESPACE = 'SYX_DVV';
 
-// Master-Detail child object api names for one object, via the object-children
-// apex endpoint (type=MASTER). The reply is { success, data: { childs: [{ apiName }] } };
-// `apiName` is the object api name. Best-effort — throws on transport failure so the
+interface ISalesforceChild {
+  apiName?: string;
+  [key: string]: any;
+}
+
+// Master-Detail children of one object, via the object-children apex endpoint
+// (type=MASTER). The reply is { success, data: { childs: [{ apiName, ... }] } }.
+// Returns the raw child entries — the caller uses `apiName` to expand the backup
+// list and persists the full payload to S3. Throws on transport failure so the
 // caller decides whether a missing children lookup is fatal (for backup, it isn't).
-const getMasterChildApiNames = async (
+const getMasterChilds = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectName: string,
   mode: 'SCHEDULE' | 'REALTIME' = 'SCHEDULE'
-): Promise<string[]> => {
+): Promise<ISalesforceChild[]> => {
   const url =
     `${instanceUrl}/services/apexrest/${SALESFORCE_NAMESPACE}/v1/data-vault/object-children` +
     `?apiName=${encodeURIComponent(objectName)}&mode=${mode}&type=MASTER`;
-  const res = await salesforceRequest<{ data?: { childs?: Array<{ apiName?: string }> } }>(
+  const res = await salesforceRequest<{ data?: { childs?: ISalesforceChild[] } }>(
     { url, method: 'GET' },
     tokens
   );
-  return (res?.data?.childs ?? [])
-    .map((child) => child?.apiName)
-    .filter((name): name is string => !!name);
+  return res?.data?.childs ?? [];
 };
 
 // ---------------------------------------------------------------------------
@@ -210,7 +214,7 @@ export {
   salesforceRequest,
   makePageFetcher,
   getObjectMetadata,
-  getMasterChildApiNames,
+  getMasterChilds,
   getPicklistValues,
   getRecordTypeValues,
   createBulkQueryJob,

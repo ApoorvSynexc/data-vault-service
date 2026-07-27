@@ -1,6 +1,14 @@
 import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
-import { IBackupObject, IDestinationConfig, IRestoreConflict, IRestoreJobDestination, IRestoreJobSource, IRestoreScope, ISource } from '../../../models';
+import {
+  IBackupObject,
+  IDestinationConfig,
+  IRestoreConflict,
+  IRestoreJobDestination,
+  IRestoreJobSource,
+  IRestoreScope,
+  ISource,
+} from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { updateBackupConfig } from '../../backup-config';
 import { getBackupJob } from '../../backup-job';
@@ -289,10 +297,14 @@ const salesforceHandler: ICrmBackupHandler = {
           ? JSON.parse(decrypt(source.encryptedKeys))
           : source.encryptedKeys;
 
-      const destinationSalesforceCredentials: { access_token: string; refresh_token: string; instanceUrl: string } =
+      const destinationSalesforceCredentials: {
+        access_token: string;
+        refresh_token: string;
+        instanceUrl: string;
+      } =
         'ciphertext' in destination.encryptedTokens
           ? JSON.parse(decrypt(destination.encryptedTokens))
-          : destination.encryptedTokens
+          : destination.encryptedTokens;
 
       let hasAnyFailure = false;
       for (let i = 0; i < objects.length; i += CONCURRENCY_LIMIT) {
@@ -303,7 +315,12 @@ const salesforceHandler: ICrmBackupHandler = {
               restoreId,
               restoreJobId,
               object,
-              sourceS3Credentials: {...sourceS3Credentials, bucketName: source.bucketName, region: source.region, folderPath: source.folderPath},
+              sourceS3Credentials: {
+                ...sourceS3Credentials,
+                bucketName: source.bucketName,
+                region: source.region,
+                folderPath: source.folderPath,
+              },
               destinationSalesforceCredentials,
               conflict,
             }).catch((err: any) => {
