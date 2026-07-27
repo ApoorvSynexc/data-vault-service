@@ -4,17 +4,73 @@ import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE, OBJECT_STATUS } from '../../constant';
 import { IBackupJob, IBackupObject, ISource, IDestinationConfig } from '../../models';
 import { encrypt } from '../../utils/encryption';
+import { buildChildsS3Key } from '../../utils/helper';
 import { incrementTableCounter } from '../counter';
-import { getMasterChildApiNames, SalesforceTokens } from '../third-party/salesforce/api-request';
+import { getBackupConfigById, updateBackupConfig } from '../backup-config';
+import { uploadToS3 } from '../destination/s3';
+import { getMasterChilds, SalesforceTokens } from '../third-party/salesforce/api-request';
 
-// Defensive expansion: client-service already merges each object's MASTER children
-// into the list, but re-check here so a backup job created by any caller still backs
-// up every Master-Detail child. Deduped by name (client-added children are skipped);
-// auto-added children back up in full (field: []). Best-effort per object — a failed
-// lookup leaves the rest intact. No-op when the source carries no Salesforce tokens.
+// Appends children discovered during this run to the backup config, so every
+// config-driven reader (compression Glue tables, Glue repair, restore listing, UI)
+// sees the objects that are actually being backed up. Append-only: existing entries
+// carry filters, counters and schedule settings the job payload doesn't have, and
+// must never be overwritten with the stripped-down job shape.
+// Never throws — a failed config write must not stop the job from running.
+const persistChildrenToConfig = async (
+  backupConfigId: string,
+  childNames: string[]
+): Promise<void> => {
+  if (!childNames.length) {
+    return;
+  }
+
+  try {
+    const config = await getBackupConfigById(backupConfigId);
+    if (!config) {
+      return;
+    }
+
+    const existing = new Set((config.objects ?? []).map((obj) => obj.name?.toLowerCase()));
+    const additions = childNames.filter((name) => !existing.has(name.toLowerCase()));
+    if (!additions.length) {
+      return;
+    }
+
+    await updateBackupConfig(backupConfigId, {
+      objects: [
+        ...(config.objects ?? []),
+        ...additions.map((name) => ({
+          id: name,
+          name,
+          type: name.endsWith('__c') ? 'CUSTOM' : 'STANDARD',
+          field: [],
+        })),
+      ],
+      objectNames: [...new Set([...(config.objectNames ?? []), ...additions])],
+    });
+  } catch (err: any) {
+    console.log(
+      `[backup-child] config update failed | backupConfigId:${backupConfigId} err:${err?.message ?? err}`
+    );
+  }
+};
+
+// Master-Detail expansion — backup jobs only. Archival children are configured by
+// the user with their own filters and stay a nested tree, so createArchivalJob does
+// not go through here.
+//
+// For every object in the job: fetch its Master-Detail children, store the raw child
+// payload at schema/childs/{objectName}/childs.json, and append any child missing
+// from the list so it gets backed up in full (field: []). New children are written
+// back to the backup config, so the next run starts from them and picks up *their*
+// children — the tree deepens one level per run instead of recursing here, which
+// keeps a single deep or cyclic relationship chain from stalling job creation.
+// Best-effort per object: a failed lookup or upload leaves the rest intact.
+// No-op when the source carries no Salesforce tokens.
 const expandWithMasterChildren = async (
   source: ISource,
   backupConfigId: string,
+  destConfig: IDestinationConfig,
   objects?: IBackupObject[]
 ): Promise<IBackupObject[] | undefined> => {
   if (!objects?.length || !source.instanceUrl || !source.access_token) {
@@ -32,15 +88,34 @@ const expandWithMasterChildren = async (
   for (const obj of objects) {
     byName.set(obj.name.toLowerCase(), obj);
   }
+  const discovered: string[] = [];
 
   await Promise.all(
     objects.map(async (obj) => {
       try {
-        const childNames = await getMasterChildApiNames(source.instanceUrl, tokens, obj.name);
-        for (const name of childNames) {
+        const childs = await getMasterChilds(source.instanceUrl, tokens, obj.name);
+
+        await uploadToS3(
+          destConfig,
+          buildChildsS3Key({
+            crmId: source.crmId,
+            crmName: source.crmName,
+            backupConfigId,
+            objectName: obj.name,
+            type: 'backup',
+          }),
+          Buffer.from(JSON.stringify(childs, null, 2))
+        );
+
+        for (const child of childs) {
+          const name = child?.apiName;
+          if (!name) {
+            continue;
+          }
           const key = name.toLowerCase();
           if (!byName.has(key)) {
             byName.set(key, { id: name, salesforceApiCalls: 0, name, field: [] });
+            discovered.push(name);
           }
         }
       } catch (err: any) {
@@ -48,6 +123,8 @@ const expandWithMasterChildren = async (
       }
     })
   );
+
+  await persistChildrenToConfig(backupConfigId, discovered);
 
   return Array.from(byName.values());
 };
@@ -68,7 +145,12 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
-  const expandedObjects = await expandWithMasterChildren(source, backupConfigId, object);
+  const expandedObjects = await expandWithMasterChildren(
+    source,
+    backupConfigId,
+    destination.config,
+    object
+  );
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
   const encryptedDestConfig = encrypt(JSON.stringify(destination.config));

@@ -8,8 +8,18 @@ interface RunSalesforceRestorePayload {
   restoreId: string;
   restoreJobId: string;
   object: { id: string; name: string; status: string };
-  sourceS3Credentials: { accessKeyId: string; secretAccessKey: string; bucketName: string; region: string; csvFilePath: string };
-  destinationSalesforceCredentials: { access_token: string; refresh_token: string; instanceUrl: string };
+  sourceS3Credentials: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    bucketName: string;
+    region: string;
+    csvFilePath: string;
+  };
+  destinationSalesforceCredentials: {
+    access_token: string;
+    refresh_token: string;
+    instanceUrl: string;
+  };
   conflict: IRestoreConflict;
 }
 
@@ -115,7 +125,14 @@ const restoreObjectData = async (
 export const runSalesforceRestore = async (
   payload: RunSalesforceRestorePayload
 ): Promise<'SUCCESS' | 'FAILED'> => {
-  const { restoreId, restoreJobId, object, sourceS3Credentials, destinationSalesforceCredentials, conflict } = payload;
+  const {
+    restoreId,
+    restoreJobId,
+    object,
+    sourceS3Credentials,
+    destinationSalesforceCredentials,
+    conflict,
+  } = payload;
 
   logger.info(`[restore] execution requested`, {
     restoreId,

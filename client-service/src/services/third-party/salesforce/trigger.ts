@@ -2,6 +2,7 @@ import JSZip from 'jszip';
 import { salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
+import { appendObjectsToBackupConfig } from '../../backup-config';
 import { getUser } from '../../user';
 import { timer } from '../../../utils/helper';
 import { decrypt } from '../../../utils/encryption';
@@ -843,6 +844,10 @@ const realTimeTriggerManagement = async (
 
     if (operation === 'create') {
       const expandedNames = await expandWithMasterChildren(user, objectApiNames);
+      // Children get a trigger, so they get backed up — record them on the config
+      // too, otherwise every config-driven reader (Glue, restore listing, UI) stays
+      // blind to data that is already landing in S3 under the child's own name.
+      await appendObjectsToBackupConfig(config.backupConfigId, expandedNames);
       return createTriggers(instanceUrl, tokens, expandedNames);
     }
     if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
