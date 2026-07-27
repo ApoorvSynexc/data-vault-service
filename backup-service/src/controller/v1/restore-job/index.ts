@@ -11,7 +11,7 @@ const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<v
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  if (restoreJob.status !== 'pending') {
+  if (restoreJob.status !== 'PENDING') {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 

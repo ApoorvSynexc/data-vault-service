@@ -133,7 +133,7 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
   }
   try {
     result = await httpRequest({
-      url: `${BACKUP_SERVICE}/v1/restore-job`,
+      url: `${BACKUP_SERVICE}/v1/restore`,
       method: 'POST',
       body: JSON.stringify(payload),
     });
