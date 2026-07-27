@@ -78,12 +78,13 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
     updatedAt: now,
   };
 
+  const cleanItem = JSON.parse(JSON.stringify(item));
   await Promise.all([
-    docClient.send(new PutCommand({ TableName: RESTORE_JOB_TABLE, Item: item })),
+    docClient.send(new PutCommand({ TableName: RESTORE_JOB_TABLE, Item: cleanItem })),
     incrementTableCounter(RESTORE_JOB_TABLE, userId),
     incrementTableCounter(RESTORE_JOB_TABLE, restoreId),
   ]);
-  return item;
+  return cleanItem;
 };
 
 const getRestoreJobById = async (restoreJobId: string): Promise<IRestoreJob | null> => {
