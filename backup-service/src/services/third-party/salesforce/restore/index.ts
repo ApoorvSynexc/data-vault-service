@@ -2,7 +2,13 @@ import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
 import { SalesforceTokens } from '../api-request';
-import { createBulkJob, uploadDataToJob, closeBulkJob } from './bulk';
+import {
+  createBulkJob,
+  uploadDataToJob,
+  closeBulkJob,
+  pollBulkJobUntilDone,
+  getFailedResults,
+} from './bulk';
 
 interface RunSalesforceRestorePayload {
   restoreId: string;
@@ -55,7 +61,20 @@ const submitIngestChunk = async (
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({ instanceUrl, tokens, objectName, operation, externalIdFieldName });
   await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
-  const aa = await closeBulkJob(instanceUrl, tokens, job.id);
+  await closeBulkJob(instanceUrl, tokens, job.id);
+  const status = await pollBulkJobUntilDone(instanceUrl, tokens, job.id);
+  // console.log({
+  //   objectName,
+  //   state: status.state,
+  //   processed: status.numberRecordsProcessed,
+  //   failed: status.numberRecordsFailed,
+  //   errorMessage: status.errorMessage,
+  // });
+
+  // if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
+  //   const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
+  //   console.log(`\n${failedCsv}`);
+  // }
   return job.id;
 };
 
