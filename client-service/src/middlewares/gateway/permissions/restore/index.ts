@@ -28,6 +28,11 @@ const restorePermissions = [
         path : '/restore/get-picklist-field-values',
         method: 'GET',
         permissions: ['restore.read']
+    },
+    {
+        path : '/restore',
+        method: 'POST',
+        permissions: ['restore.write']
     }
 ];
 
