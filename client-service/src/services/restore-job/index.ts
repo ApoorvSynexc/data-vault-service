@@ -56,6 +56,7 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
     bucketName: sourceDecryptedDestination.bucketName,
     region: sourceDecryptedDestination?.region,
     folderPath: sourceDecryptedDestination?.folderPath,
+    csvFilePath: 'salesforce/351bbc42-7f00-4d56-af09-64cdfd48e4f0/backup/027c85e7-52ca-4080-8d61-cd897871d974/raw_data/d3b30f04-4959-4e1e-8343-b9e1e1bcdf5d',
     encryptedKeys: sourceEncryptedKeys
   };
 
@@ -138,8 +139,8 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    console.log("Job failed: ", {error});
-    
+    console.log("Job failed: ", { error });
+
     // await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
     throw error;
   }

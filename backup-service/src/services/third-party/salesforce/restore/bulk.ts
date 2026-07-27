@@ -1,4 +1,4 @@
-import { SalesforceTokens } from '../api-request';
+import { salesforceRequest, SalesforceTokens } from '../api-request';
 
 const SF_API_VERSION = 'v65.0';
 
@@ -17,26 +17,20 @@ interface ICreateJob {
 
 const createBulkJob = async (payload: ICreateJob): Promise<IBulkDeleteJob> => {
   const { instanceUrl, tokens, objectName, operation } = payload;
-  const response = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${tokens.accessToken}`,
-      'Content-Type': 'application/json',
+  const response = await salesforceRequest(
+    {
+      url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`,
+      method: 'POST',
+      body: JSON.stringify({
+        object: objectName,
+        contentType: 'CSV',
+        operation,
+      }),
     },
-    body: JSON.stringify({
-      object: objectName,
-      contentType: 'CSV',
-      operation,
-    }),
-  });
+    tokens
+  );
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to create bulk ingest job: ${errorText}`);
-  }
-
-  const job = (await response.json()) as IBulkDeleteJob;
-  return job;
+  return response;
 };
 
 const uploadDataToJob = async (
