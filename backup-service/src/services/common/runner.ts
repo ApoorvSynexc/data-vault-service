@@ -301,15 +301,8 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       throw new Error(`Restore job ${restoreJobId}: parent restore ${restoreId} not found`);
     }
 
-
     const handler = getRestoreCrmHandler(destination.crmName);
-    const result = await handler.runRestore(
-      restoreId,
-      restoreJobId,
-      source,
-      destination,
-      conflict
-    );
+    const result = await handler.runRestore(restoreId, restoreJobId, source, destination, conflict);
 
     await updateRestoreJobStatus({
       restoreJobId,

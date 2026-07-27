@@ -10,10 +10,12 @@ export interface IRestoreJobSource {
   region: string;
   folderPath: string;
   csvFilePath: string;
-  encryptedKeys: {
-    accessKeyId: string;
-    secretAccessKey: string;
-  } | EncryptedPayload;
+  encryptedKeys:
+    | {
+        accessKeyId: string;
+        secretAccessKey: string;
+      }
+    | EncryptedPayload;
 }
 
 export interface IRestoreJobDestination {
@@ -22,14 +24,16 @@ export interface IRestoreJobDestination {
   objects: Array<{
     id: string;
     name: string;
-    status: "PENDING" | "SUCCESS" | "FAILED";
+    status: 'PENDING' | 'SUCCESS' | 'FAILED';
   }>;
 
   instanceUrl: string;
-  encryptedTokens: {
-    access_token: string;
-    refresh_token: string;
-  } | EncryptedPayload;
+  encryptedTokens:
+    | {
+        access_token: string;
+        refresh_token: string;
+      }
+    | EncryptedPayload;
 }
 
 export interface IRestoreJob {

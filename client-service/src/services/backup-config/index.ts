@@ -11,6 +11,7 @@ import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS } from '../../constant';
 import { IBackupConfig, IObject, IScheduleConfig, ITriggerResult } from '../../models';
 import { toSlug, buildSlug } from '../../utils/helper';
+import { logger } from '../../middlewares';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
 
 // Keeps NORMAL and ARCHIVAL configs counted separately per user, since both types share BACKUP_CONFIG_TABLE
@@ -283,6 +284,51 @@ const updateBackupConfig = async (
   );
 
   return { ...existing, ...updates };
+};
+
+// Appends objects discovered at runtime — Master-Detail children of the selected
+// objects — so the config lists everything that is actually being backed up.
+// Append-only: existing entries carry filters, counters and schedule settings the
+// caller doesn't have, and must never be overwritten. Names already on the config
+// are skipped, so this is safe to call on every run.
+// Never throws: config bookkeeping must not fail the caller's real work.
+const appendObjectsToBackupConfig = async (
+  backupConfigId: string,
+  objectNames: string[]
+): Promise<void> => {
+  if (!objectNames.length) {
+    return;
+  }
+
+  try {
+    const config = await getBackupConfigById(backupConfigId);
+    if (!config) {
+      return;
+    }
+
+    const existing = new Set((config.objects ?? []).map((obj) => obj.name?.toLowerCase()));
+    const additions = objectNames.filter((name) => !existing.has(name.toLowerCase()));
+    if (!additions.length) {
+      return;
+    }
+
+    await updateBackupConfig(backupConfigId, {
+      objects: [
+        ...(config.objects ?? []),
+        ...additions.map((name) => ({
+          id: name,
+          name,
+          type: name.endsWith('__c') ? 'CUSTOM' : 'STANDARD',
+          field: [],
+        })),
+      ],
+      objectNames: [...new Set([...(config.objectNames ?? []), ...additions])],
+    });
+  } catch (error) {
+    logger.error(
+      `[config-objects] append failed | backupConfigId=${backupConfigId} error=${(error as Error)?.message ?? String(error)}`
+    );
+  }
 };
 
 const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
@@ -573,6 +619,7 @@ export {
   getScheduledIncrementalBackupConfigs,
   getBackupConfigsWithPagination,
   updateBackupConfig,
+  appendObjectsToBackupConfig,
   deleteBackupConfig,
   buildBackupConfigCounterKey,
 };
