@@ -74,6 +74,24 @@ export const buildRawSql = (tableName: string, p: IFetchSqlParams): string => {
   );
 };
 
+// ── Compressed archival (Hudi current state) ─────────────────────────────────
+// A compressed archival snapshot lives in the Hudi current-state table (one row
+// per Id). Archival is point-in-time, so there is no delta/checkpoint replay —
+// the Hudi row IS the record. No backup_job_id filter: the whole table is the
+// archival's current state.
+export const buildHudiRawSql = (
+  hudiTable: string,
+  p: Omit<IFetchSqlParams, 'jobIds'>
+): string => {
+  const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
+  return (
+    `SELECT ${cols}, backup_job_id, 'RAW' AS change_type ` +
+    `FROM "${hudiTable}"` +
+    `${filterClause(p.filterWhere, 'WHERE')} ` +
+    `ORDER BY ${quoteCol(LMD)} DESC LIMIT ${p.limit}`
+  );
+};
+
 // ── By-field (filteringFields) sources ────────────────────────────────────────
 // Both builders emit one flat row per record with `r_`-prefixed columns; the
 // service strips the prefix back into a { record } object. Everything is CAST
@@ -303,6 +321,15 @@ if (require.main === module) {
   assert.ok(raw.includes(`backup_job_id IN ('j1', 'j2')`));
   assert.ok(raw.includes(`ORDER BY "LastModifiedDate" DESC LIMIT 50`));
   assert.ok(raw.includes(`"LastModifiedDate"`), 'LMD projected even when unrequested');
+
+  // Hudi archival current state: whole table, no job filter, RAW change_type.
+  const hraw = buildHudiRawSql('cfg_x_account_hudi', { columnNames: ['Name'], filterWhere: null, limit: 50 });
+  assert.ok(hraw.includes(`FROM "cfg_x_account_hudi" ORDER BY "LastModifiedDate" DESC LIMIT 50`));
+  assert.ok(!hraw.includes('backup_job_id IN'), 'no job filter on the Hudi snapshot');
+  assert.ok(
+    buildHudiRawSql('h', { columnNames: ['Name'], filterWhere: `"Name" = 'Acme'`, limit: 50 })
+      .includes(`FROM "h" WHERE ("Name" = 'Acme')`)
+  );
 
   const del = buildCompressedDeletedSql('cfg_x_account_delta', p);
   assert.ok(del.includes(`json_extract_scalar(change_data, '$["Name"]') AS "Name"`));

@@ -17,8 +17,10 @@ const athena = new AthenaClient({
   },
 });
 
-// Adaptive polling: most queries finish in well under a second, so poll fast
-// first and back off toward POLL_MAX_MS for long-running scans.
+// Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
+// almost never finishes sooner, so an earlier check is a wasted call), then
+// poll on a 250ms→2s backoff ladder.
+const POLL_FIRST_MS = 2000;
 const POLL_INITIAL_MS = 250;
 const POLL_MAX_MS = 2000;
 
@@ -72,6 +74,9 @@ const startQuery = async (sql: string, database: string): Promise<string> => {
 const waitForQuery = async (queryExecutionId: string): Promise<void> => {
   const deadline = Date.now() + QUERY_TIMEOUT_MS;
   let interval = POLL_INITIAL_MS;
+
+  // Initial settle wait before the first status check.
+  await new Promise((resolve) => setTimeout(resolve, POLL_FIRST_MS));
 
   while (Date.now() < deadline) {
     const { QueryExecution } = await athena.send(

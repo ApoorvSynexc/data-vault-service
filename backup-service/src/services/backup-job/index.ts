@@ -5,6 +5,52 @@ import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE, OBJECT_STATUS } from '../../con
 import { IBackupJob, IBackupObject, ISource, IDestinationConfig } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
+import { getMasterChildApiNames, SalesforceTokens } from '../third-party/salesforce/api-request';
+
+// Defensive expansion: client-service already merges each object's MASTER children
+// into the list, but re-check here so a backup job created by any caller still backs
+// up every Master-Detail child. Deduped by name (client-added children are skipped);
+// auto-added children back up in full (field: []). Best-effort per object — a failed
+// lookup leaves the rest intact. No-op when the source carries no Salesforce tokens.
+const expandWithMasterChildren = async (
+  source: ISource,
+  backupConfigId: string,
+  objects?: IBackupObject[]
+): Promise<IBackupObject[] | undefined> => {
+  if (!objects?.length || !source.instanceUrl || !source.access_token) {
+    return objects;
+  }
+
+  const tokens: SalesforceTokens = {
+    accessToken: source.access_token,
+    refreshToken: source.refresh_token,
+    crmId: source.crmId,
+    backupConfigId,
+  };
+
+  const byName = new Map<string, IBackupObject>();
+  for (const obj of objects) {
+    byName.set(obj.name.toLowerCase(), obj);
+  }
+
+  await Promise.all(
+    objects.map(async (obj) => {
+      try {
+        const childNames = await getMasterChildApiNames(source.instanceUrl, tokens, obj.name);
+        for (const name of childNames) {
+          const key = name.toLowerCase();
+          if (!byName.has(key)) {
+            byName.set(key, { id: name, salesforceApiCalls: 0, name, field: [] });
+          }
+        }
+      } catch (err: any) {
+        console.log(`[backup-child] children fetch failed for ${obj.name}: ${err?.message ?? err}`);
+      }
+    })
+  );
+
+  return Array.from(byName.values());
+};
 
 interface CreateBackupJobParams {
   userId: string;
@@ -13,16 +59,20 @@ interface CreateBackupJobParams {
   destination: { type: string; config: IDestinationConfig };
   lastUpdatedAt?: string;
   spaceId?: string;
+  schemaSync?: boolean;
 }
 
 const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination, lastUpdatedAt, spaceId } = params;
+  const { userId, backupConfigId, source, destination, lastUpdatedAt, spaceId, schemaSync } =
+    params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
+  const expandedObjects = await expandWithMasterChildren(source, backupConfigId, object);
+
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
   const encryptedDestConfig = encrypt(JSON.stringify(destination.config));
-  const trackedObjects = object?.map((item) => ({
+  const trackedObjects = expandedObjects?.map((item) => ({
     ...item,
     status: OBJECT_STATUS.created,
     bulkJobId: '',
@@ -42,6 +92,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     status: JOB_STATUS.pending,
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     ...(spaceId && { spaceId }),
+    ...(schemaSync ? { schemaSync: true } : {}),
     createdAt: now,
     updatedAt: now,
   };
