@@ -58,6 +58,7 @@ const CRM_TABLE = String(process.env.CRM_TABLE || 'data-vault-crms');
 const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
 const DESTINATION_TABLE = String(process.env.DESTINATION_TABLE || 'data-vault-destinations');
 const RESTORE_TABLE = String(process.env.RESTORE_TABLE || 'data-vault-restores');
+const RESTORE_JOB_TABLE = String(process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs');
 
 // Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
@@ -277,6 +278,7 @@ export {
   BACKUP_CONFIG_TABLE,
   DESTINATION_TABLE,
   RESTORE_TABLE,
+  RESTORE_JOB_TABLE,
   ENCRYPTION_KEY,
 
   // Webhook

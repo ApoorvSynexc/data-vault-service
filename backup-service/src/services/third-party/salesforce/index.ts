@@ -1,6 +1,6 @@
 import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
-import { IBackupObject, IDestinationConfig, ISource } from '../../../models';
+import { IBackupObject, IDestinationConfig, IRestoreConflict, IRestoreJobDestination, IRestoreJobSource, IRestoreScope, ISource } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { updateBackupConfig } from '../../backup-config';
 import { getBackupJob } from '../../backup-job';
@@ -8,6 +8,8 @@ import { getBackupJob } from '../../backup-job';
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { archiveAndHardDelete } from './schedule/archival';
+import { runSalesforceRestore } from './restore';
+import { decrypt } from '../../../utils/encryption';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -272,6 +274,61 @@ const salesforceHandler: ICrmBackupHandler = {
     );
 
     return hasAnyFailure ? 'PARTIAL_FAILURE' : 'SUCCESS';
+  },
+  runRestore: async (
+    restoreId: string,
+    restoreJobId: string,
+    source: IRestoreJobSource,
+    destination: IRestoreJobDestination,
+    conflict: IRestoreConflict
+  ): Promise<'SUCCESS' | 'FAILED'> => {
+    try {
+      const objects = destination.objects;
+      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+        'ciphertext' in source.encryptedKeys
+          ? JSON.parse(decrypt(source.encryptedKeys))
+          : source.encryptedKeys;
+
+      const destinationSalesforceCredentials: { access_token: string; refresh_token: string; instanceUrl: string } =
+        'ciphertext' in destination.encryptedTokens
+          ? JSON.parse(decrypt(destination.encryptedTokens))
+          : destination.encryptedTokens
+
+      let hasAnyFailure = false;
+      for (let i = 0; i < objects.length; i += CONCURRENCY_LIMIT) {
+        const batch = objects.slice(i, i + CONCURRENCY_LIMIT);
+        const results = await Promise.allSettled(
+          batch.map((object) =>
+            runSalesforceRestore({
+              restoreId,
+              restoreJobId,
+              object,
+              sourceS3Credentials: {...sourceS3Credentials, bucketName: source.bucketName, region: source.region, folderPath: source.folderPath},
+              destinationSalesforceCredentials,
+              conflict,
+            }).catch((err: any) => {
+              // Log and continue so remaining objects in the batch/job are not skipped.
+              logger.error(
+                `[restore] object failed — continuing with remaining objects | restoreJobId:${restoreJobId} objectName:${object.name} error:${err?.message}`
+              );
+              throw err;
+            })
+          )
+        );
+        hasAnyFailure ||= results.some((result) => result.status === 'rejected');
+      }
+
+      const finalStatus = hasAnyFailure ? 'FAILED' : 'SUCCESS';
+      logger.info(`Restore job completed`, { restoreId, restoreJobId, result: finalStatus });
+      return finalStatus;
+    } catch (err: any) {
+      logger.error(`Restore job failed`, {
+        restoreId,
+        restoreJobId,
+        error: err?.message ?? err,
+      });
+      throw err;
+    }
   },
 };
 

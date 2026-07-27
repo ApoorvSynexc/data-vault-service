@@ -18,10 +18,12 @@ import {
   FilterError,
   validateColumns,
   fetchPicklistValues,
+  createRestoreJob,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
+import { v4 as uuidv4 } from 'uuid';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -417,14 +419,18 @@ const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<v
 };
 
 const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const body = req.body;
-  const created = await createRestore(body);
+  const restoreId = uuidv4();
+  const payload = { restoreId, userId: user!.userId, ...body };
+  const created = await createRestore(payload);
   if (!created) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
   makeResponse(req, res, 201, true, 'create');
+  await createRestoreJob(payload);
 }
 
 export const restoreRetrieveJobController = wrapController({

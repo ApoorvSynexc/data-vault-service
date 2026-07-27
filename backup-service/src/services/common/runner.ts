@@ -1,10 +1,12 @@
 import dayjs from 'dayjs';
-import { IBackupJob, IBackupObject, IDestinationConfig, ISource } from '../../models';
+import { IBackupJob, IBackupObject, IDestinationConfig, IRestoreJob, ISource } from '../../models';
 import { BACKUP_STATUS, JOB_STATUS, OBJECT_STATUS } from '../../constant';
 import { decrypt } from '../../utils/encryption';
-import { getCrmHandler } from '../third-party/registry';
+import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
 import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
 import { updateBackupConfig } from '../backup-config';
+import { getRestoreById } from '../restore';
+import { updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
 
@@ -229,5 +231,70 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     ]);
   } finally {
     activeJobs.delete(backupJobId);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Entry point for restore jobs — call this fire-and-forget from the controller
+// ---------------------------------------------------------------------------
+export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
+  const { restoreId, restoreJobId, source, destination, conflict } = job;
+  const startedAt = dayjs().toISOString();
+
+  activeJobs.add(restoreJobId);
+
+  // Same atomic RUNNING transition as backup/archival — see runBackupJob for the
+  // concurrent-resume rationale.
+  try {
+    await updateRestoreJobStatus({
+      restoreJobId,
+      status: JOB_STATUS.running,
+      startedAt,
+      conditionExpression: '#status <> :runningStatus',
+      conditionExpressionValues: { ':runningStatus': JOB_STATUS.running },
+    });
+  } catch (err: any) {
+    activeJobs.delete(restoreJobId);
+    if (err.name === 'ConditionalCheckFailedException') {
+      throw new HttpError(409, `Restore job ${restoreJobId} is already running`);
+    }
+    throw err;
+  }
+
+  try {
+    if (!source) {
+      throw new Error(`Restore job ${restoreJobId}: source credentials are missing`);
+    }
+
+    const restore = await getRestoreById(restoreId);
+    if (!restore) {
+      throw new Error(`Restore job ${restoreJobId}: parent restore ${restoreId} not found`);
+    }
+
+
+    const handler = getRestoreCrmHandler(destination.crmName);
+    const result = await handler.runRestore(
+      restoreId,
+      restoreJobId,
+      source,
+      destination,
+      conflict
+    );
+
+    await updateRestoreJobStatus({
+      restoreJobId,
+      status: result === 'FAILED' ? JOB_STATUS.failed : JOB_STATUS.success,
+      completedAt: dayjs().toISOString(),
+    });
+  } catch (err: any) {
+    logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
+    await updateRestoreJobStatus({
+      restoreJobId,
+      status: JOB_STATUS.failed,
+      completedAt: dayjs().toISOString(),
+      errorMessage: err?.message ?? 'Unknown error',
+    }).catch(() => {});
+  } finally {
+    activeJobs.delete(restoreJobId);
   }
 };
