@@ -433,7 +433,6 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   makeResponse(req, res, 201, true, 'create');
   try{
     const restoreJob = await createRestoreJob(payload);
-    restoreJob.source.csvFilePath = 'http://salesforce/351bbc42-7f00-4d56-af09-64cdfd48e4f0/backup/027c85e7-52ca-4080-8d61-cd897871d974/raw_data/d3b30f04-4959-4e1e-8343-b9e1e1bcdf5d'
     await tiggerRestoreJob(restoreJob);
   } catch (error) {
     console.error('Error creating restore job:', error);
