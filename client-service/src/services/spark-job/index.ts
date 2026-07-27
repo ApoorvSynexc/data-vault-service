@@ -1,7 +1,7 @@
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
-import { BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
+import { BACKUP_SERVICE, INTERNAL_SECRET, BACKUP_TYPE } from '../../constant';
 import { httpRequest } from '../../utils/http-request';
 import { IObject } from '../../models';
 
@@ -39,7 +39,8 @@ export interface IEnsureCompressionGlueResult {
  * when the config/crm/destination can't be resolved.
  */
 export const ensureCompressionGlueTables = async (
-  backupConfigId: string
+  backupConfigId: string,
+  isCheckpointsCreated = false
 ): Promise<IEnsureCompressionGlueResult | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config) return null;
@@ -71,6 +72,9 @@ export const ensureCompressionGlueTables = async (
       backupConfigId,
       objectNames,
       destConfig,
+      isCheckpointsCreated,
+      // ARCHIVAL configs get the Hudi table only — no Delta, no checkpoints.
+      isArchival: config.type === BACKUP_TYPE.archival,
     }),
   });
 

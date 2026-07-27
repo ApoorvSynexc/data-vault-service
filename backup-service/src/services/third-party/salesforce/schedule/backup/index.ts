@@ -2,15 +2,12 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
-import {
-  buildS3KeyPrefix,
-  buildSchemaS3Key,
-  toParquetDataType,
-  schemasAreEqual,
-} from '../../../../../utils/helper';
+import { buildS3KeyPrefix, buildSchemaS3Key, schemasAreEqual } from '../../../../../utils/helper';
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destination/s3';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
+import { uploadPicklistValues } from '../../picklist';
+import { uploadRecordTypeMetadata } from '../../record-type';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 import {
   createCsvGlueTable,
@@ -124,6 +121,23 @@ export const exportFirstTime = async (
       objectName,
       'schedule'
     );
+    await uploadPicklistValues({
+      schema,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
+    await uploadRecordTypeMetadata({
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
@@ -214,10 +228,6 @@ export const exportFirstTime = async (
     }
     await updateBackupConfig(backupConfigId, updateParams);
 
-    const schemaWithParquet = schema.map((field: { dataType: string }) => ({
-      ...field,
-      parquetDataType: toParquetDataType(field.dataType),
-    }));
     const schemaKey = buildSchemaS3Key({
       crmId,
       crmName,
@@ -225,11 +235,7 @@ export const exportFirstTime = async (
       objectName,
       type: 'backup',
     });
-    await uploadToS3(
-      destConfig,
-      schemaKey,
-      Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
-    );
+    await uploadToS3(destConfig, schemaKey, Buffer.from(JSON.stringify(schema, null, 2)));
 
     await createCsvGlueTable({
       crmId,
@@ -310,6 +316,23 @@ export const exportIncremental = async (
       objectName,
       'schedule'
     );
+    await uploadPicklistValues({
+      schema: latestSchema,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
+    await uploadRecordTypeMetadata({
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
 
     // ── Phase 1: query new + updated + deleted records in one queryAll job ────
     let bulkJobId = object.bulkJobId;
@@ -464,17 +487,12 @@ export const exportIncremental = async (
       versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
     const existingSchemaBuffer = await downloadFromS3(destConfig, currentSchemaKey);
 
-    const latestSchemaWithParquet = latestSchema.map((field: { dataType: string }) => ({
-      ...field,
-      parquetDataType: toParquetDataType(field.dataType),
-    }));
-
     const schemaChanged =
       !existingSchemaBuffer ||
-      !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchemaWithParquet);
+      !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchema);
 
     if (schemaChanged) {
-      const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2));
+      const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchema, null, 2));
       const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
       await uploadToS3(destConfig, versionedKey, newSchemaBuffer);
 

@@ -30,13 +30,13 @@ import { updateArchivalObject } from '../../../../backup-job';
 import {
   buildS3KeyPrefix,
   buildSchemaS3Key,
-  toParquetDataType,
   formatFieldValuesForSOQL,
   formatValueByDataType,
 } from '../../../../../utils/helper';
 import { listS3Objects, uploadToS3 } from '../../../../destination/s3';
 import { uploadSingleObject, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
+import { uploadPicklistValues } from '../../picklist';
 import { buildFailedRecordsIdCsv, bulkDeleteRecords } from './delete-bulk';
 import {
   // getBackupConfigById,
@@ -612,6 +612,15 @@ export const archiveAndHardDelete = async (
       objectName,
       'archival'
     );
+    await uploadPicklistValues({
+      schema,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'archival',
+    });
 
     let jobId: string;
     let totalRecordCount: number;
@@ -905,14 +914,10 @@ export const archiveAndHardDelete = async (
       `[archival:orchestrator] phase 3 complete | backupJobId:${backupJobId} objectName:${objectName}`
     );
 
-    const schemaWithParquet = schema.map((field: { dataType: string }) => ({
-      ...field,
-      parquetDataType: toParquetDataType(field.dataType),
-    }));
     await uploadToS3(
       destConfig,
       buildSchemaS3Key({ crmId, crmName, backupConfigId, objectName, type: 'archival' }),
-      Buffer.from(JSON.stringify(schemaWithParquet, null, 2))
+      Buffer.from(JSON.stringify(schema, null, 2))
     );
     logger.info(
       `[archival:orchestrator] schema uploaded | backupJobId:${backupJobId} objectName:${objectName}`

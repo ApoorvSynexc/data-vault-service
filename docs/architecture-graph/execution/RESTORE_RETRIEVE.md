@@ -1,63 +1,10 @@
 # Execution Flow: Restore and Retrieve
 
-Step-by-step trace for snapshot logs and object list queries.
+Step-by-step trace for the restore/retrieve object-list and record-fetch queries.
 
 Corrected 2026-07-14: every route below was documented under the `/v1/restore-retrieve/*` prefix — the actual mount (`routes/v1/index.ts`) is `/v1/restore/*` (the router file is still named `restore-retrieve.route.ts`, only the URL prefix differs). There is also no "double authenticate" — this router sits behind the same single global `authenticate → aclGateway` chain as every other private route group. The TypeScript snippets in this file describe implementation logic that was **not** re-verified against the current controller source during this pass (only route paths/mounting were checked) — treat the code blocks below as unconfirmed until cross-checked against `controller/v1/restore-retrieve/index.ts`.
 
-## GET /v1/restore/snapshot-logs
-
-```typescript
-// query: { type: 'BACKUP' | 'ARCHIVAL', backupConfigId?, cursor?, limit? }
-
-const { type, backupConfigId } = req.query;
-const user = req.user;
-```
-
-### For type = BACKUP
-
-```typescript
-// Get all backup configs for this user (or filter by backupConfigId)
-const configs = backupConfigId
-  ? [await getBackupConfigById(backupConfigId)]
-  : await getBackupConfigsByUserId(user.userId);
-
-// Fan-out: for each config (concurrency limit = 5), query jobs
-// Multi-cursor: cursor is a map of { [backupConfigId]: configCursor }
-
-const results = await Promise.all(
-  configs.slice(0, 5).map(config => 
-    getBackupJobsByConfig(config.backupConfigId, {
-      limit: perConfigLimit,
-      cursor: decodedCursor[config.backupConfigId],
-    })
-  )
-);
-
-// sanitize: remove source/destination encrypted fields before returning
-const sanitized = results.map(job => ({
-  ...job,
-  source: undefined,
-  destination: undefined,
-}));
-```
-
-### For type = ARCHIVAL
-
-```typescript
-// ARCHIVAL returns config-level entries (not job-level)
-// Fewer jobs but each has a full object tree
-
-const configs = await getArchivalConfigsByUserId(user.userId);
-// Returns configs with their archival job history
-```
-
-### Cursor Encoding (multi-config pagination)
-
-The cursor for snapshot-logs is a JSON map:
-```typescript
-{ [backupConfigId1]: encodedDynamoCursor1, [backupConfigId2]: encodedDynamoCursor2, ... }
-```
-This is then base64url-encoded as the outer cursor. Allows independent pagination per config in a single request.
+> **Removed 2026-07-21:** `GET /v1/restore/snapshot-logs`, `GET /v1/restore/fetch-logs`, and `GET /v1/restore/get-backup-configs-name` were deleted along with their controller handlers and backing services (`getSnapshotActivityLogs`, `getJobActivityLogs`, `getBackupConfigNamesByDestination`).
 
 ## GET /v1/restore/get-objectlist-by-configid
 
@@ -83,15 +30,6 @@ const jobs = await Promise.all(
 );
 
 // Return { [backupJobId]: object[] } map
-```
-
-## GET /v1/restore/fetch-logs
-
-```typescript
-// query: { backupConfigId?, limit?, cursor?, filter? }
-
-// Returns paginated list of backup jobs for the user
-// All jobs sanitized (no source/destination)
 ```
 
 ## GET /v1/restore/list

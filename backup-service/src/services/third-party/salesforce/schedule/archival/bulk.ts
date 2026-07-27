@@ -24,13 +24,9 @@ import {
   getObjectMetadata,
   createBulkQueryJob,
 } from '../../api-request';
+import { uploadPicklistValues } from '../../picklist';
 import { uploadToS3, downloadFromS3, listS3Objects } from '../../../../destination';
-import {
-  buildS3KeyPrefix,
-  buildSchemaS3Key,
-  toParquetDataType,
-  schemasAreEqual,
-} from '../../../../../utils/helper';
+import { buildS3KeyPrefix, buildSchemaS3Key, schemasAreEqual } from '../../../../../utils/helper';
 import {
   createCsvGlueTable,
   registerBackupJobPartition,
@@ -333,6 +329,15 @@ async function uploadSingleObject(
     object.name,
     'archival'
   );
+  await uploadPicklistValues({
+    schema,
+    destConfig: ctx.destConfig,
+    crmId: ctx.crmId,
+    crmName: ctx.crmName,
+    backupConfigId: ctx.backupConfigId,
+    objectName: object.name,
+    type: 'archival',
+  });
   // Exclude soft-deleted records from every level of the archival query — see
   // the matching comment in archival/index.ts for the rationale.
   const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE IsDeleted = false AND (${effectiveWhereBody}) ORDER BY Id ASC`;
@@ -389,6 +394,46 @@ async function uploadSingleObject(
       logger.info(
         `[archival:child] no records — skipping upload | backupJobId:${backupJobId} objectName:${object.name}`
       );
+
+      // Even with zero records we still persist the object schema (and create its
+      // Glue table) so restore-retrieve's fetch-object-fields works for archived-
+      // but-empty objects. Mirrors the first-time branch of the schema block below;
+      // guarded on existing keys so retries don't rewrite fields.json.
+      try {
+        const schemaKey = buildSchemaS3Key({
+          crmId: ctx.crmId,
+          crmName: ctx.crmName,
+          backupConfigId: ctx.backupConfigId,
+          objectName: object.name,
+          type: 'archival',
+        });
+        const schemaFolder = schemaKey.replace('/fields.json', '/');
+        const existingSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
+        if (!existingSchemaKeys.length) {
+          await uploadToS3(ctx.destConfig, schemaKey, Buffer.from(JSON.stringify(schema, null, 2)));
+          await createCsvGlueTable({
+            crmId: ctx.crmId,
+            crmName: ctx.crmName,
+            backupConfigId: ctx.backupConfigId,
+            objectName: object.name,
+            type: 'archival',
+            destConfig: ctx.destConfig,
+            columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
+          }).catch((err) =>
+            logger.error(
+              `[glue] failed to create table | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
+            )
+          );
+          logger.info(
+            `[archival:child] schema persisted for empty object | backupJobId:${backupJobId} objectName:${object.name} key:${schemaKey}`
+          );
+        }
+      } catch (err: any) {
+        logger.error(
+          `[archival:child] failed to persist schema for empty object | backupJobId:${backupJobId} objectName:${object.name} error:${err?.message ?? err}`
+        );
+      }
+
       await updateArchivalObject({
         backupJobId,
         object: {
@@ -516,17 +561,9 @@ async function uploadSingleObject(
       const schemaFolder = schemaKey.replace('/fields.json', '/');
       const allSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
       const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
-      const latestSchemaWithParquet = schema.map((field: { dataType: string }) => ({
-        ...field,
-        parquetDataType: toParquetDataType(field.dataType),
-      }));
 
       if (!allSchemaKeys.length) {
-        await uploadToS3(
-          ctx.destConfig,
-          schemaKey,
-          Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2))
-        );
+        await uploadToS3(ctx.destConfig, schemaKey, Buffer.from(JSON.stringify(schema, null, 2)));
         logger.info(
           `[archival:child] schema uploaded (first time) | backupJobId:${backupJobId} objectName:${object.name} key:${schemaKey}`
         );
@@ -550,8 +587,7 @@ async function uploadSingleObject(
         let changed = false;
         try {
           const existing = await downloadFromS3(ctx.destConfig, currentKey);
-          changed =
-            !existing || !schemasAreEqual(JSON.parse(existing.toString()), latestSchemaWithParquet);
+          changed = !existing || !schemasAreEqual(JSON.parse(existing.toString()), schema);
         } catch {
           changed = true;
         }
@@ -560,7 +596,7 @@ async function uploadSingleObject(
           await uploadToS3(
             ctx.destConfig,
             versionedKey,
-            Buffer.from(JSON.stringify(latestSchemaWithParquet, null, 2))
+            Buffer.from(JSON.stringify(schema, null, 2))
           );
           logger.info(
             `[archival:child] schema change detected — versioned upload | backupJobId:${backupJobId} objectName:${object.name} key:${versionedKey}`

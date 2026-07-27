@@ -195,4 +195,4 @@ Every module, what it owns, and where it lives.
 |---|---|
 | src/utils/encryption.ts | encrypt, decrypt (AES-256-GCM), EncryptedPayload |
 | src/utils/http-request.ts | httpRequest |
-| src/utils/helper.ts | buildSchemaS3Key, toParquetDataType, schemasAreEqual |
+| src/utils/helper.ts | buildSchemaS3Key, schemasAreEqual |

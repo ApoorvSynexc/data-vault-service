@@ -123,12 +123,9 @@ The previous version of this doc used the mount prefix `/restore-retrieve` — t
 
 | Method | Path | Handler | Notes |
 |---|---|---|---|
-| GET | /restore/fetch-logs | restoreRetrieveJobController.fetchLogsHandler | Activity log for a specific job (by backupJobId) |
-| GET | /restore/snapshot-logs | restoreRetrieveJobController.getSnapshotActivityLogsHandler | Activity log entries for a config scoped to a destination |
 | GET | /restore/list | restoreRetrieveJobController.listRestoreRetrieveJobsHandler | Paginated list of restore/retrieve jobs |
 | GET | /restore/get-objectlist-by-configid | restoreRetrieveJobController.getObjectListByConfigIdHandler | |
 | GET | /restore/get-objectlist-by-backup-jobids | restoreRetrieveJobController.getObjectListByBackupJobIdsHandler | Comma-separated backupJobIds |
-| GET | /restore/get-backup-configs-name | restoreRetrieveJobController.getBackupConfigsNameHandler | |
 | POST | /restore/retrieve/fetch-records | restoreRetrieveJobController.fetchRecordsHandler | Query Athena records for given backupJobIds, objectApiName, columnNames |
 | POST | /restore/retrieve/repair-glue | restoreRetrieveJobController.repairGlueTablesHandler | Not documented in the previous version of this file |
 | ~~POST~~ | ~~/restore/fetch-object-fields~~ | restoreRetrieveJobController.fetchObjectFieldsHandler | **Registered but unreachable (added 2026-07-17).** `restore-retrieve.route.ts:28` is `router.post('fetch-object-fields', ...)` — **no leading slash**. Express 5 accepts the registration without throwing, but the route then matches nothing: verified empirically against this repo's own `express@^5.2.1` — `POST /restore/fetch-object-fields` returns **404** with the path as written and **200** once the slash is added. Every other route in this file starts with `/`. The handler and its `fetchObjectFields()` service (~103 lines, S3 schema lookup) are live code with no reachable caller until the slash is added. |

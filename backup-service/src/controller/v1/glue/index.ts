@@ -4,7 +4,9 @@ import {
   registerBackupJobPartition,
   ensureHudiCurrentStateTable,
   ensureDeltaTable,
+  ensureCheckpointTable,
 } from '../../../services/third-party/glue';
+import { logger } from '../../../middlewares/logger';
 import { wrapController } from '../../../utils/helper';
 
 /**
@@ -88,6 +90,13 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
     }
   });
 
+  logger.info(
+    `[glue] repair done | cfg:${backupConfigId} repaired:${repaired.length} failed:${failed.length}`
+  );
+  if (failed.length) {
+    logger.error(`[glue] repair failures | cfg:${backupConfigId} ${JSON.stringify(failed)}`);
+  }
+
   makeResponse(req, res, 200, true, 'repair', { repaired, failed });
 };
 
@@ -101,10 +110,12 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
  *     backupConfigId: string
  *     objectNames:    string[]
  *     destConfig:     IDestinationConfig
+ *     isCheckpointsCreated?: boolean — when true, also ensures the checkpoints table
+ *     isArchival?: boolean — when true, only the Hudi table is created (no Delta, no checkpoints)
  *   }
  *
  * Called after Spark reports a successful compression. For each object, ensures
- * the current-state Hudi table and the Delta table exist in the Glue Catalog —
+ * the current-state Hudi table and (for non-archival configs) the Delta table exist in the Glue Catalog —
  * created once from the committed `.hoodie` schema, never updated. Fully
  * idempotent: existing tables are left untouched, so retries and concurrent
  * completion events are safe.
@@ -114,12 +125,22 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
  * the rest.
  */
 const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, crmName, backupConfigId, objectNames, destConfig } = req.body as {
+  const {
+    crmId,
+    crmName,
+    backupConfigId,
+    objectNames,
+    destConfig,
+    isCheckpointsCreated,
+    isArchival,
+  } = req.body as {
     crmId: string;
     crmName: string;
     backupConfigId: string;
     objectNames: string[];
     destConfig: any;
+    isCheckpointsCreated?: boolean;
+    isArchival?: boolean;
   };
 
   if (
@@ -136,19 +157,25 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
 
   const results = await Promise.allSettled(
     objectNames.map(async (objectName) => {
-      // Both are independent; a missing/not-yet-written delta must not block hudi.
-      const [hudi, delta] = await Promise.allSettled([
-        ensureHudiCurrentStateTable({ crmId, crmName, backupConfigId, objectName, destConfig }),
-        ensureDeltaTable({ crmId, crmName, backupConfigId, objectName, destConfig }),
-      ]);
+      const tableParams = { crmId, crmName, backupConfigId, objectName, destConfig };
+      // All independent; a missing/not-yet-written dataset must not block the others.
+      const tasks: [string, Promise<boolean>][] = [
+        ['hudi', ensureHudiCurrentStateTable(tableParams)],
+      ];
+      // ARCHIVAL keeps Hudi only — Delta and checkpoints are skipped entirely.
+      if (!isArchival) {
+        tasks.push(['delta', ensureDeltaTable(tableParams)]);
+        if (isCheckpointsCreated) {
+          tasks.push(['checkpoints', ensureCheckpointTable(tableParams)]);
+        }
+      }
 
-      const errors: string[] = [];
-      if (hudi.status === 'rejected') {
-        errors.push(`hudi: ${hudi.reason?.message ?? String(hudi.reason)}`);
-      }
-      if (delta.status === 'rejected') {
-        errors.push(`delta: ${delta.reason?.message ?? String(delta.reason)}`);
-      }
+      const settled = await Promise.allSettled(tasks.map(([, task]) => task));
+      const errors = settled.flatMap((result, i) =>
+        result.status === 'rejected'
+          ? [`${tasks[i][0]}: ${result.reason?.message ?? String(result.reason)}`]
+          : []
+      );
       if (errors.length) {
         throw new Error(errors.join(' | '));
       }
@@ -169,6 +196,15 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
       });
     }
   });
+
+  logger.info(
+    `[glue] ensure-compression-tables done | cfg:${backupConfigId} ensured:${ensured.length} failed:${failed.length}`
+  );
+  if (failed.length) {
+    logger.error(
+      `[glue] ensure-compression-tables failures | cfg:${backupConfigId} ${JSON.stringify(failed)}`
+    );
+  }
 
   makeResponse(req, res, 200, true, 'create', { ensured, failed });
 };

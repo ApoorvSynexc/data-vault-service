@@ -1,4 +1,5 @@
-import { defaultRoles } from '../../../assets';
+import { v4 as uuidv4 } from 'uuid';
+import { defaultPermissions } from '../../../assets';
 import {
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
@@ -21,7 +22,9 @@ import {
   SalesforceEnvironment,
   getCrmByOrgId,
   getUserByCrmProfileUserId,
+  createRole,
 } from '../../../services';
+import { IRolePermissions, IUser } from '../../../models';
 import { encrypt } from '../../../utils/encryption';
 import {
   generateTokens,
@@ -39,7 +42,7 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { authProvider, environment, customUrl } = req.query as { authProvider: string, environment: SalesforceEnvironment, customUrl: string };
+  const { authProvider, environment, customUrl, userId } = req.query as { authProvider: string, environment: SalesforceEnvironment, customUrl: string, userId : string };
 
   if (!authProvider) {
     makeResponse(req, res, 400, false, 'auth_provider_required');
@@ -53,7 +56,7 @@ const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> 
   switch (authProviderStr) {
     case 'salesforce': {
       const { url, codeVerifier, state } = getSalesforceLoginUrl(undefined, SALESFORCE_LOGIN_REDIRECT_URI, environment, customUrl);
-      await createOAuthState(state, codeVerifier, '', authProviderStr, undefined, environment, customUrl);
+      await createOAuthState(state, codeVerifier, userId, authProviderStr, environment, customUrl);
       authorizationUrl = url;
       break;
     }
@@ -136,8 +139,50 @@ const socialLoginCallbackHandler = async (
     return;
   }
 
+  // State created by the admin authorize flow is pinned to a specific Salesforce
+  // user id; reject the callback if a different user's credentials completed the
+  // login. Plain social-login states carry userId '' and skip this check.
+  if (oauthState.userId && oauthState.userId !== sfProfile.user_id) {
+    console.log('[social-login-callback] 401: state pinned to different user:', { expected: oauthState.userId, actual: sfProfile.user_id });
+    makeResponse(req, res, 401, false, 'unauthorized');
+    return;
+  }
+
   // Check if user exists by email (only match active users)
   let user = await getUserByCrmProfileUserId(sfProfile.user_id);
+  if (!user && oauthState.isAdminUser && oauthState.adminUserSfProfile) {
+    // First-time admin: authorize-org deferred role + user creation to here,
+    // after Salesforce has confirmed the login.
+    const { username, email, instanceUrl, organizationId } = oauthState.adminUserSfProfile;
+
+    const permissions: IRolePermissions = [];
+    defaultPermissions.forEach((module) => {
+      module.permissions.forEach((permission) => {
+        permissions.push(`${module.value}.${permission.value}`);
+      });
+    });
+    const roleName = 'Custom';
+    const roleId = uuidv4();
+    await createRole({ roleId, name: roleName, permissions });
+
+    const userId = uuidv4();
+    const crmExist = await getCrmByOrgId(organizationId);
+    const crmId = crmExist?.crmId ?? uuidv4();
+    console.log('[social-login-callback] Creating admin user for CRM profile:', { userId, organizationId, email });
+    const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId };
+    await createUser({ crmProfile, role: { name: roleName, roleId }, userId, crmId });
+    await upsertCrm({
+      userId,
+      crmId,
+      environment: oauthState.environment === 'custom' ? undefined : oauthState.environment,
+      organizationId,
+      crmName: 'salesforce',
+      status : STATUS.active
+    });
+    // createUser returns void and the GSI read is eventually consistent —
+    // use the record we just wrote for the rest of the login flow.
+    user = { userId, crmId, crmProfile, status: STATUS.active } as IUser;
+  }
   if (!user) {
     makeResponse(req, res, 401, false, 'unauthorized');
     return;

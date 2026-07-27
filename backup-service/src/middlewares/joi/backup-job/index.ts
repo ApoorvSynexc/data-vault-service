@@ -12,6 +12,7 @@ const sourceSchema = Joi.object({
   object: Joi.array()
     .items(
       Joi.object({
+        id: Joi.string().optional(),
         name: Joi.string().required(),
         condition: Joi.object({
           type: Joi.string().valid('AND', 'OR', 'CUSTOM').required(),

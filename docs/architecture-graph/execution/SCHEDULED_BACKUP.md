@@ -178,7 +178,7 @@ const { sizeInBytes } = await uploadBulkResultsByPage({
 ### Step 15: Upload schema JSON
 
 ```typescript
-const schemaKey = `${crmName}/${crmId}/backup/${backupConfigId}/schema/${objectName}/fields.json`;
+const schemaKey = `${crmName}/${crmId}/backup/${backupConfigId}/schema/${objectName}/fields/fields.json`;
 await uploadToS3(destConfig, schemaKey, Buffer.from(JSON.stringify(schema)));
 ```
 

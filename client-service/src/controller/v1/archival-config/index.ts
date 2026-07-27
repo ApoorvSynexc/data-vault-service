@@ -5,6 +5,8 @@ import {
     createBackupConfig,
     deleteBackupConfig,
     getApexFields,
+    getApexPicklistValues,
+    getUserForCrm,
     getApexObjectChilds,
     getDestinationById,
     getBackupConfigsWithPagination,
@@ -136,13 +138,13 @@ const buildWhereClauseFromParentChain = (parent: ParentNode, childReferenceName?
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
-    const { crmId, objectName, mode } = req.query;
+    const { crmId, objectName, mode, relationshipDepth } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
 
     const [apexResult] = await Promise.all([
-        getApexObjectChilds({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined }),
+        getApexObjectChilds({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined, relationshipDepth: relationshipDepth ? Number(relationshipDepth) : undefined }),
     ]);
 
     makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
@@ -158,6 +160,24 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
         return makeResponse(req, res, 400, false, 'object_name_required');
     }
     const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
+    makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
+};
+
+// Same apex callout also exposed on /restore (see restore-retrieve controller) — shared logic lives in getApexPicklistValues.
+const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const { crmId, objectApiName, fieldApiName } = req.query;
+    if (!crmId) {
+        return makeResponse(req, res, 400, false, 'crm_id_required');
+    }
+    if (!objectApiName || !fieldApiName) {
+        return makeResponse(req, res, 400, false, 'params_required');
+    }
+    // A person can have one user record per connected CRM — resolve the record for this crmId.
+    const crmUser = await getUserForCrm(req.user!, String(crmId));
+    if (!crmUser) {
+        return makeResponse(req, res, 400, false, 'not_exist');
+    }
+    const result = await getApexPicklistValues({ user: crmUser, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
     makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
@@ -602,6 +622,7 @@ const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<vo
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
     getFieldsHanlder,
+    getPicklistFieldValuesHandler,
     getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,

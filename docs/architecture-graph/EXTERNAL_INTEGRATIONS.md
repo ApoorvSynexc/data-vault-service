@@ -84,8 +84,8 @@ Every third-party system the platform integrates with.
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/inserts/{locator}.csv
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/updates/{locator}.csv
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/deletes/{locator}.csv
-{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields.json
-{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields_{timestamp}.json  (versioned)
+{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields_{timestamp}.json  (versioned)
 {crmName}/{crmId}/archive/{backupConfigId}/{objectName}/inserts/{locator}.csv
 ```
 

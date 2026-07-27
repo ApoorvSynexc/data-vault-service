@@ -49,33 +49,6 @@ const asyncHandler =
 const wrapController = <T extends Record<string, IHandler>>(controller: T): T =>
   Object.fromEntries(Object.entries(controller).map(([key, fn]) => [key, asyncHandler(fn)])) as T;
 
-const SALESFORCE_TO_PARQUET_TYPE: Record<string, string> = {
-  STRING: 'BYTE_ARRAY',
-  ID: 'BYTE_ARRAY',
-  REFERENCE: 'BYTE_ARRAY',
-  PICKLIST: 'BYTE_ARRAY',
-  MULTIPICKLIST: 'BYTE_ARRAY',
-  TEXTAREA: 'BYTE_ARRAY',
-  PHONE: 'BYTE_ARRAY',
-  URL: 'BYTE_ARRAY',
-  EMAIL: 'BYTE_ARRAY',
-  ENCRYPTEDSTRING: 'BYTE_ARRAY',
-  COMBOBOX: 'BYTE_ARRAY',
-  BASE64: 'BYTE_ARRAY',
-  DATE: 'BYTE_ARRAY',
-  DATETIME: 'BYTE_ARRAY',
-  TIME: 'BYTE_ARRAY',
-  BOOLEAN: 'BOOLEAN',
-  INTEGER: 'INT32',
-  LONG: 'INT64',
-  DOUBLE: 'DOUBLE',
-  PERCENT: 'DOUBLE',
-  CURRENCY: 'DOUBLE',
-};
-
-const toParquetDataType = (salesforceDataType: string): string =>
-  SALESFORCE_TO_PARQUET_TYPE[salesforceDataType.toUpperCase()] ?? 'BYTE_ARRAY';
-
 type S3KeyOperation = 'inserts' | 'updates' | 'deletes';
 type S3KeyType = 'backup' | 'archival';
 
@@ -120,7 +93,20 @@ const buildSchemaS3Key = ({
   objectName,
   type,
 }: ISchemaS3KeyParams): string =>
-  `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
+  `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields/fields.json`;
+
+// Picklist values live beside the field schema:
+// .../schema/{objectName}/picklist/{fieldApiName}/values.json
+const buildPicklistS3Key = (params: ISchemaS3KeyParams & { fieldApiName: string }): string =>
+  buildSchemaS3Key(params).replace(
+    '/fields/fields.json',
+    `/picklist/${params.fieldApiName}/values.json`
+  );
+
+// Record-type metadata lives beside the field schema, single unversioned file:
+// .../schema/{objectName}/record-types.json — latest values win, same as picklists.
+const buildRecordTypeS3Key = (params: ISchemaS3KeyParams): string =>
+  buildSchemaS3Key(params).replace('/fields/fields.json', '/record-types.json');
 
 interface IErrorLogsS3PrefixParams {
   crmId: string;
@@ -319,8 +305,9 @@ export {
   wrapController,
   buildS3KeyPrefix,
   buildSchemaS3Key,
+  buildPicklistS3Key,
+  buildRecordTypeS3Key,
   buildErrorLogsS3Prefix,
-  toParquetDataType,
   schemasAreEqual,
   splitCSVRows,
   parseCSVLine,
