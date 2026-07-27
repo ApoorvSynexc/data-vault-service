@@ -41,7 +41,7 @@ const uploadDataToJob = async (
   jobId: string,
   csvData: string
 ): Promise<void> => {
-  await salesforceRequest(
+  const result = await salesforceRequest(
     {
       url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/batches`,
       method: 'PUT',
@@ -52,6 +52,7 @@ const uploadDataToJob = async (
     },
     tokens
   );
+  return result;
 };
 
 // Bulk API 2.0 ingest jobs don't start processing on their own — after the CSV
@@ -63,7 +64,7 @@ const closeBulkJob = async (
   tokens: SalesforceTokens,
   jobId: string
 ): Promise<void> => {
-  await salesforceRequest(
+  const result = await salesforceRequest(
     {
       url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
       method: 'PATCH',
@@ -71,6 +72,7 @@ const closeBulkJob = async (
     },
     tokens
   );
+  return result;
 };
 
 export { createBulkJob, uploadDataToJob, closeBulkJob };

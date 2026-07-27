@@ -54,11 +54,8 @@ const submitIngestChunk = async (
 ): Promise<string> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({ instanceUrl, tokens, objectName, operation, externalIdFieldName });
-  console.log("111111111");
   await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
-  console.log("222222222");
-  await closeBulkJob(instanceUrl, tokens, job.id);
-  console.log("333333333");
+  const aa = await closeBulkJob(instanceUrl, tokens, job.id);
   return job.id;
 };
 
