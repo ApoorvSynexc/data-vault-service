@@ -3,9 +3,9 @@ import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 
 const sourceSchema = Joi.object({
-    backupConfigId: Joi.string().required(),
-    crmId: Joi.string().required(),
-    crmName: Joi.string().required(),
+  backupConfigId: Joi.string().required(),
+  crmId: Joi.string().required(),
+  crmName: Joi.string().required(),
 
     bucketName: Joi.string().required(),
     region: Joi.string().required(),
@@ -16,8 +16,8 @@ const sourceSchema = Joi.object({
 })
 
 const destinationSchema = Joi.object({
-    crmId: Joi.string().required(),
-    crmName: Joi.string().required(),
+  crmId: Joi.string().required(),
+  crmName: Joi.string().required(),
 
     encryptedTokens: Joi.object().required(),
     instanceUrl: Joi.string().uri().required(),
@@ -45,10 +45,10 @@ export const createRestoreJobValidation = (req: Request, res: Response, next: Ne
         lastUpdatedAt: Joi.string().isoDate().optional()
     });
 
-    const { error } = schema.validate(req.body, { abortEarly: false });
-    if (error) {
-        makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
-        return;
-    }
-    next();
+  const { error } = schema.validate(req.body, { abortEarly: false });
+  if (error) {
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    return;
+  }
+  next();
 };

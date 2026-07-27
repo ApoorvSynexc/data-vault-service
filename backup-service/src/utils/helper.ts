@@ -95,6 +95,18 @@ const buildSchemaS3Key = ({
 }: ISchemaS3KeyParams): string =>
   `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields/fields.json`;
 
+// Master-Detail children of an object, stored under a dedicated childs folder:
+// .../schema/childs/{objectName}/childs.json — one unversioned file per object,
+// overwritten each run so the latest relationship tree wins.
+const buildChildsS3Key = ({
+  crmId,
+  crmName,
+  backupConfigId,
+  objectName,
+  type,
+}: ISchemaS3KeyParams): string =>
+  `${crmName}/${crmId}/${type}/${backupConfigId}/schema/childs/${objectName}/childs.json`;
+
 // Picklist values live beside the field schema:
 // .../schema/{objectName}/picklist/{fieldApiName}/values.json
 const buildPicklistS3Key = (params: ISchemaS3KeyParams & { fieldApiName: string }): string =>
@@ -305,6 +317,7 @@ export {
   wrapController,
   buildS3KeyPrefix,
   buildSchemaS3Key,
+  buildChildsS3Key,
   buildPicklistS3Key,
   buildRecordTypeS3Key,
   buildErrorLogsS3Prefix,
