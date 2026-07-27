@@ -19,6 +19,7 @@ import {
   validateColumns,
   fetchPicklistValues,
   createRestoreJob,
+  tiggerRestoreJob,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -420,7 +421,7 @@ const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<v
 
 const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
-  const body = req.body;
+  const { ...body } = req.body;
   const restoreId = uuidv4();
   const payload = { restoreId, userId: user!.userId, ...body };
   const created = await createRestore(payload);
@@ -430,7 +431,11 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 
   makeResponse(req, res, 201, true, 'create');
-  await createRestoreJob(payload);
+  try{
+    await createRestoreJob(payload);
+  } catch (error) {
+    console.error('Error creating restore job:', error);
+  }
 }
 
 export const restoreRetrieveJobController = wrapController({

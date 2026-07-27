@@ -36,13 +36,14 @@ const conflictSchema = Joi.object({
 });
 
 export const createRestoreJobValidation = (req: Request, res: Response, next: NextFunction) => {
-  const schema = Joi.object({
-    userId: Joi.string().required(),
-    source: sourceSchema.required(),
-    destination: destinationSchema.required(),
-    conflict: conflictSchema.required(),
-    lastUpdatedAt: Joi.string().isoDate().optional(),
-  });
+    const schema = Joi.object({
+        restoreJobId: Joi.string().required(),
+        userId: Joi.string().required(),
+        source: sourceSchema.required(),
+        destination: destinationSchema.required(),
+        conflict: conflictSchema.required(),
+        lastUpdatedAt: Joi.string().isoDate().optional()
+    });
 
   const { error } = schema.validate(req.body, { abortEarly: false });
   if (error) {
