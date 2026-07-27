@@ -70,7 +70,8 @@ const restoreObjectData = async (
   tokens: SalesforceTokens,
   operation: 'insert' | 'update' | 'upsert'
 ): Promise<string[]> => {
-  const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}`);
+  const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}/inserts`);
+  console.log(keys);
   if (!keys.length) {
     throw new Error(`No backed-up data found for object ${objectName} under ${csvFilePath}`);
   }
@@ -188,14 +189,6 @@ export const runSalesforceRestore = async (
     operation
   );
 
-  logger.info(`[restore] bulk ingest jobs submitted`, {
-    restoreId,
-    restoreJobId,
-    objectName: object.name,
-    jobCount: jobIds.length,
-    jobIds,
-    operation,
-  });
-
+  logger.info(`[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`);
   return 'SUCCESS';
 };

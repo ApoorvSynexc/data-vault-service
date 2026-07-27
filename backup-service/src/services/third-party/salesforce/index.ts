@@ -315,8 +315,8 @@ const salesforceHandler: ICrmBackupHandler = {
               restoreId,
               restoreJobId,
               object,
-              sourceS3Credentials: {...sourceS3Credentials, bucketName: source.bucketName, region: source.region, csvFilePath: source.folderPath},
-              destinationSalesforceCredentials,
+              sourceS3Credentials: {...sourceS3Credentials, bucketName: source.bucketName, region: source.region, csvFilePath: source.csvFilePath},
+              destinationSalesforceCredentials:{...destinationSalesforceCredentials, instanceUrl: destination.instanceUrl},
               conflict,
             }).catch((err: any) => {
               // Log and continue so remaining objects in the batch/job are not skipped.
