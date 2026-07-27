@@ -11,12 +11,6 @@ import { startStaleJobSweeper } from './services/common/sweeper';
 const validateEnv = (): void => {
   const errors: string[] = [];
 
-  // AES-256-GCM key must be exactly 32 bytes expressed as 64 hex characters.
-  const KEY_RE = /^[0-9a-fA-F]{64}$/;
-  if (!KEY_RE.test(process.env.ENCRYPTION_KEY ?? '')) {
-    errors.push('ENCRYPTION_KEY must be a 64-character hex string (32 bytes for AES-256)');
-  }
-
   const required = [
     'CORE_SERVICE',
     'INTERNAL_SECRET',
