@@ -33,5 +33,15 @@ const decrypt = ({ ciphertext, iv, authTag }: EncryptedPayload): string => {
   ]).toString('utf8');
 };
 
-export { encrypt, decrypt };
+const decryptWithoutAuthTag = ({ ciphertext, iv }: EncryptedPayload): string => {
+  const key = Buffer.from(ENCRYPTION_KEY, 'base64');
+  const rawCiphertext = ciphertext;
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(iv, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(rawCiphertext, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
+};
+
+export { encrypt, decrypt, decryptWithoutAuthTag };
 export type { EncryptedPayload };

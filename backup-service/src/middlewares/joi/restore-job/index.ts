@@ -9,8 +9,8 @@ const sourceSchema = Joi.object({
 
     bucketName: Joi.string().required(),
     region: Joi.string().required(),
-    accessKeyId: Joi.string().required(),
-    secretAccessKey: Joi.string().required(),
+    encryptedKeys: Joi.object().required(),
+    
     folderPath: Joi.string().optional(),
     csvFilePath: Joi.string().optional(),
 })
@@ -19,20 +19,20 @@ const destinationSchema = Joi.object({
     crmId: Joi.string().required(),
     crmName: Joi.string().required(),
 
-    access_token: Joi.string().required(),
-    refresh_token: Joi.string().required(),
+    encryptedTokens: Joi.object().required(),
     instanceUrl: Joi.string().uri().required(),
 
     objects: Joi.array().items(
         Joi.object({
-            id: Joi.string().required(),
+            id: Joi.string().optional(),
             name: Joi.string().required(),
+            status: Joi.string().required(),
         }).required()
     )
 })
 
 const conflictSchema = Joi.object({
-    type: Joi.string().valid('OVERWRITE', 'APPEND_NEW').required(),
+    restoreMode: Joi.string().valid('OVERWRITE', 'APPEND_NEW').required(),
 })
 
 export const createRestoreJobValidation = (req: Request, res: Response, next: NextFunction) => {

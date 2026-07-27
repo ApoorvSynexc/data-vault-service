@@ -9,7 +9,7 @@ import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { archiveAndHardDelete } from './schedule/archival';
 import { runSalesforceRestore } from './restore';
-import { decrypt } from '../../../utils/encryption';
+import { decrypt, decryptWithoutAuthTag } from '../../../utils/encryption';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -286,8 +286,9 @@ const salesforceHandler: ICrmBackupHandler = {
       const objects = destination.objects;
       const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
         'ciphertext' in source.encryptedKeys
-          ? JSON.parse(decrypt(source.encryptedKeys))
+          ? JSON.parse(decryptWithoutAuthTag(source.encryptedKeys))
           : source.encryptedKeys;
+      console.log({ sourceS3Credentials });
 
       const destinationSalesforceCredentials: { access_token: string; refresh_token: string; instanceUrl: string } =
         'ciphertext' in destination.encryptedTokens
@@ -303,7 +304,7 @@ const salesforceHandler: ICrmBackupHandler = {
               restoreId,
               restoreJobId,
               object,
-              sourceS3Credentials: {...sourceS3Credentials, bucketName: source.bucketName, region: source.region, folderPath: source.folderPath},
+              sourceS3Credentials: {...sourceS3Credentials, bucketName: source.bucketName, region: source.region, csvFilePath: source.folderPath},
               destinationSalesforceCredentials,
               conflict,
             }).catch((err: any) => {

@@ -432,7 +432,8 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
 
   makeResponse(req, res, 201, true, 'create');
   try{
-    await createRestoreJob(payload);
+    const restoreJob = await createRestoreJob(payload);
+    await tiggerRestoreJob(restoreJob);
   } catch (error) {
     console.error('Error creating restore job:', error);
   }
