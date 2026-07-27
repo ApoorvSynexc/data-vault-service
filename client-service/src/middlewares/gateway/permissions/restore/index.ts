@@ -14,6 +14,26 @@ const restorePermissions = [
         method: 'POST',
         permissions: ['restore.read']
     },
+    {
+        path : '/restore/get-objectlist-by-configid',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/fetch-object-fields',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/get-picklist-field-values',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore',
+        method: 'POST',
+        permissions: ['restore.write']
+    }
 ];
 
 export { restorePermissions };

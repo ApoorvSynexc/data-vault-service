@@ -122,6 +122,7 @@ export interface IBackupJob {
   source?: EncryptedPayload; // encrypted ISource
   object?: IBackupObject[];
   lastUpdatedAt?: string; // ISO timestamp of last successful backup — used for incremental queries
+  schemaSync?: boolean; // true for Schema-Sync jobs — on success the runner calls back to resume /payload compression
   // REALTIME-only fields
   crmId?: string;
   crmName?: string;

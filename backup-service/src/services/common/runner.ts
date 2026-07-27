@@ -1,6 +1,12 @@
 import dayjs from 'dayjs';
 import { IBackupJob, IBackupObject, IDestinationConfig, IRestoreJob, ISource } from '../../models';
-import { BACKUP_STATUS, JOB_STATUS, OBJECT_STATUS } from '../../constant';
+import {
+  BACKUP_STATUS,
+  JOB_STATUS,
+  OBJECT_STATUS,
+  CORE_SERVICE,
+  INTERNAL_SECRET,
+} from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
 import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
@@ -9,6 +15,26 @@ import { getRestoreById } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
+import { httpRequest } from '../../utils/http-request';
+
+// A Schema-Sync job refreshed the stored schema/picklist/record-type metadata; tell
+// client-service to resume the deferred /payload compression for this config. Reuses
+// the existing internal event channel + secret. Best-effort — a missed callback is
+// recovered by the next external /payload trigger.
+const notifySchemaSyncCompleted = async (backupConfigId: string): Promise<void> => {
+  try {
+    await httpRequest({
+      url: `${CORE_SERVICE}/v1/internal/backup-payload`,
+      method: 'POST',
+      headers: { 'x-internal-secret': INTERNAL_SECRET },
+      body: JSON.stringify({ eventType: 'schema.sync.completed', backupConfigId }),
+    });
+  } catch (err: any) {
+    logger.error(
+      `[schema-sync] resume callback failed | backupConfigId:${backupConfigId} err:${err?.message ?? err}`
+    );
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Tracks jobs currently being processed in this process instance.
@@ -71,6 +97,16 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       throw new Error(`Backup job ${backupJobId}: source credentials are missing`);
     }
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
+    // crmId is stored top-level on the job (createBackupJob strips it out of the
+    // encrypted source), so restore it here — glue table/partition naming needs it.
+    source.crmId = source.crmId ?? (job.crmId as string);
+    // Fail loud before any S3/Glue work — a missing id would otherwise silently
+    // produce `undefined/` S3 paths and a cryptic toLowerCase crash in Glue.
+    if (!source.crmId || !backupConfigId) {
+      throw new Error(
+        `Backup job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
+      );
+    }
     const destConfig = JSON.parse(
       decrypt({
         ciphertext: destination.ciphertext,
@@ -95,6 +131,10 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       status: JOB_STATUS.success,
       completedAt: dayjs().toISOString(),
     });
+
+    if (job.schemaSync) {
+      await notifySchemaSyncCompleted(backupConfigId);
+    }
   } catch (err: any) {
     logger.error(`Backup job ${backupJobId} failed: ${err?.message}`);
     await updateJobStatus({
@@ -138,6 +178,16 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       throw new Error(`Archival job ${backupJobId}: source credentials are missing`);
     }
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
+    // crmId is stored top-level on the job (createArchivalJob strips it out of the
+    // encrypted source), so restore it here — glue table/partition naming needs it.
+    source.crmId = source.crmId ?? (job.crmId as string);
+    // Fail loud before any S3/Glue work — a missing id would otherwise silently
+    // produce `undefined/` S3 paths and a cryptic toLowerCase crash in Glue.
+    if (!source.crmId || !backupConfigId) {
+      throw new Error(
+        `Archival job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
+      );
+    }
     const destConfig = JSON.parse(
       decrypt({
         ciphertext: destination.ciphertext,

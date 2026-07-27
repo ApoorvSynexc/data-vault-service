@@ -18,6 +18,7 @@ import {
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
 import { readHudiTableSchema } from './hudi-schema';
+import { listS3Prefixes } from '../../destination/s3';
 
 // Platform-owned Glue client — always uses our own AWS credentials,
 // never the customer's destination bucket credentials.
@@ -74,10 +75,15 @@ const buildPartitionS3Location = (
 const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
   try {
     await glue.send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
+    logger.info(`[glue] created database | db:${databaseName}`);
   } catch (err: any) {
     if (err.name !== 'AlreadyExistsException') {
+      logger.error(
+        `[glue] ensureGlueDatabase failed | db:${databaseName} err:${err.name}: ${err.message}`
+      );
       throw err;
     }
+    logger.info(`[glue] database already exists | db:${databaseName}`);
   }
 };
 
@@ -90,6 +96,9 @@ const glueTableExists = async (databaseName: string, tableName: string): Promise
     if (err instanceof EntityNotFoundException || err.name === 'EntityNotFoundException') {
       return false;
     }
+    logger.error(
+      `[glue] glueTableExists failed | db:${databaseName} table:${tableName} err:${err.name}: ${err.message}`
+    );
     throw err;
   }
 };
@@ -176,10 +185,17 @@ export const createCsvGlueTable = async (params: ICreateCsvGlueTableParams): Pro
   const databaseName = buildGlueDatabaseName(crmId);
   const tableName = buildGlueTableName(backupConfigId, objectName);
 
+  logger.info(
+    `[glue] createCsvGlueTable start | db:${databaseName} table:${tableName} type:${type} columns:${columns.length}`
+  );
+
   await ensureGlueDatabase(databaseName);
 
   const exists = await glueTableExists(databaseName, tableName);
   if (exists) {
+    logger.info(
+      `[glue] table already exists, skipping create | db:${databaseName} table:${tableName}`
+    );
     return;
   }
 
@@ -226,6 +242,10 @@ export const registerBackupJobPartition = async (
   const databaseName = buildGlueDatabaseName(crmId);
   const tableName = buildGlueTableName(backupConfigId, objectName);
 
+  logger.info(
+    `[glue] registerBackupJobPartition start | table:${tableName} backupJobId:${backupJobId} type:${type}`
+  );
+
   const partitionInput: PartitionInput = {
     Values: [backupJobId],
     StorageDescriptor: {
@@ -255,8 +275,14 @@ export const registerBackupJobPartition = async (
     // AlreadyExistsException from BatchCreatePartition surfaces inside the response
     // errors array, not as a thrown exception — but guard the thrown path too.
     if (err.name === 'AlreadyExistsException') {
+      logger.info(
+        `[glue] partition already exists | table:${tableName} backupJobId:${backupJobId}`
+      );
       return;
     }
+    logger.error(
+      `[glue] registerBackupJobPartition failed | table:${tableName} backupJobId:${backupJobId} err:${err.name}: ${err.message}`
+    );
     throw err;
   }
 };
@@ -279,6 +305,10 @@ export const updateGlueTableSchema = async (
 
   const databaseName = buildGlueDatabaseName(crmId);
   const tableName = buildGlueTableName(backupConfigId, objectName);
+
+  logger.info(
+    `[glue] updateGlueTableSchema start | db:${databaseName} table:${tableName} columns:${columns.length}`
+  );
 
   const glueColumns: Column[] = columns.map(({ name, type, comment }) => ({
     Name: toGlueIdentifier(name),
@@ -329,6 +359,8 @@ export const repairGlueTableParams = async (params: IRepairGlueTableParamsInput)
   const databaseName = buildGlueDatabaseName(crmId);
   const tableName = buildGlueTableName(backupConfigId, objectName);
 
+  logger.info(`[glue] repairGlueTableParams start | db:${databaseName} table:${tableName}`);
+
   const { Table } = await glue.send(
     new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
   );
@@ -370,8 +402,9 @@ export const repairGlueTableParams = async (params: IRepairGlueTableParamsInput)
 // so the table always matches what Spark wrote.
 //
 // Layout (backup pipeline only — archival is a separate workflow):
-//   Hudi : <crmName>/<crmId>/backup/<cfg>/main_backup_files/<Object>/
-//   Delta: <crmName>/<crmId>/backup/<cfg>/delta/<Object>/
+//   Hudi       : <crmName>/<crmId>/backup/<cfg>/main_backup_files/<Object>/
+//   Delta      : <crmName>/<crmId>/backup/<cfg>/delta/<Object>/
+//   Checkpoints: <crmName>/<crmId>/backup/<cfg>/checkpoints/<Object>/
 
 // Hudi CoW read format for Athena — parquet data read through Hudi's input format.
 const HUDI_STORAGE_DESCRIPTOR_BASE = {
@@ -392,13 +425,16 @@ const buildHudiTableName = (backupConfigId: string, objectName: string): string 
 const buildDeltaTableName = (backupConfigId: string, objectName: string): string =>
   `${buildGlueTableName(backupConfigId, objectName)}_delta`;
 
+const buildCheckpointTableName = (backupConfigId: string, objectName: string): string =>
+  `${buildGlueTableName(backupConfigId, objectName)}_checkpoints`;
+
 // S3 key prefix (no bucket) of a compression-output table root.
 const buildCompressionRootKey = (
   crmName: string,
   crmId: string,
   backupConfigId: string,
   objectName: string,
-  dataset: 'main_backup_files' | 'delta'
+  dataset: 'main_backup_files' | 'delta' | 'checkpoints'
 ): string => `${crmName}/${crmId}/backup/${backupConfigId}/${dataset}/${objectName}/`;
 
 export interface IEnsureCompressionTableParams {
@@ -409,26 +445,111 @@ export interface IEnsureCompressionTableParams {
   destConfig: IDestinationConfig;
 }
 
+// Registers the year=YYYY/month=MM partitions that exist on S3 for a
+// Hudi-format table. Athena silently returns ZERO rows for a partitioned table
+// with no registered partitions — `hudi.metadata-listing-enabled` only covers
+// engine v3 with the Hudi metadata table intact, so explicit registration is
+// the deterministic path. Two delimiter listings (years, then months) — never
+// a full object enumeration. Idempotent: already-registered partitions come
+// back as AlreadyExistsException entries in the batch response and are ignored.
+const syncHudiTablePartitions = async (
+  databaseName: string,
+  tableName: string,
+  destConfig: IDestinationConfig,
+  rootKey: string
+): Promise<void> => {
+  const partitionInputs: PartitionInput[] = [];
+
+  const yearPrefixes = (await listS3Prefixes(destConfig, rootKey)).filter((p) =>
+    /\/year=\d+\/$/.test(p)
+  );
+  for (const yearPrefix of yearPrefixes) {
+    const monthPrefixes = (await listS3Prefixes(destConfig, yearPrefix)).filter((p) =>
+      /\/month=\d+\/$/.test(p)
+    );
+    for (const monthPrefix of monthPrefixes) {
+      const year = /year=(\d+)\//.exec(yearPrefix)![1];
+      const month = /month=(\d+)\/$/.exec(monthPrefix)![1];
+      partitionInputs.push({
+        Values: [year, month],
+        // Same pattern as registerBackupJobPartition: no Columns on the
+        // partition SD — Athena falls back to the table's columns.
+        StorageDescriptor: {
+          ...HUDI_STORAGE_DESCRIPTOR_BASE,
+          Location: `s3://${destConfig.bucketName}/${monthPrefix}`,
+        },
+      });
+    }
+  }
+
+  if (partitionInputs.length === 0) {
+    logger.info(`[glue] no hive-style partitions found on S3 | table:${tableName} root:${rootKey}`);
+    return;
+  }
+
+  // BatchCreatePartition caps at 100 inputs per call.
+  for (let i = 0; i < partitionInputs.length; i += 100) {
+    const batch = partitionInputs.slice(i, i + 100);
+    const result = await glue.send(
+      new BatchCreatePartitionCommand({
+        DatabaseName: databaseName,
+        TableName: tableName,
+        PartitionInputList: batch,
+      })
+    );
+    const realErrors = (result.Errors ?? []).filter(
+      (e) => e.ErrorDetail?.ErrorCode !== 'AlreadyExistsException'
+    );
+    if (realErrors.length) {
+      logger.warn(
+        `[glue] partition sync had errors | table:${tableName} errors:${JSON.stringify(realErrors)}`
+      );
+    }
+  }
+
+  logger.info(
+    `[glue] partition sync complete | table:${tableName} partitions:${partitionInputs.length}`
+  );
+};
+
 // Creates one Hudi-format Glue table, idempotently. Reads the committed schema
 // from `.hoodie` on the client bucket, then creates the table pointing at the
 // dataset root. Returns false (no-op) when the table already exists.
+// In BOTH cases it then syncs the year/month partitions from S3 — new
+// partitions appear as compression runs land, and Athena needs them registered.
 const ensureHudiFormatTable = async (
   params: IEnsureCompressionTableParams & {
     tableName: string;
-    dataset: 'main_backup_files' | 'delta';
+    dataset: 'main_backup_files' | 'delta' | 'checkpoints';
   }
 ): Promise<boolean> => {
   const { crmId, crmName, backupConfigId, objectName, destConfig, tableName, dataset } = params;
 
   const databaseName = buildGlueDatabaseName(crmId);
+  const label = dataset === 'main_backup_files' ? 'hudi' : dataset;
+
+  logger.info(`[glue] ensure ${label} table start | db:${databaseName} table:${tableName}`);
 
   await ensureGlueDatabase(databaseName);
 
+  const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset);
+
+  // Partition sync is best-effort in both branches: a failure must not undo the
+  // COMPRESSED status handoff this call rides on.
+  const syncPartitions = (): Promise<void> =>
+    syncHudiTablePartitions(databaseName, tableName, destConfig, rootKey).catch((err: any) => {
+      logger.warn(
+        `[glue] partition sync failed | table:${tableName} err:${err.name}: ${err.message}`
+      );
+    });
+
   if (await glueTableExists(databaseName, tableName)) {
+    logger.info(
+      `[glue] ${label} table already exists, syncing partitions | db:${databaseName} table:${tableName}`
+    );
+    await syncPartitions();
     return false;
   }
-
-  const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset);
   // Authoritative: matches exactly what Spark committed. Throws if not written yet.
   const { columns, partitionKeys } = await readHudiTableSchema(destConfig, rootKey);
 
@@ -485,14 +606,21 @@ const ensureHudiFormatTable = async (
     // Concurrent completion events can both pass the GetTable check and race here.
     // The loser sees AlreadyExistsException — the table exists, so treat as success.
     if (err.name === 'AlreadyExistsException') {
+      logger.info(
+        `[glue] ${label} table created concurrently | db:${databaseName} table:${tableName}`
+      );
       return false;
     }
+    logger.error(
+      `[glue] ensure ${label} table failed | db:${databaseName} table:${tableName} err:${err.name}: ${err.message}`
+    );
     throw err;
   }
 
   logger.info(
-    `[glue] created ${dataset === 'delta' ? 'delta' : 'hudi'} table | db:${databaseName} table:${tableName} columns:${glueColumns.length} partitions:${finalPartitionKeys.length}`
+    `[glue] created ${label} table | db:${databaseName} table:${tableName} columns:${glueColumns.length} partitions:${finalPartitionKeys.length}`
   );
+  await syncPartitions();
   return true;
 };
 
@@ -512,4 +640,16 @@ export const ensureDeltaTable = async (params: IEnsureCompressionTableParams): P
     ...params,
     tableName: buildDeltaTableName(params.backupConfigId, params.objectName),
     dataset: 'delta',
+  });
+
+// Ensures the checkpoints Glue table exists for one object. Same Hudi layout and
+// schema source (its own `.hoodie`) as the main table — only the dataset folder
+// and table suffix differ. Idempotent.
+export const ensureCheckpointTable = async (
+  params: IEnsureCompressionTableParams
+): Promise<boolean> =>
+  ensureHudiFormatTable({
+    ...params,
+    tableName: buildCheckpointTableName(params.backupConfigId, params.objectName),
+    dataset: 'checkpoints',
   });

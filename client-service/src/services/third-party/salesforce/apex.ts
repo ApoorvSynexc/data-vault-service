@@ -112,7 +112,7 @@ const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?
   );
 };
 
-const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
+const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipDepth }: { user?: IUser; objectName?: string; mode?: string; type?: string; relationshipDepth?: number } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -130,10 +130,32 @@ const getApexObjectChilds = async ({ user, objectName, mode }: { user?: IUser; o
   if (mode) {
     url += `&mode=${mode}`;
   }
+  if (type) {
+    url += `&type=${type}`;
+  }
+  if (relationshipDepth !== undefined) {
+    url += `&relationshipDepth=${relationshipDepth}`;
+  }
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
   );
+};
+
+// Fetch the api names of an object's Master-Detail children via object-children
+// (type=MASTER). SCHEDULE and REALTIME modes share the same eligibility, so either
+// backup mode returns the same set. Throws on transport/parse failure — callers
+// decide whether a missing children lookup is fatal (it isn't, for backup/trigger).
+const getMasterChildApiNames = async (
+  user: IUser,
+  objectName: string,
+  mode: string
+): Promise<string[]> => {
+  const reply = await getApexObjectChilds({ user, objectName, mode, type: 'MASTER' });
+  const data = unwrapApex<{ childs?: Array<{ apiName?: string }> }>(reply);
+  return (data?.childs ?? [])
+    .map((child) => child?.apiName)
+    .filter((name): name is string => !!name);
 };
 
 const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
@@ -147,7 +169,7 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-fields-metadata?objectApiName=${objectName}`;
+  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-fields-metadata?apiName=${objectName}`;
   if (mode) {
     url += `&mode=${mode}`;
   }
@@ -157,7 +179,7 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   );
 };
 
-const createApexSecret = async ({ user, body }: { user?: IUser; body?: { webhookSecret: string } } = {}) => {
+const getApexPicklistValues = async ({ user, objectApiName, fieldApiName }: { user?: IUser; objectApiName?: string; fieldApiName?: string } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -167,11 +189,33 @@ const createApexSecret = async ({ user, body }: { user?: IUser; body?: { webhook
   }
   const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   const instanceUrl = user.crmProfile?.instanceUrl;
-
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/upsert-webhook-secret`;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/get-picklist-values?objectApiName=${encodeURIComponent(objectApiName!)}&fieldApiName=${encodeURIComponent(fieldApiName!)}`;
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    { url, method: 'POST', body }
+    { url, method: 'GET' }
+  );
+};
+
+const getRecordTypeMetadata = async ({ user, objectApiName }: { user?: IUser; objectApiName?: string } = {}) => {
+  if (!user || !user.crmId) {
+    return [];
+  }
+  const crm = await getCrmById(user.crmId);
+  if (!crm) {
+    throw new Error('CRM not found');
+  }
+  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const instanceUrl = user.crmProfile?.instanceUrl;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-record-type-metadata?objectApiName=${encodeURIComponent(objectApiName!)}`;
+  return callApex(
+    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+    { url, method: 'GET' }
   );
 };
 
@@ -193,14 +237,18 @@ const apexValidateSoql = async (
   const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  return callApex(
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    {
-      url: `${APEX_BASE(instanceUrl)}/validate-soql`,
-      method: 'POST',
-      body: { apiName, whereClause: whereClause || null },
-    }
+  const raw = unwrapApex<{ isValid?: boolean; errorMessage?: string }>(
+    await callApex(
+      { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
+      {
+        url: `${APEX_BASE(instanceUrl)}/validate-soql`,
+        method: 'POST',
+        body: { apiName: apiName, whereClause: whereClause || null },
+      }
+    )
   );
+
+  return { isValid: !!raw?.isValid, message: raw?.errorMessage };
 };
 
 export interface IApexCountOneResult {
@@ -260,4 +308,4 @@ export const apexCountOne = async (
   }
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getApexObjectRecords, getApexFields, createApexSecret, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getMasterChildApiNames, getApexObjectRecords, getApexFields, getApexPicklistValues, getRecordTypeMetadata, apexValidateSoql, callApex, unwrapApex, APEX_BASE };

@@ -17,8 +17,7 @@ import {
   SCHEDULE_MODE,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
-import { decryptSalesforceRequest } from '../../../utils/salesforce-crypto';
-import { ICrm } from '../../../models';
+import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -50,24 +49,15 @@ import { ICrm } from '../../../models';
  *   objectApiName, transactionId) to write the CSV and resolve the job. Forwarding the
  *   entire body avoids re-mapping fields here and keeps client-service as a thin router.
  *
- * WHY decryption happens here, not in the handler:
- *   DataVaultRecordSyncQueueable.sendPayload() encrypts this body two-layer (Bootstrap
- *   Key wraps an org-key-encrypted payload — see utils/salesforce-crypto.ts). The
- *   handler must respond 200 before this runs (fire-and-forget), so decrypting here
- *   keeps that response fast; a decrypt/CRM-lookup failure just means the hit is
- *   dropped (logged), same as the pre-existing "unknown org" no-op below.
+ * WHY the request arrives already decrypted:
+ *   attachDecryptedSalesforceRequest('body') decrypts the two-layer Salesforce
+ *   envelope in middleware — the same auth path as the user/role endpoints — and a
+ *   bad envelope is rejected there with a 401 before this ever runs. That decryption
+ *   IS the authorization; there is no separate webhook-secret header any more.
  */
-const processRealtimeWebhook = async (rawBody: any): Promise<void> => {
-  let crm: ICrm;
-  let decryptedBody: any;
-  try {
-    const result = await decryptSalesforceRequest(rawBody);
-    crm = result.crm;
-    decryptedBody = JSON.parse(result.plaintext);
-  } catch (error) {
-    logger.warn(`Realtime webhook decrypt failed — skipping: ${error}`);
-    return;
-  }
+const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<void> => {
+  const { crm } = sf;
+  const decryptedBody = JSON.parse(sf.plaintext);
 
   const { transactionId } = decryptedBody;
 
@@ -149,10 +139,10 @@ const processRealtimeWebhook = async (rawBody: any): Promise<void> => {
  */
 const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
-    const rawBody = req.body;
+    const sf = req.salesforcePayload as DecryptedSalesforceRequest;
     makeResponse(req, res, 200, true, 'fetch');
 
-    await processRealtimeWebhook(rawBody);
+    await processRealtimeWebhook(sf);
     logger.info('Processed real-time webhook');
   } catch (error) {
     logger.error('realtime webhook processing error:', error);

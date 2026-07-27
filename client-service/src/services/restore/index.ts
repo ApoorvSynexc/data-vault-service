@@ -25,6 +25,7 @@ interface CreateRestoreParams {
   };
   destination: IRestoreDestination;
   conflict: IRestoreConflict;
+  restoreType?: string;
   jobDetail: IRestoreJobDetail;
   schedule: IScheduleConfig;
 }
@@ -39,6 +40,7 @@ const createRestore = async (params: CreateRestoreParams): Promise<IRestore> => 
     selection,
     destination,
     conflict,
+    restoreType = 'RESTORE_ONLY_CHANGED_FIELDS',
     jobDetail,
     schedule,
   } = params;
@@ -53,6 +55,7 @@ const createRestore = async (params: CreateRestoreParams): Promise<IRestore> => 
     selection,
     destination,
     conflict,
+    restoreType,
     jobDetail,
     schedule,
     createdAt: now,

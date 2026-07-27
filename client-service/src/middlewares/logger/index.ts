@@ -20,8 +20,18 @@ const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.printf(({ timestamp, level, message }) => {
-      return `[${timestamp}] ${level.toUpperCase()} : ${message}`;
+    winston.format.printf((info) => {
+      const { timestamp, level, message } = info;
+      // winston's printf only renders `message` — extra args like
+      // logger.error('failed:', err) land in the splat symbol and would be
+      // silently dropped without this.
+      const splat = (info[Symbol.for('splat')] as unknown[] | undefined) ?? [];
+      const extra = splat
+        .map((arg) =>
+          arg instanceof Error ? (arg.stack ?? arg.message) :
+          typeof arg === 'object' ? JSON.stringify(arg) : String(arg))
+        .join(' ');
+      return `[${timestamp}] ${level.toUpperCase()} : ${message}${extra ? ` ${extra}` : ''}`;
     })
   ),
   transports: [

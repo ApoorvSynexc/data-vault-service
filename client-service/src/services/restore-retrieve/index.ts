@@ -1,36 +1,69 @@
-import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, BatchGetCommand, BatchGetCommandOutput } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, JOB_STATUS, STATUS, COMPRESSION_STATUS, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
-import { IBackupConfig, IBackupJob, ICrm, IObject } from '../../models';
-import { getBackupConfigById, getBackupConfigsWithPagination } from '../backup-config';
+import { BACKUP_JOB_TABLE, JOB_STATUS, COMPRESSION_STATUS, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
+import { IBackupJob, IObject } from '../../models';
+import { getBackupConfigById } from '../backup-config';
 import { getBackupJobsByConfig } from '../backup-job';
-import { getCrmById, getCrmByOrgId } from '../crm';
+import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery, IQueryResult } from '../third-party/athena/query';
 import { httpRequest } from '../../utils/http-request';
 import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
 
+export { buildAthenaFilterWhere, FilterError } from './athena-filter';
+export { validateColumns } from './athena-fetch';
+import { assembleEntireRecords } from './restore-reconstruct';
+import {
+  buildRawSql,
+  buildCompressedDeletedSql,
+  buildCompressedByFieldSql,
+  buildCsvByFieldSql,
+  buildEntireDeltaChainSql,
+  buildEntireCheckpointSql,
+  buildHudiBulkSql,
+  buildHudiRawSql,
+  buildCsvEitherSql,
+  pairedColumns,
+  outputColumns,
+} from './athena-fetch';
+
 const RESTORE_JOB_TYPE = 'RESTORE';
-const BACKUP_JOB_TYPE = 'NORMAL';
-const BACKUP_JOB_CONCURRENCY = 5;
 
-// Runs an async task for each item with at most `concurrency` tasks in-flight at once.
-// Preserves input order in the returned results — safe for cursor maps keyed by index/configId.
-const runWithConcurrency = async <T, R>(
-  items: T[],
-  concurrency: number,
-  task: (item: T) => Promise<R>
-): Promise<R[]> => {
-  const results: R[] = new Array(items.length);
+type BackupJobItem = Pick<IBackupJob, 'backupJobId' | 'userId' | 'backupConfigId' | 'status'>;
 
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map(task));
-    batchResults.forEach((result, j) => { results[i + j] = result; });
-  }
+// Bulk job lookup: BatchGet in 100-key chunks with every chunk in flight at
+// once — hundreds of job ids resolve in roughly one DynamoDB round trip
+// instead of N serial Gets. Missing ids are simply absent from the map.
+const getBackupJobItems = async (backupJobIds: string[]): Promise<Map<string, BackupJobItem>> => {
+  const byId = new Map<string, BackupJobItem>();
+  const chunks: string[][] = [];
+  for (let i = 0; i < backupJobIds.length; i += 100) chunks.push(backupJobIds.slice(i, i + 100));
 
-  return results;
+  await Promise.all(
+    chunks.map(async (ids) => {
+      let requestItems: Record<string, any> | undefined = {
+        [BACKUP_JOB_TABLE]: {
+          Keys: ids.map((backupJobId) => ({ backupJobId })),
+          ProjectionExpression: 'backupJobId, userId, backupConfigId, #status',
+          ExpressionAttributeNames: { '#status': 'status' },
+        },
+      };
+      // BatchGet can return partial results under throttling — loop the leftovers.
+      while (requestItems) {
+        const result: BatchGetCommandOutput = await docClient.send(new BatchGetCommand({ RequestItems: requestItems }));
+        for (const item of result.Responses?.[BACKUP_JOB_TABLE] ?? []) {
+          byId.set(item.backupJobId as string, item as BackupJobItem);
+        }
+        requestItems =
+          result.UnprocessedKeys && Object.keys(result.UnprocessedKeys).length
+            ? result.UnprocessedKeys
+            : undefined;
+      }
+    })
+  );
+
+  return byId;
 };
 
 // ---------------------------------------------------------------------------
@@ -113,348 +146,6 @@ const getRestoreRetrieveJobsByUser = async (
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
-const getJobActivityLogs = async (
-  backupJobId: string
-): Promise<{ userId: string; object: IBackupJob['object'] } | null> => {
-  const result = await docClient.send(
-    new GetCommand({
-      TableName: BACKUP_JOB_TABLE,
-      Key: { backupJobId },
-      ProjectionExpression: '#object, userId',
-      ExpressionAttributeNames: { '#object': 'object' },
-    })
-  );
-
-  if (!result.Item) return null;
-
-  return {
-    userId: result.Item.userId as string,
-    object: (result.Item.object ?? []) as IBackupJob['object'],
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Snapshot activity log — BACKUP type (job-level entries)
-// ---------------------------------------------------------------------------
-
-export type SnapshotType = 'BACKUP' | 'ARCHIVAL';
-export type BackupScheduleType = 'REALTIME' | 'SCHEDULE';
-
-// Maps schedule filter values to the jobType stored on the DynamoDB item.
-const SCHEDULE_TO_JOB_TYPE: Record<BackupScheduleType, string> = {
-  REALTIME: 'REALTIME',
-  SCHEDULE: 'BULK',
-};
-
-export interface ISnapshotActivityLogEntry {
-  backupConfigId: string;
-  backupJobId: string;
-  dateTime: string;
-  configName: string;
-  sourceName: string;
-  dataSize: number;
-  backupType: string;
-  status: string;
-  // Only populated for REALTIME jobs
-  recordCount?: number;
-  objectApiName?: string;
-  operation?: string;
-}
-
-// Cursor shape for BACKUP: { [configId]: { [jobType]: DynamoDB LastEvaluatedKey } }
-// Each config tracks its own DynamoDB resume key so configs paginate independently.
-type BackupCursorMap = Record<string, Record<string, Record<string, any>>>;
-
-const JOB_TYPE_LABEL: Record<string, string> = {
-  BULK: 'Scheduled',
-  REALTIME: 'RealTime',
-};
-
-const computeBackupJobDataSize = (job: IBackupJob): number => {
-  // REALTIME jobs store sizeInBytes at the root; BULK jobs accumulate it inside object[].
-  if (job.jobType === 'REALTIME') return job.sizeInBytes ?? 0;
-  return (job.object ?? []).reduce((total, obj) => total + (obj.sizeInBytes ?? 0), 0);
-};
-
-const buildBackupJobLogEntry = (
-  job: IBackupJob,
-  configName: string,
-  sourceName: string
-): ISnapshotActivityLogEntry => {
-  const entry: ISnapshotActivityLogEntry = {
-    backupConfigId: job.backupConfigId,
-    backupJobId: job.backupJobId,
-    dateTime: job.createdAt,
-    configName,
-    sourceName,
-    dataSize: computeBackupJobDataSize(job),
-    backupType: JOB_TYPE_LABEL[job.jobType] ?? job.jobType,
-    status: job.status,
-  };
-
-  if (job.jobType === 'REALTIME') {
-    entry.recordCount = job.recordCount;
-    entry.objectApiName = job.objectApiName;
-    entry.operation = job.operation;
-  }
-
-  return entry;
-};
-
-/**
- * Queries one page of successful backup jobs for a config, supporting an optional
- * scheduleType filter (REALTIME or SCHEDULE) and per-type cursor resumption.
- *
- * The lastEvaluatedKeysByType map holds a raw DynamoDB key per jobType so each
- * job type resumes exactly where it left off across pages.
- */
-const fetchBackupJobsForConfigPaginated = async (
-  backupConfigId: string,
-  pageSize: number,
-  lastEvaluatedKeysByType: Record<string, Record<string, any>>,
-  scheduleFilter?: BackupScheduleType,
-  dateFrom?: string,
-  dateTo?: string
-): Promise<{ items: IBackupJob[]; lastEvaluatedKeysByType: Record<string, Record<string, any>> }> => {
-  const jobTypeFilter = scheduleFilter ? SCHEDULE_TO_JOB_TYPE[scheduleFilter] : undefined;
-
-  const { items, nextCursor } = await getBackupJobsByConfig(backupConfigId, {
-    limit: pageSize,
-    status: JOB_STATUS.success,
-    type: 'NORMAL',
-    jobType: jobTypeFilter,
-    cursor: lastEvaluatedKeysByType['NORMAL']
-      ? encodeCursor(lastEvaluatedKeysByType['NORMAL'])
-      : undefined,
-    ...(dateFrom && { dateFrom }),
-    ...(dateTo && { dateTo }),
-  });
-
-  const nextKeysByType: Record<string, Record<string, any>> = {};
-  if (nextCursor) {
-    const decoded = decodeCursor(nextCursor);
-    if (decoded) nextKeysByType['NORMAL'] = decoded;
-  }
-
-  return { items, lastEvaluatedKeysByType: nextKeysByType };
-};
-
-/**
- * Returns paginated backup job log entries across all configs tied to a destination.
- *
- * Flow:
- *   1. Load all user configs; filter to those matching the destination and schedule.
- *   2. Fetch CRMs for all matched configs in parallel (deduplicated by crmId).
- *   3. Query one page of successful jobs per config, each resuming from its own cursor.
- *   4. Merge all entries, sort newest-first, slice to the requested page size.
- */
-const getBackupSnapshotLogs = async (params: {
-  userId: string;
-  destinationId: string;
-  scheduleType?: BackupScheduleType;
-  backupConfigId?: string;
-  crmId?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  limit: number;
-  cursor?: string;
-}): Promise<{ entries: ISnapshotActivityLogEntry[]; nextCursor?: string }> => {
-  const { userId, destinationId, scheduleType, backupConfigId, crmId, dateFrom, dateTo, limit, cursor } = params;
-
-  const { documents: allConfigs } = await getBackupConfigsWithPagination(
-    {
-      userId,
-      type: 'NORMAL',
-      destinationId,
-      ...(scheduleType && { schedule: scheduleType }),
-      ...(crmId && { crmId }),
-    },
-    { limit: 1000 }
-  );
-
-  const matchingConfigs = backupConfigId
-    ? allConfigs.filter((c) => c.backupConfigId === backupConfigId)
-    : allConfigs;
-
-  if (matchingConfigs.length === 0) return { entries: [] };
-
-  const cursorMap: BackupCursorMap = cursor
-    ? (decodeCursor(cursor) as BackupCursorMap) ?? {}
-    : {};
-
-  const uniqueCrmIds = [...new Set(matchingConfigs.map((c) => c.crmId))];
-  const crmResults = await Promise.all(uniqueCrmIds.map((crmId) => getCrmById(crmId)));
-  const crmById = new Map<string, ICrm>(
-    crmResults
-      .filter((crm): crm is ICrm => crm !== null)
-      .map((crm) => [crm.crmId, crm])
-  );
-
-  const resultsPerConfig = await runWithConcurrency(
-    matchingConfigs,
-    BACKUP_JOB_CONCURRENCY,
-    async (config) => {
-      const { items, lastEvaluatedKeysByType } = await fetchBackupJobsForConfigPaginated(
-        config.backupConfigId,
-        limit,
-        cursorMap[config.backupConfigId] ?? {},
-        scheduleType,
-        dateFrom,
-        dateTo
-      );
-
-      const crm = crmById.get(config.crmId);
-      const configName = config.name ?? config.backupConfigId;
-      const sourceName = crm?.name ?? crm?.crmName ?? config.crmId;
-
-      return {
-        entries: items.map((job) => buildBackupJobLogEntry(job, configName, sourceName)),
-        configId: config.backupConfigId,
-        lastEvaluatedKeysByType,
-      };
-    }
-  );
-
-  const allEntries = resultsPerConfig.flatMap((r) => r.entries);
-  allEntries.sort((a, b) => b.dateTime.localeCompare(a.dateTime));
-
-  const nextCursorMap: BackupCursorMap = {};
-  for (const { configId, lastEvaluatedKeysByType } of resultsPerConfig) {
-    if (Object.keys(lastEvaluatedKeysByType).length > 0) {
-      nextCursorMap[configId] = lastEvaluatedKeysByType;
-    }
-  }
-
-  const nextCursor = Object.keys(nextCursorMap).length > 0
-    ? encodeCursor(nextCursorMap)
-    : undefined;
-
-  return { entries: allEntries.slice(0, limit), nextCursor };
-};
-
-// ---------------------------------------------------------------------------
-// Snapshot activity log — ARCHIVAL type (config-level entries)
-// ---------------------------------------------------------------------------
-
-export interface IArchivalConfigEntry {
-  backupConfigId: string;
-  configName: string;
-  sourceName: string;
-  dataSize: number;
-  selectedObjectCount: number;
-  lastJobRunTime?: string;
-  lastJobStatus?: string;
-}
-
-const countSelectedObjects = (config: IBackupConfig): number => {
-  // Prefer objects[] (full metadata) over objectNames[] (name-only list).
-  // Both represent the user's selection; objects[] is more authoritative when present.
-  if (config.objects && config.objects.length > 0) return config.objects.length;
-  return config.objectNames?.length ?? 0;
-};
-
-const buildArchivalConfigEntry = (
-  config: IBackupConfig,
-  sourceName: string
-): IArchivalConfigEntry => ({
-  backupConfigId: config.backupConfigId,
-  configName: config.name ?? config.backupConfigId,
-  sourceName,
-  dataSize: config.sizeInBytes ?? 0,
-  selectedObjectCount: countSelectedObjects(config),
-  lastJobRunTime: config.lastBackupAt,
-  // Only include lastJobStatus when there is no lastBackupAt — it acts as a fallback
-  // so the UI always has something to display even if no job has completed yet.
-  lastJobStatus: config.lastBackupAt ? undefined : config.backupStatus,
-});
-
-/**
- * Returns a paginated list of active archival configs tied to a destination.
- * Each entry represents one archival config — not an individual job run.
- *
- * Flow:
- *   1. Query DynamoDB via getBackupConfigsWithPagination filtering by userId, type=ARCHIVAL,
- *      status=ACTIVE, destinationId, and optionally name (contains) and backupConfigId.
- *   2. Fetch CRMs for configs on this page in parallel.
- *   3. Build one entry per config and return with a DynamoDB-native nextCursor.
- */
-const getArchivalSnapshotLogs = async (params: {
-  userId: string;
-  destinationId: string;
-  backupConfigId?: string;
-  crmId?: string;
-  name?: string;
-  limit: number;
-  cursor?: string;
-}): Promise<{ entries: IArchivalConfigEntry[]; nextCursor?: string }> => {
-  const { userId, destinationId, backupConfigId, crmId, name, limit, cursor } = params;
-
-  const { documents: pageConfigs, nextCursor: rawNextCursor } = await getBackupConfigsWithPagination(
-    {
-      userId,
-      type: 'ARCHIVAL',
-      status: STATUS.active,
-      destinationId,
-      ...(crmId && { crmId }),
-      ...(name && { name }),
-    },
-    { limit, cursor }
-  );
-
-  if (pageConfigs.length === 0) return { entries: [] };
-
-  const filteredConfigs = backupConfigId
-    ? pageConfigs.filter((c) => c.backupConfigId === backupConfigId)
-    : pageConfigs;
-
-  const uniqueCrmIds = [...new Set(filteredConfigs.map((c) => c.crmId))];
-  const crmResults = await Promise.all(uniqueCrmIds.map((crmId) => getCrmById(crmId)));
-  const crmById = new Map<string, ICrm>(
-    crmResults
-      .filter((crm): crm is ICrm => crm !== null)
-      .map((crm) => [crm.crmId, crm])
-  );
-
-  const entries = filteredConfigs.map((config) => {
-    const crm = crmById.get(config.crmId);
-    const sourceName = crm?.name ?? crm?.crmName ?? config.crmId;
-    return buildArchivalConfigEntry(config, sourceName);
-  });
-
-  return { entries, nextCursor: rawNextCursor ?? undefined };
-};
-
-// ---------------------------------------------------------------------------
-// Unified entry point — routes to the correct handler by snapshotType
-// ---------------------------------------------------------------------------
-
-/**
- * Routes snapshot log requests to the correct handler based on snapshotType:
- *   BACKUP   → paginated job-level entries (one row per completed backup job)
- *   ARCHIVAL → paginated config-level entries (one row per archival config)
- */
-const getSnapshotActivityLogs = async (params: {
-  userId: string;
-  destinationId: string;
-  snapshotType: SnapshotType;
-  scheduleType?: BackupScheduleType;
-  backupConfigId?: string;
-  crmId?: string;
-  name?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  limit: number;
-  cursor?: string;
-}): Promise<{ entries: ISnapshotActivityLogEntry[] | IArchivalConfigEntry[]; nextCursor?: string }> => {
-  const { snapshotType, dateFrom, dateTo, scheduleType, ...rest } = params;
-
-  if (snapshotType === 'ARCHIVAL') {
-    return getArchivalSnapshotLogs(rest);
-  }
-
-  return getBackupSnapshotLogs({ ...rest, scheduleType, dateFrom, dateTo });
-};
-
 // ---------------------------------------------------------------------------
 // Object list helper
 // ---------------------------------------------------------------------------
@@ -495,67 +186,33 @@ const getObjectListByConfigId = async (
   return { objects: uniqueNames, found: true };
 };
 
-// Fetches one backup job's object names using a projection that excludes encrypted
-// source/destination payloads — only the fields needed to validate ownership and
-// extract object names are read. Ownership, job kind (type=NORMAL), and execution
-// mode (jobType ∈ BULK | REALTIME) are validated here so the caller can treat the
-// result as authoritative.
-//
-// BULK jobs store the user's selection as a tree under `object[]`; REALTIME jobs
-// instead record a single `objectApiName` at the root (one object changed per job),
-// so both shapes are normalised into a flat string[] here.
-const getBackupJobObjectNames = async (
-  backupJobId: string,
-  userId: string
-): Promise<{ objects: string[]; found: boolean }> => {
-  const result = await docClient.send(
-    new GetCommand({
-      TableName: BACKUP_JOB_TABLE,
-      Key: { backupJobId },
-      ProjectionExpression: 'userId, #type, jobType, #object, objectApiName',
-      ExpressionAttributeNames: { '#type': 'type', '#object': 'object' },
-    })
-  );
-
-  const item = result.Item as
-    | Pick<IBackupJob, 'userId' | 'type' | 'jobType' | 'object' | 'objectApiName'>
-    | undefined;
-
-  if (!item || item.userId !== userId || item.type !== BACKUP_JOB_TYPE) {
-    return { objects: [], found: false };
-  }
-
-  const names = item.jobType === 'REALTIME'
-    ? (item.objectApiName ? [item.objectApiName] : [])
-    : flattenObjectNames(item.object ?? []);
-
-  return { objects: [...new Set(names)], found: true };
-};
-
-const getObjectListByBackupJobIds = async (
-  backupJobIds: string[],
-  userId: string
-): Promise<Record<string, string[]>> => {
-  const results = await runWithConcurrency(
-    backupJobIds,
-    BACKUP_JOB_CONCURRENCY,
-    async (id) => {
-      const { objects, found } = await getBackupJobObjectNames(id, userId);
-      return { id, objects, found };
-    }
-  );
-
-  return results.reduce<Record<string, string[]>>((acc, { id, objects, found }) => {
-    if (found) acc[id] = objects;
-    return acc;
-  }, {});
-};
-
 // ---------------------------------------------------------------------------
 // Fetch records via Athena
 // ---------------------------------------------------------------------------
 
 export type FetchRecordsConfigType = 'BACKUP' | 'ARCHIVAL';
+
+export type FetchRecordsFilterType = 'AND' | 'OR' | 'SOQL';
+
+export interface IFetchRecordsFilterField {
+  name: string;
+  dataType: string;
+  operator: string;
+  value: string;
+}
+
+export interface IFetchRecordsFilters {
+  type: FetchRecordsFilterType;
+  // Present (and used) only when type === 'SOQL'.
+  soqlQuery?: string;
+  // Present (and used) when type is 'AND' | 'OR'.
+  fields?: IFetchRecordsFilterField[];
+}
+
+export interface IChangedSinceRange {
+  startDate?: string;
+  endDate?: string;
+}
 
 export interface IFetchRecordsParams {
   configType: FetchRecordsConfigType;
@@ -566,146 +223,291 @@ export interface IFetchRecordsParams {
   backupJobIds?: string[];
   // ARCHIVAL: caller supplies the config ID; we resolve the most recent successful job.
   backupConfigId?: string;
-}
-
-export interface IFetchRecordsResult {
-  backupJobId: string;
-  records: IQueryResult;
+  // Precompiled Athena WHERE body (AND/OR/SOQL) from the filter module. Built and
+  // validated in the controller so filter errors map to 400 before hitting Athena.
+  filterWhere?: string | null;
+  deletedOnly?: boolean;
+  // Validated by the controller, not yet applied to the query (deferred).
+  filters?: IFetchRecordsFilters;
+  changedSince?: IChangedSinceRange;
+  bulkCsvIds?: string[];
+  // When present and non-empty, switches from the default entire-record
+  // reconstruction to the by-field flow: only these fields are reverted to
+  // their pre-change values; everything else stays current.
+  filteringFields?: string[];
 }
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
 const toGlueId = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
-// Builds the Athena SQL for a given table, column list, and set of job IDs.
-// backup_job_id is always prepended — it is a Glue partition key that Athena
-// exposes as a virtual column, so groupRowsByJobId can correlate rows to jobs.
-const buildFetchSql = (
-  tableName: string,
-  columnNames: string[],
-  jobIds: string[]
-): string => {
-  const cols = ['backup_job_id', ...columnNames.map((c) => `"${c}"`)].join(', ');
-  const ids = jobIds.map((id) => `'${id}'`).join(', ');
-  return `SELECT ${cols} FROM "${tableName}" WHERE backup_job_id IN (${ids})`;
+// Global cap: at most 50 records, newest-first by LastModifiedDate across all jobs.
+const FETCH_LIMIT = 50;
+
+// RESTORE_ENTIRE_RECORD is a bulk restore, not a preview grid — cap high.
+// ponytail: single-response ceiling; page the endpoint if restores outgrow 10k rows.
+const RESTORE_ENTIRE_LIMIT = 10_000;
+
+// Merges per-source result sets into one newest-first, capped set. Each source
+// already applies the same ORDER BY LastModifiedDate DESC + LIMIT, and the global
+// top-N is contained in the union of the per-source top-N, so a merge-sort-slice
+// here yields the correct global result.
+const mergeOrderLimit = (results: IQueryResult[], columnNames: string[]): IQueryResult => {
+  const rows = results.flatMap((r) => r.rows);
+  const lmd = (row: Record<string, string>): number => Date.parse(row['LastModifiedDate'] ?? '') || 0;
+  rows.sort((a, b) => lmd(b) - lmd(a));
+  const columns = results.find((r) => r.columns.length)?.columns ?? outputColumns(columnNames);
+  return { columns, rows: rows.slice(0, FETCH_LIMIT) };
 };
 
-// Groups flat Athena result rows by their backup_job_id column value.
-const groupRowsByJobId = (
+// ── Reconstructed { record } row shape ─────────────────────────────────────────
+
+export interface IByFieldRow {
+  record: Record<string, string>;
+}
+
+export interface IByFieldResult {
+  columns: string[];
+  rows: IByFieldRow[];
+}
+
+// Strips the r_ prefix off the flat SQL row into a { record } object. For
+// compressed rows, the winning delta's old values are overlaid onto the Hudi
+// record — but only for `revertFields` (the by-field selection), so unselected
+// fields keep their current values. Fields outside the projection never leak in.
+const toByFieldRows = (
   result: IQueryResult,
-  jobIds: string[]
-): IFetchRecordsResult[] => {
-  const byJobId = new Map<string, IQueryResult['rows']>();
-  for (const row of result.rows) {
-    const jobId = row['backup_job_id'] ?? '';
-    if (!byJobId.has(jobId)) byJobId.set(jobId, []);
-    byJobId.get(jobId)!.push(row);
-  }
-  return jobIds.map((id) => ({
-    backupJobId: id,
-    records: { columns: result.columns, rows: byJobId.get(id) ?? [] },
-  }));
-};
+  kind: 'compressed' | 'csv',
+  revertFields?: string[]
+): IByFieldRow[] =>
+  result.rows.map((flat) => {
+    const record: Record<string, string> = {};
+    for (const [key, value] of Object.entries(flat)) {
+      if (key.startsWith('r_')) record[key.slice(2)] = value;
+    }
+    if (kind === 'compressed') {
+      const allow = new Set(revertFields?.length ? revertFields : Object.keys(record));
+      try {
+        const changes = JSON.parse(flat['d_change_data'] ?? '') as Record<string, unknown>;
+        for (const [field, entry] of Object.entries(changes)) {
+          // Spark's to_json drops null struct fields — a null→value change has no
+          // `old` key. Any {old,new}-shaped entry reverts (old absent = was null),
+          // matching the Java reconstructor's map<string,struct<old,new>> semantics.
+          if (allow.has(field) && field in record && entry && typeof entry === 'object' && ('old' in entry || 'new' in entry)) {
+            const old = (entry as { old?: unknown }).old;
+            record[field] = old == null ? '' : String(old);
+          }
+        }
+      } catch {
+        // malformed change_data — leave the record at current values
+      }
+    }
+    return { record };
+  });
 
 /**
  * BACKUP path: verifies ownership of every supplied job ID against the caller,
  * resolves the Glue table coordinates from the first job's config, then queries
- * Athena for the requested partitions.
+ * Athena and returns reconstructed { record } rows.
  *
- * Compressed jobs (status === COMPRESSED) have had their raw CSVs compacted into
- * the Hudi dataset by the compression pipeline, so their data no longer lives in
- * the CSV table (cfg_<cfg>_<obj>) — it must be read from the Hudi table
- * (cfg_<cfg>_<obj>_hudi). A single request can mix both, so job IDs are split by
- * status and each group is queried against its own table, then merged.
+ * A request can mix compressed and uncompressed jobs:
+ *   - uncompressed → the CSV table (cfg_<cfg>_<obj>) merged against Hudi.
+ *   - compressed   → the Hudi main table (cfg_<cfg>_<obj>_hudi) + delta CDC table
+ *     (cfg_<cfg>_<obj>_delta) + optional checkpoints.
+ *
+ * Modes:
+ *   - default            → bulk entire-record reconstruction (delta replay /
+ *                          checkpoints, see assembleEntireRecords).
+ *   - filteringFields    → by-field: only the named fields are reverted to their
+ *                          pre-change values; everything else stays current.
+ *   - deletedOnly        → deleted records from the DELETE deltas' change_data
+ *                          (delta model only, so CSV jobs contribute nothing).
  */
+interface IFetchRecordsForBackupParams {
+  backupJobIds: string[];
+  objectApiName: string;
+  columnNames: string[];
+  userId: string;
+  filterWhere: string | null;
+  deletedOnly: boolean;
+  // Non-empty → by-field mode restricted to these fields; absent → entire-record.
+  filteringFields?: string[];
+  // Record scope for the entire-record flow (request bulkCsvIds).
+  recordIds?: string[];
+}
+
 const fetchRecordsForBackup = async (
-  backupJobIds: string[],
-  objectApiName: string,
-  columnNames: string[],
-  userId: string
-): Promise<IFetchRecordsResult[] | null> => {
-  const jobItems = await runWithConcurrency(
-    backupJobIds,
-    BACKUP_JOB_CONCURRENCY,
-    async (backupJobId) => {
-      const result = await docClient.send(
-        new GetCommand({
-          TableName: BACKUP_JOB_TABLE,
-          Key: { backupJobId },
-          ProjectionExpression: 'userId, backupConfigId, #status',
-          ExpressionAttributeNames: { '#status': 'status' },
-        })
-      );
-      return result.Item as
-        | Pick<IBackupJob, 'userId' | 'backupConfigId' | 'status'>
-        | undefined;
-    }
-  );
+  params: IFetchRecordsForBackupParams
+): Promise<IQueryResult | IByFieldResult | null> => {
+  const { backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly, filteringFields, recordIds } = params;
+  const jobById = await getBackupJobItems(backupJobIds);
 
   // Every job must exist and belong to the caller.
-  if (jobItems.some((item) => !item || item.userId !== userId)) return null;
+  if (backupJobIds.some((id) => jobById.get(id)?.userId !== userId)) return null;
 
-  const config = await getBackupConfigById(jobItems[0]!.backupConfigId);
+  const firstJob = jobById.get(backupJobIds[0])!;
+  const config = await getBackupConfigById(firstJob.backupConfigId);
   if (!config) return null;
 
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
-  const csvTable = `cfg_${toGlueId(jobItems[0]!.backupConfigId)}_${toGlueId(objectApiName)}`;
+  const csvTable = `cfg_${toGlueId(firstJob.backupConfigId)}_${toGlueId(objectApiName)}`;
   const hudiTable = `${csvTable}_hudi`;
+  const deltaTable = `${csvTable}_delta`;
 
-  // Partition job IDs by storage: compressed → Hudi table, everything else → CSV.
-  const hudiIds: string[] = [];
+  // Partition job IDs by storage: compressed → Hudi/delta, everything else → CSV.
+  const compressedIds: string[] = [];
   const csvIds: string[] = [];
-  backupJobIds.forEach((id, i) => {
-    (jobItems[i]!.status === COMPRESSION_STATUS.compressed ? hudiIds : csvIds).push(id);
+  backupJobIds.forEach((id) => {
+    (jobById.get(id)!.status === COMPRESSION_STATUS.compressed ? compressedIds : csvIds).push(id);
   });
 
-  const results = await Promise.all([
-    csvIds.length ? runAthenaQuery(buildFetchSql(csvTable, columnNames, csvIds), databaseName) : null,
-    hudiIds.length ? runAthenaQuery(buildFetchSql(hudiTable, columnNames, hudiIds), databaseName) : null,
-  ]);
+  // Every Hudi-touching query tolerates a missing _hudi/_delta table — those only
+  // exist after the first compression run, so absence just means "no compressed
+  // state yet", not an error.
+  const run = (sql: string): Promise<IQueryResult> =>
+    runAthenaQuery(sql, databaseName).catch((e: unknown) => {
+      if (/TABLE_NOT_FOUND|does not exist/i.test(String((e as Error).message))) {
+        return { columns: [], rows: [] };
+      }
+      throw e;
+    });
 
-  const firstResult = results.find((r) => r !== null)!;
-  const merged: IQueryResult = {
-    columns: firstResult.columns,
-    rows: results.flatMap((r) => (r ? r.rows : [])),
-  };
+  if (deletedOnly) {
+    // Deleted records live only in the delta model, so CSV jobs contribute nothing.
+    const queries: Promise<IQueryResult>[] = [];
+    if (compressedIds.length) {
+      queries.push(
+        run(buildCompressedDeletedSql(deltaTable, { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT }))
+      );
+    }
+    return mergeOrderLimit(await Promise.all(queries), columnNames);
+  }
 
-  return groupRowsByJobId(merged, backupJobIds);
+  if (filteringFields?.length) {
+    // By-field mode: one { record } row per record — compressed jobs yield the
+    // current Hudi record with ONLY the selected fields reverted to their
+    // pre-change values; uncompressed jobs yield the newer of the CSV/Hudi
+    // versions.
+    const tasks: Promise<IByFieldRow[]>[] = [];
+    if (compressedIds.length) {
+      tasks.push(
+        run(buildCompressedByFieldSql(hudiTable, deltaTable, { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT }))
+          .then((r) => toByFieldRows(r, 'compressed', filteringFields))
+      );
+    }
+    if (csvIds.length) {
+      tasks.push(
+        run(buildCsvByFieldSql(csvTable, hudiTable, { columnNames, jobIds: csvIds, filterWhere, limit: FETCH_LIMIT }))
+          .then((r) => toByFieldRows(r, 'csv'))
+      );
+    }
+    const rows = (await Promise.all(tasks)).flat();
+    const lmd = (r: IByFieldRow): number => Date.parse(r.record['LastModifiedDate'] ?? '') || 0;
+    rows.sort((a, b) => lmd(b) - lmd(a));
+    return { columns: pairedColumns(columnNames), rows: rows.slice(0, FETCH_LIMIT) };
+  }
+
+  // Default: bulk entire-record reconstruction — a fixed number of Athena
+  // queries regardless of how many jobs/records are requested. Grouping and
+  // reconstruction happen in memory (assembleEntireRecords).
+  {
+    const cols = pairedColumns(columnNames);
+    const tasks: Promise<IByFieldRow[]>[] = [];
+    if (compressedIds.length) {
+      const scope = { jobIds: compressedIds, recordIds };
+      tasks.push(
+        (async () => {
+          // 3 bulk queries: delta chain (Scenario A data for every record),
+          // chosen checkpoints, and the Hudi base. With an explicit record
+          // scope all three are independent and run in ONE Athena round trip;
+          // without it the Hudi ids must come from the chain result (2 rounds).
+          // A missing _checkpoints table → empty result via `run` → every
+          // record falls back to Scenario A; a checkpoint-less record falls
+          // back individually inside assembleEntireRecords.
+          const [chain, checkpoints, hudiEarly] = await Promise.all([
+            run(buildEntireDeltaChainSql(deltaTable, scope)),
+            run(buildEntireCheckpointSql(`${csvTable}_checkpoints`, deltaTable, scope, columnNames, filterWhere)),
+            recordIds?.length
+              ? run(buildHudiBulkSql(hudiTable, recordIds, columnNames, filterWhere))
+              : Promise.resolve(null),
+          ]);
+          const ids = [...new Set(chain.rows.map((r) => r['record_id']).filter(Boolean))];
+          const hudi =
+            hudiEarly ??
+            (ids.length
+              ? await run(buildHudiBulkSql(hudiTable, ids, columnNames, filterWhere))
+              : { columns: [], rows: [] });
+          return assembleEntireRecords(cols, hudi.rows, chain.rows, checkpoints.rows);
+        })()
+      );
+    }
+    if (csvIds.length) {
+      tasks.push(
+        run(buildCsvEitherSql(csvTable, hudiTable, { columnNames, jobIds: csvIds, filterWhere, limit: RESTORE_ENTIRE_LIMIT }, recordIds))
+          .then((r) => toByFieldRows(r, 'csv'))
+      );
+    }
+    const rows = (await Promise.all(tasks)).flat();
+    const lmd = (r: IByFieldRow): number => Date.parse(r.record['LastModifiedDate'] ?? '') || 0;
+    rows.sort((a, b) => lmd(b) - lmd(a));
+    return { columns: cols, rows: rows.slice(0, RESTORE_ENTIRE_LIMIT) };
+  }
 };
 
 /**
- * ARCHIVAL path: resolves the most recent successful ARCHIVAL job for the given
+ * ARCHIVAL path: resolves the most recent retrievable ARCHIVAL job for the given
  * config ID, verifies the config belongs to the caller, then queries Athena for
- * that single job's partition. Returns null when the config doesn't exist, is not
- * owned by the caller, or has no completed archival job yet.
+ * that snapshot. An archival job's `status` is single-valued — SUCCESS while
+ * uncompressed, then COMPRESSED once Spark compresses it — so both are candidates.
+ * Routing by that status (never delta/checkpoint, archival is a point-in-time
+ * snapshot):
+ *   - COMPRESSED → the Hudi current-state table (_hudi), one row per Id.
+ *   - SUCCESS    → the raw CSV table (cfg_<cfg>_<obj>), scoped to the job.
+ * deletedOnly has no meaning for an archival snapshot, so it returns nothing.
+ * Returns null when the config doesn't exist, is not owned by the caller, or has
+ * no retrievable archival job yet.
  */
+interface IFetchRecordsForArchivalParams {
+  backupConfigId: string;
+  objectApiName: string;
+  columnNames: string[];
+  userId: string;
+  filterWhere: string | null;
+  deletedOnly: boolean;
+}
+
 const fetchRecordsForArchival = async (
-  backupConfigId: string,
-  objectApiName: string,
-  columnNames: string[],
-  userId: string
-): Promise<IFetchRecordsResult[] | null> => {
-  const config = await getBackupConfigById(backupConfigId);
+  params: IFetchRecordsForArchivalParams
+): Promise<IQueryResult | null> => {
+  const { backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly } = params;
+  // A single status equality per query is all getBackupJobsByConfig supports, and
+  // SUCCESS/COMPRESSED are mutually exclusive on the same job — query both and keep
+  // the newest, so a re-run (fresh SUCCESS) wins over an older COMPRESSED snapshot.
+  const [config, success, compressed] = await Promise.all([
+    getBackupConfigById(backupConfigId),
+    getBackupJobsByConfig(backupConfigId, { limit: 1, status: JOB_STATUS.success, type: 'ARCHIVAL' }),
+    getBackupJobsByConfig(backupConfigId, { limit: 1, status: COMPRESSION_STATUS.compressed, type: 'ARCHIVAL' }),
+  ]);
+
   if (!config || config.userId !== userId) return null;
 
-  const { items } = await getBackupJobsByConfig(backupConfigId, {
-    limit: 1,
-    status: JOB_STATUS.success,
-    type: 'ARCHIVAL',
-  });
+  const candidates = [...success.items, ...compressed.items];
+  if (candidates.length === 0) return null;
+  if (deletedOnly) return { columns: outputColumns(columnNames), rows: [] };
 
-  if (items.length === 0) return null;
-
-  const latestJob = items[0];
+  const latestJob = candidates.sort(
+    (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+  )[0];
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
   const tableName = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
 
-  const result = await runAthenaQuery(
-    buildFetchSql(tableName, columnNames, [latestJob.backupJobId]),
-    databaseName
-  );
+  const sql =
+    latestJob.status === COMPRESSION_STATUS.compressed
+      ? buildHudiRawSql(`${tableName}_hudi`, { columnNames, filterWhere, limit: FETCH_LIMIT })
+      : buildRawSql(tableName, { columnNames, jobIds: [latestJob.backupJobId], filterWhere, limit: FETCH_LIMIT });
 
-  return groupRowsByJobId(result, [latestJob.backupJobId]);
+  const result = await runAthenaQuery(sql, databaseName);
+  return mergeOrderLimit([result], columnNames);
 };
 
 /**
@@ -714,17 +516,30 @@ const fetchRecordsForArchival = async (
  */
 const fetchRecordsByBackupJobs = async (
   params: IFetchRecordsParams
-): Promise<IFetchRecordsResult[] | null> => {
+): Promise<IQueryResult | IByFieldResult | null> => {
   const { configType, objectApiName, columnNames, userId, backupJobIds, backupConfigId } = params;
+  const filterWhere = params.filterWhere ?? null;
+  const deletedOnly = params.deletedOnly ?? false;
 
   if (configType === 'ARCHIVAL') {
     if (!backupConfigId) return null;
-    return fetchRecordsForArchival(backupConfigId, objectApiName, columnNames, userId);
+    return fetchRecordsForArchival({ backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly });
   }
 
-  // BACKUP
+  // BACKUP (archival snapshots have no Hudi/delta history): entire-record
+  // reconstruction by default; filteringFields switches to by-field mode with
+  // only those fields reverted (bulkCsvIds = record scope).
   if (!backupJobIds || backupJobIds.length === 0) return null;
-  return fetchRecordsForBackup(backupJobIds, objectApiName, columnNames, userId);
+  return fetchRecordsForBackup({
+    backupJobIds,
+    objectApiName,
+    columnNames,
+    userId,
+    filterWhere,
+    deletedOnly,
+    filteringFields: params.filteringFields,
+    recordIds: params.bulkCsvIds,
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -812,13 +627,13 @@ const repairGlueTables = async (
 
 export interface IFetchObjectFieldsParams {
   objectApiName: string;
-  backupJobIds: string[];
+  backupConfigId: string;
   userId: string;
 }
 
 export type FetchObjectFieldsResult =
   | { ok: true; schema: unknown }
-  | { ok: false; reason: 'not_exist' | 'multiple_configs' };
+  | { ok: false; reason: 'not_exist' };
 
 /**
  * Returns the latest schema JSON stored on S3 for an object, exactly as written
@@ -826,68 +641,52 @@ export type FetchObjectFieldsResult =
  * so the controller can map each failure to the right status/message.
  *
  * Flow:
- *   1. Resolve each job's owner + backupConfigId (projection keeps encrypted
- *      source/destination blobs out of memory).
- *   2. Enforce the one-config rule: every selected job must share a single
- *      backupConfigId, else 'multiple_configs'.
- *   3. Resolve the config's CRM and destination, decrypt the S3 credentials.
- *   4. Read the most recent schema file from S3 and return its parsed contents.
+ *   1. Resolve the config's CRM and destination, decrypt the S3 credentials.
+ *   2. Read the most recent schema file from S3 and return its parsed contents.
  *
  * Schema S3 layout (written by backup-service): every schema version is stored
  * as a new fields_<timestamp>.json — fields.json is the original and is never
  * overwritten — so the highest-timestamped versioned file is the latest schema,
  * falling back to fields.json when no versioned files exist yet.
  */
-const fetchObjectFields = async (
-  params: IFetchObjectFieldsParams
-): Promise<FetchObjectFieldsResult> => {
-  const { objectApiName, backupJobIds, userId } = params;
-
-  const jobItems = await runWithConcurrency(
-    backupJobIds,
-    BACKUP_JOB_CONCURRENCY,
-    async (backupJobId) => {
-      const result = await docClient.send(
-        new GetCommand({
-          TableName: BACKUP_JOB_TABLE,
-          Key: { backupJobId },
-          ProjectionExpression: 'userId, backupConfigId',
-        })
-      );
-      return result.Item as Pick<IBackupJob, 'userId' | 'backupConfigId'> | undefined;
-    }
-  );
-
-  // Every job must exist and belong to the caller.
-  if (jobItems.some((item) => !item || item.userId !== userId)) {
-    return { ok: false, reason: 'not_exist' };
-  }
-
-  // Business rule: all selected jobs must belong to a single backup configuration.
-  const configIds = [...new Set(jobItems.map((item) => item!.backupConfigId))];
-  if (configIds.length !== 1) {
-    return { ok: false, reason: 'multiple_configs' };
-  }
-  const backupConfigId = configIds[0];
-
+// Resolves a caller-owned config down to its decrypted S3 destination and the
+// schema root prefix (.../schema/) — shared by the fields and picklist readers.
+const resolveSchemaS3 = async (
+  backupConfigId: string,
+  userId: string
+): Promise<{ destConfig: S3Config; schemaRoot: string } | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) {
-    return { ok: false, reason: 'not_exist' };
+    return null;
   }
 
   const crm = await getCrmById(config.crmId);
   if (!crm) {
-    return { ok: false, reason: 'not_exist' };
+    return null;
   }
 
   const destination = await getDestinationById(config.destinationId);
   if (!destination) {
-    return { ok: false, reason: 'not_exist' };
+    return null;
   }
 
   const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
   const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
-  const schemaFolder = `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/${objectApiName}/`;
+  return { destConfig, schemaRoot: `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/` };
+};
+
+const fetchObjectFields = async (
+  params: IFetchObjectFieldsParams
+): Promise<FetchObjectFieldsResult> => {
+  const { objectApiName, backupConfigId, userId } = params;
+
+  const resolved = await resolveSchemaS3(backupConfigId, userId);
+  if (!resolved) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  const { destConfig, schemaRoot } = resolved;
+  const schemaFolder = `${schemaRoot}${objectApiName}/fields/`;
 
   const keys = await listS3Keys(destConfig, schemaFolder);
   const versionedKeys = keys.filter((k) => /fields_\d+\.json$/.test(k));
@@ -907,15 +706,50 @@ const fetchObjectFields = async (
   return { ok: true, schema: JSON.parse(raw) };
 };
 
+/**
+ * Returns the picklist values persisted on S3 by backup-service at
+ * .../schema/{objectApiName}/picklist/{fieldApiName}/values.json — exactly as
+ * stored. { ok:false } when the config isn't resolvable/owned or no values
+ * file exists for the field.
+ */
+const fetchPicklistValues = async (params: {
+  objectApiName: string;
+  fieldApiName: string;
+  backupConfigId: string;
+  userId: string;
+}): Promise<{ ok: true; values: unknown } | { ok: false; reason: 'not_exist' }> => {
+  const { objectApiName, fieldApiName, backupConfigId, userId } = params;
+
+  const resolved = await resolveSchemaS3(backupConfigId, userId);
+  if (!resolved) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  const key = `${resolved.schemaRoot}${objectApiName}/picklist/${fieldApiName}/values.json`;
+  let raw: string;
+  try {
+    raw = await getS3Text(resolved.destConfig, key);
+  } catch (err: any) {
+    // No values.json for this field (not a picklist / not backed up yet).
+    if (err?.name === 'NoSuchKey') {
+      return { ok: false, reason: 'not_exist' };
+    }
+    throw err;
+  }
+  if (!raw) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  return { ok: true, values: JSON.parse(raw) };
+};
+
 export {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
-  getJobActivityLogs,
-  getSnapshotActivityLogs,
   getObjectListByConfigId,
-  getObjectListByBackupJobIds,
   fetchRecordsByBackupJobs,
   repairGlueTables,
   fetchObjectFields,
+  fetchPicklistValues,
 };

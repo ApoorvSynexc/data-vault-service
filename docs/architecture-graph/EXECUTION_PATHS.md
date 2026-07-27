@@ -15,6 +15,8 @@ Index of all major execution flows with links to their detailed documents.
 | Destination Create | execution/DESTINATION_CREATE.md | S3 destination + Athena grant |
 | Restore & Retrieve | execution/RESTORE_RETRIEVE.md | Snapshot logs, object list queries |
 | Compression (Spark) | execution/COMPRESSION.md | Post-backup Hudi/Delta compression, 3-service round trip |
+| Checkpoint (Spark/Java) | execution/CHECKPOINT_FLOW.md | Stage-level crash-resume + periodic snapshot table, Java→Glue→Athena chain |
+| Java middleware (all of it) | java/JAVA_OVERVIEW.md | Hub for the Spark/Java repo: bootstrap, backup pipeline, deltas, schema, Hudi, archival, restore |
 | Token Refresh | execution/TOKEN_REFRESH.md | Salesforce token auto-refresh chain |
 | Stale Job Sweep | execution/STALE_JOB_SWEEP.md | Sweeper recovery mechanism |
 

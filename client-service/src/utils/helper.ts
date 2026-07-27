@@ -208,7 +208,33 @@ const buildSchemaS3Key = ({
   backupConfigId,
   objectName,
   type,
-}: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields.json`;
+}: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields/fields.json`;
+
+// Picklist values live beside the field schema:
+// .../schema/{objectName}/picklist/{fieldApiName}/values.json — mirrors backup-service.
+const buildPicklistS3Key = (params: ISchemaS3KeyParams & { fieldApiName: string }): string =>
+  buildSchemaS3Key(params).replace(
+    '/fields/fields.json',
+    `/picklist/${params.fieldApiName}/values.json`
+  );
+
+// Record-type metadata, single unversioned file: .../schema/{objectName}/record-types.json.
+const buildRecordTypeS3Key = (params: ISchemaS3KeyParams): string =>
+  buildSchemaS3Key(params).replace('/fields/fields.json', '/record-types.json');
+
+// Order-independent schema equality by field identifier + dataType only — mirrors
+// backup-service so the /payload drift check matches the backup's own comparison.
+const schemasAreEqual = (existing: any[], latest: any[]): boolean => {
+  if (existing.length !== latest.length) {
+    return false;
+  }
+  const key = (f: any): string => f.apiName ?? f.name ?? '';
+  const sorted = (arr: any[]) => [...arr].sort((a, b) => key(a).localeCompare(key(b)));
+  return sorted(existing).every((ef, i) => {
+    const lf = sorted(latest)[i];
+    return key(ef) === key(lf) && ef.dataType === lf.dataType;
+  });
+};
 
 
 export {
@@ -224,5 +250,8 @@ export {
   formatSalesforceValueByDataType,
   formatFieldValuesForSOQL,
   flattenBackupObjects,
-  buildSchemaS3Key
+  buildSchemaS3Key,
+  buildPicklistS3Key,
+  buildRecordTypeS3Key,
+  schemasAreEqual
 };

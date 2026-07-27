@@ -1,21 +1,23 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { buildPayload } from '../../../services/payload';
+import { buildPayload, buildRestorePayload } from '../../../services/payload';
 import { getBackupConfigById } from '../../../services/backup-config';
 import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
 import { COMPRESSION_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
-import { decryptFromTransport, encryptToTransport } from '../../../utils/encryption';
+import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
 
-// Decrypts a transport payload, or returns null if it isn't a usable encrypted string.
-// Shared by both handlers so the invalid/undecryptable cases stay one code path.
+// Decrypts a request, or returns null if it isn't decryptable. Accepts both shapes
+// Spark sends: a base64 transport string, or the raw { ciphertext, iv } envelope
+// posted as the body itself. Shared by both handlers so the invalid/undecryptable
+// cases stay one code path.
 const decryptRequest = <T>(payload: unknown): T | null => {
-  if (!payload || typeof payload !== 'string') {
-    return null;
-  }
   try {
-    return JSON.parse(decryptFromTransport(payload)) as T;
+    const plaintext = typeof payload === 'string'
+      ? decryptFromTransport(payload)
+      : decrypt(readEnvelope(payload));
+    return JSON.parse(plaintext) as T;
   } catch (error) {
     logger.error('payload decryption failed:', error);
     return null;
@@ -24,42 +26,55 @@ const decryptRequest = <T>(payload: unknown): T | null => {
 
 /**
  * POST /spark-job/build-payload
- * Body:     { payload: "<encrypted-string>" }   → decrypts to { backupConfigId, backupJobIds? }
- * Response: { payload: "<encrypted-built-payload>" }
+ * Body:     encrypted envelope → decrypts to { backupConfigId } | { restoreConfigId }
+ * Response: raw Base64(JSON) body — no makeResponse envelope, no encryption. Spark
+ *           (JsonUtils.java) base64-decodes the body and parses the payload directly,
+ *           so any wrapper breaks it ("Illegal base64 character 7b"). Creds travel
+ *           base64-only inside it — TLS is the transport protection.
  *
- * Decrypts the request, builds the EMR payload for the requested jobs, marks those jobs
- * COMPRESSION_JOB_IN_PROGRESS, and returns the payload re-encrypted. The raw built payload
- * (which contains destination credentials) is never returned unencrypted.
+ * Decrypts the request, resolves the config's eligible jobs (status SUCCESS — i.e. not
+ * failed, not compressed, not compression-in-progress), builds the EMR payload for them,
+ * marks them COMPRESSION_JOB_IN_PROGRESS, and returns the payload.
  */
+const sendSparkPayload = (res: IResponse, built: unknown): void => {
+  res.status(200).send(Buffer.from(JSON.stringify(built)).toString('base64'));
+};
+
 const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { payload } = req.body as { payload?: unknown };
+  console.log('BODY ==> ', JSON.stringify(req.body));
+  // Spark posts the encrypted envelope as the body itself; a wrapped
+  // { payload: "<string>" } body is also accepted.
+  const payload = (req.body as { payload?: unknown })?.payload ?? req.body;
   logger.info('[COMPRESSION] build-payload request received');
 
-  if (!payload || typeof payload !== 'string') {
-    return makeResponse(req, res, 400, false, 'params_required');
-  }
-
-  const decrypted = decryptRequest<{ backupConfigId?: string; backupJobIds?: string[] }>(payload);
+  const decrypted = decryptRequest<{
+    backupConfigId?: string;
+    restoreConfigId?: string;
+  }>(payload);
   if (!decrypted) {
     return makeResponse(req, res, 400, false, 'invalid_payload');
   }
   logger.info('payload decrypted');
 
-  const { backupConfigId, backupJobIds } = decrypted;
+  // Restore builds have a distinct payload shape and no compression lifecycle:
+  // there are no jobs to mark COMPRESSION_JOB_IN_PROGRESS, so this returns early.
+  if (decrypted.restoreConfigId) {
+    const builtRestore = await buildRestorePayload(decrypted.restoreConfigId);
+    logger.info(`[RESTORE] build-payload complete | restoreConfigId=${decrypted.restoreConfigId}`);
+    return sendSparkPayload(res, builtRestore);
+  }
+
+  const { backupConfigId } = decrypted;
   if (!backupConfigId) {
     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  if (backupJobIds !== undefined && !Array.isArray(backupJobIds)) {
-    return makeResponse(req, res, 400, false, 'params_required');
-  }
-
-  // Builds first: it validates that every requested id belongs to this config, so a bad
-  // request can't strand jobs in COMPRESSION_JOB_IN_PROGRESS. Still ahead of Spark's work.
-  const built = await buildPayload(backupConfigId, backupJobIds);
+  // buildPayload resolves the eligible job set itself (isCompressible), so the request
+  // carries no job ids to validate.
+  const built = await buildPayload(backupConfigId);
 
   // objectOperations is keyed by backupJobId, so this is exactly the set Spark will compress.
-  const jobIds = Object.keys(built.objectOperations);
+  const jobIds = Object.keys(built.details.objectOperations);
   const { failed } = await setCompressionStatusBulk({
     backupConfigId,
     jobs: jobIds.map((backupJobId) => ({ backupJobId, status: COMPRESSION_STATUS.inProgress })),
@@ -70,16 +85,15 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
     return makeResponse(req, res, 400, false, 'compression_status_update_failed');
   }
 
-  const encrypted = encryptToTransport(JSON.stringify(built));
   logger.info(`[COMPRESSION] build-payload complete | configId=${backupConfigId} jobs=${jobIds.length} status=${COMPRESSION_STATUS.inProgress}`);
 
-  return makeResponse(req, res, 200, true, 'fetch', { payload: encrypted });
+  return sendSparkPayload(res, built);
 };
 
 /**
  * POST /spark-job/update-spark-job-status
  * Body:     { payload: "<encrypted-string>" }
- *           → decrypts to { backupConfigId, backupJobIds, success, errorMessage? }
+ *           → decrypts to { backupConfigId, backupJobIds, success, errorMessage?, isCheckpointsCreated? }
  * Response: { updated: [...], failed: [{ backupJobId, reason }] }
  *
  * Terminal step of the compression lifecycle. Spark compresses the whole config as one
@@ -89,25 +103,22 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
  * on this config, so a mismatched run can't write a foreign job.
  */
 const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { payload } = req.body as { payload?: unknown };
+  const payload = (req.body as { payload?: unknown })?.payload ?? req.body;
   logger.info('[COMPRESSION] update-spark-job-status request received');
-
-  if (!payload || typeof payload !== 'string') {
-    return makeResponse(req, res, 400, false, 'params_required');
-  }
 
   const decrypted = decryptRequest<{
     backupConfigId?: string;
     backupJobIds?: string[];
     success?: boolean;
     errorMessage?: string;
+    isCheckpointsCreated?: boolean;
   }>(payload);
   if (!decrypted) {
     return makeResponse(req, res, 400, false, 'invalid_payload');
   }
   logger.info('payload decrypted');
 
-  const { backupConfigId, backupJobIds, success, errorMessage } = decrypted;
+  const { backupConfigId, backupJobIds, success, errorMessage, isCheckpointsCreated } = decrypted;
   if (!backupConfigId) {
     return makeResponse(req, res, 400, false, 'id_required');
   }
@@ -150,12 +161,16 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
   }
 
   // Compression succeeded — ensure the current-state Hudi and Delta Glue tables
-  // exist so Athena can query the compressed output. Best-effort: the job status
-  // is already committed, so a Glue failure is logged, never fatal to the response.
+  // (plus checkpoints, when Spark reports it wrote them) exist so Athena can
+  // query the compressed output. Best-effort: the job status is already
+  // committed, so a Glue failure is logged, never fatal to the response.
   // Idempotent, so retries / duplicate completion events are safe.
   if (success) {
     try {
-      const glueResult = await ensureCompressionGlueTables(backupConfigId);
+      const glueResult = await ensureCompressionGlueTables(
+        backupConfigId,
+        isCheckpointsCreated === true
+      );
       if (glueResult?.failed.length) {
         logger.warn(
           `[COMPRESSION] glue ensure partial | configId=${backupConfigId} ensured=${glueResult.ensured.length} failed=${JSON.stringify(glueResult.failed)}`

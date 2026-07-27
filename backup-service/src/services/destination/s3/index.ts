@@ -30,6 +30,37 @@ const getS3Client = (config: IDestinationConfig): S3Client => {
   return client;
 };
 
+// Lists immediate child "folder" prefixes under a prefix (delimiter listing) —
+// e.g. year=2026/, year=2025/ — without enumerating every object beneath them.
+export const listS3Prefixes = async (
+  config: IDestinationConfig,
+  prefix: string
+): Promise<string[]> => {
+  const client = getS3Client(config);
+
+  const prefixes: string[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const result = await client.send(
+      new ListObjectsV2Command({
+        Bucket: config.bucketName,
+        Prefix: prefix,
+        Delimiter: '/',
+        ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
+      })
+    );
+    for (const p of result.CommonPrefixes ?? []) {
+      if (p.Prefix) {
+        prefixes.push(p.Prefix);
+      }
+    }
+    continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+  } while (continuationToken !== undefined);
+
+  return prefixes.sort();
+};
+
 export const uploadToS3 = async (
   config: IDestinationConfig,
   key: string,

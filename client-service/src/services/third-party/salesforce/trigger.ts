@@ -1,10 +1,12 @@
 import JSZip from 'jszip';
-import { createApexSecret, salesforceRequest, SalesforceTokens } from './index';
-import { IBackupConfig } from '../../../models';
+import { salesforceRequest, SalesforceTokens } from './index';
+import { IBackupConfig, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
 import { getUser } from '../../user';
 import { timer } from '../../../utils/helper';
 import { decrypt } from '../../../utils/encryption';
+import { getMasterChildApiNames } from './apex';
+import { SCHEDULE_MODE } from '../../../constant';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
 const NAMESPACE_PREFIX = 'SYX_DVV';
@@ -507,6 +509,36 @@ const createPermissionSet = async (
 };
 
 // ---------------------------------------------------------------------------
+// Expand the configured objects with their Master-Detail children so a trigger
+// is created on each child too. Deduped (case-insensitive) — a child reachable
+// from two parents gets a single trigger. Best-effort: a failed children lookup
+// for one object leaves the rest of the list intact.
+// ---------------------------------------------------------------------------
+const expandWithMasterChildren = async (
+  user: IUser,
+  objectApiNames: string[]
+): Promise<string[]> => {
+  const byName = new Map<string, string>(); // lowercased key -> original casing
+  for (const name of objectApiNames) byName.set(name.toLowerCase(), name);
+
+  await Promise.all(
+    objectApiNames.map(async (name) => {
+      try {
+        const childNames = await getMasterChildApiNames(user, name, SCHEDULE_MODE.realtime);
+        for (const child of childNames) {
+          const key = child.toLowerCase();
+          if (!byName.has(key)) byName.set(key, child);
+        }
+      } catch (err) {
+        console.log(`Error fetching master children for ${name}:`, err);
+      }
+    })
+  );
+
+  return Array.from(byName.values());
+};
+
+// ---------------------------------------------------------------------------
 // Create triggers for one or more objects sequentially.
 // Handler class is ensured once before all trigger creations.
 // Permission set is set up after using only the successfully created triggers.
@@ -810,8 +842,8 @@ const realTimeTriggerManagement = async (
     const objectApiNames = config.objectNames;
 
     if (operation === 'create') {
-      await createApexSecret({ user, body: { webhookSecret: config.backupConfigId } });
-      return createTriggers(instanceUrl, tokens, objectApiNames);
+      const expandedNames = await expandWithMasterChildren(user, objectApiNames);
+      return createTriggers(instanceUrl, tokens, expandedNames);
     }
     if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
     if (operation === 'inactivate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Inactive'); }
