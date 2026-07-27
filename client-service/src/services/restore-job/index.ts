@@ -56,7 +56,7 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
     bucketName: sourceDecryptedDestination.bucketName,
     region: sourceDecryptedDestination?.region,
     folderPath: sourceDecryptedDestination?.folderPath,
-    csvFilePath: 'salesforce/351bbc42-7f00-4d56-af09-64cdfd48e4f0/backup/027c85e7-52ca-4080-8d61-cd897871d974/raw_data/d3b30f04-4959-4e1e-8343-b9e1e1bcdf5d',
+    csvFilePath: 'salesforce/0f0d2522-c2a8-4cce-bbf9-2a94d4a872f9/backup/f397f146-8ddc-41f7-8ab9-e5b5da86f5c3/raw_data/ec3f5732-9a38-40ca-b0f3-e090e5b6ff7c',
     encryptedKeys: sourceEncryptedKeys
   };
 

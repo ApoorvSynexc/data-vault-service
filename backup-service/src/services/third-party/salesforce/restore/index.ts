@@ -49,12 +49,16 @@ const submitIngestChunk = async (
   tokens: SalesforceTokens,
   objectName: string,
   operation: 'insert' | 'update' | 'upsert',
+  externalIdFieldName: string | undefined,
   chunk: CsvChunk
 ): Promise<string> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
-  const job = await createBulkJob({ instanceUrl, tokens, objectName, operation });
+  const job = await createBulkJob({ instanceUrl, tokens, objectName, operation, externalIdFieldName });
+  console.log("111111111");
   await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
+  console.log("222222222");
   await closeBulkJob(instanceUrl, tokens, job.id);
+  console.log("333333333");
   return job.id;
 };
 
@@ -69,7 +73,8 @@ const restoreObjectData = async (
   objectName: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
-  operation: 'insert' | 'update' | 'upsert'
+  operation: 'insert' | 'update' | 'upsert',
+  externalIdFieldName: string
 ): Promise<string[]> => {
   const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}/inserts`);
   console.log(keys);
@@ -85,7 +90,7 @@ const restoreObjectData = async (
     if (!chunk || !chunk.rows.length) {
       return;
     }
-    const jobId = await submitIngestChunk(instanceUrl, tokens, objectName, operation, chunk);
+    const jobId = await submitIngestChunk(instanceUrl, tokens, objectName, operation, externalIdFieldName, chunk);
     submittedJobIds.push(jobId);
     chunk = newChunk(header!);
   };
@@ -127,6 +132,7 @@ const restoreObjectData = async (
 export const runSalesforceRestore = async (
   payload: RunSalesforceRestorePayload
 ): Promise<'SUCCESS' | 'FAILED'> => {
+  let externalIdFieldName = '';
   const {
     restoreId,
     restoreJobId,
@@ -160,6 +166,7 @@ export const runSalesforceRestore = async (
       break;
     case 'OVERWRITE':
       operation = 'upsert';
+      externalIdFieldName = 'Id'; // Salesforce's own docs say this is the only supported external ID field for upsert-ing to existing records
       break;
     case 'REPLACE_ENTIRE_OBJECT':
       throw new Error('REPLACE_ENTIRE_OBJECT restore mode is not implemented yet');
@@ -187,7 +194,8 @@ export const runSalesforceRestore = async (
     object.name,
     destinationSalesforceCredentials.instanceUrl,
     tokens,
-    operation
+    operation,
+    externalIdFieldName
   );
 
   logger.info(`[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`);
