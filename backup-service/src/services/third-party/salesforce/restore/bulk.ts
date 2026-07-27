@@ -13,10 +13,11 @@ interface ICreateJob {
   tokens: SalesforceTokens;
   objectName: string;
   operation: 'insert' | 'update' | 'upsert';
+  externalIdFieldName?: string;
 }
 
 const createBulkJob = async (payload: ICreateJob): Promise<IBulkDeleteJob> => {
-  const { instanceUrl, tokens, objectName, operation } = payload;
+  const { instanceUrl, tokens, objectName, operation, externalIdFieldName } = payload;
   const response = await salesforceRequest(
     {
       url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`,
@@ -25,6 +26,7 @@ const createBulkJob = async (payload: ICreateJob): Promise<IBulkDeleteJob> => {
         object: objectName,
         contentType: 'CSV',
         operation,
+        externalIdFieldName,
       }),
     },
     tokens
@@ -44,6 +46,9 @@ const uploadDataToJob = async (
       url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/batches`,
       method: 'PUT',
       body: csvData,
+      headers: {
+        'Content-Type': 'text/csv',
+      },
     },
     tokens
   );

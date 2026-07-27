@@ -30,6 +30,7 @@ interface SalesforceRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: any;
   query?: Record<string, string | number | boolean>;
+  headers?: Record<string, string>;
 }
 
 export interface SalesforceTokens {
@@ -43,11 +44,13 @@ const salesforceRequest = async <T = any>(
   options: SalesforceRequestOptions,
   tokens: SalesforceTokens
 ): Promise<T> => {
-  const makeCall = (accessToken: string) =>
-    httpRequest<T>({
-      ...options,
-      headers: { Authorization: `Bearer ${accessToken}` },
+  const makeCall = (accessToken: string) =>{
+    const { headers, ...opt } = options;
+    return httpRequest<T>({
+      ...opt,
+      headers: { ...headers, Authorization: `Bearer ${accessToken}` },
     });
+  }
 
   try {
     return await makeCall(tokens.accessToken);
