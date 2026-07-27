@@ -27,22 +27,24 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   const sourceDecryptedDestination = getDecryptedDestinationConfig(soruceBackupDestination);
   const sourceEncryptedKeys = encrypt(JSON.stringify({ accessKeyId: sourceDecryptedDestination.accessKeyId, secretAccessKey: sourceDecryptedDestination.secretAccessKey, }));
 
+  const destinationUser = await getUser({ userId });
+  if (!destinationUser) throw new Error(`user_not_found:${userId}`);
+
   if (params.destination.type === 'DIFFERENT') {
     destinationCrmId = destination?.crmId!;
+  } else {
+    destinationCrmId = destinationUser.crmId!;
   }
 
   const destinationCrm = await getCrmById(destinationCrmId);
   if (!destinationCrm) throw new Error(`crm_not_found:${destinationCrmId}`);
 
-  const destinationUser = await getUser({ userId });
-  if (!destinationUser) throw new Error(`user_not_found:${userId}`);
-
   if (selection.restoreScope.type === 'ALL') {
     destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "PENDING" })) ?? [];
-  } else if(selection.restoreScope.type === 'OBJECT' &&  selection.restoreScope.objects) {
+  } else if (selection.restoreScope.type === 'OBJECT' && selection.restoreScope.objects) {
     destinationObjects = selection.restoreScope.objects.map(name => ({ id: uuidv4(), name, status: "PENDING" }));
-  } else if(selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
-    destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "PENDING" })); 
+  } else if (selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
+    destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "PENDING" }));
   }
 
   const updatedSource = {

@@ -430,7 +430,11 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 
   makeResponse(req, res, 201, true, 'create');
-  await createRestoreJob(payload);
+  try{
+    await createRestoreJob(payload);
+  } catch (error) {
+    console.error('Error creating restore job:', error);
+  }
 }
 
 export const restoreRetrieveJobController = wrapController({

@@ -160,6 +160,7 @@ export const createRestoreValidation = (req: Request, res: Response, next: NextF
   const schema = Joi.object({
     crmId: Joi.string().optional(),
     source: Joi.object({
+      backupConfigId: Joi.string().required(),
       backupJobIds: Joi.array().items(Joi.string()).min(1).required(),
     }).required(),
     selection: Joi.object({
