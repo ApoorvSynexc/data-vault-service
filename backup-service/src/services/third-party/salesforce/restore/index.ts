@@ -14,6 +14,7 @@ interface RunSalesforceRestorePayload {
     bucketName: string;
     region: string;
     csvFilePath: string;
+    backupConfigId: string;
   };
   destinationSalesforceCredentials: {
     access_token: string;
@@ -177,7 +178,7 @@ export const runSalesforceRestore = async (
     accessToken: destinationSalesforceCredentials.access_token,
     refreshToken: destinationSalesforceCredentials.refresh_token,
     crmId: '', // not carried on this payload — unused by the plain-fetch calls below
-    backupConfigId: restoreId, // placeholder — no refresh path scoped to restores yet
+    backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
   };
 
   const jobIds = await restoreObjectData(
