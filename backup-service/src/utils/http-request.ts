@@ -57,5 +57,7 @@ export async function httpRequest<TResponse = any, TBody = any>(
     throw new Error(`HTTP Error ${response.status}: ${errorMessage}`);
   }
 
-  return response.json() as Promise<TResponse>;
+  const text = await response.text();
+  if (!text) return undefined as TResponse;
+  return JSON.parse(text) as TResponse;
 }
