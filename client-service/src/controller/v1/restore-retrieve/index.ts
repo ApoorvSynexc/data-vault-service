@@ -20,6 +20,7 @@ import {
   fetchPicklistValues,
   createRestoreJob,
   tiggerRestoreJob,
+  getRestoresWithPagination,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -439,6 +440,31 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 }
 
+const listRestoresHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { limit, cursor } = req.query as Record<string, string>;
+  const userId = req.user!.userId;
+
+  const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
+  const { search, status, createdAtFrom, createdAtTo } = req.query as Record<string, string>;
+
+  const result = await getRestoresWithPagination(
+    {
+      userId,
+      ...(search && search.length > 0 && { search }),
+      ...(status && { status }),
+      ...(createdAtFrom && { createdAtFrom }),
+      ...(createdAtTo && { createdAtTo }),
+    },
+    { limit: limitNum, cursor }
+  );
+
+  const { documents, nextCursor } = result;
+  makeResponse(req, res, 200, true, 'fetch', documents, {
+    limit: limitNum,
+    nextCursor,
+  });
+};
+
 export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
@@ -448,4 +474,5 @@ export const restoreRetrieveJobController = wrapController({
   repairGlueTablesHandler,
   createRestoreHandler,
   getPicklistFieldValuesHandler,
+  listRestoresHandler,
 });
