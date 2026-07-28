@@ -79,6 +79,88 @@ const updateRestoreJobStatus = async (params: UpdateRestoreJobStatusParams): Pro
   }
 };
 
+interface UpdateRestoreObjectParams {
+  restoreJobId: string;
+  objectName: string;
+  status?: "FAILED" | "SUCCESS";
+  // Accumulated via DynamoDB ADD (not SET) — submitIngestChunk reports a delta
+  // per chunk, and a single object can span multiple chunks/ingest jobs, so a
+  // plain SET would overwrite the running total instead of adding to it.
+  processedRecordCount?: number;
+  failedRecordCount?: number;
+  errorMessage?: string;
+}
+
+// Mirrors updateBackupObject's array-index update pattern (backup-job service),
+// just against RESTORE_JOB_TABLE's smaller destination.objects[] shape. Called
+// after each ingest chunk so per-object restore progress is visible mid-run,
+// not just once the whole job finishes.
+//
+// DynamoDB only supports targeted array-element updates by literal numeric
+// index, not by matching a property value, so objectName has to be resolved to
+// its current index with a fresh read before every write. Object names are
+// unique within destination.objects[], so this always resolves to exactly one
+// element (or none, if the name doesn't exist).
+const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<void> => {
+  const { restoreJobId, objectName, status, processedRecordCount, failedRecordCount, errorMessage } = params;
+  const now = new Date().toISOString();
+
+  const job = await getRestoreJobById(restoreJobId);
+  const objectIndex = job?.destination.objects.findIndex((o) => o.name === objectName) ?? -1;
+  if (objectIndex === -1) {
+    return;
+  }
+
+  const setParts = ['updatedAt = :updatedAt'];
+  const addParts: string[] = [];
+  const expressionNames: Record<string, string> = { '#objects': 'objects' };
+  const expressionValues: Record<string, any> = { ':updatedAt': now };
+
+  if (status !== undefined) {
+    setParts.push(`#objects[${objectIndex}].#status = :status`);
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = status;
+  }
+  if (errorMessage !== undefined) {
+    setParts.push(`#objects[${objectIndex}].#errorMessage = :errorMessage`);
+    expressionNames['#errorMessage'] = 'errorMessage';
+    expressionValues[':errorMessage'] = errorMessage;
+  }
+  if (processedRecordCount) {
+    addParts.push(`#objects[${objectIndex}].#processedRecordCount :processedRecordCount`);
+    expressionNames['#processedRecordCount'] = 'processedRecordCount';
+    expressionValues[':processedRecordCount'] = processedRecordCount;
+  }
+  if (failedRecordCount) {
+    addParts.push(`#objects[${objectIndex}].#failedRecordCount :failedRecordCount`);
+    expressionNames['#failedRecordCount'] = 'failedRecordCount';
+    expressionValues[':failedRecordCount'] = failedRecordCount;
+  }
+
+  const updateExpression = [
+    `SET ${setParts.join(', ')}`,
+    ...(addParts.length ? [`ADD ${addParts.join(', ')}`] : []),
+  ].join(' ');
+
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: RESTORE_JOB_TABLE,
+        Key: { restoreJobId },
+        UpdateExpression: updateExpression,
+        ExpressionAttributeNames: expressionNames,
+        ExpressionAttributeValues: expressionValues,
+        ConditionExpression: 'attribute_exists(restoreJobId)',
+      })
+    );
+  } catch (error: any) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
+  }
+};
+
 const getRestoreJobById = async (restoreJobId: string): Promise<IRestoreJob | null> => {
   const result = await docClient.send(
     new GetCommand({
@@ -115,6 +197,7 @@ const getRestoreJobsByRestoreId = async (restoreId: string): Promise<IRestoreJob
 
 export {
   updateRestoreJobStatus,
+  updateRestoreObject,
   getRestoreJobById,
   getRestoreJobsByUserId,
   getRestoreJobsByRestoreId,
