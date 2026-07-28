@@ -1,6 +1,7 @@
 import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
+import { updateRestoreJobStatus, updateRestoreObject } from '../../../restore-job';
 import { SalesforceTokens } from '../api-request';
 import {
   createBulkJob,
@@ -57,7 +58,7 @@ const submitIngestChunk = async (
   operation: 'insert' | 'update' | 'upsert',
   externalIdFieldName: string | undefined,
   chunk: CsvChunk
-): Promise<string> => {
+): Promise<{processed: number, failed: number, jobId: string}> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({ instanceUrl, tokens, objectName, operation, externalIdFieldName });
   await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
@@ -75,7 +76,7 @@ const submitIngestChunk = async (
   //   const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
   //   console.log(`\n${failedCsv}`);
   // }
-  return job.id;
+  return { jobId: job.id, processed: status.numberRecordsProcessed ?? 0, failed: status.numberRecordsFailed ?? 0 };
 };
 
 // Streams every backed-up CSV file for this object from S3 — one line at a time,
@@ -84,6 +85,7 @@ const submitIngestChunk = async (
 // to multiple GB, so chunking happens across line boundaries within and across
 // files, not per-file.
 const restoreObjectData = async (
+  restoreJobId: string,
   s3Config: IDestinationConfig,
   csvFilePath: string,
   objectName: string,
@@ -106,8 +108,18 @@ const restoreObjectData = async (
     if (!chunk || !chunk.rows.length) {
       return;
     }
-    const jobId = await submitIngestChunk(instanceUrl, tokens, objectName, operation, externalIdFieldName, chunk);
-    submittedJobIds.push(jobId);
+    const job = await submitIngestChunk(instanceUrl, tokens, objectName, operation, externalIdFieldName, chunk);
+    submittedJobIds.push(job.jobId);
+    // Accumulate this chunk's processed/failed counts onto the object's running
+    // total — a single object can span multiple chunks, so this fires once per
+    // chunk rather than once at the very end of the object.
+    await updateRestoreObject({
+      restoreJobId,
+      objectName,
+      processedRecordCount: job.processed,
+      failedRecordCount: job.failed,
+      status: job.failed ? 'FAILED' : 'SUCCESS',
+    });
     chunk = newChunk(header!);
   };
 
@@ -204,7 +216,8 @@ export const runSalesforceRestore = async (
     backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
   };
 
-  const jobIds = await restoreObjectData(
+  await restoreObjectData(
+    restoreJobId,
     s3Config,
     sourceS3Credentials.csvFilePath,
     object.name,

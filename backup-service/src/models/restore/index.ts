@@ -59,6 +59,7 @@ export interface IRestore {
   userId: string; // GSI: userId-index
   crmId?: string; // GSI: crmId-index
   status: string; // DRAFT | PENDING | RUNNING | SUCCESS | FAILED
+  errorMessage?: string;
 
   source: {
     backupJobIds: string[];
