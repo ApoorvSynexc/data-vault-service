@@ -54,11 +54,11 @@ const fetchTrigger = async (
 // Pure helper — builds the Apex trigger body string for a given object.
 // Centralised here so createTriggers and activateTriggers both use the same body.
 // ---------------------------------------------------------------------------
+const triggerNameFor = (objectApiName: string): string =>
+  `DataVault_${objectApiName.replace('__c', '')}_Trigger`;
+
 const buildTriggerBody = (objectApiName: string): string => {
-  let triggerName = `DataVault_${objectApiName}_Trigger`;
-  if (triggerName.includes("__c")) {
-    triggerName = triggerName.replace('__c', '');
-  }
+  const triggerName = triggerNameFor(objectApiName);
   return (
     `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n` +
     `    try {\n` +
@@ -106,10 +106,7 @@ const createSingleTrigger = async (
   tokens: SalesforceTokens,
   objectApiName: string
 ): Promise<void> => {
-  let triggerName = `DataVault_${objectApiName}_Trigger`;
-  if (triggerName.includes("__c")) {
-    triggerName = triggerName.replace('__c', '');
-  }
+  const triggerName = triggerNameFor(objectApiName);
 
   const packageXml =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
@@ -554,11 +551,8 @@ const createTriggers = async (
   const results: ITriggerResult[] = [];
 
   for (let i = 0; i < objectApiNames.length; i++) {
-    let objectApiName = objectApiNames[i];
-    let triggerName = `DataVault_${objectApiName}_Trigger`;
-    if (triggerName.includes("__c")) {
-      triggerName = triggerName.replace('__c', '');
-    }
+    const objectApiName = objectApiNames[i];
+    const triggerName = triggerNameFor(objectApiName);
     try {
       const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
       if (existing?.Status === 'Active') {
