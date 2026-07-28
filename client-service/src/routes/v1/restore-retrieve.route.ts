@@ -16,6 +16,7 @@ import { createRestoreValidation } from '../../middlewares';
 const router = Router();
 
 router.post('/', createRestoreValidation, restoreRetrieveJobController.createRestoreHandler);
+router.get('/config/list', restoreRetrieveJobController.listRestoresHandler);
 router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler);
 router.get('/get-objectlist-by-configid', restoreRetrieveJobController.getObjectListByConfigIdHandler);
 router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);

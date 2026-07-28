@@ -20,6 +20,7 @@ import {
   fetchPicklistValues,
   createRestoreJob,
   tiggerRestoreJob,
+  getRestoresWithPagination,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -433,12 +434,36 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   makeResponse(req, res, 201, true, 'create');
   try{
     const restoreJob = await createRestoreJob(payload);
-    restoreJob.source.csvFilePath = 'http://salesforce/351bbc42-7f00-4d56-af09-64cdfd48e4f0/backup/027c85e7-52ca-4080-8d61-cd897871d974/raw_data/d3b30f04-4959-4e1e-8343-b9e1e1bcdf5d'
     await tiggerRestoreJob(restoreJob);
   } catch (error) {
     console.error('Error creating restore job:', error);
   }
 }
+
+const listRestoresHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { limit, cursor } = req.query as Record<string, string>;
+  const userId = req.user!.userId;
+
+  const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
+  const { search, status, createdAtFrom, createdAtTo } = req.query as Record<string, string>;
+
+  const result = await getRestoresWithPagination(
+    {
+      userId,
+      ...(search && search.length > 0 && { search }),
+      ...(status && { status }),
+      ...(createdAtFrom && { createdAtFrom }),
+      ...(createdAtTo && { createdAtTo }),
+    },
+    { limit: limitNum, cursor }
+  );
+
+  const { documents, nextCursor } = result;
+  makeResponse(req, res, 200, true, 'fetch', documents, {
+    limit: limitNum,
+    nextCursor,
+  });
+};
 
 export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
@@ -449,4 +474,5 @@ export const restoreRetrieveJobController = wrapController({
   repairGlueTablesHandler,
   createRestoreHandler,
   getPicklistFieldValuesHandler,
+  listRestoresHandler,
 });
