@@ -19,7 +19,7 @@ import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
 import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
 import { updateBackupConfig } from '../backup-config';
-import { getRestoreById } from '../restore';
+import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
@@ -150,7 +150,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
   } finally {
     activeJobs.delete(backupJobId);
   }
@@ -264,8 +264,8 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
         status: JOB_STATUS.failed,
         completedAt: dayjs().toISOString(),
         errorMessage: err?.message ?? 'Unknown error',
-      }).catch(() => {}),
-      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => {}),
+      }).catch(() => { }),
+      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => { }),
     ]);
   } finally {
     activeJobs.delete(backupJobId);
@@ -335,6 +335,10 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       status: result === 'FAILED' ? JOB_STATUS.failed : JOB_STATUS.success,
       completedAt: dayjs().toISOString(),
     });
+    await updateRestore({
+      restoreId,
+      status: result === 'FAILED' ? JOB_STATUS.failed : JOB_STATUS.success,
+    });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
     await updateRestoreJobStatus({
@@ -342,7 +346,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
   } finally {
     activeJobs.delete(restoreJobId);
   }
