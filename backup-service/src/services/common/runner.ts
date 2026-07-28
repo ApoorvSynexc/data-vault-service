@@ -309,17 +309,8 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       throw new Error(`Restore job ${restoreJobId}: parent restore ${restoreId} not found`);
     }
 
-    // `source` and `destination` are stored as GCM envelopes (models/restore-job)
-    // — decrypt them into the plaintext shapes the CRM handler expects, exactly
-    // as the backup path does with its destination credentials above.
-    const restoreSource = JSON.parse(decrypt(source)) as IRestoreJobSource;
-    const restoreDestination = JSON.parse(
-      decrypt({
-        ciphertext: destination.ciphertext,
-        iv: destination.iv,
-        authTag: destination.authTag,
-      })
-    ) as IRestoreJobDestination;
+    const restoreSource = source as unknown as IRestoreJobSource;
+    const restoreDestination = destination as unknown as IRestoreJobDestination;
 
     const handler = getRestoreCrmHandler(restoreDestination.crmName);
     const result = await handler.runRestore(
