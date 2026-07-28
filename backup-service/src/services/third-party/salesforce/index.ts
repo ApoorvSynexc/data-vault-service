@@ -315,7 +315,12 @@ const salesforceHandler: ICrmBackupHandler = {
               restoreId,
               restoreJobId,
               object,
-              sourceS3Credentials: {...sourceS3Credentials, bucketName: source.bucketName, region: source.region, csvFilePath: source.folderPath},
+              sourceS3Credentials: {
+                ...sourceS3Credentials,
+                bucketName: source.bucketName,
+                region: source.region,
+                csvFilePath: source.folderPath,
+              },
               destinationSalesforceCredentials,
               conflict,
             }).catch((err: any) => {
