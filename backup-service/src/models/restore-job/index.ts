@@ -28,6 +28,7 @@ export interface IRestoreJobDestination {
     processedRecordCount?: number;
     failedRecordCount?: number;
     errorMessage?: string;
+    errors?: string[];
   }>;
 
   instanceUrl: string;

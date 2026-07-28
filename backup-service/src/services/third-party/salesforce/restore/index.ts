@@ -95,14 +95,15 @@ const restoreObjectData = async (
   externalIdFieldName: string
 ): Promise<string[]> => {
   const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}/inserts`);
-  await updateRestoreObject({
-    restoreJobId,
-    objectName,
-    processedRecordCount: 0,
-    failedRecordCount: 0,
-    status: 'SUCCESS',
-  });
+
   if (!keys.length) {
+    await updateRestoreObject({
+      restoreJobId,
+      objectName,
+      processedRecordCount: 0,
+      failedRecordCount: 0,
+      status: 'SUCCESS',
+    });
     throw new Error(`No backed-up data found for object ${objectName} under ${csvFilePath}`);
   }
 

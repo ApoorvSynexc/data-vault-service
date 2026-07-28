@@ -89,6 +89,7 @@ interface UpdateRestoreObjectParams {
   processedRecordCount?: number;
   failedRecordCount?: number;
   errorMessage?: string;
+  errors?: string[];
 }
 
 // Mirrors updateBackupObject's array-index update pattern (backup-job service),
@@ -116,7 +117,7 @@ interface UpdateRestoreObjectParams {
 // objectIndex, the current counts are already in hand — compute the new total
 // here and SET a plain literal value, which has no such restriction.
 const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<void> => {
-  const { restoreJobId, objectName, status, processedRecordCount, failedRecordCount, errorMessage } = params;
+  const { restoreJobId, objectName, status, processedRecordCount, failedRecordCount, errorMessage, errors } = params;
   const now = new Date().toISOString();
 
   const job = await getRestoreJobById(restoreJobId);
@@ -149,6 +150,11 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     setParts.push(`#destination.#objects[${objectIndex}].#failedRecordCount = :failedRecordCount`);
     expressionNames['#failedRecordCount'] = 'failedRecordCount';
     expressionValues[':failedRecordCount'] = (currentObject.failedRecordCount ?? 0) + failedRecordCount;
+  }
+  if (errors !== undefined) {
+    setParts.push(`#destination.#objects[${objectIndex}].#errors = :errors`);
+    expressionNames['#errors'] = 'errors';
+    expressionValues[':errors'] = [...(currentObject.errors ?? []), ...errors];
   }
 
   const updateExpression = `SET ${setParts.join(', ')}`;
