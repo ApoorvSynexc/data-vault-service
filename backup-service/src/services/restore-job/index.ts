@@ -83,9 +83,9 @@ interface UpdateRestoreObjectParams {
   restoreJobId: string;
   objectName: string;
   status?: "FAILED" | "SUCCESS";
-  // Accumulated via DynamoDB ADD (not SET) — submitIngestChunk reports a delta
-  // per chunk, and a single object can span multiple chunks/ingest jobs, so a
-  // plain SET would overwrite the running total instead of adding to it.
+  // Accumulated across chunks — submitIngestChunk reports a delta per chunk, and
+  // a single object can span multiple chunks/ingest jobs, so this must add to
+  // the running total rather than overwrite it.
   processedRecordCount?: number;
   failedRecordCount?: number;
   errorMessage?: string;
@@ -101,6 +101,16 @@ interface UpdateRestoreObjectParams {
 // its current index with a fresh read before every write. Object names are
 // unique within destination.objects[], so this always resolves to exactly one
 // element (or none, if the name doesn't exist).
+//
+// Counts use SET ... = if_not_exists(path, :zero) + :delta rather than ADD.
+// objects[] entries are created with only {id, name, status} — no count fields
+// — and DynamoDB's ADD action can only implicitly create a *top-level*
+// attribute; it cannot create a brand-new attribute nested inside a list
+// element, which is exactly what processedRecordCount/failedRecordCount are
+// the first time an object is updated. Using ADD there fails with "The
+// document path provided in the update expression is invalid for update".
+// if_not_exists + SET is the standard DynamoDB workaround: it still atomically
+// increments, but SET is allowed to create the nested attribute on first write.
 const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<void> => {
   const { restoreJobId, objectName, status, processedRecordCount, failedRecordCount, errorMessage } = params;
   const now = new Date().toISOString();
@@ -112,7 +122,6 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
   }
 
   const setParts = ['updatedAt = :updatedAt'];
-  const addParts: string[] = [];
   const expressionNames: Record<string, string> = { '#objects': 'objects' };
   const expressionValues: Record<string, any> = { ':updatedAt': now };
 
@@ -127,20 +136,21 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     expressionValues[':errorMessage'] = errorMessage;
   }
   if (processedRecordCount) {
-    addParts.push(`#objects[${objectIndex}].#processedRecordCount :processedRecordCount`);
+    const path = `#objects[${objectIndex}].#processedRecordCount`;
+    setParts.push(`${path} = if_not_exists(${path}, :zero) + :processedRecordCount`);
     expressionNames['#processedRecordCount'] = 'processedRecordCount';
     expressionValues[':processedRecordCount'] = processedRecordCount;
+    expressionValues[':zero'] = 0;
   }
   if (failedRecordCount) {
-    addParts.push(`#objects[${objectIndex}].#failedRecordCount :failedRecordCount`);
+    const path = `#objects[${objectIndex}].#failedRecordCount`;
+    setParts.push(`${path} = if_not_exists(${path}, :zero) + :failedRecordCount`);
     expressionNames['#failedRecordCount'] = 'failedRecordCount';
     expressionValues[':failedRecordCount'] = failedRecordCount;
+    expressionValues[':zero'] = 0;
   }
 
-  const updateExpression = [
-    `SET ${setParts.join(', ')}`,
-    ...(addParts.length ? [`ADD ${addParts.join(', ')}`] : []),
-  ].join(' ');
+  const updateExpression = `SET ${setParts.join(', ')}`;
 
   try {
     await docClient.send(
