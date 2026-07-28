@@ -1,46 +1,7 @@
 import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { RESTORE_JOB_TABLE, JOB_STATUS } from '../../constant';
-import { IRestoreConflict, IRestoreJob } from '../../models';
-import { encrypt } from '../../utils/encryption';
-import { incrementTableCounter } from '../counter';
-
-interface CreateRestoreJobParams {
-  userId: string;
-  restoreId: string;
-  source: Record<string, any>;
-  destination: { type: string; config: Record<string, any> };
-  // Carried from the parent restore request — runRestoreJob hands it straight
-  // to the CRM handler, which needs it to know how to resolve collisions.
-  conflict: IRestoreConflict;
-}
-
-const createRestoreJob = async (params: CreateRestoreJobParams): Promise<IRestoreJob> => {
-  const { userId, restoreId, source, destination, conflict } = params;
-  const now = new Date().toISOString();
-
-  const encryptedSource = encrypt(JSON.stringify(source));
-  const encryptedDestConfig = encrypt(JSON.stringify(destination.config));
-
-  const item: IRestoreJob = {
-    restoreJobId: uuidv4(),
-    restoreId,
-    userId,
-    source: encryptedSource,
-    destination: { type: destination.type, ...encryptedDestConfig },
-    conflict,
-    status: JOB_STATUS.pending,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  await Promise.all([
-    docClient.send(new PutCommand({ TableName: RESTORE_JOB_TABLE, Item: item })),
-    incrementTableCounter(RESTORE_JOB_TABLE, userId),
-    incrementTableCounter(RESTORE_JOB_TABLE, restoreId),
-  ]);
-  return item;
-};
+import { IRestoreJob } from '../../models';
 
 interface UpdateRestoreJobStatusParams {
   restoreJobId: string;
@@ -166,26 +127,26 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
   const currentObject = job.destination.objects[objectIndex];
 
   const setParts = ['updatedAt = :updatedAt'];
-  const expressionNames: Record<string, string> = { '#objects': 'objects' };
+  const expressionNames: Record<string, string> = { '#destination': 'destination', '#objects': 'objects' };
   const expressionValues: Record<string, any> = { ':updatedAt': now };
 
   if (status !== undefined) {
-    setParts.push(`#objects[${objectIndex}].#status = :status`);
+    setParts.push(`#destination.#objects[${objectIndex}].#status = :status`);
     expressionNames['#status'] = 'status';
     expressionValues[':status'] = status;
   }
   if (errorMessage !== undefined) {
-    setParts.push(`#objects[${objectIndex}].#errorMessage = :errorMessage`);
+    setParts.push(`#destination.#objects[${objectIndex}].#errorMessage = :errorMessage`);
     expressionNames['#errorMessage'] = 'errorMessage';
     expressionValues[':errorMessage'] = errorMessage;
   }
   if (processedRecordCount) {
-    setParts.push(`#objects[${objectIndex}].#processedRecordCount = :processedRecordCount`);
+    setParts.push(`#destination.#objects[${objectIndex}].#processedRecordCount = :processedRecordCount`);
     expressionNames['#processedRecordCount'] = 'processedRecordCount';
     expressionValues[':processedRecordCount'] = (currentObject.processedRecordCount ?? 0) + processedRecordCount;
   }
   if (failedRecordCount) {
-    setParts.push(`#objects[${objectIndex}].#failedRecordCount = :failedRecordCount`);
+    setParts.push(`#destination.#objects[${objectIndex}].#failedRecordCount = :failedRecordCount`);
     expressionNames['#failedRecordCount'] = 'failedRecordCount';
     expressionValues[':failedRecordCount'] = (currentObject.failedRecordCount ?? 0) + failedRecordCount;
   }

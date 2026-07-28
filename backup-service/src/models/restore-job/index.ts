@@ -46,8 +46,8 @@ export interface IRestoreJob {
   // Stored encrypted, so these hold the ciphertext envelope — NOT the plaintext
   // IRestoreJobSource / IRestoreJobDestination shapes, which are what
   // `runRestore` receives after decryption.
-  source: EncryptedPayload;
-  destination: { type: string } & EncryptedPayload;
+  source: IRestoreJobSource;
+  destination: IRestoreJobDestination;
   conflict: IRestoreConflict;
   status: string; // PENDING | RUNNING | SUCCESS | FAILED
   startedAt?: string;
