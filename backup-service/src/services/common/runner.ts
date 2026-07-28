@@ -1,5 +1,13 @@
 import dayjs from 'dayjs';
-import { IBackupJob, IBackupObject, IDestinationConfig, IRestoreJob, ISource } from '../../models';
+import {
+  IBackupJob,
+  IBackupObject,
+  IDestinationConfig,
+  IRestoreJob,
+  IRestoreJobDestination,
+  IRestoreJobSource,
+  ISource,
+} from '../../models';
 import {
   BACKUP_STATUS,
   JOB_STATUS,
@@ -301,8 +309,26 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       throw new Error(`Restore job ${restoreJobId}: parent restore ${restoreId} not found`);
     }
 
-    const handler = getRestoreCrmHandler(destination.crmName);
-    const result = await handler.runRestore(restoreId, restoreJobId, source, destination, conflict);
+    // `source` and `destination` are stored as GCM envelopes (models/restore-job)
+    // — decrypt them into the plaintext shapes the CRM handler expects, exactly
+    // as the backup path does with its destination credentials above.
+    const restoreSource = JSON.parse(decrypt(source)) as IRestoreJobSource;
+    const restoreDestination = JSON.parse(
+      decrypt({
+        ciphertext: destination.ciphertext,
+        iv: destination.iv,
+        authTag: destination.authTag,
+      })
+    ) as IRestoreJobDestination;
+
+    const handler = getRestoreCrmHandler(restoreDestination.crmName);
+    const result = await handler.runRestore(
+      restoreId,
+      restoreJobId,
+      restoreSource,
+      restoreDestination,
+      conflict
+    );
 
     await updateRestoreJobStatus({
       restoreJobId,

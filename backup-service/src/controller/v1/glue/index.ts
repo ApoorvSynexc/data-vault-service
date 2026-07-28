@@ -4,7 +4,6 @@ import {
   registerBackupJobPartition,
   ensureHudiCurrentStateTable,
   ensureDeltaTable,
-  ensureCheckpointTable,
 } from '../../../services/third-party/glue';
 import { logger } from '../../../middlewares/logger';
 import { wrapController } from '../../../utils/helper';
@@ -110,8 +109,7 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
  *     backupConfigId: string
  *     objectNames:    string[]
  *     destConfig:     IDestinationConfig
- *     isCheckpointsCreated?: boolean — when true, also ensures the checkpoints table
- *     isArchival?: boolean — when true, only the Hudi table is created (no Delta, no checkpoints)
+ *     isArchival?: boolean — when true, only the Hudi table is created (no Delta)
  *   }
  *
  * Called after Spark reports a successful compression. For each object, ensures
@@ -125,21 +123,12 @@ const repairGlueHandler = async (req: IRequest, res: IResponse): Promise<void> =
  * the rest.
  */
 const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const {
-    crmId,
-    crmName,
-    backupConfigId,
-    objectNames,
-    destConfig,
-    isCheckpointsCreated,
-    isArchival,
-  } = req.body as {
+  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival } = req.body as {
     crmId: string;
     crmName: string;
     backupConfigId: string;
     objectNames: string[];
     destConfig: any;
-    isCheckpointsCreated?: boolean;
     isArchival?: boolean;
   };
 
@@ -162,12 +151,9 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
       const tasks: [string, Promise<boolean>][] = [
         ['hudi', ensureHudiCurrentStateTable(tableParams)],
       ];
-      // ARCHIVAL keeps Hudi only — Delta and checkpoints are skipped entirely.
+      // ARCHIVAL keeps Hudi only — Delta is skipped entirely.
       if (!isArchival) {
         tasks.push(['delta', ensureDeltaTable(tableParams)]);
-        if (isCheckpointsCreated) {
-          tasks.push(['checkpoints', ensureCheckpointTable(tableParams)]);
-        }
       }
 
       const settled = await Promise.allSettled(tasks.map(([, task]) => task));

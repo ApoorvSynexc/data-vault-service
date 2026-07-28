@@ -98,6 +98,7 @@ export interface IDestinationConfig {
   folderPath?: string;
 }
 
+// The AES-256-GCM envelope from utils/encryption.ts, plus the destination type.
 export interface IBackupJobDestination {
   type: string;
   ciphertext: string;

@@ -1,5 +1,8 @@
 # Restore Record Retrieval — Scenario & Solution
 
+> New to this flow? Read [[RETRIEVE_FLOW_WALKTHROUGH]] first — same example,
+> explained step by step. This document is the precise reference.
+
 How `POST /v1/restore-retrieve/retrieve/fetch-records` builds the final
 `rows: [{ record: {...} }]` for the restore flows, across every storage state a
 record can be in. Written 2026-07-23 against
@@ -10,27 +13,23 @@ restore-reconstruct.ts, index.ts).
 
 ## 1. The Problem
 
-A user wants to restore Salesforce records to the state they had **at a chosen
-backup job**. But by the time they ask, the data has moved through several
-storage shapes:
+A user wants to **undo what a set of backup jobs recorded**. But by the time
+they ask, the data has moved through several storage shapes:
 
 | Storage | Table (Glue)                          | What it holds                                                            |
 | ------- | ------------------------------------- | ------------------------------------------------------------------------ |
 | CSV     | `cfg_<cfg>_<obj>`                     | Raw per-job backup rows. **Multiple rows per record Id** (one per job).  |
-| Hudi    | `cfg_<cfg>_<obj>_hudi`                | Current state after compression. **One row per Id.** Deletes removed.    |
-| Delta   | `cfg_<cfg>_<obj>_delta`               | CDC history: `record_id, change_type, change_time, change_data, backup_job_id`. `change_data` for UPDATE = `{ Field: { old, new } }`. |
-| Checkpoint | `cfg_<cfg>_<obj>_checkpoints`      | Optional. **Same schema as the Hudi table** — each row is a full record snapshot for a `backup_job_id`, built from **old** delta values. May not exist; may not cover every record. How/when Spark produces it: CHECKPOINT_FLOW.md. |
+| Hudi    | `cfg_<cfg>_<obj>_hudi`                | Current state after compression. **One row per Id.** Deletes removed. Carries `backup_job_id` — the job that last wrote the record. |
+| Delta   | `cfg_<cfg>_<obj>_delta`               | CDC history: `record_id, change_type, change_time, change_data, backup_job_id`. **Three payload shapes, see §3.1.** |
 
 Inserts write **no** delta row. Compression is what creates `_hudi`/`_delta`;
 a job that is not yet `COMPRESSED` only has CSV rows.
 
 The request can carry **hundreds of backupJobIds and thousands of recordIds**,
-mixing compressed and uncompressed jobs, checkpointed and un-checkpointed
-records — so every step must be a bulk operation. Never one Athena query per
-record (three fixed queries cover the whole compressed path, see §6).
-
-**Ground rule: Hudi is never queried standalone.** Every Hudi read is reached
-through delta membership, CSV membership, or an explicit record-id scope.
+mixing compressed and uncompressed jobs — so every step must be a bulk
+operation. Never one Athena query per record: two fixed queries cover the whole
+compressed path (§4), and results are paged 50 at a time out of 2000-record
+blocks (API_FETCH_RECORDS.md §4).
 
 ---
 
@@ -77,8 +76,8 @@ backup where `003C Size 10→99`, is **not yet compressed** — CSV only):
 | ---- | ------------- | ---- | ---------------- |
 | 003C | JOB_6         | 99   | T6 (Jun)         |
 
-**The request** (RESTORE_ENTIRE_RECORD): *"restore 001A, 002B, 003C to the
-state of JOB_2/JOB_3 era"* →
+**The request** (RESTORE_ENTIRE_RECORD): *"undo what JOB_2 and JOB_3 recorded
+against 001A, 002B, 003C"* →
 
 ```json
 {
@@ -86,8 +85,7 @@ state of JOB_2/JOB_3 era"* →
   "objectApiName": "Account",
   "columnNames": ["Name", "Phone", "Amount", "Stage", "Size"],
   "backupJobIds": ["JOB_1", "JOB_2", "JOB_3", "JOB_6"],
-  "bulkCsvIds": ["001A", "002B", "003C"],
-  "restoreType": "RESTORE_ENTIRE_RECORD"
+  "bulkCsvIds": ["001A", "002B", "003C"]
 }
 ```
 
@@ -96,150 +94,178 @@ ids and runs both pipelines in parallel, merging at the end.
 
 ---
 
-## 3. Decision Tree (per record, not per request)
+## 3. The Rule
+
+> **A restore reverts exactly what the requested backup jobs recorded.**
+> Only deltas whose `backup_job_id` is in the request are undone. Changes made
+> by any other job stay applied.
+
+That is the whole semantic. There is no anchor, no "state as of job X", and no
+point-in-time replay.
 
 ```
 Is the record's job COMPRESSED?
-├── No  → CSV ⟗ Hudi, newest LastModifiedDate wins  (§5)
-└── Yes
-    ↓
-    Does the _checkpoints Glue table exist?
-    ├── No  → Scenario A for every record            (§4.1)
-    └── Yes
-        ↓  (decided independently for EVERY record)
-        Does this record have a usable checkpoint?
-        ├── No  → Scenario A for THIS record only    (§4.1)
-        ├── Checkpoint for the record's anchor job
-        │        → return the checkpoint row as-is   (§4.2)
-        └── Only a NEWER checkpoint
-                 → checkpoint row + replay deltas
-                   newer than the checkpoint          (§4.3)
+├── No  → CSV ⟗ Hudi, newest LastModifiedDate wins   (§5)
+└── Yes → base = Hudi row (or DELETE snapshot),
+          undo every delta belonging to a requested job   (§4)
 ```
 
-"Table exists?" costs nothing: the checkpoint query is simply attempted, and a
-`TABLE_NOT_FOUND` failure is mapped to an empty result — which is
-indistinguishable from "no record has a checkpoint", which is exactly the
-right fallback.
+**Which records are in the result** — a record qualifies two ways, unioned:
 
-The **anchor** of a record = its newest delta among the *requested* jobs. For
-001A with requested jobs {1,2,3}: the JOB_3 delta (T3). The anchor defines
-"the state the user asked for".
+1. its **Hudi row is stamped** with a requested job (`backup_job_id` is
+   provenance for whichever job last wrote the record), or
+2. a requested job **recorded a delta** against it.
+
+(1) is what brings in records a job *inserted* but never changed — inserts
+write no delta, so a delta-only scan misses them. (2) covers records a
+requested job changed but a later job has since touched, which moved the Hudi
+stamp onto that later job.
+
+> ⚠ The checkpoint table is gone. A checkpoint was a snapshot of one job's
+> point-in-time state, which answers a different question from the one this
+> endpoint now asks — using it would silently return the wrong record. It is no
+> longer read, no longer registered in Glue, and no longer written by Spark.
+
+### 3.1 change_type — three payload shapes, three meanings
+
+`buildEntireDeltasSql` projects `change_type` alongside `change_data`, and
+`applyDelta` (restore-reconstruct.ts) dispatches on it. Producer-side detail:
+JAVA_DELTA_MODEL.md.
+
+| `change_type` | `change_data` | What undoing it means |
+| ------------- | ------------- | --------------------- |
+| `UPDATE`, `UNDELETE` | `{ Field: { old, new } }` per changed field | each named field reverts to `old` (`old` absent ⇒ was null ⇒ empty string) |
+| `DELETE` | the **full record** as a flat `{ Field: value }` snapshot | nothing — it is not a field diff. It is a **base**, the only one left once the record is gone from Hudi (§4.3) |
+| `SCHEMA_FIELD_DELETED`, `SCHEMA_FIELD_TYPE_CHANGED` | `{ fieldName, value }` — one delta row per record **per affected field**, old value only | `record[fieldName] = value`. The field was dropped/retyped and then nullified in the main table, so it exists in **neither** Hudi **nor** the caller's `columnNames` — it is added to the output anyway (§4.6) |
+
+Anything unrecognised is treated as `UPDATE`, which is a no-op on a payload
+that is not `{old,new}`-shaped — so legacy rows written without a usable
+`change_type` behave exactly as before.
 
 ---
 
 ## 4. Compressed Path
 
-Three bulk Athena queries, total, no matter how many records:
+**Two bulk Athena queries**, no matter how many jobs or records:
 
-| # | Query (builder)                       | Returns                                                            |
-| - | ------------------------------------- | ------------------------------------------------------------------ |
-| 1 | `buildEntireDeltaChainSql`            | anchor (`record_id`, `t0`) LEFT JOIN **all** strictly-newer deltas |
-| 2 | `buildEntireCheckpointSql`            | the one chosen checkpoint per record (exact job first, else nearest-newer) |
-| 3 | `buildHudiBulkSql`                    | current state for every id query 1 found                           |
+| # | Query (builder) | Returns |
+| - | --------------- | ------- |
+| 1 | `buildEntireBlockSql` | the block: one Hudi row per qualifying record, ordered and seeked |
+| 2 | `buildEntireDeltasSql` | those records' deltas, filtered to the requested jobs |
 
-Everything after that is in-memory grouping in
-`assembleEntireRecords` (restore-reconstruct.ts).
+Plus `buildCompressedDeletedSql` when no filter is set, for records Hudi no
+longer has (§4.3).
 
-### 4.1 Scenario A — no checkpoint (legacy reconstruction)
+### 4.1 Query 1 — the block
 
-**Record 001A**, requested jobs {JOB_1, JOB_2, JOB_3}, no checkpoint row.
-
-Query 1 output for 001A:
-
-```
-anchor t0 = T3            (newest delta within requested jobs = JOB_3's)
-newer deltas (> T3):      T5  {Phone: old 333}
-                          T4  {Name: old Acme, Phone: old 222}
-```
-
-Assembly — start from Hudi, undo newest → oldest; **for a field changed more
-than once, the oldest newer-delta's `old` value wins** (each application
-overwrites the previous):
-
-```
-base (Hudi):   Name=Acme Corp  Phone=444  Amount=2000
-undo T5:                       Phone=333
-undo T4:       Name=Acme       Phone=222        ← overwrites T5's value
-final row:     Name=Acme  Phone=222  Amount=2000   = state at JOB_3  ✓
+```sql
+SELECT <cols> FROM "<obj>_hudi" h
+WHERE (h.backup_job_id IN (<jobs>)                      -- stamped by a requested job
+       OR h."Id" IN (SELECT DISTINCT record_id          -- or has a requested-job delta
+                     FROM "<obj>_delta"
+                     WHERE backup_job_id IN (<jobs>)))
+  AND <filter> AND <keyset seek>
+ORDER BY h."LastModifiedDate" DESC, h."Id" DESC
+LIMIT 2000
 ```
 
-Note the two Phone changes: T5's old (333) is applied first, then T4's old
-(222) replaces it. Walking newest→oldest and letting later applications win is
-what makes the record land exactly on the anchor state.
+Driving the block off **Hudi** rather than the delta table is what makes
+pagination exact: one row per `Id`, and a single sort-key domain (the record's
+current `LastModifiedDate`). Dedup is free, and the keyset seek lands on the
+same value the in-memory sort uses.
 
-**Record 002B** (same request): anchor = JOB_3's delta (T3), newer = T4.
-`Stage: Won → (undo T4) → Open` → final `Stage=Open` = state at JOB_3 ✓.
+The delta side is a `DISTINCT record_id` semi-join over a `backup_job_id`-
+filtered scan — the cheap slice of the delta table, and **no self-join**.
 
-A record whose anchor has **no newer deltas** (nothing changed since) comes
-back as the untouched Hudi row — query 1 still emits its anchor row so the id
-reaches the Hudi fetch.
+### 4.2 Query 2 — the deltas to undo
 
-### 4.2 Scenario B, exact checkpoint
-
-Suppose `_checkpoints` has a snapshot written **for JOB_3** of 001A
-(remember: checkpoint rows carry the **old**-values state for their job):
-
-| Id   | Name | Phone | Amount | backup_job_id | LastModifiedDate |
-| ---- | ---- | ----- | ------ | ------------- | ---------------- |
-| 001A | Acme | 222   | 2000   | JOB_3         | T3'              |
-
-001A's anchor job is JOB_3 → `checkpoint.backup_job_id = anchor_job` →
-`is_exact = 1`. The checkpoint row **is** the final record. No delta replay,
-no dependency on the Hudi row at all:
-
-```
-final row:  Name=Acme  Phone=222  Amount=2000     (checkpoint, as-is)
+```sql
+SELECT record_id, change_time, change_type, change_data FROM "<obj>_delta"
+WHERE backup_job_id IN (<jobs>) AND record_id IN (<the block's ≤2000 ids>)
 ```
 
-Same answer as §4.1 — but reached with zero reconstruction work. That is the
-entire point of checkpoints: pre-computed answers for frequently restored jobs.
+Filtered to the requested jobs, so **every row it returns is one to revert** —
+assembly undoes all of them with no further filtering. Bounded by the block's
+ids, so it stays small however much history the object has.
 
-### 4.3 Scenario B, nearest-newer checkpoint
+No `ORDER BY`: `reconstructRecord` sorts by `change_time` in memory, because a
+field the requested jobs changed more than once must revert to the **oldest**
+of those values.
 
-Now suppose the only checkpoint for 001A is the state **as of JOB_4** (the
-Spark snapshot ran then), and the request anchors at JOB_2:
+### 4.3 Deleted records
 
-| Id   | Name      | Phone | Amount | backup_job_id | LastModifiedDate |
-| ---- | --------- | ----- | ------ | ------------- | ---------------- |
-| 001A | Acme Corp | 333   | 2000   | JOB_4         | T4               |
+A DELETE removes the record from `_hudi`, so query 1 cannot see it. Its full
+last state is in the DELETE delta's `change_data`, fetched by
+`buildCompressedDeletedSql` (the same builder the `deletedOnly` flow uses) and
+merged in as an extra base row.
 
-Selection: not exact (JOB_4 ≠ anchor JOB_2), but its time is newer than the
-anchor → chosen as **nearest newer checkpoint** (if several qualify, the
-lowest checkpoint time wins).
+Hudi rows are passed to assembly **first**, so a live record is never shadowed
+by a stale DELETE snapshot for the same `Id`.
 
-Assembly: base = the checkpoint row, then undo the deltas **baked into it since
-the anchor** — `change_time ∈ (t0, checkpoint_time]` — rewinding the checkpoint
-to the anchor state (bulk-filtered in memory from query 1's rows — no extra
-Athena call). Deltas newer than the checkpoint (T5) are not part of its state
-and are ignored:
+DELETE deltas are no-ops during replay — a snapshot is a base, not a diff — so
+the requested jobs' UPDATE deltas still revert on top of it.
+
+**Filter interaction:** a DELETE-sourced record is rebuilt in memory and never
+passes through the Athena `WHERE`, so the query is skipped entirely when a
+filter is active. That is one less scan, and it avoids returning rows the
+filter meant to exclude. (`ponytail:` marker in restore-reconstruct.ts —
+compile `filterWhere` against `change_data` JSON paths if filtered restores
+need deleted records.)
+
+### 4.4 Worked example
+
+**Record 001A**, requested jobs `{JOB_2, JOB_3}`.
 
 ```
-base (ckpt @T4):  Name=Acme Corp  Phone=333  Amount=2000
-undo T4:          Name=Acme       Phone=222
-undo T3:                                     Amount=1000
-final row:        Name=Acme  Phone=222  Amount=1000   = state at JOB_2  ✓
+Hudi now:  Name=Acme Corp   Phone=444   Amount=2000   (LMD=T5)
+
+Deltas in the delta table:
+  T2  JOB_2  {Phone:  111 → 222}      ← requested
+  T3  JOB_3  {Amount: 1000 → 2000}    ← requested
+  T4  JOB_4  {Name: Acme → Acme Corp, Phone: 222 → 333}
+  T5  JOB_5  {Phone: 333 → 444}
+
+Query 2 returns ONLY T3 and T2 — T4/T5 belong to jobs nobody asked about.
+
+base (Hudi):        Name=Acme Corp   Phone=444   Amount=2000
+undo T3 (JOB_3):                                 Amount=1000
+undo T2 (JOB_2):                     Phone=111
+──────────────────────────────────────────────────────────────
+result:             Name=Acme Corp   Phone=111   Amount=1000
 ```
 
-The Spark side (CheckpointService.java) writes the main table's **pre-update
-snapshot** — the state including every delta up to the checkpoint's own
-LastModifiedDate — which is why the rewind bound is `(anchor, checkpoint]`.
-The benefit over Scenario A: only the deltas inside that window are needed,
-not the whole tail of history since the anchor.
+`Name` keeps its current value: JOB_4 changed it, JOB_4 was not requested, so
+that change is left alone. This is **not** the record as it looked at JOB_3 —
+it is the current record with JOB_2's and JOB_3's changes reverted.
 
-### 4.4 Mixed fallback in one request
+Replay runs newest→oldest and each undo overwrites the last, so a field the
+requested jobs touched twice lands on the oldest of their `old` values.
 
-The decision is per record, so a single request happily does all of the above
-at once:
+### 4.5 Records with no deltas
 
-| Record | Checkpoint state              | Path taken                  |
-| ------ | ----------------------------- | --------------------------- |
-| 001A   | exact for anchor job          | §4.2 checkpoint as-is       |
-| 002B   | none                          | §4.1 Scenario A             |
-| 007X   | only a newer one              | §4.3 checkpoint + replay    |
-| 008Y   | table missing entirely        | §4.1 for **all** records    |
-| 009Z   | no Hudi row, no checkpoint    | **skipped** (deleted record — nothing to build on) |
+A record a requested job **inserted** and never changed has no delta at all —
+inserts write none. It still comes back, via the `h.backup_job_id IN (<jobs>)`
+branch of query 1, and is returned untouched. The previous delta-anchored
+design missed these entirely.
 
-Still three queries.
+### 4.6 Schema-change deltas — fields that no longer exist
+
+`SCHEMA_FIELD_DELETED` / `SCHEMA_FIELD_TYPE_CHANGED` deltas replay like any
+other, but they are the one case that **widens** the output: the field they
+restore was dropped or retyped and nullified in the main table, so it is not a
+Hudi column and the caller (whose `columnNames` come from the *current* schema
+via `/fetch-object-fields`) cannot have asked for it. `applyDelta` adds the
+field to the allow-set instead of letting the column-scope prune remove it.
+
+```
+columnNames = ["Name"]        (LegacyCode was deleted from the schema)
+base (Hudi):                                 Name=Now
+undo {fieldName:LegacyCode, value:X-1}:      LegacyCode=X-1   ← re-added
+final row:                                   Name=…  LegacyCode=X-1
+```
+
+One delta row exists per record **per affected field**, so a multi-field schema
+change simply replays as several deltas.
 
 ---
 
@@ -270,46 +296,70 @@ that's what the FULL OUTER join is for.
 
 ---
 
+## 5.5 By-field mode (`filteringFields` → RESTORE_ONLY_CHANGED_FIELDS)
+
+A non-empty `filteringFields` switches the whole request off the entire-record
+path: only the named fields revert to their pre-change values, everything else
+stays current. Compressed jobs run `buildCompressedByFieldSql` (newest delta per
+`record_id` ⟗ Hudi, `change_data` overlaid in JS); uncompressed jobs run
+`buildCsvByFieldSql`.
+
+Both of those **inner-join Hudi**, so a deleted record vanishes from the result.
+It is recovered with `buildCompressedDeletedSql` — the same builder the
+`deletedOnly` flow uses — run alongside them: newest delta per `record_id`
+within the requested `backup_job_id`s, kept only when that newest change is the
+DELETE, with the requested columns `json_extract_scalar`-ed straight out of
+`change_data`. That row **is** the record; no field reversion is applied,
+because a DELETE payload is a snapshot, not an `{old,new}` diff. The builder
+projects `pairedColumns`, so `Id` is always extracted regardless of what the
+caller requested.
+
+Results are merged in task order and de-duplicated by `Id`, so a live Hudi/CSV
+row wins over a DELETE snapshot for the same record — the two should never
+co-occur, but a duplicate would mean restoring the record twice.
+
+---
+
 ## 6. Putting the Response Together
 
 ```
-fetchRecordsForBackup (restoreType = RESTORE_ENTIRE_RECORD)
+fetchRecordsForBackup
 │
 ├─ partition backupJobIds by job status
 │     COMPRESSED     → {JOB_1, JOB_2, JOB_3}
 │     not COMPRESSED → {JOB_6}
 │
-├─ compressed pipeline (3 Athena queries, §4) ──► [{record: 001A@JOB_3},
-│                                                  {record: 002B@JOB_3}]
-├─ uncompressed pipeline (1 Athena query, §5) ──► [{record: 003C newest}]
+├─ compressed pipeline (2 Athena queries, §4) ──► [{record: 001A}, {record: 002B}]
+├─ uncompressed pipeline (1 Athena query, §5) ──► [{record: 003C}]
 │
-├─ concat → sort by record.LastModifiedDate DESC → cap 10 000
+├─ concat → dedupe by Id → sort by key DESC → block of ≤2000 → slice 50
 │
 └─ respond
    {
-     "columns": ["Id","Name","Phone","Amount","Stage","Size","LastModifiedDate"],
-     "rows": [
-       { "record": { "Id":"003C", "Size":"99",  ... } },
-       { "record": { "Id":"001A", "Name":"Acme", "Phone":"222", "Amount":"2000", ... } },
-       { "record": { "Id":"002B", "Stage":"Open", ... } }
-     ]
+     "data": {
+       "columns": ["Name","Phone","Amount","Stage","Size"],
+       "rows": [ { "record": { "Name":"Acme Corp", "Phone":"111", … } }, … ]
+     },
+     "meta": { "limit": 50, "hasMore": true, "nextCursor": "…" }
    }
 ```
 
-`Id` and `LastModifiedDate` are always added to the projection (`pairedColumns`)
-so pairing and ordering never depend on what the caller asked for. Every value
-is a string — Athena returns strings regardless of Glue types, and all SQL
-projections `CAST(... AS varchar)` so Hudi-typed, CSV-string, and checkpoint
-columns unify.
+`Id` and `LastModifiedDate` are always **scanned** (`pairedColumns`) because
+pairing and ordering need them, but they are pruned from the response unless
+the caller asked for them — the contract is "exactly `columnNames`", plus any
+field a SCHEMA delta restored (§4.6). Every value is a string: Athena returns
+strings regardless of Glue types, and the SQL `CAST(… AS varchar)` so
+Hudi-typed and CSV-string columns unify.
 
-Filters (`filters` → `filterWhere`) apply on **all** sources: the CSV `rn=1`
-candidates, the Hudi bulk fetch, and the checkpoint rows. A record matching in
-no source drops out of the response.
+Filters (`filters` → `filterWhere`) apply on the block query and the CSV
+`rn=1` candidates. A record matching in no source drops out of the response;
+deleted records are skipped entirely while a filter is active (§4.3).
 
 **Bulk guarantee:** for J jobs and R records the Athena query count is
-constant — 3 (compressed) + 1 (uncompressed) — never O(R) or O(J). Grouping
-by `record_id`, checkpoint bounding, and delta replay all happen in memory in
-`assembleEntireRecords`.
+constant — 2 (compressed, +1 for deletes when unfiltered) + 1 (uncompressed) —
+never O(R) or O(J). Grouping by `record_id` and delta replay happen in memory
+in `assembleEntireRecords`. One scan then serves 40 pages (§4 of
+API_FETCH_RECORDS.md).
 
 ---
 
@@ -317,17 +367,20 @@ by `record_id`, checkpoint bounding, and delta replay all happen in memory in
 
 | Case | Behavior |
 | ---- | -------- |
-| Record deleted (no Hudi row) and no checkpoint | Skipped — its last state lives only in DELETE deltas (`deletedOnly` flow). |
-| Insert-only record (no deltas at all) | Never anchors → not in the compressed result. It appears via the CSV path while its job is uncompressed. |
-| `_checkpoints` table missing | Checkpoint query fails `TABLE_NOT_FOUND` → treated as empty → global Scenario A. |
-| Checkpoint exists but not for this record | Per-record Scenario A. |
+| Record inserted by a requested job, never changed | Returned untouched, via the Hudi `backup_job_id` branch (§4.5). |
+| Record changed by a requested job, later touched by another | Still returned: the Hudi stamp moved to the later job, but the delta semi-join finds it (§3). Only the requested jobs' deltas are undone. |
+| Record deleted (no Hudi row) | Rebuilt from the DELETE delta's `change_data` (§4.3, and §5.5 for by-field mode). |
+| Record deleted **and** a filter is set | Skipped — the in-memory rebuild bypasses the Athena `WHERE`, so the query is not run at all (§4.3). |
+| Deleted then re-created | Hudi has the new life and wins; the DELETE snapshot only applies when Hudi has no row. |
+| Schema-change delta for a dropped/retyped field | Field is restored into the response even though it is in neither Hudi nor `columnNames` (§4.6). |
+| `CascadeDeleteService` 9-column delta rows | Written into the same delta table with `change_type='DELETE'` but **no `change_data`** — the snapshot parse yields nothing usable. Known upstream inconsistency, see JAVA_DELTA_MODEL.md § Known inconsistency. |
 | Malformed `change_data` JSON | That delta is a no-op during replay (`reconstructRecord` guards). |
 | Requested record ids | Inlined into `IN (...)` lists — fine into the low thousands; Athena's 256 KB query cap is the ceiling (`ponytail:` marker in athena-fetch.ts — chunk the queries beyond that). |
-| Time comparability | Nearest-newer checkpoint selection compares delta `change_time` against checkpoint `LastModifiedDate` as strings — verified same domain: `change_time` IS the record's LastModifiedDate (DeltaService.java:863). |
 | Null→value changes | Spark's `to_json` drops null struct fields, so such a delta arrives as `{new: …}` with no `old` key — replay still reverts the field (to empty), matching the Java reconstructor's `map<string,struct<old,new>>` semantics. |
-| Partition visibility | `_hudi`/`_delta`/`_checkpoints` Glue tables are partitioned by year/month; partitions are explicitly registered from S3 prefixes on every `ensureCompressionGlueTables` call (`syncHudiTablePartitions`) — no reliance on `hudi.metadata-listing-enabled`. |
-| Query runtime | Athena wait capped at 300 s (`QUERY_TIMEOUT_MS`) with 250 ms→2 s poll backoff. |
-| Response size | Capped at 10 000 rows (`RESTORE_ENTIRE_LIMIT`) — page the endpoint if restores outgrow it. |
+| Delta partition prune | Upper bound inferred from the newest requested job; lower bound only from caller-supplied `changedSince.startDate`. Never inferred — SCHEMA_* deltas carry the record's OLD `LastModifiedDate` (`DeltaService:956`) and sit in far older partitions. Hudi/checkpoint-style tables are never time-pruned: they partition on immutable `CreatedDate`. |
+| Partition visibility | `_hudi`/`_delta` Glue tables are partitioned by year/month; partitions are explicitly registered from S3 prefixes on every `ensureCompressionGlueTables` call (`syncHudiTablePartitions`) — no reliance on `hudi.metadata-listing-enabled`. |
+| Query runtime | Athena wait capped at 300 s (`QUERY_TIMEOUT_MS`) with 250 ms→2 s poll backoff; replayed pages skip it entirely. |
+| Response size | 50 rows per page out of 2000-row blocks — see API_FETCH_RECORDS.md §4. |
 
 ## 8. Self-checks
 
@@ -339,6 +392,10 @@ npm run build && node dist/services/restore-retrieve/restore-reconstruct.js
                                                                  # replay + assembly
 ```
 
-The assembly self-check encodes §4's example shapes directly: oldest-wins
-double-change, untouched record, checkpoint rewound via `(anchor, checkpoint]`
-deltas, exact checkpoint, null-old revert, and the skipped-record case.
+The assembly self-check encodes §4.4's worked example directly, plus:
+oldest-wins double-change, the insert-only record with no deltas, deltas with
+no base row, Hudi winning over a DELETE snapshot for the same Id, DELETE as a
+no-op during replay, null-old revert, and a SCHEMA delta re-adding a field
+outside `columnNames`. The SQL check covers the block query's two qualifying
+branches, the keyset seek, the partition prune, and the absence of any
+self-join. `toPage` covers the three cursor transitions.
