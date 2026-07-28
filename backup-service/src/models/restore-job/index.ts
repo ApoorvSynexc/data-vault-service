@@ -25,6 +25,9 @@ export interface IRestoreJobDestination {
     id: string;
     name: string;
     status: 'PENDING' | 'SUCCESS' | 'FAILED';
+    processedRecordCount?: number;
+    failedRecordCount?: number;
+    errorMessage?: string;
   }>;
 
   instanceUrl: string;
