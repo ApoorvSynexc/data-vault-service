@@ -20,6 +20,8 @@ import {
   fetchPicklistValues,
   createRestoreJob,
   tiggerRestoreJob,
+  CursorError,
+  PAGE_SIZE,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -262,6 +264,13 @@ const parseFetchRecordsParams = (
     value.deletedOnly = body.deletedOnly;
   }
 
+  // Opaque nextCursor echoed back from a previous response. Its contents are
+  // validated in the service (fingerprint match), not here.
+  if (body.cursor !== undefined && body.cursor !== null && body.cursor !== '') {
+    if (typeof body.cursor !== 'string') return { ok: false, error: 'invalid_cursor' };
+    value.cursor = body.cursor;
+  }
+
   if (body.filteringFields !== undefined && body.filteringFields !== null) {
     if (!Array.isArray(body.filteringFields)) return { ok: false, error: 'invalid_filtering_fields' };
     const fields = [...new Set(body.filteringFields.map((f) => String(f).trim()).filter(Boolean))];
@@ -328,14 +337,31 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
     return;
   }
 
-  const result = await fetchRecordsByBackupJobs(parsed.value);
+  let result;
+  try {
+    result = await fetchRecordsByBackupJobs(parsed.value);
+  } catch (e) {
+    // A cursor that no longer matches the request, or whose Athena results have
+    // aged out. Surfaced rather than silently restarting, so the UI knows to go
+    // back to page 1 instead of assuming it received the page it asked for.
+    if (e instanceof CursorError) {
+      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
+      return;
+    }
+    throw e;
+  }
 
   if (!result) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
-  makeResponse(req, res, 200, true, 'fetch', result);
+  const { nextCursor, hasMore, ...data } = result;
+  makeResponse(req, res, 200, true, 'fetch', data, {
+    limit: PAGE_SIZE,
+    hasMore,
+    ...(nextCursor ? { nextCursor } : {}),
+  });
 };
 
 /**

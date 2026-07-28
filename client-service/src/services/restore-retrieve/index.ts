@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { GetCommand, QueryCommand, BatchGetCommand, BatchGetCommandOutput } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
@@ -7,30 +8,30 @@ import { getBackupConfigById } from '../backup-config';
 import { getBackupJobsByConfig } from '../backup-job';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
-import { runAthenaQuery, IQueryResult } from '../third-party/athena/query';
+import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { httpRequest } from '../../utils/http-request';
 import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
 
 export { buildAthenaFilterWhere, FilterError } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import { assembleEntireRecords } from './restore-reconstruct';
 import {
   buildRawSql,
   buildCompressedDeletedSql,
   buildCompressedByFieldSql,
   buildCsvByFieldSql,
-  buildEntireDeltaChainSql,
-  buildEntireCheckpointSql,
-  buildHudiBulkSql,
+  buildDeltaPartitionWhere,
+  buildEntireBlockSql,
+  buildEntireDeltasSql,
   buildHudiRawSql,
   buildCsvEitherSql,
   pairedColumns,
-  outputColumns,
+  IPageKey,
 } from './athena-fetch';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 
-type BackupJobItem = Pick<IBackupJob, 'backupJobId' | 'userId' | 'backupConfigId' | 'status'>;
+// createdAt bounds the delta partition prune — see buildDeltaPartitionWhere.
+type BackupJobItem = Pick<IBackupJob, 'backupJobId' | 'userId' | 'backupConfigId' | 'status' | 'createdAt'>;
 
 // Bulk job lookup: BatchGet in 100-key chunks with every chunk in flight at
 // once — hundreds of job ids resolve in roughly one DynamoDB round trip
@@ -45,7 +46,7 @@ const getBackupJobItems = async (backupJobIds: string[]): Promise<Map<string, Ba
       let requestItems: Record<string, any> | undefined = {
         [BACKUP_JOB_TABLE]: {
           Keys: ids.map((backupJobId) => ({ backupJobId })),
-          ProjectionExpression: 'backupJobId, userId, backupConfigId, #status',
+          ProjectionExpression: 'backupJobId, userId, backupConfigId, #status, createdAt',
           ExpressionAttributeNames: { '#status': 'status' },
         },
       };
@@ -235,41 +236,131 @@ export interface IFetchRecordsParams {
   // reconstruction to the by-field flow: only these fields are reverted to
   // their pre-change values; everything else stays current.
   filteringFields?: string[];
+  // Opaque `nextCursor` from the previous response. Absent → first page.
+  cursor?: string;
 }
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
 const toGlueId = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
-// Global cap: at most 50 records, newest-first by LastModifiedDate across all jobs.
-const FETCH_LIMIT = 50;
+/**
+ * ── Block-and-page model ─────────────────────────────────────────────────────
+ *
+ * The endpoint returns PAGE_SIZE records, but Athena is queried in blocks of
+ * BLOCK_SIZE. One Athena scan therefore serves BLOCK_SIZE / PAGE_SIZE pages:
+ *
+ *   page 1        → run the query, keep the queryExecutionId, serve rows 0-49
+ *   pages 2..40   → REPLAY that execution id (Athena keeps the result set in
+ *                   S3) and serve rows 50-99, 100-149, … — no data scanned, no
+ *                   ~2s submit/poll settle, so these pages are near-instant and
+ *                   free
+ *   page 41       → block exhausted: run ONE new query that seeks past the last
+ *                   row of the previous block, and repeat
+ *
+ * The cursor carries everything needed, so the server holds no state and any
+ * instance can serve any page. Changing the filters/columns/jobs changes the
+ * fingerprint, which invalidates the cursor and starts a fresh block — which is
+ * exactly the "reuse pagination while nothing has changed" rule.
+ */
+export { PAGE_SIZE, BLOCK_SIZE, IPageCursor, IFetchRecordsResult } from './restore-reconstruct';
+import {
+  assembleEntireRecords,
+  toPage,
+  BLOCK_SIZE,
+  IRankedRecord,
+  IPageCursor,
+  IFetchRecordsResult,
+} from './restore-reconstruct';
 
-// RESTORE_ENTIRE_RECORD is a bulk restore, not a preview grid — cap high.
-// ponytail: single-response ceiling; page the endpoint if restores outgrow 10k rows.
-const RESTORE_ENTIRE_LIMIT = 10_000;
+// Thrown when a cursor cannot be honoured (expired execution ids, or a request
+// shape that no longer matches). The controller maps it to a 400 so the UI
+// restarts from page 1 rather than silently getting wrong rows.
+export class CursorError extends Error {
+  constructor(public readonly code: 'cursor_mismatch' | 'cursor_expired') {
+    super(code);
+  }
+}
 
-// Merges per-source result sets into one newest-first, capped set. Each source
-// already applies the same ORDER BY LastModifiedDate DESC + LIMIT, and the global
-// top-N is contained in the union of the per-source top-N, so a merge-sort-slice
-// here yields the correct global result.
-const mergeOrderLimit = (results: IQueryResult[], columnNames: string[]): IQueryResult => {
-  const rows = results.flatMap((r) => r.rows);
-  const lmd = (row: Record<string, string>): number => Date.parse(row['LastModifiedDate'] ?? '') || 0;
-  rows.sort((a, b) => lmd(b) - lmd(a));
-  const columns = results.find((r) => r.columns.length)?.columns ?? outputColumns(columnNames);
-  return { columns, rows: rows.slice(0, FETCH_LIMIT) };
+/**
+ * Executes a named query, or replays a previous execution of it.
+ *
+ * `sql` is a thunk so the string is never built on a replay. Every Hudi/delta
+ * query tolerates a missing table — those only exist after the first
+ * compression run, so absence means "no compressed state yet", not an error.
+ */
+const makeRunner = (databaseName: string, replay: Record<string, string> | null) => {
+  const executions: Record<string, string> = {};
+
+  const run = async (name: string, sql: () => string): Promise<IQueryResult> => {
+    const stored = replay?.[name];
+    try {
+      const result = stored
+        ? await fetchStoredResults(stored)
+        : await runAthenaQuery(sql(), databaseName);
+      if (result.queryExecutionId) executions[name] = result.queryExecutionId;
+      return result;
+    } catch (e: unknown) {
+      const message = String((e as Error).message);
+      if (/TABLE_NOT_FOUND|does not exist/i.test(message)) return { columns: [], rows: [] };
+      // A replayed execution that Athena no longer knows about is a stale
+      // cursor, not a server fault — surface it as such.
+      if (stored) throw new CursorError('cursor_expired');
+      throw e;
+    }
+  };
+
+  return { run, executions };
 };
 
-// ── Reconstructed { record } row shape ─────────────────────────────────────────
+const byKeyDesc = (a: IRankedRecord, b: IRankedRecord): number =>
+  b.key.lmd.localeCompare(a.key.lmd) || b.key.id.localeCompare(a.key.id);
 
-export interface IByFieldRow {
-  record: Record<string, string>;
-}
+/**
+ * Identity of the query behind a cursor. Everything that changes WHICH rows
+ * come back, or in what order, goes in. Anything else — the cursor itself —
+ * stays out. If the caller changes a filter, a column, or the job list, the
+ * fingerprint moves and their old cursor is rejected instead of silently
+ * paging through a result set built for a different question.
+ */
+const fingerprintRequest = (p: IFetchRecordsParams): string =>
+  createHash('sha1')
+    .update(
+      JSON.stringify([
+        p.configType,
+        p.objectApiName,
+        p.userId,
+        [...p.columnNames].sort(),
+        [...(p.backupJobIds ?? [])].sort(),
+        p.backupConfigId ?? null,
+        p.filterWhere ?? null,
+        p.deletedOnly ?? false,
+        [...(p.filteringFields ?? [])].sort(),
+        [...(p.bulkCsvIds ?? [])].sort(),
+        p.changedSince ?? null,
+      ])
+    )
+    .digest('base64url');
 
-export interface IByFieldResult {
-  columns: string[];
-  rows: IByFieldRow[];
-}
+// Decodes the incoming cursor into the block/offset to serve. Throws rather
+// than silently restarting: a UI that thinks it is on page 7 should be told its
+// cursor is stale, not handed page 1's rows.
+const resolvePage = (params: IFetchRecordsParams): IPageState => {
+  const fingerprint = fingerprintRequest(params);
+  if (!params.cursor) return { fingerprint, replay: null, offset: 0, cursor: null };
+
+  const decoded = decodeCursor(params.cursor) as IPageCursor | undefined;
+  if (!decoded || decoded.fp !== fingerprint) throw new CursorError('cursor_mismatch');
+
+  return {
+    fingerprint,
+    // An empty `ex` means the previous block ran out: run a fresh one seeking
+    // past `key` rather than replaying.
+    replay: Object.keys(decoded.ex ?? {}).length ? decoded.ex : null,
+    offset: Object.keys(decoded.ex ?? {}).length ? decoded.off : 0,
+    cursor: Object.keys(decoded.ex ?? {}).length ? null : decoded.key,
+  };
+};
 
 // Strips the r_ prefix off the flat SQL row into a { record } object. For
 // compressed rows, the winning delta's old values are overlaid onto the Hudi
@@ -279,12 +370,13 @@ const toByFieldRows = (
   result: IQueryResult,
   kind: 'compressed' | 'csv',
   revertFields?: string[]
-): IByFieldRow[] =>
+): IRankedRecord[] =>
   result.rows.map((flat) => {
     const record: Record<string, string> = {};
     for (const [key, value] of Object.entries(flat)) {
       if (key.startsWith('r_')) record[key.slice(2)] = value;
     }
+    const key = { lmd: record['LastModifiedDate'] ?? '', id: record['Id'] ?? '' };
     if (kind === 'compressed') {
       const allow = new Set(revertFields?.length ? revertFields : Object.keys(record));
       try {
@@ -302,8 +394,29 @@ const toByFieldRows = (
         // malformed change_data — leave the record at current values
       }
     }
-    return { record };
+    return { record, key };
   });
+
+// Rows whose SQL already produced the whole record: the archival snapshot
+// tables, and DELETE change_data extracted column by column.
+const toSnapshotRows = (result: IQueryResult, columns: string[]): IRankedRecord[] =>
+  result.rows.map((row) => {
+    const record: Record<string, string> = {};
+    for (const c of columns) record[c] = row[c] ?? '';
+    return { record, key: { lmd: record['LastModifiedDate'] ?? '', id: record['Id'] ?? '' } };
+  });
+
+// Keeps the first row per Id. Rows without an Id are passed through untouched.
+const dedupeById = (rows: IRankedRecord[]): IRankedRecord[] => {
+  const seen = new Set<string>();
+  return rows.filter(({ record }) => {
+    const id = record['Id'];
+    if (!id) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+};
 
 /**
  * BACKUP path: verifies ownership of every supplied job ID against the caller,
@@ -313,11 +426,11 @@ const toByFieldRows = (
  * A request can mix compressed and uncompressed jobs:
  *   - uncompressed → the CSV table (cfg_<cfg>_<obj>) merged against Hudi.
  *   - compressed   → the Hudi main table (cfg_<cfg>_<obj>_hudi) + delta CDC table
- *     (cfg_<cfg>_<obj>_delta) + optional checkpoints.
+ *     (cfg_<cfg>_<obj>_delta).
  *
  * Modes:
- *   - default            → bulk entire-record reconstruction (delta replay /
- *                          checkpoints, see assembleEntireRecords).
+ *   - default            → revert exactly the requested jobs' deltas on top of
+ *                          the current record (see assembleEntireRecords).
  *   - filteringFields    → by-field: only the named fields are reverted to their
  *                          pre-change values; everything else stays current.
  *   - deletedOnly        → deleted records from the DELETE deltas' change_data
@@ -334,12 +447,24 @@ interface IFetchRecordsForBackupParams {
   filteringFields?: string[];
   // Record scope for the entire-record flow (request bulkCsvIds).
   recordIds?: string[];
+  // Caller-declared lower bound for the delta partition prune (changedSince).
+  changedSinceStart?: string;
+  page: IPageState;
+}
+
+// Where in the paged stream this request sits: which block to serve, and from
+// which offset inside it.
+interface IPageState {
+  fingerprint: string;
+  replay: Record<string, string> | null;
+  offset: number;
+  cursor: IPageKey | null;
 }
 
 const fetchRecordsForBackup = async (
   params: IFetchRecordsForBackupParams
-): Promise<IQueryResult | IByFieldResult | null> => {
-  const { backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly, filteringFields, recordIds } = params;
+): Promise<IFetchRecordsResult | null> => {
+  const { backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly, filteringFields, recordIds, page } = params;
   const jobById = await getBackupJobItems(backupJobIds);
 
   // Every job must exist and belong to the caller.
@@ -361,26 +486,32 @@ const fetchRecordsForBackup = async (
     (jobById.get(id)!.status === COMPRESSION_STATUS.compressed ? compressedIds : csvIds).push(id);
   });
 
-  // Every Hudi-touching query tolerates a missing _hudi/_delta table — those only
-  // exist after the first compression run, so absence just means "no compressed
-  // state yet", not an error.
-  const run = (sql: string): Promise<IQueryResult> =>
-    runAthenaQuery(sql, databaseName).catch((e: unknown) => {
-      if (/TABLE_NOT_FOUND|does not exist/i.test(String((e as Error).message))) {
-        return { columns: [], rows: [] };
-      }
-      throw e;
-    });
+  // Delta partition prune. Upper bound: the newest requested job's timestamp —
+  // no job can have recorded a change that had not happened when it ran, so
+  // every delta it wrote is in an earlier-or-equal month. Lower bound: only
+  // what the caller declared, never inferred (SCHEMA_* deltas carry the
+  // record's OLD LastModifiedDate and land in far older partitions — see
+  // buildDeltaPartitionWhere).
+  const newestJobAt = backupJobIds
+    .map((id) => jobById.get(id)?.createdAt)
+    .filter((t): t is string => Boolean(t))
+    .sort()
+    .pop();
+  const deltaPartition = buildDeltaPartitionWhere(params.changedSinceStart ?? null, newestJobAt ?? null);
+
+  const { run, executions } = makeRunner(databaseName, page.replay);
+  const base = { columnNames, filterWhere, limit: BLOCK_SIZE, cursor: page.cursor, deltaPartition };
+  const cols = pairedColumns(columnNames);
+  const finish = (rows: IRankedRecord[]): IFetchRecordsResult =>
+    toPage(rows.sort(byKeyDesc).slice(0, BLOCK_SIZE), columnNames, page.offset, page.fingerprint, executions);
 
   if (deletedOnly) {
     // Deleted records live only in the delta model, so CSV jobs contribute nothing.
-    const queries: Promise<IQueryResult>[] = [];
-    if (compressedIds.length) {
-      queries.push(
-        run(buildCompressedDeletedSql(deltaTable, { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT }))
-      );
-    }
-    return mergeOrderLimit(await Promise.all(queries), columnNames);
+    if (!compressedIds.length) return finish([]);
+    const result = await run('deleted', () =>
+      buildCompressedDeletedSql(deltaTable, { ...base, jobIds: compressedIds })
+    );
+    return finish(toSnapshotRows(result, cols));
   }
 
   if (filteringFields?.length) {
@@ -388,69 +519,81 @@ const fetchRecordsForBackup = async (
     // current Hudi record with ONLY the selected fields reverted to their
     // pre-change values; uncompressed jobs yield the newer of the CSV/Hudi
     // versions.
-    const tasks: Promise<IByFieldRow[]>[] = [];
+    const tasks: Promise<IRankedRecord[]>[] = [];
     if (compressedIds.length) {
+      const p = { ...base, jobIds: compressedIds };
       tasks.push(
-        run(buildCompressedByFieldSql(hudiTable, deltaTable, { columnNames, jobIds: compressedIds, filterWhere, limit: FETCH_LIMIT }))
+        run('byfield', () => buildCompressedByFieldSql(hudiTable, deltaTable, p))
           .then((r) => toByFieldRows(r, 'compressed', filteringFields))
+      );
+      // Deleted records have no Hudi row, so the join above drops them. Their
+      // whole last state is the DELETE delta's change_data — returned as a
+      // record of its own, with no field reversion (a DELETE payload is a
+      // snapshot, not an {old,new} diff).
+      tasks.push(
+        run('deleted', () => buildCompressedDeletedSql(deltaTable, p)).then((r) => toSnapshotRows(r, cols))
       );
     }
     if (csvIds.length) {
       tasks.push(
-        run(buildCsvByFieldSql(csvTable, hudiTable, { columnNames, jobIds: csvIds, filterWhere, limit: FETCH_LIMIT }))
+        run('csv', () => buildCsvByFieldSql(csvTable, hudiTable, { ...base, jobIds: csvIds }))
           .then((r) => toByFieldRows(r, 'csv'))
       );
     }
-    const rows = (await Promise.all(tasks)).flat();
-    const lmd = (r: IByFieldRow): number => Date.parse(r.record['LastModifiedDate'] ?? '') || 0;
-    rows.sort((a, b) => lmd(b) - lmd(a));
-    return { columns: pairedColumns(columnNames), rows: rows.slice(0, FETCH_LIMIT) };
+    // Task order is the precedence order: a live Hudi/CSV row wins over a
+    // DELETE snapshot for the same Id (the two should never both appear, but a
+    // duplicate would mean restoring the record twice).
+    return finish(dedupeById((await Promise.all(tasks)).flat()));
   }
 
-  // Default: bulk entire-record reconstruction — a fixed number of Athena
-  // queries regardless of how many jobs/records are requested. Grouping and
-  // reconstruction happen in memory (assembleEntireRecords).
+  // Default: revert exactly what the requested jobs recorded. Two Athena
+  // queries for the compressed side regardless of how many jobs or records are
+  // involved; grouping and replay happen in memory (assembleEntireRecords).
   {
-    const cols = pairedColumns(columnNames);
-    const tasks: Promise<IByFieldRow[]>[] = [];
+    const tasks: Promise<IRankedRecord[]>[] = [];
+    // A deleted record is rebuilt from DELETE change_data in memory and never
+    // passes through filterWhere, so including it under an active filter could
+    // return rows the filter excludes. Skipping the query entirely is also one
+    // less Athena scan when a filter is set.
+    const includeDeleted = !filterWhere;
     if (compressedIds.length) {
-      const scope = { jobIds: compressedIds, recordIds };
+      const scope = { jobIds: compressedIds, recordIds, limit: BLOCK_SIZE, cursor: page.cursor, deltaPartition };
       tasks.push(
         (async () => {
-          // 3 bulk queries: delta chain (Scenario A data for every record),
-          // chosen checkpoints, and the Hudi base. With an explicit record
-          // scope all three are independent and run in ONE Athena round trip;
-          // without it the Hudi ids must come from the chain result (2 rounds).
-          // A missing _checkpoints table → empty result via `run` → every
-          // record falls back to Scenario A; a checkpoint-less record falls
-          // back individually inside assembleEntireRecords.
-          const [chain, checkpoints, hudiEarly] = await Promise.all([
-            run(buildEntireDeltaChainSql(deltaTable, scope)),
-            run(buildEntireCheckpointSql(`${csvTable}_checkpoints`, deltaTable, scope, columnNames, filterWhere)),
-            recordIds?.length
-              ? run(buildHudiBulkSql(hudiTable, recordIds, columnNames, filterWhere))
-              : Promise.resolve(null),
-          ]);
-          const ids = [...new Set(chain.rows.map((r) => r['record_id']).filter(Boolean))];
-          const hudi =
-            hudiEarly ??
-            (ids.length
-              ? await run(buildHudiBulkSql(hudiTable, ids, columnNames, filterWhere))
-              : { columns: [], rows: [] });
-          return assembleEntireRecords(cols, hudi.rows, chain.rows, checkpoints.rows);
+          // Query 1 defines the block: the Hudi rows the requested jobs either
+          // last wrote or recorded a delta against, ordered and seeked on the
+          // one key domain. Query 2 then pulls just those records' deltas —
+          // bounded by <= BLOCK_SIZE ids, so it stays small however much
+          // history the object has. Two round trips, two queries, fixed.
+          const blockRows = await run('block', () =>
+            buildEntireBlockSql(hudiTable, deltaTable, scope, columnNames, filterWhere)
+          );
+          const deletedRows = includeDeleted
+            ? await run('deleted', () =>
+                buildCompressedDeletedSql(deltaTable, { ...base, jobIds: compressedIds })
+              )
+            : { columns: [], rows: [] };
+
+          // Hudi first: a live record must never be shadowed by a stale DELETE
+          // snapshot for the same Id.
+          const bases = [...blockRows.rows, ...deletedRows.rows];
+          const ids = [...new Set(bases.map((r) => r['Id']).filter(Boolean))];
+          if (!ids.length) return [];
+
+          const deltas = await run('deltas', () =>
+            buildEntireDeltasSql(deltaTable, compressedIds, ids, deltaPartition)
+          );
+          return assembleEntireRecords(cols, bases, deltas.rows);
         })()
       );
     }
     if (csvIds.length) {
       tasks.push(
-        run(buildCsvEitherSql(csvTable, hudiTable, { columnNames, jobIds: csvIds, filterWhere, limit: RESTORE_ENTIRE_LIMIT }, recordIds))
+        run('csv', () => buildCsvEitherSql(csvTable, hudiTable, { ...base, jobIds: csvIds }, recordIds))
           .then((r) => toByFieldRows(r, 'csv'))
       );
     }
-    const rows = (await Promise.all(tasks)).flat();
-    const lmd = (r: IByFieldRow): number => Date.parse(r.record['LastModifiedDate'] ?? '') || 0;
-    rows.sort((a, b) => lmd(b) - lmd(a));
-    return { columns: cols, rows: rows.slice(0, RESTORE_ENTIRE_LIMIT) };
+    return finish(dedupeById((await Promise.all(tasks)).flat()));
   }
 };
 
@@ -474,12 +617,13 @@ interface IFetchRecordsForArchivalParams {
   userId: string;
   filterWhere: string | null;
   deletedOnly: boolean;
+  page: IPageState;
 }
 
 const fetchRecordsForArchival = async (
   params: IFetchRecordsForArchivalParams
-): Promise<IQueryResult | null> => {
-  const { backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly } = params;
+): Promise<IFetchRecordsResult | null> => {
+  const { backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly, page } = params;
   // A single status equality per query is all getBackupJobsByConfig supports, and
   // SUCCESS/COMPRESSED are mutually exclusive on the same job — query both and keep
   // the newest, so a re-run (fresh SUCCESS) wins over an older COMPRESSED snapshot.
@@ -493,21 +637,28 @@ const fetchRecordsForArchival = async (
 
   const candidates = [...success.items, ...compressed.items];
   if (candidates.length === 0) return null;
-  if (deletedOnly) return { columns: outputColumns(columnNames), rows: [] };
+
+  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const { run, executions } = makeRunner(databaseName, page.replay);
+  const empty = (): IFetchRecordsResult => toPage([], columnNames, page.offset, page.fingerprint, executions);
+  if (deletedOnly) return empty();
 
   const latestJob = candidates.sort(
     (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
   )[0];
-  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
   const tableName = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
+  const base = { columnNames, filterWhere, limit: BLOCK_SIZE, cursor: page.cursor };
 
-  const sql =
+  // Archival tables partition on CreatedDate, so there is no time prune to
+  // apply here — see buildDeltaPartitionWhere.
+  const result = await run('archival', () =>
     latestJob.status === COMPRESSION_STATUS.compressed
-      ? buildHudiRawSql(`${tableName}_hudi`, { columnNames, filterWhere, limit: FETCH_LIMIT })
-      : buildRawSql(tableName, { columnNames, jobIds: [latestJob.backupJobId], filterWhere, limit: FETCH_LIMIT });
+      ? buildHudiRawSql(`${tableName}_hudi`, base)
+      : buildRawSql(tableName, { ...base, jobIds: [latestJob.backupJobId] })
+  );
 
-  const result = await runAthenaQuery(sql, databaseName);
-  return mergeOrderLimit([result], columnNames);
+  const rows = toSnapshotRows(result, pairedColumns(columnNames));
+  return toPage(rows.sort(byKeyDesc).slice(0, BLOCK_SIZE), columnNames, page.offset, page.fingerprint, executions);
 };
 
 /**
@@ -516,14 +667,15 @@ const fetchRecordsForArchival = async (
  */
 const fetchRecordsByBackupJobs = async (
   params: IFetchRecordsParams
-): Promise<IQueryResult | IByFieldResult | null> => {
+): Promise<IFetchRecordsResult | null> => {
   const { configType, objectApiName, columnNames, userId, backupJobIds, backupConfigId } = params;
   const filterWhere = params.filterWhere ?? null;
   const deletedOnly = params.deletedOnly ?? false;
+  const page = resolvePage(params);
 
   if (configType === 'ARCHIVAL') {
     if (!backupConfigId) return null;
-    return fetchRecordsForArchival({ backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly });
+    return fetchRecordsForArchival({ backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly, page });
   }
 
   // BACKUP (archival snapshots have no Hudi/delta history): entire-record
@@ -539,6 +691,8 @@ const fetchRecordsByBackupJobs = async (
     deletedOnly,
     filteringFields: params.filteringFields,
     recordIds: params.bulkCsvIds,
+    changedSinceStart: params.changedSince?.startDate,
+    page,
   });
 };
 
