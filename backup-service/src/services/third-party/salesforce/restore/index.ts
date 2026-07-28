@@ -1,7 +1,7 @@
 import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
-import { updateRestoreJobStatus } from '../../../restore-job';
+import { updateRestoreJobStatus, updateRestoreObject } from '../../../restore-job';
 import { SalesforceTokens } from '../api-request';
 import {
   createBulkJob,
@@ -110,6 +110,16 @@ const restoreObjectData = async (
     }
     const job = await submitIngestChunk(instanceUrl, tokens, objectName, operation, externalIdFieldName, chunk);
     submittedJobIds.push(job.jobId);
+    // Accumulate this chunk's processed/failed counts onto the object's running
+    // total — a single object can span multiple chunks, so this fires once per
+    // chunk rather than once at the very end of the object.
+    await updateRestoreObject({
+      restoreJobId,
+      objectName,
+      processedRecordCount: job.processed,
+      failedRecordCount: job.failed,
+      status: job.failed ? 'FAILED' : 'SUCCESS',
+    });
     chunk = newChunk(header!);
   };
 
