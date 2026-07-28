@@ -102,24 +102,29 @@ interface UpdateRestoreObjectParams {
 // unique within destination.objects[], so this always resolves to exactly one
 // element (or none, if the name doesn't exist).
 //
-// Counts use SET ... = if_not_exists(path, :zero) + :delta rather than ADD.
-// objects[] entries are created with only {id, name, status} — no count fields
-// — and DynamoDB's ADD action can only implicitly create a *top-level*
-// attribute; it cannot create a brand-new attribute nested inside a list
-// element, which is exactly what processedRecordCount/failedRecordCount are
-// the first time an object is updated. Using ADD there fails with "The
-// document path provided in the update expression is invalid for update".
-// if_not_exists + SET is the standard DynamoDB workaround: it still atomically
-// increments, but SET is allowed to create the nested attribute on first write.
+// Counts are computed in JS and written as a literal SET, not via ADD or
+// if_not_exists(). Both were tried and both fail on this specific shape:
+//  - ADD can only implicitly create a *top-level* item attribute; it can't
+//    create a brand-new attribute nested inside a list element, which is
+//    exactly what processedRecordCount/failedRecordCount are the first time
+//    an object is touched (objects[] entries start as just {id, name, status}).
+//  - if_not_exists(path, default) is unreliable once path includes a list
+//    index (objects[n].field) — DynamoDB's expression parser doesn't
+//    consistently validate/evaluate that combination, and errors with the same
+//    "document path provided in the update expression is invalid" message.
+// Since getRestoreJobById already reads the current item to resolve
+// objectIndex, the current counts are already in hand — compute the new total
+// here and SET a plain literal value, which has no such restriction.
 const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<void> => {
   const { restoreJobId, objectName, status, processedRecordCount, failedRecordCount, errorMessage } = params;
   const now = new Date().toISOString();
 
   const job = await getRestoreJobById(restoreJobId);
   const objectIndex = job?.destination.objects.findIndex((o) => o.name === objectName) ?? -1;
-  if (objectIndex === -1) {
+  if (!job || objectIndex === -1) {
     return;
   }
+  const currentObject = job.destination.objects[objectIndex];
 
   const setParts = ['updatedAt = :updatedAt'];
   const expressionNames: Record<string, string> = { '#objects': 'objects' };
@@ -136,18 +141,14 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     expressionValues[':errorMessage'] = errorMessage;
   }
   if (processedRecordCount) {
-    const path = `#objects[${objectIndex}].#processedRecordCount`;
-    setParts.push(`${path} = if_not_exists(${path}, :zero) + :processedRecordCount`);
+    setParts.push(`#objects[${objectIndex}].#processedRecordCount = :processedRecordCount`);
     expressionNames['#processedRecordCount'] = 'processedRecordCount';
-    expressionValues[':processedRecordCount'] = processedRecordCount;
-    expressionValues[':zero'] = 0;
+    expressionValues[':processedRecordCount'] = (currentObject.processedRecordCount ?? 0) + processedRecordCount;
   }
   if (failedRecordCount) {
-    const path = `#objects[${objectIndex}].#failedRecordCount`;
-    setParts.push(`${path} = if_not_exists(${path}, :zero) + :failedRecordCount`);
+    setParts.push(`#objects[${objectIndex}].#failedRecordCount = :failedRecordCount`);
     expressionNames['#failedRecordCount'] = 'failedRecordCount';
-    expressionValues[':failedRecordCount'] = failedRecordCount;
-    expressionValues[':zero'] = 0;
+    expressionValues[':failedRecordCount'] = (currentObject.failedRecordCount ?? 0) + failedRecordCount;
   }
 
   const updateExpression = `SET ${setParts.join(', ')}`;
