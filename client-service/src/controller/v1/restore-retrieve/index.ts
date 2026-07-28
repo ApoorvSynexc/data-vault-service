@@ -21,6 +21,7 @@ import {
   createRestoreJob,
   tiggerRestoreJob,
   getRestoresWithPagination,
+  getRestoreJobById,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -432,7 +433,7 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 
   makeResponse(req, res, 201, true, 'create');
-  try{
+  try {
     const restoreJob = await createRestoreJob(payload);
     await tiggerRestoreJob(restoreJob);
   } catch (error) {
@@ -465,6 +466,16 @@ const listRestoresHandler = async (req: IRequest, res: IResponse): Promise<void>
   });
 };
 
+const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { restoreId } = req.query as Record<string, string>;
+  if (!restoreId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const restoreJob = await getRestoreJobById(restoreId);
+  makeResponse(req, res, 200, true, 'fetch', restoreJob);
+}
+
 export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
@@ -475,4 +486,5 @@ export const restoreRetrieveJobController = wrapController({
   createRestoreHandler,
   getPicklistFieldValuesHandler,
   listRestoresHandler,
+  getRestoreJobHandler
 });
