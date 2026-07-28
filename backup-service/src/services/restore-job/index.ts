@@ -140,12 +140,12 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     expressionNames['#errorMessage'] = 'errorMessage';
     expressionValues[':errorMessage'] = errorMessage;
   }
-  if (processedRecordCount) {
+  if (processedRecordCount !== undefined) {
     setParts.push(`#destination.#objects[${objectIndex}].#processedRecordCount = :processedRecordCount`);
     expressionNames['#processedRecordCount'] = 'processedRecordCount';
     expressionValues[':processedRecordCount'] = (currentObject.processedRecordCount ?? 0) + processedRecordCount;
   }
-  if (failedRecordCount) {
+  if (failedRecordCount !== undefined) {
     setParts.push(`#destination.#objects[${objectIndex}].#failedRecordCount = :failedRecordCount`);
     expressionNames['#failedRecordCount'] = 'failedRecordCount';
     expressionValues[':failedRecordCount'] = (currentObject.failedRecordCount ?? 0) + failedRecordCount;
