@@ -21,7 +21,7 @@ import {
   createRestoreJob,
   tiggerRestoreJob,
   getRestoresWithPagination,
-  getRestoreJobById,
+  getRestoreJobsByRestoreId,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -472,7 +472,7 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const restoreJob = await getRestoreJobById(restoreId);
+  const restoreJob = await getRestoreJobsByRestoreId(restoreId);
   makeResponse(req, res, 200, true, 'fetch', restoreJob);
 }
 
