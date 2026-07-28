@@ -58,7 +58,7 @@ const submitIngestChunk = async (
   operation: 'insert' | 'update' | 'upsert',
   externalIdFieldName: string | undefined,
   chunk: CsvChunk
-): Promise<{processed: number, failed: number, jobId: string}> => {
+): Promise<{ processed: number, failed: number, jobId: string }> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({ instanceUrl, tokens, objectName, operation, externalIdFieldName });
   await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
@@ -95,7 +95,13 @@ const restoreObjectData = async (
   externalIdFieldName: string
 ): Promise<string[]> => {
   const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}/inserts`);
-  console.log(keys);
+  await updateRestoreObject({
+    restoreJobId,
+    objectName,
+    processedRecordCount: 0,
+    failedRecordCount: 0,
+    status: 'SUCCESS',
+  });
   if (!keys.length) {
     throw new Error(`No backed-up data found for object ${objectName} under ${csvFilePath}`);
   }
@@ -113,7 +119,6 @@ const restoreObjectData = async (
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
     // chunk rather than once at the very end of the object.
-    console.log("1111111111111111111")
     await updateRestoreObject({
       restoreJobId,
       objectName,
@@ -121,8 +126,6 @@ const restoreObjectData = async (
       failedRecordCount: job.failed,
       status: job.failed ? 'FAILED' : 'SUCCESS',
     });
-    console.log(`2222222222222222222 Object name: ${objectName} update their status`);
-    
     chunk = newChunk(header!);
   };
 
