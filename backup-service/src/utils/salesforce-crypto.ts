@@ -22,7 +22,12 @@ import { getCrmByOrgId, ICrm } from '../services/crm';
 //
 // This module is deliberately independent from utils/encryption.ts —
 // encryption.ts is AES-256-GCM + hex for backup-service's own at-rest data
-// and shares no key/algorithm with the Salesforce scheme.
+// and shares no key or algorithm with the Salesforce scheme.
+//
+// The CBC-without-auth-tag shape here is dictated by Salesforce: it is what
+// DataVaultCryptoService emits. It applies ONLY to inbound /v1/salesforce/*
+// payloads (realtime events, users, roles). Never reuse it for data this
+// service stores itself.
 // ---------------------------------------------------------------------------
 
 const ALGORITHM = 'aes-256-cbc';

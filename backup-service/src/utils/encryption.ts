@@ -1,63 +1,51 @@
 import crypto from 'crypto';
 import { ENCRYPTION_KEY } from '../constant';
 
-// const ALGORITHM = 'aes-256-gcm';
+// ---------------------------------------------------------------------------
+// backup-service's OWN at-rest encryption: AES-256-GCM, hex, with an
+// authentication tag. Used for anything this service stores itself — backup /
+// realtime / restore job source + destination credentials.
+//
+// ⚠ Not to be confused with utils/salesforce-crypto.ts, which is AES-256-CBC
+// with a `{ ciphertext, iv }` envelope and no auth tag. That scheme exists ONLY
+// to read payloads Salesforce sends us on the /v1/salesforce/* routes (realtime
+// events, users, roles) — it has to match what Salesforce's
+// DataVaultCryptoService emits, so it is fixed by them, not by us. Nothing this
+// service encrypts for itself should use it: GCM's auth tag is what makes
+// tampering with stored credentials detectable, and CBC has no equivalent.
+// ---------------------------------------------------------------------------
 
-// interface EncryptedPayload {
-//   ciphertext: string;
-//   iv: string;
-//   authTag: string;
-// }
+const ALGORITHM = 'aes-256-gcm';
 
-// const encrypt = (plaintext: string): EncryptedPayload => {
-//   const iv = crypto.randomBytes(16);
-//   const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-//   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-//   return {
-//     ciphertext: encrypted.toString('hex'),
-//     iv: iv.toString('hex'),
-//     authTag: cipher.getAuthTag().toString('hex'),
-//   };
-// };
-
-// const decrypt = ({ ciphertext, iv, authTag }: EncryptedPayload): string => {
-//   const decipher = crypto.createDecipheriv(
-//     ALGORITHM,
-//     Buffer.from(ENCRYPTION_KEY, 'hex'),
-//     Buffer.from(iv, 'hex')
-//   );
-//   decipher.setAuthTag(Buffer.from(authTag, 'hex'));
-//   return Buffer.concat([
-//     decipher.update(Buffer.from(ciphertext, 'hex')),
-//     decipher.final(),
-//   ]).toString('utf8');
-// };
-
-
-
-const ALGORITHM = 'aes-256-cbc';
 interface EncryptedPayload {
   ciphertext: string;
   iv: string;
+  authTag: string;
 }
+
 const encrypt = (plaintext: string): EncryptedPayload => {
   const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'base64'), iv);
+  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   return {
-    ciphertext: encrypted.toString('base64'),
-    iv: iv.toString('base64'),
+    ciphertext: encrypted.toString('hex'),
+    iv: iv.toString('hex'),
+    authTag: cipher.getAuthTag().toString('hex'),
   };
 };
 
-const decrypt = ({ ciphertext, iv }: EncryptedPayload): string => {
-  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'base64'), Buffer.from(iv, 'base64'));
+const decrypt = ({ ciphertext, iv, authTag }: EncryptedPayload): string => {
+  const decipher = crypto.createDecipheriv(
+    ALGORITHM,
+    Buffer.from(ENCRYPTION_KEY, 'hex'),
+    Buffer.from(iv, 'hex')
+  );
+  decipher.setAuthTag(Buffer.from(authTag, 'hex'));
   return Buffer.concat([
-    decipher.update(Buffer.from(ciphertext, 'base64')),
+    decipher.update(Buffer.from(ciphertext, 'hex')),
     decipher.final(),
   ]).toString('utf8');
 };
-
 
 export { encrypt, decrypt };
 export type { EncryptedPayload };

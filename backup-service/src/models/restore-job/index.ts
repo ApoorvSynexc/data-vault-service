@@ -43,8 +43,11 @@ export interface IRestoreJob {
   restoreJobId: string; // PK
   restoreId: string; // GSI: restoreId-index — parent restore request this job belongs to
   userId: string; // GSI: userId-index
-  source: IRestoreJobSource; // encrypted — never expose
-  destination: IRestoreJobDestination; // encrypted — never expose
+  // Stored encrypted, so these hold the ciphertext envelope — NOT the plaintext
+  // IRestoreJobSource / IRestoreJobDestination shapes, which are what
+  // `runRestore` receives after decryption.
+  source: EncryptedPayload;
+  destination: { type: string } & EncryptedPayload;
   conflict: IRestoreConflict;
   status: string; // PENDING | RUNNING | SUCCESS | FAILED
   startedAt?: string;

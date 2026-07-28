@@ -39,8 +39,7 @@ export interface IEnsureCompressionGlueResult {
  * when the config/crm/destination can't be resolved.
  */
 export const ensureCompressionGlueTables = async (
-  backupConfigId: string,
-  isCheckpointsCreated = false
+  backupConfigId: string
 ): Promise<IEnsureCompressionGlueResult | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config) return null;
@@ -72,8 +71,7 @@ export const ensureCompressionGlueTables = async (
       backupConfigId,
       objectNames,
       destConfig,
-      isCheckpointsCreated,
-      // ARCHIVAL configs get the Hudi table only — no Delta, no checkpoints.
+      // ARCHIVAL configs get the Hudi table only — no Delta.
       isArchival: config.type === BACKUP_TYPE.archival,
     }),
   });
