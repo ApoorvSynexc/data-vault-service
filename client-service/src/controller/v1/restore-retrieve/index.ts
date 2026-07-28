@@ -472,8 +472,9 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const restoreJob = await getRestoreJobsByRestoreId(restoreId);
-  makeResponse(req, res, 200, true, 'fetch', restoreJob);
+  const restoreJobs = await getRestoreJobsByRestoreId(restoreId);
+  const restoreJob = restoreJobs[0];
+  makeResponse(req, res, 200, true, 'fetch', {...restoreJob, destination: undefined, source: undefined});
 }
 
 export const restoreRetrieveJobController = wrapController({
