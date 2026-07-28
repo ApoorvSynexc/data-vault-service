@@ -2,7 +2,13 @@ import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
 import { SalesforceTokens } from '../api-request';
-import { createBulkJob, uploadDataToJob, closeBulkJob } from './bulk';
+import {
+  createBulkJob,
+  uploadDataToJob,
+  closeBulkJob,
+  pollBulkJobUntilDone,
+  getFailedResults,
+} from './bulk';
 
 interface RunSalesforceRestorePayload {
   restoreId: string;
@@ -49,12 +55,26 @@ const submitIngestChunk = async (
   tokens: SalesforceTokens,
   objectName: string,
   operation: 'insert' | 'update' | 'upsert',
+  externalIdFieldName: string | undefined,
   chunk: CsvChunk
 ): Promise<string> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
-  const job = await createBulkJob({ instanceUrl, tokens, objectName, operation });
+  const job = await createBulkJob({ instanceUrl, tokens, objectName, operation, externalIdFieldName });
   await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
   await closeBulkJob(instanceUrl, tokens, job.id);
+  const status = await pollBulkJobUntilDone(instanceUrl, tokens, job.id);
+  // console.log({
+  //   objectName,
+  //   state: status.state,
+  //   processed: status.numberRecordsProcessed,
+  //   failed: status.numberRecordsFailed,
+  //   errorMessage: status.errorMessage,
+  // });
+
+  // if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
+  //   const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
+  //   console.log(`\n${failedCsv}`);
+  // }
   return job.id;
 };
 
@@ -69,7 +89,8 @@ const restoreObjectData = async (
   objectName: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
-  operation: 'insert' | 'update' | 'upsert'
+  operation: 'insert' | 'update' | 'upsert',
+  externalIdFieldName: string
 ): Promise<string[]> => {
   const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}/inserts`);
   console.log(keys);
@@ -85,7 +106,7 @@ const restoreObjectData = async (
     if (!chunk || !chunk.rows.length) {
       return;
     }
-    const jobId = await submitIngestChunk(instanceUrl, tokens, objectName, operation, chunk);
+    const jobId = await submitIngestChunk(instanceUrl, tokens, objectName, operation, externalIdFieldName, chunk);
     submittedJobIds.push(jobId);
     chunk = newChunk(header!);
   };
@@ -127,6 +148,7 @@ const restoreObjectData = async (
 export const runSalesforceRestore = async (
   payload: RunSalesforceRestorePayload
 ): Promise<'SUCCESS' | 'FAILED'> => {
+  let externalIdFieldName = '';
   const {
     restoreId,
     restoreJobId,
@@ -160,6 +182,7 @@ export const runSalesforceRestore = async (
       break;
     case 'OVERWRITE':
       operation = 'upsert';
+      externalIdFieldName = 'Id'; // Salesforce's own docs say this is the only supported external ID field for upsert-ing to existing records
       break;
     case 'REPLACE_ENTIRE_OBJECT':
       throw new Error('REPLACE_ENTIRE_OBJECT restore mode is not implemented yet');
@@ -187,7 +210,8 @@ export const runSalesforceRestore = async (
     object.name,
     destinationSalesforceCredentials.instanceUrl,
     tokens,
-    operation
+    operation,
+    externalIdFieldName
   );
 
   logger.info(`[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`);
