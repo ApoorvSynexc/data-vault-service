@@ -10,6 +10,7 @@ import { logger } from '../../middlewares';
 import { IBackupConfig, IBackupJob } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
 import { encryptWithKey } from '../../utils/encryption';
+import { getRestoreJobById } from '../restore-job';
 
 // EMR runs in a separate AWS account — use its dedicated credentials, not the default chain.
 const client = new EMRServerlessClient({
@@ -261,7 +262,12 @@ async function buildPayload(backupConfigId: string) {
 async function buildRestorePayload(restoreConfigId: string) {
     logger.info(`Building EMR RESTORE payload for restoreConfigId: ${restoreConfigId}`);
 
-    const restore = await getRestoreById(restoreConfigId);
+    const restoreJob = await getRestoreJobById(restoreConfigId);
+    if (!restoreJob) {
+        throw new Error('restore_job_not_found');
+    }
+
+    const restore = await getRestoreById(restoreJob.restoreId);
     if (!restore) {
         throw new Error('restore_config_not_found');
     }
