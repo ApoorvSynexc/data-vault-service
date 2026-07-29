@@ -96,5 +96,6 @@
   "invalid_restore_scope_type": "selection.restoreScope.type is not supported",
   "invalid_scope_objects": "restoreScope.objects must be an array of object names",
   "invalid_scope_records": "each restoreScope.records entry must have a string objectName and a recordIds array",
-  "invalid_scope_fields": "each restoreScope.fields entry must have a string objectName and a fieldNames array"
+  "invalid_scope_fields": "each restoreScope.fields entry must have a string objectName and a fieldNames array",
+  "invalid_full_restore": "fullRestore must be a boolean"
 }
