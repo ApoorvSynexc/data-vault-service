@@ -83,5 +83,6 @@
   "invalid_payload": "The encrypted payload is invalid or could not be decrypted",
   "jobs_required": "jobs must be a non-empty array",
   "job_id_required": "Every job requires an id",
-  "compression_status_update_failed": "Failed to update the compression status of the backup jobs"
+  "compression_status_update_failed": "Failed to update the compression status of the backup jobs",
+  "restore_not_draft": "Only restores in DRAFT status can be activated"
 }
