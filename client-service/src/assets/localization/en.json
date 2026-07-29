@@ -84,5 +84,17 @@
   "jobs_required": "jobs must be a non-empty array",
   "job_id_required": "Every job requires an id",
   "compression_status_update_failed": "Failed to update the compression status of the backup jobs",
-  "restore_not_draft": "Only restores in DRAFT status can be activated"
+  "restore_not_draft": "Only restores in DRAFT status can be activated",
+  "invalid_source": "source must be an object",
+  "invalid_source_type": "source.type must be ENTIRE, PARTIAL, or CHANGED_BETWEEN",
+  "invalid_source_date": "source.startDate and source.endDate must be strings",
+  "invalid_backup_job_ids": "source.backupJobIds must be an array of job ids",
+  "backup_job_ids_required": "source.backupJobIds is required when source.type is PARTIAL",
+  "date_range_required": "source.startDate or source.endDate is required when source.type is CHANGED_BETWEEN",
+  "invalid_selection": "selection must be an object",
+  "invalid_restore_scope": "selection.restoreScope must be an object",
+  "invalid_restore_scope_type": "selection.restoreScope.type is not supported",
+  "invalid_scope_objects": "restoreScope.objects must be an array of object names",
+  "invalid_scope_records": "each restoreScope.records entry must have a string objectName and a recordIds array",
+  "invalid_scope_fields": "each restoreScope.fields entry must have a string objectName and a fieldNames array"
 }
