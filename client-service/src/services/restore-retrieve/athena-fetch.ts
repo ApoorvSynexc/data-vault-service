@@ -13,8 +13,22 @@ import { FilterError } from './athena-filter';
  *
  * Object field columns are stored PascalCase (from the Salesforce schema); delta
  * bookkeeping columns are lowercase snake_case. Identifiers are quoted or bare to
- * match. Every source projects the same output columns:
- *   <requested cols> [, LastModifiedDate] , backup_job_id , change_type
+ * match.
+ *
+ * PROJECTION RULE: every builder scans exactly `columnNames` plus `Id` and
+ * `LastModifiedDate` — nothing else. Those two are not optional extras:
+ *   Id                — joins delta ⇄ Hudi rows, and is the tiebreaker that
+ *                       makes the sort order total.
+ *   LastModifiedDate  — the sort column, and half of the pagination key.
+ * The service prunes both from the response when the caller did not ask for
+ * them, so the API contract is "you get back the columns you requested".
+ * Parquet is columnar, so a narrow projection is directly a smaller scan.
+ *
+ * PAGINATION: keyset (seek), not OFFSET. Every builder orders by
+ * `LastModifiedDate DESC, Id DESC` and accepts a cursor key; the predicate
+ * `(lmd, id) < (cursor.lmd, cursor.id)` seeks straight to the next block
+ * instead of counting past the rows already served. Cost per block is constant
+ * — page 40 scans no more than page 1.
  */
 
 // Object field API names are identifier-safe; validate to keep them out of the
@@ -32,45 +46,138 @@ export const validateColumns = (columnNames: string[]): void => {
   columnNames.forEach(quoteCol);
 };
 
-// LastModifiedDate drives ordering; must always be selectable.
+// LastModifiedDate drives ordering; Id breaks its ties. Both are always
+// selectable — see the PROJECTION RULE above.
 const LMD = 'LastModifiedDate';
+const ID = 'Id';
 
-// backup_job_id values are server-issued ids; escaped anyway as defence in depth.
-const idList = (ids: string[]): string => ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
+// Values are server-issued ids / cursor echoes; escaped as defence in depth.
+const lit = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+const idList = (ids: string[]): string => ids.map(lit).join(', ');
+
+/** The last row of a block — where the next block starts seeking from. */
+export interface IPageKey {
+  lmd: string;
+  id: string;
+}
 
 export interface IFetchSqlParams {
   columnNames: string[];
   jobIds: string[];
   filterWhere: string | null;
   limit: number;
+  // Absent/null → first block.
+  cursor?: IPageKey | null;
+  // Prebuilt year/month predicate from buildDeltaPartitionWhere. Spliced into
+  // DELTA-table scans only — never the Hudi table (different partition source).
+  deltaPartition?: string | null;
 }
 
-// Requested columns, de-duplicated, with LastModifiedDate guaranteed present.
+// Requested columns, de-duplicated, with Id and LastModifiedDate guaranteed
+// present. Id leads so the projection order is stable across builders.
 const projectionColumns = (columnNames: string[]): string[] => {
   const cols = [...new Set(columnNames)];
   if (!cols.some((c) => c.toLowerCase() === LMD.toLowerCase())) cols.push(LMD);
+  if (!cols.some((c) => c.toLowerCase() === ID.toLowerCase())) cols.unshift(ID);
   return cols;
 };
 
-const filterClause = (where: string | null, keyword: 'WHERE' | 'AND'): string =>
-  where ? ` ${keyword} (${where})` : '';
+// Joins the active conditions with AND under a single WHERE/AND keyword.
+const whereClause = (parts: (string | null | undefined)[], keyword: 'WHERE' | 'AND'): string => {
+  const active = parts.filter((p): p is string => Boolean(p));
+  return active.length ? ` ${keyword} ${active.map((p) => `(${p})`).join(' AND ')}` : '';
+};
 
-// Output columns are identical across every builder, so results merge cleanly.
-export const outputColumns = (columnNames: string[]): string[] => [
-  ...projectionColumns(columnNames),
-  'backup_job_id',
-  'change_type',
-];
+// Seek predicate for "strictly after the cursor" under ORDER BY lmd DESC, id
+// DESC. Compared as varchar throughout: LastModifiedDate is an ISO string, so
+// lexicographic order is chronological (the same assumption the rest of the
+// module already makes).
+const keysetWhere = (
+  cursor: IPageKey | null | undefined,
+  lmdExpr: string,
+  idExpr: string
+): string | null =>
+  cursor
+    ? `${lmdExpr} < ${lit(cursor.lmd)} OR ` +
+      `(${lmdExpr} = ${lit(cursor.lmd)} AND ${idExpr} < ${lit(cursor.id)})`
+    : null;
+
+/**
+ * Partition predicate for the DELTA table. Cuts the scan to the months that can
+ * possibly matter — the single biggest cost lever on this endpoint, since
+ * Athena bills by bytes scanned and the delta table is the one that grows
+ * without bound.
+ *
+ * Verified against the Spark writers (DataValut-Middleware-App):
+ *   - delta is partitioned year/month from `change_time`
+ *     (`DeltaService.writeDeltaToHudi:591-597`), both keys typed `string` in
+ *     Glue (`glue/index.ts:560-564`).
+ *   - `month` is zero-padded — `lpad(month(...), 2, "0")` — in every mainline
+ *     writer, but `CascadeDeleteService:243-244` writes it UNPADDED. Both
+ *     spellings therefore exist in the same table, so month must be compared
+ *     numerically (`CAST(month AS integer)`), never lexicographically ('7' would
+ *     sort after '12'). Trino still prunes across that cast. Year is always four
+ *     digits, so it compares as a string.
+ *
+ * ⚠ Only ever applied to the delta table. The main Hudi table partitions on
+ * **CreatedDate** (`BackupPipeline:467`, `SchemaUtils.addPartitionColumnsCoalesced`
+ * — per-row fallback to LastModifiedDate). CreatedDate is immutable, so a
+ * record created in 2020 and edited yesterday still lives in the 2020
+ * partition: pruning that table by a backup job's timestamp would silently drop
+ * old records. Never do it.
+ *
+ * ⚠ `from` must come from a caller-declared window (`changedSince`), never be
+ * inferred from job timestamps. `DeltaService:956-957` sets a SCHEMA_* delta's
+ * `change_time` to the RECORD's LastModifiedDate, and the timestamp guard only
+ * emits those rows for records with `LMD <= schemaChangedAt` — so their
+ * change_time can predate the job that wrote them by years, landing in old
+ * partitions. An inferred lower bound would drop exactly the schema history a
+ * restore needs. `to` is safe to infer: no job can record a change that had not
+ * happened by the time it ran.
+ */
+export const buildDeltaPartitionWhere = (
+  from: string | null,
+  to: string | null
+): string | null => {
+  const parts: string[] = [];
+  const ym = (iso: string): { y: string; m: number } | null => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? null
+      : { y: String(d.getUTCFullYear()), m: d.getUTCMonth() + 1 };
+  };
+  const lo = from ? ym(from) : null;
+  const hi = to ? ym(to) : null;
+  // Year compares lexicographically (always 4 digits); month must be numeric so
+  // '7' and '07' both order correctly against 12.
+  if (lo) parts.push(`(year > ${lit(lo.y)} OR (year = ${lit(lo.y)} AND CAST(month AS integer) >= ${lo.m}))`);
+  if (hi) parts.push(`(year < ${lit(hi.y)} OR (year = ${lit(hi.y)} AND CAST(month AS integer) <= ${hi.m}))`);
+  return parts.length ? parts.join(' AND ') : null;
+};
+
+// Wraps a finished projection so the cursor, ordering, and block limit are
+// applied once, uniformly, over whatever the inner query produced — including
+// the CASE-picked columns the CSV builders emit, which cannot be referenced
+// from an inner WHERE.
+const pageWrap = (
+  inner: string,
+  p: { cursor?: IPageKey | null; limit: number },
+  lmdExpr: string,
+  idExpr: string
+): string =>
+  `SELECT * FROM (${inner}) p` +
+  whereClause([keysetWhere(p.cursor, lmdExpr, idExpr)], 'WHERE') +
+  ` ORDER BY ${lmdExpr} DESC, ${idExpr} DESC LIMIT ${p.limit}`;
 
 // ── Uncompressed (CSV) / archival ─────────────────────────────────────────────
 // One table, filter by backup_job_id, ordered + capped.
 export const buildRawSql = (tableName: string, p: IFetchSqlParams): string => {
   const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
   return (
-    `SELECT ${cols}, backup_job_id, 'RAW' AS change_type ` +
-    `FROM "${tableName}" ` +
-    `WHERE backup_job_id IN (${idList(p.jobIds)})${filterClause(p.filterWhere, 'AND')} ` +
-    `ORDER BY ${quoteCol(LMD)} DESC LIMIT ${p.limit}`
+    `SELECT ${cols} FROM "${tableName}" ` +
+    `WHERE backup_job_id IN (${idList(p.jobIds)})` +
+    whereClause([p.filterWhere, keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID))], 'AND') +
+    ` ORDER BY ${quoteCol(LMD)} DESC, ${quoteCol(ID)} DESC LIMIT ${p.limit}`
   );
 };
 
@@ -85,10 +192,9 @@ export const buildHudiRawSql = (
 ): string => {
   const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
   return (
-    `SELECT ${cols}, backup_job_id, 'RAW' AS change_type ` +
-    `FROM "${hudiTable}"` +
-    `${filterClause(p.filterWhere, 'WHERE')} ` +
-    `ORDER BY ${quoteCol(LMD)} DESC LIMIT ${p.limit}`
+    `SELECT ${cols} FROM "${hudiTable}"` +
+    whereClause([p.filterWhere, keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID))], 'WHERE') +
+    ` ORDER BY ${quoteCol(LMD)} DESC, ${quoteCol(ID)} DESC LIMIT ${p.limit}`
   );
 };
 
@@ -98,12 +204,9 @@ export const buildHudiRawSql = (
 // to varchar so Hudi-typed and CSV-string columns can share a projection —
 // Athena results are strings end-to-end anyway.
 
-// Requested cols + Id (needed for pairing) + LastModifiedDate (ordering).
-export const pairedColumns = (columnNames: string[]): string[] => {
-  const cols = projectionColumns(columnNames);
-  if (!cols.some((c) => c.toLowerCase() === 'id')) cols.unshift('Id');
-  return cols;
-};
+// The internal column set every builder scans: what the caller asked for, plus
+// Id (pairing + sort tiebreaker) and LastModifiedDate (sort + cursor key).
+export const pairedColumns = projectionColumns;
 
 // COMPRESSED jobs: newest delta per record_id wins (change_time is the CDC order;
 // LastModifiedDate isn't a flat field inside UPDATE change_data). The Hudi record
@@ -118,17 +221,17 @@ export const buildCompressedByFieldSql = (
   const rCols = pairedColumns(p.columnNames)
     .map((c) => `CAST(h.${quoteCol(c)} AS varchar) AS ${quoteCol(`r_${c}`)}`)
     .join(', ');
-  return (
+  const inner =
     `WITH d AS (` +
     `SELECT record_id, change_data, ` +
     `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
     `FROM "${deltaTable}" WHERE backup_job_id IN (${idList(p.jobIds)})` +
+    whereClause([p.deltaPartition], 'AND') +
     `) ` +
     `SELECT ${rCols}, d.change_data AS "d_change_data" ` +
     `FROM d JOIN "${hudiTable}" h ON d.rn = 1 AND h."Id" = d.record_id` +
-    `${filterClause(p.filterWhere, 'WHERE')} ` +
-    `ORDER BY ${quoteCol(`r_${LMD}`)} DESC LIMIT ${p.limit}`
-  );
+    whereClause([p.filterWhere], 'WHERE');
+  return pageWrap(inner, p, quoteCol(`r_${LMD}`), quoteCol(`r_${ID}`));
 };
 
 // Uncompressed jobs: the record must exist in the CSV rows for these jobs AND in
@@ -150,45 +253,53 @@ export const buildCsvByFieldSql = (
         `ELSE CAST(m.${quoteCol(c)} AS varchar) END AS ${quoteCol(`r_${c}`)}`
     )
     .join(', ');
-  return (
+  const inner =
     `WITH ranked AS (` +
     `SELECT ${colList}, ` +
     `ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY ${quoteCol(LMD)} DESC) AS rn ` +
     `FROM "${csvTable}" WHERE backup_job_id IN (${idList(p.jobIds)})` +
-    `), m AS (SELECT * FROM ranked WHERE rn = 1${filterClause(p.filterWhere, 'AND')}) ` +
+    `), m AS (SELECT * FROM ranked WHERE rn = 1${whereClause([p.filterWhere], 'AND')}) ` +
     `SELECT ${rCols} ` +
     `FROM m ` +
-    `JOIN "${hudiTable}" h ON h."Id" = m."Id" ` +
-    `ORDER BY ${quoteCol(`r_${LMD}`)} DESC LIMIT ${p.limit}`
-  );
+    `JOIN "${hudiTable}" h ON h."Id" = m."Id"`;
+  return pageWrap(inner, p, quoteCol(`r_${LMD}`), quoteCol(`r_${ID}`));
 };
 
-// ── Compressed, deleted records (deletedOnly = true) ──────────────────────────
+// ── Compressed, deleted records ───────────────────────────────────────────────
 // Deleted records are gone from _hudi; their full last-known state lives in the
 // DELETE delta's change_data JSON. Extract the requested columns from it. Dedup
-// to the newest change_time per record_id.
+// to the newest change_time per record_id, and only when that newest change is
+// the DELETE — a record deleted and later re-created is not deleted. DELETE
+// deltas are reachable only through backup_job_id, which is the filter here.
+// Used by the deletedOnly flow and by the by-field flow, where the Hudi join
+// would otherwise drop these records entirely.
 export const buildCompressedDeletedSql = (deltaTable: string, p: IFetchSqlParams): string => {
-  const cols = projectionColumns(p.columnNames);
+  const cols = pairedColumns(p.columnNames);
   const extracted = cols
     .map((c) => `json_extract_scalar(change_data, '$["${c}"]') AS ${quoteCol(c)}`)
     .join(', ');
   const inner =
-    `SELECT ${extracted}, backup_job_id, 'DELETE' AS change_type FROM (` +
-    `SELECT record_id, change_data, backup_job_id, change_type, ` +
+    `SELECT ${extracted} FROM (` +
+    `SELECT record_id, change_data, change_type, ` +
     `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
     `FROM "${deltaTable}" WHERE backup_job_id IN (${idList(p.jobIds)})` +
+    whereClause([p.deltaPartition], 'AND') +
     `) t WHERE rn = 1 AND change_type = 'DELETE'`;
-  return (
-    `SELECT * FROM (${inner}) w` +
-    `${filterClause(p.filterWhere, 'WHERE')} ` +
-    `ORDER BY ${quoteCol(LMD)} DESC LIMIT ${p.limit}`
-  );
+  const filtered = `SELECT * FROM (${inner}) w${whereClause([p.filterWhere], 'WHERE')}`;
+  return pageWrap(filtered, p, quoteCol(LMD), quoteCol(ID));
 };
 
 // ── RESTORE_ENTIRE_RECORD (bulk) sources ──────────────────────────────────────
-// Fixed query count regardless of record/job volume — never one query per
-// record. The service runs these, groups rows in memory, and assembly happens
-// in restore-reconstruct.assembleEntireRecords.
+// Two queries, fixed, regardless of record/job volume. The service runs them,
+// groups rows in memory, and assembly happens in
+// restore-reconstruct.assembleEntireRecords.
+//
+// SEMANTICS: a restore reverts exactly what the REQUESTED jobs recorded. Only
+// deltas whose backup_job_id is in the request are undone; changes made by any
+// other job stay applied. There is no anchor and no point-in-time replay, so
+// the checkpoint table is not consulted at all — a checkpoint is a snapshot of
+// one job's point-in-time state, which is a different question from the one
+// being asked here, and using it would silently return the wrong record.
 
 export interface IEntireScope {
   jobIds: string[];
@@ -197,83 +308,75 @@ export interface IEntireScope {
   // ponytail: ids inline into one IN list — fine into the low thousands
   // (Athena's 256KB query cap); chunk the queries if requests outgrow that.
   recordIds?: string[];
+  limit: number;
+  cursor?: IPageKey | null;
+  deltaPartition?: string | null;
 }
 
 const recordScope = (recordIds: string[] | undefined, column: string): string =>
   recordIds?.length ? ` AND ${column} IN (${idList(recordIds)})` : '';
 
-// Scenario A in one query: anchors (newest delta per record across the
-// requested jobs) LEFT JOINed to every strictly-newer delta. A record with no
-// newer changes still emits one row (empty change_time), so the full record-id
-// set falls out of this single result.
-export const buildEntireDeltaChainSql = (deltaTable: string, s: IEntireScope): string =>
-  `WITH anchor AS (` +
-  `SELECT record_id, MAX(change_time) AS t0 FROM "${deltaTable}" ` +
-  `WHERE backup_job_id IN (${idList(s.jobIds)})${recordScope(s.recordIds, 'record_id')} ` +
-  `GROUP BY record_id` +
-  `) ` +
-  `SELECT a.record_id, a.t0, d.change_time, d.change_data ` +
-  `FROM anchor a LEFT JOIN "${deltaTable}" d ` +
-  `ON d.record_id = a.record_id AND d.change_time > a.t0 ` +
-  `ORDER BY a.record_id, d.change_time DESC`;
-
-// Chosen checkpoint per record, in one query: a checkpoint written for the
-// record's anchor job wins outright (is_exact = 1); otherwise the nearest
-// checkpoint newer than the anchor delta. Records with neither emit no row →
-// Scenario A fallback per record in assembly. A missing checkpoints table
-// throws TABLE_NOT_FOUND, which the service maps to "no checkpoints at all".
-// The checkpoints table shares the Hudi table's schema — a checkpoint row IS a
-// full record snapshot — so the record fields are projected as c_<col> and
-// its LastModifiedDate doubles as the checkpoint time.
-// ponytail: assumes delta change_time and LastModifiedDate share a comparable
-// string format; wrap both in a normalising cast if they ever diverge.
-export const buildEntireCheckpointSql = (
-  checkpointTable: string,
+/**
+ * Query 1 of 2 — defines the block: WHICH records are in this page, and in what
+ * order. Driven off the Hudi table so there is exactly one sort-key domain
+ * (the record's current LastModifiedDate) and one row per Id, which makes the
+ * keyset seek exact and dedup free.
+ *
+ * A record qualifies two ways, unioned:
+ *   - its Hudi row is STAMPED with a requested job (`backup_job_id` is
+ *     provenance for the job that last wrote the record). This is what brings
+ *     in records a job inserted but never changed — inserts write no delta, so
+ *     the delta side alone would miss them entirely.
+ *   - a requested job recorded a delta against it (semi-join). Covers records
+ *     a requested job changed but a LATER job has since touched, which moved
+ *     the Hudi stamp to that later job.
+ *
+ * The delta side is a DISTINCT record_id semi-join over a `backup_job_id`-
+ * filtered scan — the cheap slice of the delta table, and no self-join.
+ */
+export const buildEntireBlockSql = (
+  hudiTable: string,
   deltaTable: string,
   s: IEntireScope,
   columnNames: string[],
   filterWhere: string | null
 ): string => {
-  const anchor =
-    `SELECT record_id, change_time AS t0, backup_job_id AS anchor_job FROM (` +
-    `SELECT record_id, change_time, backup_job_id, ` +
-    `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
-    `FROM "${deltaTable}" WHERE backup_job_id IN (${idList(s.jobIds)})${recordScope(s.recordIds, 'record_id')}` +
-    `) t WHERE rn = 1`;
-  const projected = pairedColumns(columnNames)
-    .map((c) => `CAST(c.${quoteCol(c)} AS varchar) AS ${quoteCol(`c_${c}`)}`)
+  const cols = pairedColumns(columnNames)
+    .map((c) => `CAST(h.${quoteCol(c)} AS varchar) AS ${quoteCol(c)}`)
     .join(', ');
+  const hLmd = `CAST(h.${quoteCol(LMD)} AS varchar)`;
+  const hId = `CAST(h.${quoteCol(ID)} AS varchar)`;
+  const touched =
+    `SELECT DISTINCT record_id FROM "${deltaTable}" ` +
+    `WHERE backup_job_id IN (${idList(s.jobIds)})${recordScope(s.recordIds, 'record_id')}` +
+    whereClause([s.deltaPartition], 'AND');
   return (
-    `WITH anchor AS (${anchor}), ranked AS (` +
-    `SELECT ${projected}, a.t0, ` +
-    `CAST(c.${quoteCol(LMD)} AS varchar) AS checkpoint_time, ` +
-    `CASE WHEN c.backup_job_id = a.anchor_job THEN 1 ELSE 0 END AS is_exact, ` +
-    `ROW_NUMBER() OVER (PARTITION BY c."Id" ORDER BY ` +
-    `CASE WHEN c.backup_job_id = a.anchor_job THEN 0 ELSE 1 END, c.${quoteCol(LMD)} ASC) AS rn ` +
-    `FROM "${checkpointTable}" c JOIN anchor a ON c."Id" = a.record_id ` +
-    `WHERE (c.backup_job_id = a.anchor_job OR CAST(c.${quoteCol(LMD)} AS varchar) > a.t0)` +
-    `${filterClause(filterWhere, 'AND')}` +
-    `) SELECT * FROM ranked WHERE rn = 1`
+    `SELECT ${cols} FROM "${hudiTable}" h ` +
+    `WHERE (h.backup_job_id IN (${idList(s.jobIds)}) OR h."Id" IN (${touched}))` +
+    recordScope(s.recordIds, 'h."Id"') +
+    whereClause([filterWhere, keysetWhere(s.cursor, hLmd, hId)], 'AND') +
+    ` ORDER BY ${hLmd} DESC, ${hId} DESC LIMIT ${s.limit}`
   );
 };
 
-// Bulk current-state fetch for the assembly base — scoped to ids that came out
-// of the delta chain, so Hudi is still never queried standalone. The filter
-// applies here so non-checkpointed records honour it too.
-export const buildHudiBulkSql = (
-  hudiTable: string,
+/**
+ * Query 2 of 2 — the deltas to undo, for the block's records only.
+ *
+ * Filtered to the requested jobs, so every row it returns is one the caller
+ * asked to revert; assembly undoes all of them with no further filtering. No
+ * ordering or limit: the row count is bounded by the block's record ids, and
+ * `reconstructRecord` sorts by change_time itself (a field changed twice must
+ * revert to the OLDEST value, so order matters but is applied in memory).
+ */
+export const buildEntireDeltasSql = (
+  deltaTable: string,
+  jobIds: string[],
   recordIds: string[],
-  columnNames: string[],
-  filterWhere: string | null
-): string => {
-  const cols = pairedColumns(columnNames)
-    .map((c) => `CAST(${quoteCol(c)} AS varchar) AS ${quoteCol(c)}`)
-    .join(', ');
-  return (
-    `SELECT ${cols} FROM "${hudiTable}" WHERE "Id" IN (${idList(recordIds)})` +
-    `${filterClause(filterWhere, 'AND')}`
-  );
-};
+  deltaPartition?: string | null
+): string =>
+  `SELECT record_id, change_time, change_type, change_data FROM "${deltaTable}" ` +
+  `WHERE backup_job_id IN (${idList(jobIds)}) AND record_id IN (${idList(recordIds)})` +
+  whereClause([deltaPartition], 'AND');
 
 // Uncompressed jobs, RESTORE_ENTIRE_RECORD: newest CSV row per Id vs the Hudi
 // record — the newer LastModifiedDate wins, and a record present in only one
@@ -293,17 +396,16 @@ export const buildCsvEitherSql = (
     `WHEN h."Id" IS NOT NULL AND CAST(h.${quoteCol(LMD)} AS varchar) > CAST(m.${quoteCol(LMD)} AS varchar) ` +
     `THEN CAST(h.${quoteCol(c)} AS varchar) ` +
     `ELSE CAST(m.${quoteCol(c)} AS varchar) END AS ${quoteCol(`r_${c}`)}`;
-  return (
+  const inner =
     `WITH ranked AS (` +
     `SELECT ${colList}, ` +
     `ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY ${quoteCol(LMD)} DESC) AS rn ` +
     `FROM "${csvTable}" WHERE backup_job_id IN (${idList(p.jobIds)})${recordScope(recordIds, '"Id"')}` +
-    `), m AS (SELECT * FROM ranked WHERE rn = 1${filterClause(p.filterWhere, 'AND')}), ` +
+    `), m AS (SELECT * FROM ranked WHERE rn = 1${whereClause([p.filterWhere], 'AND')}), ` +
     `h AS (SELECT ${colList} FROM "${hudiTable}" WHERE "Id" IN (${hudiScope})) ` +
     `SELECT ${cols.map(pick).join(', ')} ` +
-    `FROM m FULL OUTER JOIN h ON h."Id" = m."Id" ` +
-    `ORDER BY ${quoteCol(`r_${LMD}`)} DESC LIMIT ${p.limit}`
-  );
+    `FROM m FULL OUTER JOIN h ON h."Id" = m."Id"`;
+  return pageWrap(inner, p, quoteCol(`r_${LMD}`), quoteCol(`r_${ID}`));
 };
 
 // ── Self-check ────────────────────────────────────────────────────────────────
@@ -312,45 +414,77 @@ if (require.main === module) {
   const assert: typeof import('assert') = require('assert');
   const p: IFetchSqlParams = { columnNames: ['Name', 'Amount'], jobIds: ['j1', 'j2'], filterWhere: null, limit: 50 };
 
-  // LastModifiedDate auto-added for ordering; output columns stable.
-  assert.deepStrictEqual(outputColumns(['Name']), ['Name', 'LastModifiedDate', 'backup_job_id', 'change_type']);
-  assert.deepStrictEqual(outputColumns(['Name', 'LastModifiedDate']), ['Name', 'LastModifiedDate', 'backup_job_id', 'change_type']);
+  // Projection is exactly the requested columns + Id + LastModifiedDate.
+  assert.deepStrictEqual(pairedColumns(['Name']), ['Id', 'Name', 'LastModifiedDate']);
+  assert.deepStrictEqual(pairedColumns(['Id', 'Name', 'LastModifiedDate']), ['Id', 'Name', 'LastModifiedDate']);
 
   const raw = buildRawSql('cfg_x_account', p);
-  assert.ok(raw.includes(`FROM "cfg_x_account"`));
+  assert.ok(raw.includes(`SELECT "Id", "Name", "Amount", "LastModifiedDate" FROM "cfg_x_account"`));
   assert.ok(raw.includes(`backup_job_id IN ('j1', 'j2')`));
-  assert.ok(raw.includes(`ORDER BY "LastModifiedDate" DESC LIMIT 50`));
-  assert.ok(raw.includes(`"LastModifiedDate"`), 'LMD projected even when unrequested');
+  assert.ok(raw.includes(`ORDER BY "LastModifiedDate" DESC, "Id" DESC LIMIT 50`));
+  assert.ok(!raw.includes('backup_job_id,'), 'bookkeeping columns are not projected');
+  assert.ok(!raw.includes('change_type'), 'bookkeeping columns are not projected');
 
-  // Hudi archival current state: whole table, no job filter, RAW change_type.
+  // Hudi archival current state: whole table, no job filter.
   const hraw = buildHudiRawSql('cfg_x_account_hudi', { columnNames: ['Name'], filterWhere: null, limit: 50 });
-  assert.ok(hraw.includes(`FROM "cfg_x_account_hudi" ORDER BY "LastModifiedDate" DESC LIMIT 50`));
+  assert.ok(hraw.includes(`FROM "cfg_x_account_hudi" ORDER BY "LastModifiedDate" DESC, "Id" DESC LIMIT 50`));
   assert.ok(!hraw.includes('backup_job_id IN'), 'no job filter on the Hudi snapshot');
   assert.ok(
     buildHudiRawSql('h', { columnNames: ['Name'], filterWhere: `"Name" = 'Acme'`, limit: 50 })
       .includes(`FROM "h" WHERE ("Name" = 'Acme')`)
   );
 
+  // ── Keyset pagination ──────────────────────────────────────────────────────
+  const cursor = { lmd: '2026-07-20T00:00:00Z', id: '001A' };
+  const seek = buildRawSql('t', { ...p, cursor });
+  assert.ok(
+    seek.includes(
+      `AND ("LastModifiedDate" < '2026-07-20T00:00:00Z' OR ` +
+        `("LastModifiedDate" = '2026-07-20T00:00:00Z' AND "Id" < '001A'))`
+    ),
+    'seek predicate, not OFFSET'
+  );
+  assert.ok(!seek.includes('OFFSET'), 'never OFFSET — cost must not grow with page number');
+  // Cursor values are escaped like any other literal.
+  assert.ok(buildRawSql('t', { ...p, cursor: { lmd: 'x', id: "o'brien" } }).includes(`'o''brien'`));
+
+  // ── Delta partition pruning ────────────────────────────────────────────────
+  assert.strictEqual(buildDeltaPartitionWhere(null, null), null, 'no window → no predicate');
+  assert.strictEqual(
+    buildDeltaPartitionWhere(null, '2026-07-28T00:00:00Z'),
+    `(year < '2026' OR (year = '2026' AND CAST(month AS integer) <= 7))`
+  );
+  assert.strictEqual(
+    buildDeltaPartitionWhere('2025-11-01T00:00:00Z', null),
+    `(year > '2025' OR (year = '2025' AND CAST(month AS integer) >= 11))`
+  );
+  // month is cast, never string-compared: '7' would sort after '12' otherwise.
+  assert.ok(buildDeltaPartitionWhere(null, '2026-07-28T00:00:00Z')!.includes('CAST(month AS integer)'));
+  assert.strictEqual(buildDeltaPartitionWhere('nonsense', null), null, 'unparseable date is ignored');
+
   const del = buildCompressedDeletedSql('cfg_x_account_delta', p);
   assert.ok(del.includes(`json_extract_scalar(change_data, '$["Name"]') AS "Name"`));
+  assert.ok(del.includes(`json_extract_scalar(change_data, '$["Id"]') AS "Id"`), 'Id always extracted for pairing');
   assert.ok(del.includes(`json_extract_scalar(change_data, '$["LastModifiedDate"]') AS "LastModifiedDate"`));
   assert.ok(del.includes(`rn = 1 AND change_type = 'DELETE'`));
+  assert.ok(del.includes(`ORDER BY "LastModifiedDate" DESC, "Id" DESC LIMIT 50`));
+  // The prune reaches the delta scan inside the window function.
+  assert.ok(
+    buildCompressedDeletedSql('d', { ...p, deltaPartition: `year = '2026'` })
+      .includes(`backup_job_id IN ('j1', 'j2') AND (year = '2026')`)
+  );
 
   // Filter injects into the right slot (WHERE for delete wrapper, AND elsewhere).
   const filtered = { ...p, filterWhere: `"Name" = 'Acme'` };
   assert.ok(buildRawSql('t', filtered).includes(`WHERE backup_job_id IN ('j1', 'j2') AND ("Name" = 'Acme')`));
   assert.ok(buildCompressedDeletedSql('d', filtered).includes(`) w WHERE ("Name" = 'Acme')`));
 
-  // Paired projection: Id + LastModifiedDate always present.
-  assert.deepStrictEqual(pairedColumns(['Name']), ['Id', 'Name', 'LastModifiedDate']);
-  assert.deepStrictEqual(pairedColumns(['Id', 'Name']), ['Id', 'Name', 'LastModifiedDate']);
-
   // Compressed by-field: Hudi only via join to newest delta; raw change_data returned.
   const cp = buildCompressedByFieldSql('cfg_x_account_hudi', 'cfg_x_account_delta', p);
   assert.ok(cp.includes(`FROM d JOIN "cfg_x_account_hudi" h ON d.rn = 1 AND h."Id" = d.record_id`));
   assert.ok(cp.includes(`CAST(h."Name" AS varchar) AS "r_Name"`));
   assert.ok(cp.includes(`d.change_data AS "d_change_data"`));
-  assert.ok(cp.includes(`ORDER BY "r_LastModifiedDate" DESC LIMIT 50`));
+  assert.ok(cp.includes(`ORDER BY "r_LastModifiedDate" DESC, "r_Id" DESC LIMIT 50`));
   assert.ok(buildCompressedByFieldSql('h', 'd', filtered).includes(`d.record_id WHERE ("Name" = 'Acme')`));
 
   // CSV by-field: record must exist in CSV + Hudi; newer LastModifiedDate wins per row.
@@ -375,42 +509,56 @@ if (require.main === module) {
   }
 
   // RESTORE_ENTIRE_RECORD bulk sources.
-  const scope = { jobIds: ['j1'], recordIds: ['r1', 'r2'] };
-  const chain = buildEntireDeltaChainSql('d', scope);
-  assert.ok(chain.includes(`MAX(change_time) AS t0`));
-  assert.ok(chain.includes(`AND record_id IN ('r1', 'r2')`));
-  assert.ok(chain.includes(`LEFT JOIN "d" d ON d.record_id = a.record_id AND d.change_time > a.t0`));
-  assert.ok(!buildEntireDeltaChainSql('d', { jobIds: ['j1'] }).includes('record_id IN ('), 'no record scope when ids omitted');
+  const scope = { jobIds: ['j1'], recordIds: ['r1', 'r2'], limit: 2000 };
 
-  const ck = buildEntireCheckpointSql('c', 'd', scope, ['Name'], null);
-  assert.ok(ck.includes(`CASE WHEN c.backup_job_id = a.anchor_job THEN 1 ELSE 0 END AS is_exact`));
-  assert.ok(ck.includes(`CAST(c."Name" AS varchar) AS "c_Name"`), 'record fields projected from the checkpoint row');
-  assert.ok(ck.includes(`CAST(c."Id" AS varchar) AS "c_Id"`));
-  assert.ok(ck.includes(`CAST(c."LastModifiedDate" AS varchar) AS checkpoint_time`));
-  assert.ok(ck.includes(`(c.backup_job_id = a.anchor_job OR CAST(c."LastModifiedDate" AS varchar) > a.t0)`));
-  assert.ok(ck.includes(`CASE WHEN c.backup_job_id = a.anchor_job THEN 0 ELSE 1 END, c."LastModifiedDate" ASC`));
-  assert.ok(ck.includes(`FROM ranked WHERE rn = 1`));
+  // Query 1 — the block. Hudi-driven, so one sort-key domain and one row per Id.
+  const block = buildEntireBlockSql('h', 'd', scope, ['Name'], null);
+  assert.ok(block.includes(`CAST(h."Name" AS varchar) AS "Name"`));
+  assert.ok(block.includes(`CAST(h."Id" AS varchar) AS "Id"`));
   assert.ok(
-    buildEntireCheckpointSql('c', 'd', scope, ['Name'], `"Name" = 'Acme'`).includes(`> a.t0) AND ("Name" = 'Acme')`),
-    'filter applies to checkpoint rows'
+    block.includes(`h.backup_job_id IN ('j1') OR h."Id" IN (SELECT DISTINCT record_id FROM "d" `),
+    'a record qualifies by Hudi stamp OR by having a requested-job delta'
+  );
+  assert.ok(block.includes(`AND record_id IN ('r1', 'r2')`), 'record scope bounds the delta semi-join');
+  assert.ok(block.includes(`AND h."Id" IN ('r1', 'r2')`), 'record scope bounds the Hudi side too');
+  assert.ok(
+    block.includes(`ORDER BY CAST(h."LastModifiedDate" AS varchar) DESC, CAST(h."Id" AS varchar) DESC LIMIT 2000`)
+  );
+  assert.ok(!block.includes('LEFT JOIN'), 'no self-join — the anchor chain is gone');
+  assert.ok(!buildEntireBlockSql('h', 'd', { jobIds: ['j1'], limit: 10 }, ['Name'], null).includes(`record_id IN (`));
+
+  // Seek + filter + partition prune all land on the block query.
+  const blockSeek = buildEntireBlockSql('h', 'd', { ...scope, cursor }, ['Name'], `"Name" = 'Acme'`);
+  assert.ok(blockSeek.includes(`AND ("Name" = 'Acme') AND (CAST(h."LastModifiedDate" AS varchar) < '2026-07-20T00:00:00Z'`));
+  assert.ok(
+    buildEntireBlockSql('h', 'd', { ...scope, deltaPartition: `year <= '2026'` }, ['Name'], null)
+      .includes(`AND (year <= '2026')`),
+    'prune reaches the delta semi-join'
   );
 
-  const hb = buildHudiBulkSql('h', ['r1'], ['Name'], null);
-  assert.ok(hb.includes(`CAST("Name" AS varchar) AS "Name"`));
-  assert.ok(hb.includes(`CAST("Id" AS varchar) AS "Id"`));
-  assert.ok(hb.includes(`WHERE "Id" IN ('r1')`));
-  assert.ok(
-    buildHudiBulkSql('h', ['r1'], ['Name'], `"Name" = 'Acme'`).includes(`WHERE "Id" IN ('r1') AND ("Name" = 'Acme')`),
-    'filter applies to the Hudi base'
+  // Query 2 — the deltas to undo. Job-filtered, so every row is one to revert.
+  const dl = buildEntireDeltasSql('d', ['j1', 'j2'], ['r1'], null);
+  assert.strictEqual(
+    dl,
+    `SELECT record_id, change_time, change_type, change_data FROM "d" ` +
+      `WHERE backup_job_id IN ('j1', 'j2') AND record_id IN ('r1')`
   );
+  assert.ok(!dl.includes('ORDER BY'), 'replay order is applied in memory, not in SQL');
+  assert.ok(buildEntireDeltasSql('d', ['j1'], ['r1'], `year = '2026'`).includes(`AND (year = '2026')`));
 
   const ce = buildCsvEitherSql('c', 'h', p, ['r1']);
   assert.ok(ce.includes(`FULL OUTER JOIN h ON h."Id" = m."Id"`));
   assert.ok(ce.includes(`h AS (SELECT "Id", "Name", "Amount", "LastModifiedDate" FROM "h" WHERE "Id" IN ('r1'))`));
   assert.ok(ce.includes(`CASE WHEN m."Id" IS NULL THEN CAST(h."Name" AS varchar)`));
   assert.ok(ce.includes(`AND "Id" IN ('r1')`), 'CSV side scoped to requested records');
+  assert.ok(ce.includes(`ORDER BY "r_LastModifiedDate" DESC, "r_Id" DESC LIMIT 50`));
   // Without explicit record ids, the Hudi side is bounded to CSV candidates.
   assert.ok(buildCsvEitherSql('c', 'h', p).includes(`"Id" IN (SELECT "Id" FROM m)`));
+  // The seek applies to the CASE-picked winner, so it must sit in the wrapper.
+  assert.ok(
+    buildCsvEitherSql('c', 'h', { ...p, cursor }, ['r1'])
+      .includes(`) p WHERE ("r_LastModifiedDate" < '2026-07-20T00:00:00Z'`)
+  );
 
   console.log('athena-fetch self-check passed');
 }

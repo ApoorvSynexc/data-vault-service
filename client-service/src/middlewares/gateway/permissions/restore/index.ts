@@ -33,6 +33,16 @@ const restorePermissions = [
         path : '/restore',
         method: 'POST',
         permissions: ['restore.write']
+    },
+    {
+        path : '/restore/config/list',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/job',
+        method: 'GET',
+        permissions: ['restore.read']
     }
 ];
 

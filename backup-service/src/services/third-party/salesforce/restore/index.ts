@@ -50,6 +50,42 @@ const newChunk = (header: string): CsvChunk => ({
   byteLength: Buffer.byteLength(header, 'utf8'),
 });
 
+const parseCsvRow = (line: string): string[] => {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      fields.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current);
+  return fields;
+};
+
+const parseFirstNErrors = (failedCsv: string, limit: number): string[] => {
+  const lines = failedCsv.split('\n').filter((l) => l.trim());
+  if (lines.length < 2) return [];
+  const headers = parseCsvRow(lines[0]);
+  const errorColIndex = headers.findIndex((h) => h.trim() === 'sf__Error');
+  if (errorColIndex === -1) return [];
+  return lines
+    .slice(1, limit + 1)
+    .map((line) => parseCsvRow(line)[errorColIndex]?.trim())
+    .filter(Boolean) as string[];
+};
+
 // Submits one closed Bulk API 2.0 ingest job for a single ≤MAX_CHUNK_BYTES CSV chunk.
 const submitIngestChunk = async (
   instanceUrl: string,
@@ -58,25 +94,20 @@ const submitIngestChunk = async (
   operation: 'insert' | 'update' | 'upsert',
   externalIdFieldName: string | undefined,
   chunk: CsvChunk
-): Promise<{processed: number, failed: number, jobId: string}> => {
+): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({ instanceUrl, tokens, objectName, operation, externalIdFieldName });
   await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
   await closeBulkJob(instanceUrl, tokens, job.id);
   const status = await pollBulkJobUntilDone(instanceUrl, tokens, job.id);
-  // console.log({
-  //   objectName,
-  //   state: status.state,
-  //   processed: status.numberRecordsProcessed,
-  //   failed: status.numberRecordsFailed,
-  //   errorMessage: status.errorMessage,
-  // });
 
-  // if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
-  //   const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
-  //   console.log(`\n${failedCsv}`);
-  // }
-  return { jobId: job.id, processed: status.numberRecordsProcessed ?? 0, failed: status.numberRecordsFailed ?? 0 };
+  let errors: string[] = [];
+  if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
+    const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
+    errors = parseFirstNErrors(failedCsv, 25);
+  }
+
+  return { jobId: job.id, processed: status.numberRecordsProcessed ?? 0, failed: status.numberRecordsFailed ?? 0, errors };
 };
 
 // Streams every backed-up CSV file for this object from S3 — one line at a time,
@@ -95,8 +126,15 @@ const restoreObjectData = async (
   externalIdFieldName: string
 ): Promise<string[]> => {
   const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}/inserts`);
-  console.log(keys);
+
   if (!keys.length) {
+    await updateRestoreObject({
+      restoreJobId,
+      objectName,
+      processedRecordCount: 0,
+      failedRecordCount: 0,
+      status: 'SUCCESS',
+    });
     throw new Error(`No backed-up data found for object ${objectName} under ${csvFilePath}`);
   }
 
@@ -119,6 +157,7 @@ const restoreObjectData = async (
       processedRecordCount: job.processed,
       failedRecordCount: job.failed,
       status: job.failed ? 'FAILED' : 'SUCCESS',
+      errors: job.errors.length ? job.errors : undefined,
     });
     chunk = newChunk(header!);
   };

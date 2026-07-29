@@ -1,14 +1,14 @@
 import crypto from 'crypto';
 import { ENCRYPTION_KEY } from '../constant';
-
+ 
 // const ALGORITHM = 'aes-256-gcm';
-
+ 
 // interface EncryptedPayload {
 //   ciphertext: string;
 //   iv: string;
 //   authTag: string;
 // }
-
+ 
 // const encrypt = (plaintext: string): EncryptedPayload => {
 //   const iv = crypto.randomBytes(16);
 //   const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
@@ -19,7 +19,7 @@ import { ENCRYPTION_KEY } from '../constant';
 //     authTag: cipher.getAuthTag().toString('hex'),
 //   };
 // };
-
+ 
 // const decrypt = ({ ciphertext, iv, authTag }: EncryptedPayload): string => {
 //   const decipher = crypto.createDecipheriv(
 //     ALGORITHM,
@@ -32,9 +32,9 @@ import { ENCRYPTION_KEY } from '../constant';
 //     decipher.final(),
 //   ]).toString('utf8');
 // };
-
-
-
+ 
+ 
+ 
 const ALGORITHM = 'aes-256-cbc';
 interface EncryptedPayload {
   ciphertext: string;
@@ -49,7 +49,7 @@ const encrypt = (plaintext: string): EncryptedPayload => {
     iv: iv.toString('base64'),
   };
 };
-
+ 
 const decrypt = ({ ciphertext, iv }: EncryptedPayload): string => {
   const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'base64'), Buffer.from(iv, 'base64'));
   return Buffer.concat([
@@ -57,7 +57,9 @@ const decrypt = ({ ciphertext, iv }: EncryptedPayload): string => {
     decipher.final(),
   ]).toString('utf8');
 };
-
-
+ 
+ 
 export { encrypt, decrypt };
 export type { EncryptedPayload };
+ 
+ 
