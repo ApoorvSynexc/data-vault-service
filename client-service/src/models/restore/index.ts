@@ -38,6 +38,14 @@ export interface IRestoreScope {
   deletedOnly?: boolean;
 }
 
+export interface IRestoreSource {
+  backupConfigId: string;
+  type?: string; // ENTIRE | PARTIAL | CHANGED_BETWEEN
+  startDate?: string;
+  endDate?: string;
+  backupJobIds: string[];
+}
+
 export interface IRestoreDestination {
   type: string; // SAME | DIFFERENT
   crmId?: string;
@@ -61,10 +69,7 @@ export interface IRestore {
   status: string; // DRAFT | PENDING | RUNNING | SUCCESS | FAILED
   errorMessage?: string;
 
-  source: {
-    backupConfigId: string;
-    backupJobIds: string[];
-  };
+  source: IRestoreSource;
   selection: {
     restoreScope: IRestoreScope;
   };
