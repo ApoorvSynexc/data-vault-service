@@ -41,7 +41,6 @@ const sendSparkPayload = (res: IResponse, built: unknown): void => {
 };
 
 const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  console.log('BODY ==> ', JSON.stringify(req.body));
   // Spark posts the encrypted envelope as the body itself; a wrapped
   // { payload: "<string>" } body is also accepted.
   const payload = (req.body as { payload?: unknown })?.payload ?? req.body;

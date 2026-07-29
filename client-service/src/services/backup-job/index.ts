@@ -377,7 +377,6 @@ const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type:
 
   const endpoint = config.type === 'ARCHIVAL' ? '/archival/resume' : '/resume';
   const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`
-  console.log({ url });
 
   return httpRequest({
     url,

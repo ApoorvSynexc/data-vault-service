@@ -61,13 +61,11 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
-  console.log('getObjectsHanlder called with crmId:', crmId, 'and mode:', mode);
   const [apexResult, backupConfigs] = await Promise.all([
     getApexObjects({ user, mode: mode ? String(mode) : undefined }),
     getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
   ]);
 
-  console.log('Apex Result:', JSON.stringify(apexResult));
   const backedUpMap = new Map<string, { schedule: string }>();
   for (const config of backupConfigs) {
     for (const objectName of config.objectNames) {
@@ -83,7 +81,6 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
     schedule: backedUpMap.get(obj.apiName)?.schedule ?? null,
   }));
 
-  console.log('Final Objects List:', objects);
   // Only the enriched list — spreading apexResult here also leaked its raw `data`
   // and `success` into the response envelope.
   makeResponse(req, res, 200, true, 'fetch', { objects });
@@ -357,7 +354,6 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         );
       }
       // const triggerResults = await realTimeTriggerManagement('delete', config);
-      // console.log({ triggerResults });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
       // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
     }
@@ -370,7 +366,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     makeResponse(req, res, 200, true, 'delete');
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const triggerResults = await realTimeTriggerManagement('delete', config);
-      console.log({ triggerResults });
+      console.log('Trigger has been deleted successfully, trir length:', triggerResults.length);
     }
   } catch (error) {
     throw error;
