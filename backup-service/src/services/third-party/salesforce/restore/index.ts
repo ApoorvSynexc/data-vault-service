@@ -140,7 +140,7 @@ const restoreObjectData = async (
   operation: 'insert' | 'update' | 'upsert',
   externalIdFieldName: string
 ): Promise<string[]> => {
-  const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}/inserts`);
+  const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}`);
 
   if (!keys.length) {
     await updateRestoreObject({

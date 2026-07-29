@@ -178,38 +178,87 @@ export interface ICsvFetchParams {
   recordIds?: string[] | null;
   // Precompiled WHERE body from athena-filter (AND / OR / SOQL).
   filterWhere?: string | null;
-  // Keep only rows whose derived type is DELETE.
+  // Keep only records whose newest operation is DELETE.
   deletedOnly?: boolean;
+  // Return the version to restore TO rather than the current one — see
+  // VERSION PICKING below.
+  fullRestore?: boolean;
   limit: number;
   // Absent/null → first block.
   cursor?: IPageKey | null;
 }
 
 /**
- * The one active query: raw CSV rows for a single object, newest version per Id,
- * each row tagged with its INSERT/UPDATE/DELETE origin.
+ * Per-record version ordering. Newest first, with "$path" breaking ties so two
+ * rows sharing a LastModifiedDate rank deterministically — which matters once
+ * `fullRestore` selects rank 2 by position rather than by value.
+ */
+const VERSION_ORDER = `ORDER BY ${quoteCol(LMD)} DESC, "$path" DESC`;
+
+/**
+ * Picks which ranked version of each record to return.
+ *
+ * Default — the current state: rank 1, the newest version.
+ *
+ * fullRestore — the version to restore TO, which is the one BEFORE the newest
+ * change:
+ *   DELETE  → rank 1. A deleted record has no version to roll back to; the
+ *             DELETE row is the whole answer, so it is returned as-is.
+ *   UPDATE  → rank 2. The newest row holds the post-update values, so restoring
+ *             means the version underneath it — which for a record updated once
+ *             is the original row in inserts/.
+ *   INSERT  → rank 1. Nothing has changed since the record was written, so the
+ *             current version already IS the restore target.
+ *
+ * The `versions = 1` arm covers an UPDATE with no earlier row — a CDC update
+ * captured for a record the backup never inserted. There is no prior version to
+ * restore to, so the update itself is returned rather than dropping the record;
+ * its `type` still reports UPDATE, so the caller can tell the two apart.
+ */
+const versionPick = (fullRestore: boolean): string => {
+  if (!fullRestore) return 'rn = 1';
+  return (
+    `(${quoteCol(TYPE)} = 'UPDATE' AND (rn = 2 OR versions = 1)) ` +
+    `OR (${quoteCol(TYPE)} <> 'UPDATE' AND rn = 1)`
+  );
+};
+
+/**
+ * The one active query: raw CSV rows for a single object, one row per record,
+ * tagged with the record's latest INSERT/UPDATE/DELETE operation.
  *
  * Shape (inside → out):
  *   1. scan   — read the CSV table under every row-level filter (jobs, date
- *               window, record scope, caller filter), deriving `type` from
- *               "$path" and ranking versions per Id.
- *   2. latest — keep rank 1 only, then apply deletedOnly. deletedOnly lives here
- *               because it tests the DERIVED column, which the scan's WHERE
- *               cannot see.
+ *               window, record scope, caller filter), deriving `type` and
+ *               ranking the record's versions.
+ *   2. pick   — keep one version per record (see versionPick), then apply
+ *               deletedOnly. Both live here because they test DERIVED columns,
+ *               which the scan's WHERE cannot see.
  *   3. page   — keyset seek + ORDER BY + LIMIT (pageWrap).
  *
- * Filtering before ranking is deliberate: "the latest version" means the latest
- * of the rows the caller's filters admit, not the latest overall (which might be
- * a version the filter excludes, silently dropping a record that does match).
+ * `type` is FIRST_VALUE over the same ordering, not the returned row's own
+ * operation, so it always answers "what last happened to this record" — the
+ * same meaning in both modes. Under fullRestore the values come from an earlier
+ * version while `type` still reports the change being reverted; at rank 1 the
+ * two coincide, so the default path is unaffected.
+ *
+ * Filtering before ranking is deliberate: the versions considered are the ones
+ * the caller's filters admit, not all of them (ranking first would let a
+ * filtered-out newest version hide a record that does match).
  */
 export const buildCsvRecordsSql = (tableName: string, p: ICsvFetchParams): string => {
   const cols = projectionColumns(p.columnNames);
   const colList = cols.map(quoteCol).join(', ');
+  const fullRestore = p.fullRestore === true;
 
   const scan =
-    `SELECT ${colList}, ${ROW_TYPE_EXPR} AS ${quoteCol(TYPE)}, ` +
-    `ROW_NUMBER() OVER (PARTITION BY ${quoteCol(ID)} ORDER BY ${quoteCol(LMD)} DESC) AS rn ` +
-    `FROM "${tableName}"` +
+    `SELECT ${colList}, ` +
+    `FIRST_VALUE(${ROW_TYPE_EXPR}) OVER (PARTITION BY ${quoteCol(ID)} ${VERSION_ORDER}) AS ${quoteCol(TYPE)}, ` +
+    `ROW_NUMBER() OVER (PARTITION BY ${quoteCol(ID)} ${VERSION_ORDER}) AS rn` +
+    // Only fullRestore needs the per-record version count; the default path
+    // keeps exactly the window functions it uses.
+    (fullRestore ? `, COUNT(*) OVER (PARTITION BY ${quoteCol(ID)}) AS versions` : '') +
+    ` FROM "${tableName}"` +
     whereClause(
       [
         inWhere('backup_job_id', p.backupJobIds),
@@ -220,11 +269,13 @@ export const buildCsvRecordsSql = (tableName: string, p: ICsvFetchParams): strin
       'WHERE'
     );
 
-  const latest =
-    `SELECT ${colList}, ${quoteCol(TYPE)} FROM (${scan}) r WHERE rn = 1` +
+  // The pick is parenthesised: it can be an OR expression, and deletedOnly
+  // appends an AND that would otherwise bind to only its last arm.
+  const picked =
+    `SELECT ${colList}, ${quoteCol(TYPE)} FROM (${scan}) r WHERE (${versionPick(fullRestore)})` +
     (p.deletedOnly ? ` AND ${quoteCol(TYPE)} = 'DELETE'` : '');
 
-  return pageWrap(latest, p, quoteCol(LMD), quoteCol(ID));
+  return pageWrap(picked, p, quoteCol(LMD), quoteCol(ID));
 };
 
 // =============================================================================
@@ -477,15 +528,38 @@ if (require.main === module) {
 
   // ── Unfiltered: whole table, newest version per Id, type from "$path" ───────
   const all = buildCsvRecordsSql('cfg_x_account', base);
-  assert.ok(all.includes(`SELECT "Id", "Name", "Amount", "LastModifiedDate", CASE WHEN "$path" LIKE '%/deletes/%' THEN 'DELETE'`));
-  assert.ok(all.includes(`WHEN "$path" LIKE '%/updates/%' THEN 'UPDATE' ELSE 'INSERT' END AS "type"`));
-  assert.ok(all.includes(`ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY "LastModifiedDate" DESC) AS rn`));
-  assert.ok(all.includes(`FROM "cfg_x_account" ORDER BY`) === false, 'the scan is wrapped, not bare');
-  assert.ok(all.includes(`) r WHERE rn = 1`), 'only the latest version per Id survives');
+  assert.ok(all.includes(`SELECT "Id", "Name", "Amount", "LastModifiedDate", FIRST_VALUE(CASE WHEN "$path" LIKE '%/deletes/%' THEN 'DELETE'`));
+  assert.ok(all.includes(`WHEN "$path" LIKE '%/updates/%' THEN 'UPDATE' ELSE 'INSERT' END)`));
+  // type is the record's LATEST operation, not the returned row's own folder.
+  assert.ok(all.includes(`OVER (PARTITION BY "Id" ORDER BY "LastModifiedDate" DESC, "$path" DESC) AS "type"`));
+  assert.ok(all.includes(`ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY "LastModifiedDate" DESC, "$path" DESC) AS rn`));
+  assert.ok(all.includes(`) r WHERE (rn = 1)`), 'default mode returns the current version');
+  assert.ok(!all.includes('versions'), 'the version count is only computed for fullRestore');
   assert.ok(all.includes(`ORDER BY "LastModifiedDate" DESC, "Id" DESC LIMIT 50`));
   // No filters supplied → no WHERE on the scan at all.
   assert.ok(!all.includes(`FROM "cfg_x_account" WHERE`), 'no predicates when nothing was filtered');
   assert.ok(!all.includes('backup_job_id'), 'jobs are optional — absent means every job');
+
+  // ── fullRestore: the version to restore TO ─────────────────────────────────
+  const restore = buildCsvRecordsSql('t', { ...base, fullRestore: true });
+  assert.ok(restore.includes(`COUNT(*) OVER (PARTITION BY "Id") AS versions`));
+  assert.ok(
+    restore.includes(
+      `) r WHERE (("type" = 'UPDATE' AND (rn = 2 OR versions = 1)) OR ("type" <> 'UPDATE' AND rn = 1))`
+    ),
+    'UPDATE rolls back to the second-newest version; DELETE and INSERT return rank 1'
+  );
+  // A deleted record has no version to roll back to — the DELETE row is the answer.
+  assert.ok(restore.includes(`"type" <> 'UPDATE' AND rn = 1`));
+  // An UPDATE with no earlier row still comes back rather than being dropped.
+  assert.ok(restore.includes(`rn = 2 OR versions = 1`));
+
+  // deletedOnly must AND against the WHOLE pick, not just its last arm.
+  const restoreDeleted = buildCsvRecordsSql('t', { ...base, fullRestore: true, deletedOnly: true });
+  assert.ok(
+    restoreDeleted.includes(`OR ("type" <> 'UPDATE' AND rn = 1)) AND "type" = 'DELETE'`),
+    'the pick is parenthesised so AND cannot bind to one OR arm'
+  );
 
   // ── backupJobIds → partition filter ────────────────────────────────────────
   assert.ok(
@@ -517,7 +591,7 @@ if (require.main === module) {
 
   // ── deletedOnly tests the DERIVED column, so it sits outside the scan ───────
   const del = buildCsvRecordsSql('t', { ...base, deletedOnly: true });
-  assert.ok(del.includes(`) r WHERE rn = 1 AND "type" = 'DELETE'`));
+  assert.ok(del.includes(`) r WHERE (rn = 1) AND "type" = 'DELETE'`));
   assert.ok(!buildCsvRecordsSql('t', base).includes(`"type" = 'DELETE'`));
 
   // ── Caller filter joins the scan-level predicates ──────────────────────────
