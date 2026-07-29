@@ -998,12 +998,13 @@ const realTimeTriggerManagement = async (
     const objectApiNames = config.objectNames;
 
     if (operation === 'create') {
-      const expandedNames = await expandWithMasterChildren(user, objectApiNames);
+
+      //const expandedNames = await expandWithMasterChildren(user, objectApiNames);
       // Children get a trigger, so they get backed up — record them on the config
       // too, otherwise every config-driven reader (Glue, restore listing, UI) stays
       // blind to data that is already landing in S3 under the child's own name.
-      await appendObjectsToBackupConfig(config.backupConfigId, expandedNames);
-      return createTriggers(instanceUrl, tokens, expandedNames);
+      await appendObjectsToBackupConfig(config.backupConfigId, objectApiNames);
+      return createTriggers(instanceUrl, tokens, objectApiNames);
     }
     if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
     if (operation === 'inactivate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Inactive'); }

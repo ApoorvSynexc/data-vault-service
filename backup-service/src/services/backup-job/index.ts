@@ -145,12 +145,15 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
-  const expandedObjects = await expandWithMasterChildren(
-    source,
-    backupConfigId,
-    destination.config,
-    object
-  );
+  // Master-Detail expansion disabled — back up only the objects the user selected.
+  // Uncomment to resume auto-adding Master-Detail children to every scheduled run.
+  // const expandedObjects = await expandWithMasterChildren(
+  //   source,
+  //   backupConfigId,
+  //   destination.config,
+  //   object
+  // );
+  const expandedObjects = object;
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
   const encryptedDestConfig: any = encrypt(JSON.stringify(destination.config));
