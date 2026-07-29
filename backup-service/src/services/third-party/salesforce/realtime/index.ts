@@ -135,40 +135,44 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
       `Realtime job ${realtimeJobId}: uploaded ${records.length} ${operation} record(s) for ${objectApiName} → ${s3Path}`
     );
 
-    // Register the Glue partition for this job's first CSV upload — idempotent.
-    registerBackupJobPartition({
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName: objectApiName,
-      backupJobId: realtimeJobId,
-      type: 'backup',
-      destConfig,
-    }).catch((err) =>
-      logger.error(
-        `[glue] failed to register partition | realtimeJobId:${realtimeJobId} objectApiName:${objectApiName} err:${err?.message ?? err}`
-      )
-    );
+    // Ensure the Glue table exists, THEN register this job's partition. The order
+    // matters: BatchCreatePartition against a table that does not exist yet fails
+    // with EntityNotFoundException and is never retried, so a webhook arriving
+    // before the first scheduled backup would leave its CSVs invisible to Athena.
+    //
+    // Table creation is idempotent (the initial/scheduled backup normally made it
+    // already). No schema comparison in realtime: schema evolution is owned by the
+    // scheduled backup that rewrites fields.json, so realtime just mirrors whatever
+    // schema is already stored.
+    const glueReady = columns.length
+      ? createCsvGlueTable({
+          crmId,
+          crmName,
+          backupConfigId,
+          objectName: objectApiName,
+          type: 'backup',
+          destConfig,
+          columns: columns.map((name) => ({ name, type: 'string' })),
+        })
+      : Promise.resolve();
 
-    // Ensure the Glue table exists using the stored schema (idempotent — the
-    // initial/scheduled backup normally created it already). No schema comparison
-    // in realtime: schema evolution is owned by the scheduled backup that rewrites
-    // fields.json, so realtime just mirrors whatever schema is already stored.
-    if (columns.length) {
-      createCsvGlueTable({
-        crmId,
-        crmName,
-        backupConfigId,
-        objectName: objectApiName,
-        type: 'backup',
-        destConfig,
-        columns: columns.map((name) => ({ name, type: 'string' })),
-      }).catch((err) =>
+    glueReady
+      .then(() =>
+        registerBackupJobPartition({
+          crmId,
+          crmName,
+          backupConfigId,
+          objectName: objectApiName,
+          backupJobId: realtimeJobId,
+          type: 'backup',
+          destConfig,
+        })
+      )
+      .catch((err) =>
         logger.error(
-          `[glue] failed to create table | realtimeJobId:${realtimeJobId} objectApiName:${objectApiName} err:${err?.message ?? err}`
+          `[glue] failed to ensure table/partition | realtimeJobId:${realtimeJobId} objectApiName:${objectApiName} err:${err?.message ?? err}`
         )
       );
-    }
 
     // schemaChanged is always false now — realtime no longer detects schema drift.
     return { s3Path, schemaChanged: false, sizeInBytes };
