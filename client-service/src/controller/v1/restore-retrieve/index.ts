@@ -9,13 +9,15 @@ import {
   repairGlueTables,
   getTableCounter,
   ConfigType,
-  FetchRecordsConfigType,
   createRestore,
   updateRestore,
   getRestoreById,
   IFetchRecordsFilters,
   IFetchRecordsFilterField,
   IFetchRecordsParams,
+  FetchSourceType,
+  RestoreScopeType,
+  IRestoreScope,
   buildAthenaFilterWhere,
   FilterError,
   validateColumns,
@@ -165,18 +167,89 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   makeResponse(req, res, 200, true, 'fetch', objects);
 };
 
-const VALID_FETCH_CONFIG_TYPES: FetchRecordsConfigType[] = ['BACKUP', 'ARCHIVAL'];
 const VALID_FETCH_FILTER_TYPES = ['AND', 'OR', 'SOQL'] as const;
+const VALID_SOURCE_TYPES: FetchSourceType[] = ['ENTIRE', 'PARTIAL', 'CHANGED_BETWEEN'];
+const VALID_RESTORE_SCOPE_TYPES: RestoreScopeType[] = [
+  'ALL',
+  'OBJECT',
+  'RECORD',
+  'FIELD',
+  'FILTER',
+  'DELETED_ONLY',
+  'CHNAGE_SINCE',
+  'BULK_CSV',
+];
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+// De-duplicated, trimmed, non-empty strings. Returns null when the input is not
+// an array at all, so the caller can distinguish "bad shape" from "empty list".
+const toStringList = (v: unknown): string[] | null => {
+  if (!Array.isArray(v)) return null;
+  return [...new Set(v.map((x) => String(x).trim()).filter(Boolean))];
+};
+
+// Parses the `filters` block (shared by the top-level and restoreScope shapes).
+const parseFilters = (
+  f: unknown
+): { ok: true; value: IFetchRecordsFilters } | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  if (!isRecord(f)) return { ok: false, error: 'invalid_filters' };
+  if (!VALID_FETCH_FILTER_TYPES.includes(f.type as (typeof VALID_FETCH_FILTER_TYPES)[number])) {
+    return { ok: false, error: 'invalid_filter_type' };
+  }
+  const type = f.type as IFetchRecordsFilters['type'];
+
+  if (type === 'SOQL') {
+    if (typeof f.soqlQuery !== 'string' || f.soqlQuery.trim() === '') {
+      return { ok: false, error: 'soql_query_required' };
+    }
+    return { ok: true, value: { type, soqlQuery: f.soqlQuery.trim() } };
+  }
+
+  if (!Array.isArray(f.fields)) return { ok: false, error: 'filter_fields_required' };
+  const fields: IFetchRecordsFilterField[] = [];
+  for (const raw of f.fields) {
+    if (
+      !isRecord(raw) ||
+      typeof raw.name !== 'string' ||
+      typeof raw.dataType !== 'string' ||
+      typeof raw.operator !== 'string' ||
+      typeof raw.value !== 'string'
+    ) {
+      return { ok: false, error: 'invalid_filter_field' };
+    }
+    fields.push({ name: raw.name, dataType: raw.dataType, operator: raw.operator, value: raw.value });
+  }
+  return { ok: true, value: { type, fields } };
+};
+
+// Parses restoreScope.records[] / restoreScope.fields[] — both are
+// [{ objectName, <list> }] and differ only in the list's key name.
+const parseObjectScopedLists = <K extends string>(
+  raw: unknown,
+  listKey: K
+): { objectName: string; values: string[] }[] | null => {
+  if (!Array.isArray(raw)) return null;
+  const out: { objectName: string; values: string[] }[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry) || typeof entry.objectName !== 'string' || !entry.objectName.trim()) return null;
+    const values = toStringList(entry[listKey]);
+    if (values === null) return null;
+    out.push({ objectName: entry.objectName.trim(), values });
+  }
+  return out;
+};
+
 /**
  * Validates and normalises the entire /fetch-records body into a single
- * IFetchRecordsParams — one interface, one service call, no side-channel
- * "extras" object. Column names and the filter block are compiled here too, so
- * every request-shape error (including FilterError codes) maps to a 400 before
- * Athena is touched. The handler only relays the result.
+ * IFetchRecordsParams. Column names and the filter block are compiled here too,
+ * so every request-shape error (including FilterError codes) maps to a 400
+ * before Athena is touched. The handler only relays the result.
+ *
+ * Body shape:
+ *   source     — backupConfigId + type + optional job/date window (required)
+ *   selection  — restoreScope narrowing, or null for source-level filters only
  */
 const parseFetchRecordsParams = (
   body: Record<string, unknown>,
@@ -184,89 +257,131 @@ const parseFetchRecordsParams = (
 ):
   | { ok: true; value: IFetchRecordsParams }
   | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  const { configType, backupConfigId, objectApiName, columnNames, backupJobIds } = body;
+  const { source, objectApiName, columns, selection } = body;
 
-  if (!configType || !VALID_FETCH_CONFIG_TYPES.includes(configType as FetchRecordsConfigType)) {
-    return { ok: false, error: 'invalid_config_type' };
+  // ── source ────────────────────────────────────────────────────────────────
+  if (!isRecord(source)) return { ok: false, error: 'invalid_source' };
+  if (typeof source.backupConfigId !== 'string' || !source.backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
   }
+  if (!VALID_SOURCE_TYPES.includes(source.type as FetchSourceType)) {
+    return { ok: false, error: 'invalid_source_type' };
+  }
+  const sourceType = source.type as FetchSourceType;
+
+  for (const key of ['startDate', 'endDate'] as const) {
+    if (source[key] !== undefined && source[key] !== null && typeof source[key] !== 'string') {
+      return { ok: false, error: 'invalid_source_date' };
+    }
+  }
+  const startDate = (source.startDate as string | undefined)?.trim() || undefined;
+  const endDate = (source.endDate as string | undefined)?.trim() || undefined;
+
+  let backupJobIds: string[] = [];
+  if (source.backupJobIds !== undefined && source.backupJobIds !== null) {
+    const ids = toStringList(source.backupJobIds);
+    if (ids === null) return { ok: false, error: 'invalid_backup_job_ids' };
+    backupJobIds = ids;
+  }
+
+  // PARTIAL and CHANGED_BETWEEN exist to apply a specific narrowing; a request
+  // that omits it would silently behave as ENTIRE and return the whole config.
+  if (sourceType === 'PARTIAL' && backupJobIds.length === 0) {
+    return { ok: false, error: 'backup_job_ids_required' };
+  }
+  if (sourceType === 'CHANGED_BETWEEN' && !startDate && !endDate) {
+    return { ok: false, error: 'date_range_required' };
+  }
+
   if (!objectApiName || typeof objectApiName !== 'string') {
     return { ok: false, error: 'object_api_name_required' };
   }
-  if (!Array.isArray(columnNames) || columnNames.length === 0) {
+  const columnList = toStringList(columns);
+  if (columnList === null || columnList.length === 0) {
     return { ok: false, error: 'column_names_required' };
   }
 
   const value: IFetchRecordsParams = {
-    configType: configType as FetchRecordsConfigType,
+    source: {
+      backupConfigId: source.backupConfigId.trim(),
+      type: sourceType,
+      ...(startDate && { startDate }),
+      ...(endDate && { endDate }),
+      ...(backupJobIds.length && { backupJobIds }),
+    },
     objectApiName,
-    columnNames: (columnNames as unknown[]).map((c) => String(c)),
+    columns: columnList,
     userId,
   };
 
-  if (body.filters !== undefined) {
-    const f = body.filters;
-    if (!isRecord(f)) return { ok: false, error: 'invalid_filters' };
-    if (!VALID_FETCH_FILTER_TYPES.includes(f.type as (typeof VALID_FETCH_FILTER_TYPES)[number])) {
-      return { ok: false, error: 'invalid_filter_type' };
-    }
-    const type = f.type as IFetchRecordsFilters['type'];
+  // ── selection (nullable) ──────────────────────────────────────────────────
+  // Every column list the scope can contribute is validated as an identifier,
+  // exactly like `columns`, because any of them can end up in the projection.
+  const identifierLists: string[][] = [columnList];
 
-    if (type === 'SOQL') {
-      if (typeof f.soqlQuery !== 'string' || f.soqlQuery.trim() === '') {
-        return { ok: false, error: 'soql_query_required' };
+  if (selection !== undefined && selection !== null) {
+    if (!isRecord(selection)) return { ok: false, error: 'invalid_selection' };
+    const rawScope = selection.restoreScope;
+    if (!isRecord(rawScope)) return { ok: false, error: 'invalid_restore_scope' };
+    if (!VALID_RESTORE_SCOPE_TYPES.includes(rawScope.type as RestoreScopeType)) {
+      return { ok: false, error: 'invalid_restore_scope_type' };
+    }
+
+    const scope: IRestoreScope = { type: rawScope.type as RestoreScopeType };
+
+    if (rawScope.objects !== undefined && rawScope.objects !== null) {
+      const objects = toStringList(rawScope.objects);
+      if (objects === null) return { ok: false, error: 'invalid_scope_objects' };
+      if (objects.length) scope.objects = objects;
+    }
+
+    if (rawScope.records !== undefined && rawScope.records !== null) {
+      const records = parseObjectScopedLists(rawScope.records, 'recordIds');
+      if (records === null) return { ok: false, error: 'invalid_scope_records' };
+      scope.records = records.map(({ objectName, values }) => ({ objectName, recordIds: values }));
+    }
+
+    if (rawScope.fields !== undefined && rawScope.fields !== null) {
+      const fields = parseObjectScopedLists(rawScope.fields, 'fieldNames');
+      if (fields === null) return { ok: false, error: 'invalid_scope_fields' };
+      scope.fields = fields.map(({ objectName, values }) => ({ objectName, fieldNames: values }));
+      // fields[] REPLACES columns when it matches the requested object, so its
+      // names must clear the same identifier check.
+      for (const f of scope.fields) if (f.fieldNames.length) identifierLists.push(f.fieldNames);
+    }
+
+    if (rawScope.filters !== undefined && rawScope.filters !== null) {
+      const parsed = parseFilters(rawScope.filters);
+      if (!parsed.ok) return parsed;
+      scope.filters = parsed.value;
+    }
+
+    if (rawScope.chnageSince !== undefined && rawScope.chnageSince !== null) {
+      const c = rawScope.chnageSince;
+      if (!isRecord(c)) return { ok: false, error: 'invalid_changed_since' };
+      if (c.date !== undefined && c.date !== null && typeof c.date !== 'string') {
+        return { ok: false, error: 'invalid_changed_since' };
       }
-      value.filters = { type, soqlQuery: f.soqlQuery.trim() };
-    } else {
-      if (!Array.isArray(f.fields)) return { ok: false, error: 'filter_fields_required' };
-      const fields: IFetchRecordsFilterField[] = [];
-      for (const raw of f.fields) {
-        if (
-          !isRecord(raw) ||
-          typeof raw.name !== 'string' ||
-          typeof raw.dataType !== 'string' ||
-          typeof raw.operator !== 'string' ||
-          typeof raw.value !== 'string'
-        ) {
-          return { ok: false, error: 'invalid_filter_field' };
-        }
-        fields.push({
-          name: raw.name,
-          dataType: raw.dataType,
-          operator: raw.operator,
-          value: raw.value,
-        });
-      }
-      value.filters = { type, fields };
+      const date = (c.date as string | undefined)?.trim();
+      if (date) scope.chnageSince = { date };
     }
-  }
 
-  if (body.changedSince !== undefined) {
-    const c = body.changedSince;
-    if (!isRecord(c)) return { ok: false, error: 'invalid_changed_since' };
-    const startDate = c.startDate;
-    const endDate = c.endDate;
-    if (
-      (startDate !== undefined && typeof startDate !== 'string') ||
-      (endDate !== undefined && typeof endDate !== 'string')
-    ) {
-      return { ok: false, error: 'invalid_changed_since' };
+    if (rawScope.bulkCsvIds !== undefined && rawScope.bulkCsvIds !== null) {
+      const ids = toStringList(rawScope.bulkCsvIds);
+      if (ids === null) return { ok: false, error: 'invalid_bulk_csv_ids' };
+      if (ids.length) scope.bulkCsvIds = ids;
     }
-    value.changedSince = {
-      ...(startDate !== undefined && { startDate }),
-      ...(endDate !== undefined && { endDate }),
-    };
-  }
 
-  if (body.bulkCsvIds !== undefined) {
-    if (!Array.isArray(body.bulkCsvIds)) return { ok: false, error: 'invalid_bulk_csv_ids' };
-    value.bulkCsvIds = [
-      ...new Set(body.bulkCsvIds.map((id) => String(id).trim()).filter(Boolean)),
-    ];
-  }
+    if (rawScope.deletedOnly !== undefined && rawScope.deletedOnly !== null) {
+      if (typeof rawScope.deletedOnly !== 'boolean') return { ok: false, error: 'invalid_deleted_only' };
+      scope.deletedOnly = rawScope.deletedOnly;
+    }
 
-  if (body.deletedOnly !== undefined) {
-    if (typeof body.deletedOnly !== 'boolean') return { ok: false, error: 'invalid_deleted_only' };
-    value.deletedOnly = body.deletedOnly;
+    // A DELETED_ONLY scope means deletedOnly whether or not the flag was sent —
+    // the type and the flag say the same thing, so neither can contradict it.
+    if (scope.type === 'DELETED_ONLY') scope.deletedOnly = true;
+
+    value.selection = { restoreScope: scope };
   }
 
   // Opaque nextCursor echoed back from a previous response. Its contents are
@@ -276,19 +391,12 @@ const parseFetchRecordsParams = (
     value.cursor = body.cursor;
   }
 
-  if (body.filteringFields !== undefined && body.filteringFields !== null) {
-    if (!Array.isArray(body.filteringFields)) return { ok: false, error: 'invalid_filtering_fields' };
-    const fields = [...new Set(body.filteringFields.map((f) => String(f).trim()).filter(Boolean))];
-    if (fields.length) value.filteringFields = fields;
-  }
-
   // Compile columns + filter to the Athena WHERE body — bad columns, operators,
   // or unsupported SOQL become 400 codes here instead of Athena failures.
-  // filteringFields are validated as identifiers by the same rule.
   try {
-    validateColumns(value.columnNames);
-    if (value.filteringFields) validateColumns(value.filteringFields);
-    if (value.filters) value.filterWhere = buildAthenaFilterWhere(value.filters);
+    for (const list of identifierLists) validateColumns(list);
+    const filters = value.selection?.restoreScope.filters;
+    if (filters) value.filterWhere = buildAthenaFilterWhere(filters);
   } catch (e) {
     if (e instanceof FilterError) {
       return { ok: false, error: e.code as Parameters<typeof makeResponse>[4] };
@@ -296,44 +404,48 @@ const parseFetchRecordsParams = (
     throw e;
   }
 
-  if (value.configType === 'ARCHIVAL') {
-    if (!backupConfigId || typeof backupConfigId !== 'string') {
-      return { ok: false, error: 'id_required' };
-    }
-    value.backupConfigId = backupConfigId;
-  } else {
-    if (!Array.isArray(backupJobIds)) return { ok: false, error: 'id_required' };
-    const ids = [...new Set((backupJobIds as unknown[]).map((id) => String(id).trim()).filter(Boolean))];
-    if (ids.length === 0) return { ok: false, error: 'id_required' };
-    value.backupJobIds = ids;
-  }
-
   return { ok: true, value };
 };
 
 /**
- * POST /fetch-records
- * Body: {
- *   configType:     'BACKUP' | 'ARCHIVAL'
- *   backupConfigId: string                  (required for ARCHIVAL; optional for BACKUP)
- *   objectApiName:  string
- *   columnNames:    string[]
- *   backupJobIds?:  string[]                (required for BACKUP, ignored for ARCHIVAL)
+ * POST /retrieve/fetch-records
  *
- *   filters?:         { type: 'AND'|'OR'|'SOQL', soqlQuery?: string,
- *                       fields?: { name, dataType, operator, value }[] }
- *   changedSince?:    { startDate?: string, endDate?: string }
- *   bulkCsvIds?:      string[]   (record scope for the entire-record flow)
- *   deletedOnly?:     boolean
- *   filteringFields?: string[]   (non-empty → by-field mode: only these fields
- *                                 are reverted; absent → entire-record default)
+ * Body: {
+ *   source: {
+ *     backupConfigId: string                        (required — owns the CRM,
+ *                                                    destination and Glue table)
+ *     type:           'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN'
+ *     startDate?:     string                        (LastModifiedDate lower bound)
+ *     endDate?:       string                        (LastModifiedDate upper bound)
+ *     backupJobIds?:  string[]                      (absent → every job)
+ *   }
+ *   objectApiName: string
+ *   columns:       string[]
+ *   selection:     null | {
+ *     restoreScope: {
+ *       type:        'ALL' | 'OBJECT' | 'RECORD' | 'FIELD' | 'FILTER' |
+ *                    'DELETED_ONLY' | 'CHNAGE_SINCE' | 'BULK_CSV'
+ *       objects?:    string[]                       (allow-list; excludes → empty page)
+ *       records?:    { objectName, recordIds[] }[]  (only the matching object applies)
+ *       fields?:     { objectName, fieldNames[] }[] (matching object REPLACES columns)
+ *       filters?:    { type: 'AND'|'OR'|'SOQL', soqlQuery?, fields?[] }
+ *       chnageSince?:{ date: string }               (extra LastModifiedDate lower bound)
+ *       bulkCsvIds?: string[]                       (record scope, unioned with records)
+ *       deletedOnly?: boolean
+ *     }
+ *   }
+ *   cursor?: string                                 (opaque nextCursor echo)
  * }
  *
- * BACKUP  — queries Athena for the supplied backupJobIds filtered to the given object and columns.
- * ARCHIVAL — resolves the most recent successful archival job for the given backupConfigId,
- *            then queries Athena for that job's partition.
+ * Queries the raw CSV table for one object under one backup config. Source
+ * filters always apply; `selection` narrows them further when present. Each row
+ * carries a derived `type` of INSERT / UPDATE / DELETE, and a record appears
+ * once, at its newest LastModifiedDate within the filtered scan.
  *
- * Returns not_exist when ownership cannot be confirmed or no qualifying job is found.
+ * PARTIAL requires backupJobIds and CHANGED_BETWEEN requires a date bound —
+ * without them the request would silently behave as ENTIRE.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
 const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const parsed = parseFetchRecordsParams(req.body as Record<string, unknown>, req.user!.userId);

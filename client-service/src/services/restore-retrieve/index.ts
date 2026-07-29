@@ -1,11 +1,10 @@
 import { createHash } from 'crypto';
-import { GetCommand, QueryCommand, BatchGetCommand, BatchGetCommandOutput } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, JOB_STATUS, COMPRESSION_STATUS, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
+import { BACKUP_JOB_TABLE, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { IBackupJob, IObject } from '../../models';
 import { getBackupConfigById } from '../backup-config';
-import { getBackupJobsByConfig } from '../backup-job';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
@@ -14,58 +13,44 @@ import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-creden
 
 export { buildAthenaFilterWhere, FilterError } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import {
-  buildRawSql,
-  buildCompressedDeletedSql,
-  buildCompressedByFieldSql,
-  buildCsvByFieldSql,
-  buildDeltaPartitionWhere,
-  buildEntireBlockSql,
-  buildEntireDeltasSql,
-  buildHudiRawSql,
-  buildCsvEitherSql,
-  pairedColumns,
-  IPageKey,
-} from './athena-fetch';
+import { buildCsvRecordsSql, pairedColumns, IPageKey } from './athena-fetch';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 
-// createdAt bounds the delta partition prune — see buildDeltaPartitionWhere.
-type BackupJobItem = Pick<IBackupJob, 'backupJobId' | 'userId' | 'backupConfigId' | 'status' | 'createdAt'>;
-
-// Bulk job lookup: BatchGet in 100-key chunks with every chunk in flight at
-// once — hundreds of job ids resolve in roughly one DynamoDB round trip
-// instead of N serial Gets. Missing ids are simply absent from the map.
-const getBackupJobItems = async (backupJobIds: string[]): Promise<Map<string, BackupJobItem>> => {
-  const byId = new Map<string, BackupJobItem>();
-  const chunks: string[][] = [];
-  for (let i = 0; i < backupJobIds.length; i += 100) chunks.push(backupJobIds.slice(i, i + 100));
-
-  await Promise.all(
-    chunks.map(async (ids) => {
-      let requestItems: Record<string, any> | undefined = {
-        [BACKUP_JOB_TABLE]: {
-          Keys: ids.map((backupJobId) => ({ backupJobId })),
-          ProjectionExpression: 'backupJobId, userId, backupConfigId, #status, createdAt',
-          ExpressionAttributeNames: { '#status': 'status' },
-        },
-      };
-      // BatchGet can return partial results under throttling — loop the leftovers.
-      while (requestItems) {
-        const result: BatchGetCommandOutput = await docClient.send(new BatchGetCommand({ RequestItems: requestItems }));
-        for (const item of result.Responses?.[BACKUP_JOB_TABLE] ?? []) {
-          byId.set(item.backupJobId as string, item as BackupJobItem);
-        }
-        requestItems =
-          result.UnprocessedKeys && Object.keys(result.UnprocessedKeys).length
-            ? result.UnprocessedKeys
-            : undefined;
-      }
-    })
-  );
-
-  return byId;
-};
+// DISABLED with the Hudi/Delta model — the compressed/uncompressed job split was
+// the only caller. Job ownership now comes from the config that owns the jobs
+// (fetchCsvRecords), which is one read instead of N.
+//
+// type BackupJobItem = Pick<IBackupJob, 'backupJobId' | 'userId' | 'backupConfigId' | 'status' | 'createdAt'>;
+//
+// const getBackupJobItems = async (backupJobIds: string[]): Promise<Map<string, BackupJobItem>> => {
+//   const byId = new Map<string, BackupJobItem>();
+//   const chunks: string[][] = [];
+//   for (let i = 0; i < backupJobIds.length; i += 100) chunks.push(backupJobIds.slice(i, i + 100));
+//   await Promise.all(
+//     chunks.map(async (ids) => {
+//       let requestItems: Record<string, any> | undefined = {
+//         [BACKUP_JOB_TABLE]: {
+//           Keys: ids.map((backupJobId) => ({ backupJobId })),
+//           ProjectionExpression: 'backupJobId, userId, backupConfigId, #status, createdAt',
+//           ExpressionAttributeNames: { '#status': 'status' },
+//         },
+//       };
+//       // BatchGet can return partial results under throttling — loop the leftovers.
+//       while (requestItems) {
+//         const result: BatchGetCommandOutput = await docClient.send(new BatchGetCommand({ RequestItems: requestItems }));
+//         for (const item of result.Responses?.[BACKUP_JOB_TABLE] ?? []) {
+//           byId.set(item.backupJobId as string, item as BackupJobItem);
+//         }
+//         requestItems =
+//           result.UnprocessedKeys && Object.keys(result.UnprocessedKeys).length
+//             ? result.UnprocessedKeys
+//             : undefined;
+//       }
+//     })
+//   );
+//   return byId;
+// };
 
 // ---------------------------------------------------------------------------
 // Restore / Retrieve job queries
@@ -210,32 +195,86 @@ export interface IFetchRecordsFilters {
   fields?: IFetchRecordsFilterField[];
 }
 
-export interface IChangedSinceRange {
+// ── /fetch-records request model ──────────────────────────────────────────────
+
+/**
+ * What the source window selects, before any restoreScope narrowing:
+ *   ENTIRE          — every record the config holds (inserts, updates, deletes).
+ *   PARTIAL         — the same, restricted to source.backupJobIds.
+ *   CHANGED_BETWEEN — the same, restricted to the startDate/endDate window.
+ *
+ * The three differ only in which source filters they require, not in the SQL
+ * they produce: every filter present is applied regardless of type, so ENTIRE
+ * with a date window behaves exactly like CHANGED_BETWEEN. The type therefore
+ * declares intent (and drives validation), and PARTIAL/CHANGED_BETWEEN reject a
+ * request that omits the input they exist to apply.
+ */
+export type FetchSourceType = 'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN';
+
+export type RestoreScopeType =
+  | 'ALL'
+  | 'OBJECT'
+  | 'RECORD'
+  | 'FIELD'
+  | 'FILTER'
+  | 'DELETED_ONLY'
+  // Spelled as the client sends it.
+  | 'CHNAGE_SINCE'
+  | 'BULK_CSV';
+
+export interface IFetchSource {
+  // The config owns the CRM (→ Glue database), the destination, and the Glue
+  // table name — everything the query needs is resolved from this one id.
+  backupConfigId: string;
+  type: FetchSourceType;
   startDate?: string;
   endDate?: string;
+  // Absent/empty → every backup job on the config.
+  backupJobIds?: string[];
+}
+
+export interface IRestoreScopeRecords {
+  objectName: string;
+  recordIds: string[];
+}
+
+export interface IRestoreScopeFields {
+  objectName: string;
+  fieldNames: string[];
+}
+
+export interface IRestoreScope {
+  type: RestoreScopeType;
+  // Object allow-list. When non-empty and it excludes objectApiName, the
+  // request selects nothing.
+  objects?: string[];
+  // Per-object record scope; only the entry matching objectApiName applies.
+  records?: IRestoreScopeRecords[];
+  // Per-object field selection; the entry matching objectApiName REPLACES
+  // `columns`.
+  fields?: IRestoreScopeFields[];
+  filters?: IFetchRecordsFilters;
+  // Spelled as the client sends it. Contributes a LastModifiedDate lower bound.
+  chnageSince?: { date?: string };
+  // Additional record scope, unioned with records[].recordIds.
+  bulkCsvIds?: string[];
+  deletedOnly?: boolean;
+}
+
+export interface IFetchRecordsSelection {
+  restoreScope: IRestoreScope;
 }
 
 export interface IFetchRecordsParams {
-  configType: FetchRecordsConfigType;
+  source: IFetchSource;
   objectApiName: string;
-  columnNames: string[];
+  columns: string[];
+  // null / absent → source-level filters only.
+  selection?: IFetchRecordsSelection | null;
   userId: string;
-  // BACKUP: caller supplies the job IDs to query.
-  backupJobIds?: string[];
-  // ARCHIVAL: caller supplies the config ID; we resolve the most recent successful job.
-  backupConfigId?: string;
   // Precompiled Athena WHERE body (AND/OR/SOQL) from the filter module. Built and
   // validated in the controller so filter errors map to 400 before hitting Athena.
   filterWhere?: string | null;
-  deletedOnly?: boolean;
-  // Validated by the controller, not yet applied to the query (deferred).
-  filters?: IFetchRecordsFilters;
-  changedSince?: IChangedSinceRange;
-  bulkCsvIds?: string[];
-  // When present and non-empty, switches from the default entire-record
-  // reconstruction to the by-field flow: only these fields are reverted to
-  // their pre-change values; everything else stays current.
-  filteringFields?: string[];
   // Opaque `nextCursor` from the previous response. Absent → first page.
   cursor?: string;
 }
@@ -264,8 +303,11 @@ const toGlueId = (value: string): string =>
  * exactly the "reuse pagination while nothing has changed" rule.
  */
 export { PAGE_SIZE, BLOCK_SIZE, IPageCursor, IFetchRecordsResult } from './restore-reconstruct';
+// assembleEntireRecords is disabled with the delta model — it replays change_data
+// onto a Hudi base, and nothing in the CSV path produces either. The module
+// itself is untouched, so re-enabling the Hudi/Delta paths only needs the import.
 import {
-  assembleEntireRecords,
+  // assembleEntireRecords,
   toPage,
   BLOCK_SIZE,
   IRankedRecord,
@@ -323,24 +365,31 @@ const byKeyDesc = (a: IRankedRecord, b: IRankedRecord): number =>
  * fingerprint moves and their old cursor is rejected instead of silently
  * paging through a result set built for a different question.
  */
-const fingerprintRequest = (p: IFetchRecordsParams): string =>
-  createHash('sha1')
+const fingerprintRequest = (p: IFetchRecordsParams): string => {
+  const scope = p.selection?.restoreScope;
+  return createHash('sha1')
     .update(
       JSON.stringify([
-        p.configType,
         p.objectApiName,
         p.userId,
-        [...p.columnNames].sort(),
-        [...(p.backupJobIds ?? [])].sort(),
-        p.backupConfigId ?? null,
+        [...p.columns].sort(),
+        p.source.backupConfigId,
+        p.source.type,
+        p.source.startDate ?? null,
+        p.source.endDate ?? null,
+        [...(p.source.backupJobIds ?? [])].sort(),
         p.filterWhere ?? null,
-        p.deletedOnly ?? false,
-        [...(p.filteringFields ?? [])].sort(),
-        [...(p.bulkCsvIds ?? [])].sort(),
-        p.changedSince ?? null,
+        scope?.type ?? null,
+        [...(scope?.objects ?? [])].sort(),
+        scope?.records ?? null,
+        scope?.fields ?? null,
+        scope?.chnageSince?.date ?? null,
+        [...(scope?.bulkCsvIds ?? [])].sort(),
+        scope?.deletedOnly ?? false,
       ])
     )
     .digest('base64url');
+};
 
 // Decodes the incoming cursor into the block/offset to serve. Throws rather
 // than silently restarting: a UI that thinks it is on page 7 should be told its
@@ -362,95 +411,66 @@ const resolvePage = (params: IFetchRecordsParams): IPageState => {
   };
 };
 
-// Strips the r_ prefix off the flat SQL row into a { record } object. For
-// compressed rows, the winning delta's old values are overlaid onto the Hudi
-// record — but only for `revertFields` (the by-field selection), so unselected
-// fields keep their current values. Fields outside the projection never leak in.
-const toByFieldRows = (
-  result: IQueryResult,
-  kind: 'compressed' | 'csv',
-  revertFields?: string[]
-): IRankedRecord[] =>
-  result.rows.map((flat) => {
-    const record: Record<string, string> = {};
-    for (const [key, value] of Object.entries(flat)) {
-      if (key.startsWith('r_')) record[key.slice(2)] = value;
-    }
-    const key = { lmd: record['LastModifiedDate'] ?? '', id: record['Id'] ?? '' };
-    if (kind === 'compressed') {
-      const allow = new Set(revertFields?.length ? revertFields : Object.keys(record));
-      try {
-        const changes = JSON.parse(flat['d_change_data'] ?? '') as Record<string, unknown>;
-        for (const [field, entry] of Object.entries(changes)) {
-          // Spark's to_json drops null struct fields — a null→value change has no
-          // `old` key. Any {old,new}-shaped entry reverts (old absent = was null),
-          // matching the Java reconstructor's map<string,struct<old,new>> semantics.
-          if (allow.has(field) && field in record && entry && typeof entry === 'object' && ('old' in entry || 'new' in entry)) {
-            const old = (entry as { old?: unknown }).old;
-            record[field] = old == null ? '' : String(old);
-          }
-        }
-      } catch {
-        // malformed change_data — leave the record at current values
-      }
-    }
-    return { record, key };
-  });
-
-// Rows whose SQL already produced the whole record: the archival snapshot
-// tables, and DELETE change_data extracted column by column.
-const toSnapshotRows = (result: IQueryResult, columns: string[]): IRankedRecord[] =>
+/**
+ * Turns raw CSV query rows into ranked records.
+ *
+ * `type` is carried alongside the requested columns rather than inside them: it
+ * is derived by the SQL (from "$path"), not a stored field, so it can never
+ * appear in `columns`. toPage keeps it as an extra and reports it in the
+ * response's `columns` list.
+ */
+const toCsvRows = (result: IQueryResult, columns: string[]): IRankedRecord[] =>
   result.rows.map((row) => {
     const record: Record<string, string> = {};
     for (const c of columns) record[c] = row[c] ?? '';
+    record['type'] = row['type'] ?? '';
     return { record, key: { lmd: record['LastModifiedDate'] ?? '', id: record['Id'] ?? '' } };
   });
 
-// Keeps the first row per Id. Rows without an Id are passed through untouched.
-const dedupeById = (rows: IRankedRecord[]): IRankedRecord[] => {
-  const seen = new Set<string>();
-  return rows.filter(({ record }) => {
-    const id = record['Id'];
-    if (!id) return true;
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-};
-
-/**
- * BACKUP path: verifies ownership of every supplied job ID against the caller,
- * resolves the Glue table coordinates from the first job's config, then queries
- * Athena and returns reconstructed { record } rows.
- *
- * A request can mix compressed and uncompressed jobs:
- *   - uncompressed → the CSV table (cfg_<cfg>_<obj>) merged against Hudi.
- *   - compressed   → the Hudi main table (cfg_<cfg>_<obj>_hudi) + delta CDC table
- *     (cfg_<cfg>_<obj>_delta).
- *
- * Modes:
- *   - default            → revert exactly the requested jobs' deltas on top of
- *                          the current record (see assembleEntireRecords).
- *   - filteringFields    → by-field: only the named fields are reverted to their
- *                          pre-change values; everything else stays current.
- *   - deletedOnly        → deleted records from the DELETE deltas' change_data
- *                          (delta model only, so CSV jobs contribute nothing).
- */
-interface IFetchRecordsForBackupParams {
-  backupJobIds: string[];
-  objectApiName: string;
-  columnNames: string[];
-  userId: string;
-  filterWhere: string | null;
-  deletedOnly: boolean;
-  // Non-empty → by-field mode restricted to these fields; absent → entire-record.
-  filteringFields?: string[];
-  // Record scope for the entire-record flow (request bulkCsvIds).
-  recordIds?: string[];
-  // Caller-declared lower bound for the delta partition prune (changedSince).
-  changedSinceStart?: string;
-  page: IPageState;
-}
+// DISABLED with the Hudi/Delta model — both existed to merge multiple sources.
+// The CSV query returns one row per Id already (ROW_NUMBER … WHERE rn = 1), so
+// there is nothing left to overlay or de-duplicate.
+//
+// const toByFieldRows = (
+//   result: IQueryResult,
+//   kind: 'compressed' | 'csv',
+//   revertFields?: string[]
+// ): IRankedRecord[] =>
+//   result.rows.map((flat) => {
+//     const record: Record<string, string> = {};
+//     for (const [key, value] of Object.entries(flat)) {
+//       if (key.startsWith('r_')) record[key.slice(2)] = value;
+//     }
+//     const key = { lmd: record['LastModifiedDate'] ?? '', id: record['Id'] ?? '' };
+//     if (kind === 'compressed') {
+//       const allow = new Set(revertFields?.length ? revertFields : Object.keys(record));
+//       try {
+//         const changes = JSON.parse(flat['d_change_data'] ?? '') as Record<string, unknown>;
+//         for (const [field, entry] of Object.entries(changes)) {
+//           // Spark's to_json drops null struct fields — a null→value change has no
+//           // `old` key. Any {old,new}-shaped entry reverts (old absent = was null).
+//           if (allow.has(field) && field in record && entry && typeof entry === 'object' && ('old' in entry || 'new' in entry)) {
+//             const old = (entry as { old?: unknown }).old;
+//             record[field] = old == null ? '' : String(old);
+//           }
+//         }
+//       } catch {
+//         // malformed change_data — leave the record at current values
+//       }
+//     }
+//     return { record, key };
+//   });
+//
+// const dedupeById = (rows: IRankedRecord[]): IRankedRecord[] => {
+//   const seen = new Set<string>();
+//   return rows.filter(({ record }) => {
+//     const id = record['Id'];
+//     if (!id) return true;
+//     if (seen.has(id)) return false;
+//     seen.add(id);
+//     return true;
+//   });
+// };
 
 // Where in the paged stream this request sits: which block to serve, and from
 // which offset inside it.
@@ -461,238 +481,364 @@ interface IPageState {
   cursor: IPageKey | null;
 }
 
-const fetchRecordsForBackup = async (
-  params: IFetchRecordsForBackupParams
-): Promise<IFetchRecordsResult | null> => {
-  const { backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly, filteringFields, recordIds, page } = params;
-  const jobById = await getBackupJobItems(backupJobIds);
+/**
+ * Resolves the restoreScope down to the concrete query inputs it implies.
+ *
+ * Everything here is scoped to the ONE object the request names: `records` and
+ * `fields` are per-object lists, so only the entry whose objectName matches
+ * objectApiName can apply. A scope naming other objects contributes nothing
+ * rather than leaking their ids into this object's query.
+ *
+ * `selects` is false when the scope excludes this object outright (an `objects`
+ * allow-list that does not contain it) — the caller then returns an empty page
+ * without touching Athena.
+ */
+interface IResolvedScope {
+  selects: boolean;
+  columns: string[];
+  recordIds: string[];
+  deletedOnly: boolean;
+  changedSinceStart?: string;
+}
 
-  // Every job must exist and belong to the caller.
-  if (backupJobIds.some((id) => jobById.get(id)?.userId !== userId)) return null;
+const resolveScope = (
+  objectApiName: string,
+  columns: string[],
+  scope: IRestoreScope | undefined
+): IResolvedScope => {
+  if (!scope) return { selects: true, columns, recordIds: [], deletedOnly: false };
 
-  const firstJob = jobById.get(backupJobIds[0])!;
-  const config = await getBackupConfigById(firstJob.backupConfigId);
-  if (!config) return null;
-
-  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
-  const csvTable = `cfg_${toGlueId(firstJob.backupConfigId)}_${toGlueId(objectApiName)}`;
-  const hudiTable = `${csvTable}_hudi`;
-  const deltaTable = `${csvTable}_delta`;
-
-  // Partition job IDs by storage: compressed → Hudi/delta, everything else → CSV.
-  const compressedIds: string[] = [];
-  const csvIds: string[] = [];
-  backupJobIds.forEach((id) => {
-    (jobById.get(id)!.status === COMPRESSION_STATUS.compressed ? compressedIds : csvIds).push(id);
-  });
-
-  // Delta partition prune. Upper bound: the newest requested job's timestamp —
-  // no job can have recorded a change that had not happened when it ran, so
-  // every delta it wrote is in an earlier-or-equal month. Lower bound: only
-  // what the caller declared, never inferred (SCHEMA_* deltas carry the
-  // record's OLD LastModifiedDate and land in far older partitions — see
-  // buildDeltaPartitionWhere).
-  const newestJobAt = backupJobIds
-    .map((id) => jobById.get(id)?.createdAt)
-    .filter((t): t is string => Boolean(t))
-    .sort()
-    .pop();
-  const deltaPartition = buildDeltaPartitionWhere(params.changedSinceStart ?? null, newestJobAt ?? null);
-
-  const { run, executions } = makeRunner(databaseName, page.replay);
-  const base = { columnNames, filterWhere, limit: BLOCK_SIZE, cursor: page.cursor, deltaPartition };
-  const cols = pairedColumns(columnNames);
-  const finish = (rows: IRankedRecord[]): IFetchRecordsResult =>
-    toPage(rows.sort(byKeyDesc).slice(0, BLOCK_SIZE), columnNames, page.offset, page.fingerprint, executions);
-
-  if (deletedOnly) {
-    // Deleted records live only in the delta model, so CSV jobs contribute nothing.
-    if (!compressedIds.length) return finish([]);
-    const result = await run('deleted', () =>
-      buildCompressedDeletedSql(deltaTable, { ...base, jobIds: compressedIds })
-    );
-    return finish(toSnapshotRows(result, cols));
+  // An empty/absent objects list is "no object restriction", not "no objects".
+  if (scope.objects?.length && !scope.objects.includes(objectApiName)) {
+    return { selects: false, columns, recordIds: [], deletedOnly: false };
   }
 
-  if (filteringFields?.length) {
-    // By-field mode: one { record } row per record — compressed jobs yield the
-    // current Hudi record with ONLY the selected fields reverted to their
-    // pre-change values; uncompressed jobs yield the newer of the CSV/Hudi
-    // versions.
-    const tasks: Promise<IRankedRecord[]>[] = [];
-    if (compressedIds.length) {
-      const p = { ...base, jobIds: compressedIds };
-      tasks.push(
-        run('byfield', () => buildCompressedByFieldSql(hudiTable, deltaTable, p))
-          .then((r) => toByFieldRows(r, 'compressed', filteringFields))
-      );
-      // Deleted records have no Hudi row, so the join above drops them. Their
-      // whole last state is the DELETE delta's change_data — returned as a
-      // record of its own, with no field reversion (a DELETE payload is a
-      // snapshot, not an {old,new} diff).
-      tasks.push(
-        run('deleted', () => buildCompressedDeletedSql(deltaTable, p)).then((r) => toSnapshotRows(r, cols))
-      );
-    }
-    if (csvIds.length) {
-      tasks.push(
-        run('csv', () => buildCsvByFieldSql(csvTable, hudiTable, { ...base, jobIds: csvIds }))
-          .then((r) => toByFieldRows(r, 'csv'))
-      );
-    }
-    // Task order is the precedence order: a live Hudi/CSV row wins over a
-    // DELETE snapshot for the same Id (the two should never both appear, but a
-    // duplicate would mean restoring the record twice).
-    return finish(dedupeById((await Promise.all(tasks)).flat()));
-  }
+  // fields[] REPLACES columns for the matching object. An entry that matches but
+  // carries no field names is ignored — an empty projection would return rows of
+  // nothing, which is never what a caller means.
+  const fieldNames = scope.fields?.find((f) => f.objectName === objectApiName)?.fieldNames;
+  const resolvedColumns = fieldNames?.length ? [...new Set(fieldNames)] : columns;
 
-  // Default: revert exactly what the requested jobs recorded. Two Athena
-  // queries for the compressed side regardless of how many jobs or records are
-  // involved; grouping and replay happen in memory (assembleEntireRecords).
-  {
-    const tasks: Promise<IRankedRecord[]>[] = [];
-    // A deleted record is rebuilt from DELETE change_data in memory and never
-    // passes through filterWhere, so including it under an active filter could
-    // return rows the filter excludes. Skipping the query entirely is also one
-    // less Athena scan when a filter is set.
-    const includeDeleted = !filterWhere;
-    if (compressedIds.length) {
-      const scope = { jobIds: compressedIds, recordIds, limit: BLOCK_SIZE, cursor: page.cursor, deltaPartition };
-      tasks.push(
-        (async () => {
-          // Query 1 defines the block: the Hudi rows the requested jobs either
-          // last wrote or recorded a delta against, ordered and seeked on the
-          // one key domain. Query 2 then pulls just those records' deltas —
-          // bounded by <= BLOCK_SIZE ids, so it stays small however much
-          // history the object has. Two round trips, two queries, fixed.
-          const blockRows = await run('block', () =>
-            buildEntireBlockSql(hudiTable, deltaTable, scope, columnNames, filterWhere)
-          );
-          const deletedRows = includeDeleted
-            ? await run('deleted', () =>
-                buildCompressedDeletedSql(deltaTable, { ...base, jobIds: compressedIds })
-              )
-            : { columns: [], rows: [] };
+  // records[].recordIds and bulkCsvIds are both record scopes on the same query,
+  // so they union rather than override.
+  const scoped = scope.records?.find((r) => r.objectName === objectApiName)?.recordIds ?? [];
+  const recordIds = [...new Set([...scoped, ...(scope.bulkCsvIds ?? [])])].filter(Boolean);
 
-          // Hudi first: a live record must never be shadowed by a stale DELETE
-          // snapshot for the same Id.
-          const bases = [...blockRows.rows, ...deletedRows.rows];
-          const ids = [...new Set(bases.map((r) => r['Id']).filter(Boolean))];
-          if (!ids.length) return [];
-
-          const deltas = await run('deltas', () =>
-            buildEntireDeltasSql(deltaTable, compressedIds, ids, deltaPartition)
-          );
-          return assembleEntireRecords(cols, bases, deltas.rows);
-        })()
-      );
-    }
-    if (csvIds.length) {
-      tasks.push(
-        run('csv', () => buildCsvEitherSql(csvTable, hudiTable, { ...base, jobIds: csvIds }, recordIds))
-          .then((r) => toByFieldRows(r, 'csv'))
-      );
-    }
-    return finish(dedupeById((await Promise.all(tasks)).flat()));
-  }
+  return {
+    selects: true,
+    columns: resolvedColumns,
+    recordIds,
+    deletedOnly: scope.deletedOnly === true,
+    ...(scope.chnageSince?.date ? { changedSinceStart: scope.chnageSince.date } : {}),
+  };
 };
 
 /**
- * ARCHIVAL path: resolves the most recent retrievable ARCHIVAL job for the given
- * config ID, verifies the config belongs to the caller, then queries Athena for
- * that snapshot. An archival job's `status` is single-valued — SUCCESS while
- * uncompressed, then COMPRESSED once Spark compresses it — so both are candidates.
- * Routing by that status (never delta/checkpoint, archival is a point-in-time
- * snapshot):
- *   - COMPRESSED → the Hudi current-state table (_hudi), one row per Id.
- *   - SUCCESS    → the raw CSV table (cfg_<cfg>_<obj>), scoped to the job.
- * deletedOnly has no meaning for an archival snapshot, so it returns nothing.
- * Returns null when the config doesn't exist, is not owned by the caller, or has
- * no retrievable archival job yet.
+ * The active fetch path: raw CSV rows for one object under one backup config.
+ *
+ * Ownership is checked once, on the config — the jobs a request names are the
+ * config's own jobs, so a caller who owns the config owns them. That replaces
+ * the per-job BatchGet the Hudi model needed.
+ *
+ * The config also resolves everything else the query needs: `crmId` gives the
+ * Glue database, `backupConfigId` + objectApiName give the table, and the Glue
+ * table already carries its S3 location — so no destination credentials are read
+ * on this path.
+ *
+ * Returns null when the config does not exist or is not owned by the caller.
  */
-interface IFetchRecordsForArchivalParams {
-  backupConfigId: string;
+interface IFetchCsvRecordsParams {
+  source: IFetchSource;
   objectApiName: string;
-  columnNames: string[];
+  columns: string[];
   userId: string;
   filterWhere: string | null;
-  deletedOnly: boolean;
+  scope?: IRestoreScope;
   page: IPageState;
 }
 
-const fetchRecordsForArchival = async (
-  params: IFetchRecordsForArchivalParams
+const fetchCsvRecords = async (
+  params: IFetchCsvRecordsParams
 ): Promise<IFetchRecordsResult | null> => {
-  const { backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly, page } = params;
-  // A single status equality per query is all getBackupJobsByConfig supports, and
-  // SUCCESS/COMPRESSED are mutually exclusive on the same job — query both and keep
-  // the newest, so a re-run (fresh SUCCESS) wins over an older COMPRESSED snapshot.
-  const [config, success, compressed] = await Promise.all([
-    getBackupConfigById(backupConfigId),
-    getBackupJobsByConfig(backupConfigId, { limit: 1, status: JOB_STATUS.success, type: 'ARCHIVAL' }),
-    getBackupJobsByConfig(backupConfigId, { limit: 1, status: COMPRESSION_STATUS.compressed, type: 'ARCHIVAL' }),
-  ]);
+  const { source, objectApiName, columns, userId, filterWhere, scope, page } = params;
 
+  const config = await getBackupConfigById(source.backupConfigId);
   if (!config || config.userId !== userId) return null;
 
-  const candidates = [...success.items, ...compressed.items];
-  if (candidates.length === 0) return null;
-
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const csvTable = `cfg_${toGlueId(source.backupConfigId)}_${toGlueId(objectApiName)}`;
+
+  const resolved = resolveScope(objectApiName, columns, scope);
   const { run, executions } = makeRunner(databaseName, page.replay);
-  const empty = (): IFetchRecordsResult => toPage([], columnNames, page.offset, page.fingerprint, executions);
-  if (deletedOnly) return empty();
 
-  const latestJob = candidates.sort(
-    (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
-  )[0];
-  const tableName = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
-  const base = { columnNames, filterWhere, limit: BLOCK_SIZE, cursor: page.cursor };
+  // Scope excludes this object — an empty page, not an Athena scan.
+  if (!resolved.selects) {
+    return toPage([], resolved.columns, page.offset, page.fingerprint, executions);
+  }
 
-  // Archival tables partition on CreatedDate, so there is no time prune to
-  // apply here — see buildDeltaPartitionWhere.
-  const result = await run('archival', () =>
-    latestJob.status === COMPRESSION_STATUS.compressed
-      ? buildHudiRawSql(`${tableName}_hudi`, base)
-      : buildRawSql(tableName, { ...base, jobIds: [latestJob.backupJobId] })
+  // The scope's changedSince date and the source window are both lower bounds on
+  // LastModifiedDate; the tighter one wins so neither can widen the other.
+  const startDate = [source.startDate, resolved.changedSinceStart]
+    .filter((d): d is string => Boolean(d))
+    .sort()
+    .pop();
+
+  const result = await run('csv', () =>
+    buildCsvRecordsSql(csvTable, {
+      columnNames: resolved.columns,
+      backupJobIds: source.backupJobIds,
+      startDate,
+      endDate: source.endDate,
+      recordIds: resolved.recordIds,
+      filterWhere,
+      deletedOnly: resolved.deletedOnly,
+      limit: BLOCK_SIZE,
+      cursor: page.cursor,
+    })
   );
 
-  const rows = toSnapshotRows(result, pairedColumns(columnNames));
-  return toPage(rows.sort(byKeyDesc).slice(0, BLOCK_SIZE), columnNames, page.offset, page.fingerprint, executions);
+  const rows = toCsvRows(result, pairedColumns(resolved.columns));
+  return toPage(
+    rows.sort(byKeyDesc).slice(0, BLOCK_SIZE),
+    resolved.columns,
+    page.offset,
+    page.fingerprint,
+    executions
+  );
 };
 
+// =============================================================================
+// DISABLED — Hudi / Delta fetch paths
+// =============================================================================
+//
+// Both read the compressed-state tables (_hudi, _delta) and are commented out
+// with the move to the CSV-only model. fetchRecordsForBackup split the requested
+// jobs into compressed (Hudi/delta) and uncompressed (CSV) sets and merged the
+// results; fetchRecordsForArchival routed a single archival snapshot to whichever
+// of the two tables held it. The SQL builders they call are commented out in
+// athena-fetch.ts — re-enable both together.
+//
+// interface IFetchRecordsForBackupParams {
+//   backupJobIds: string[];
+//   objectApiName: string;
+//   columnNames: string[];
+//   userId: string;
+//   filterWhere: string | null;
+//   deletedOnly: boolean;
+//   filteringFields?: string[];
+//   recordIds?: string[];
+//   changedSinceStart?: string;
+//   page: IPageState;
+// }
+
+// const fetchRecordsForBackup = async (
+//   params: IFetchRecordsForBackupParams
+// ): Promise<IFetchRecordsResult | null> => {
+//   const { backupJobIds, objectApiName, columnNames, userId, filterWhere, deletedOnly, filteringFields, recordIds, page } = params;
+//   const jobById = await getBackupJobItems(backupJobIds);
+//
+//   // Every job must exist and belong to the caller.
+//   if (backupJobIds.some((id) => jobById.get(id)?.userId !== userId)) return null;
+//
+//   const firstJob = jobById.get(backupJobIds[0])!;
+//   const config = await getBackupConfigById(firstJob.backupConfigId);
+//   if (!config) return null;
+//
+//   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+//   const csvTable = `cfg_${toGlueId(firstJob.backupConfigId)}_${toGlueId(objectApiName)}`;
+//   const hudiTable = `${csvTable}_hudi`;
+//   const deltaTable = `${csvTable}_delta`;
+//
+//   // Partition job IDs by storage: compressed → Hudi/delta, everything else → CSV.
+//   const compressedIds: string[] = [];
+//   const csvIds: string[] = [];
+//   backupJobIds.forEach((id) => {
+//     (jobById.get(id)!.status === COMPRESSION_STATUS.compressed ? compressedIds : csvIds).push(id);
+//   });
+//
+//   // Delta partition prune. Upper bound: the newest requested job's timestamp —
+//   // no job can have recorded a change that had not happened when it ran. Lower
+//   // bound: only what the caller declared, never inferred (SCHEMA_* deltas carry
+//   // the record's OLD LastModifiedDate and land in far older partitions).
+//   const newestJobAt = backupJobIds
+//     .map((id) => jobById.get(id)?.createdAt)
+//     .filter((t): t is string => Boolean(t))
+//     .sort()
+//     .pop();
+//   const deltaPartition = buildDeltaPartitionWhere(params.changedSinceStart ?? null, newestJobAt ?? null);
+//
+//   const { run, executions } = makeRunner(databaseName, page.replay);
+//   const base = { columnNames, filterWhere, limit: BLOCK_SIZE, cursor: page.cursor, deltaPartition };
+//   const cols = pairedColumns(columnNames);
+//   const finish = (rows: IRankedRecord[]): IFetchRecordsResult =>
+//     toPage(rows.sort(byKeyDesc).slice(0, BLOCK_SIZE), columnNames, page.offset, page.fingerprint, executions);
+//
+//   if (deletedOnly) {
+//     // Deleted records live only in the delta model, so CSV jobs contribute nothing.
+//     if (!compressedIds.length) return finish([]);
+//     const result = await run('deleted', () =>
+//       buildCompressedDeletedSql(deltaTable, { ...base, jobIds: compressedIds })
+//     );
+//     return finish(toSnapshotRows(result, cols));
+//   }
+//
+//   if (filteringFields?.length) {
+//     // By-field mode: compressed jobs yield the current Hudi record with ONLY the
+//     // selected fields reverted; uncompressed jobs yield the newer CSV/Hudi version.
+//     const tasks: Promise<IRankedRecord[]>[] = [];
+//     if (compressedIds.length) {
+//       const p = { ...base, jobIds: compressedIds };
+//       tasks.push(
+//         run('byfield', () => buildCompressedByFieldSql(hudiTable, deltaTable, p))
+//           .then((r) => toByFieldRows(r, 'compressed', filteringFields))
+//       );
+//       // Deleted records have no Hudi row, so the join above drops them. Their
+//       // whole last state is the DELETE delta's change_data — returned as a
+//       // record of its own, with no field reversion.
+//       tasks.push(
+//         run('deleted', () => buildCompressedDeletedSql(deltaTable, p)).then((r) => toSnapshotRows(r, cols))
+//       );
+//     }
+//     if (csvIds.length) {
+//       tasks.push(
+//         run('csv', () => buildCsvByFieldSql(csvTable, hudiTable, { ...base, jobIds: csvIds }))
+//           .then((r) => toByFieldRows(r, 'csv'))
+//       );
+//     }
+//     // Task order is the precedence order: a live Hudi/CSV row wins over a
+//     // DELETE snapshot for the same Id.
+//     return finish(dedupeById((await Promise.all(tasks)).flat()));
+//   }
+//
+//   // Default: revert exactly what the requested jobs recorded. Two Athena queries
+//   // for the compressed side regardless of how many jobs or records are involved;
+//   // grouping and replay happen in memory (assembleEntireRecords).
+//   {
+//     const tasks: Promise<IRankedRecord[]>[] = [];
+//     // A deleted record is rebuilt from DELETE change_data in memory and never
+//     // passes through filterWhere, so including it under an active filter could
+//     // return rows the filter excludes.
+//     const includeDeleted = !filterWhere;
+//     if (compressedIds.length) {
+//       const scope = { jobIds: compressedIds, recordIds, limit: BLOCK_SIZE, cursor: page.cursor, deltaPartition };
+//       tasks.push(
+//         (async () => {
+//           // Query 1 defines the block: the Hudi rows the requested jobs either
+//           // last wrote or recorded a delta against. Query 2 then pulls just
+//           // those records' deltas — bounded by <= BLOCK_SIZE ids.
+//           const blockRows = await run('block', () =>
+//             buildEntireBlockSql(hudiTable, deltaTable, scope, columnNames, filterWhere)
+//           );
+//           const deletedRows = includeDeleted
+//             ? await run('deleted', () =>
+//                 buildCompressedDeletedSql(deltaTable, { ...base, jobIds: compressedIds })
+//               )
+//             : { columns: [], rows: [] };
+//
+//           // Hudi first: a live record must never be shadowed by a stale DELETE
+//           // snapshot for the same Id.
+//           const bases = [...blockRows.rows, ...deletedRows.rows];
+//           const ids = [...new Set(bases.map((r) => r['Id']).filter(Boolean))];
+//           if (!ids.length) return [];
+//
+//           const deltas = await run('deltas', () =>
+//             buildEntireDeltasSql(deltaTable, compressedIds, ids, deltaPartition)
+//           );
+//           return assembleEntireRecords(cols, bases, deltas.rows);
+//         })()
+//       );
+//     }
+//     if (csvIds.length) {
+//       tasks.push(
+//         run('csv', () => buildCsvEitherSql(csvTable, hudiTable, { ...base, jobIds: csvIds }, recordIds))
+//           .then((r) => toByFieldRows(r, 'csv'))
+//       );
+//     }
+//     return finish(dedupeById((await Promise.all(tasks)).flat()));
+//   }
+// };
+
+// ARCHIVAL path: resolved the most recent retrievable ARCHIVAL job and routed it
+// to the Hudi current-state table (COMPRESSED) or the raw CSV table (SUCCESS).
+// Disabled with the Hudi/Delta model — the new request shape has no configType,
+// and a config's archival snapshot is reachable through the CSV path by naming
+// its backupJobIds.
+//
+// interface IFetchRecordsForArchivalParams {
+//   backupConfigId: string;
+//   objectApiName: string;
+//   columnNames: string[];
+//   userId: string;
+//   filterWhere: string | null;
+//   deletedOnly: boolean;
+//   page: IPageState;
+// }
+//
+// const fetchRecordsForArchival = async (
+//   params: IFetchRecordsForArchivalParams
+// ): Promise<IFetchRecordsResult | null> => {
+//   const { backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly, page } = params;
+//   // A single status equality per query is all getBackupJobsByConfig supports, and
+//   // SUCCESS/COMPRESSED are mutually exclusive on the same job — query both and
+//   // keep the newest, so a re-run (fresh SUCCESS) wins over an older COMPRESSED.
+//   const [config, success, compressed] = await Promise.all([
+//     getBackupConfigById(backupConfigId),
+//     getBackupJobsByConfig(backupConfigId, { limit: 1, status: JOB_STATUS.success, type: 'ARCHIVAL' }),
+//     getBackupJobsByConfig(backupConfigId, { limit: 1, status: COMPRESSION_STATUS.compressed, type: 'ARCHIVAL' }),
+//   ]);
+//
+//   if (!config || config.userId !== userId) return null;
+//
+//   const candidates = [...success.items, ...compressed.items];
+//   if (candidates.length === 0) return null;
+//
+//   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+//   const { run, executions } = makeRunner(databaseName, page.replay);
+//   const empty = (): IFetchRecordsResult => toPage([], columnNames, page.offset, page.fingerprint, executions);
+//   if (deletedOnly) return empty();
+//
+//   const latestJob = candidates.sort(
+//     (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+//   )[0];
+//   const tableName = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
+//   const base = { columnNames, filterWhere, limit: BLOCK_SIZE, cursor: page.cursor };
+//
+//   // Archival tables partition on CreatedDate, so there is no time prune here.
+//   const result = await run('archival', () =>
+//     latestJob.status === COMPRESSION_STATUS.compressed
+//       ? buildHudiRawSql(`${tableName}_hudi`, base)
+//       : buildRawSql(tableName, { ...base, jobIds: [latestJob.backupJobId] })
+//   );
+//
+//   const rows = toSnapshotRows(result, pairedColumns(columnNames));
+//   return toPage(rows.sort(byKeyDesc).slice(0, BLOCK_SIZE), columnNames, page.offset, page.fingerprint, executions);
+// };
+
 /**
- * Unified entry point that delegates to the BACKUP or ARCHIVAL path based on
- * configType. Returns null to signal a 404/ownership failure to the controller.
+ * Entry point for POST /retrieve/fetch-records.
+ *
+ * One path now: raw CSV rows for `objectApiName` under `source.backupConfigId`.
+ * `source` supplies the coarse window (jobs, date range) and `selection` — when
+ * present — narrows it further. Both are applied to the same single query; there
+ * is no per-source branching, because ENTIRE/PARTIAL/CHANGED_BETWEEN differ only
+ * in which source filters they carry.
+ *
+ * Returns null to signal a 404/ownership failure to the controller.
  */
 const fetchRecordsByBackupJobs = async (
   params: IFetchRecordsParams
 ): Promise<IFetchRecordsResult | null> => {
-  const { configType, objectApiName, columnNames, userId, backupJobIds, backupConfigId } = params;
-  const filterWhere = params.filterWhere ?? null;
-  const deletedOnly = params.deletedOnly ?? false;
-  const page = resolvePage(params);
+  const { source, objectApiName, columns, userId, selection } = params;
+  if (!source?.backupConfigId) return null;
 
-  if (configType === 'ARCHIVAL') {
-    if (!backupConfigId) return null;
-    return fetchRecordsForArchival({ backupConfigId, objectApiName, columnNames, userId, filterWhere, deletedOnly, page });
-  }
-
-  // BACKUP (archival snapshots have no Hudi/delta history): entire-record
-  // reconstruction by default; filteringFields switches to by-field mode with
-  // only those fields reverted (bulkCsvIds = record scope).
-  if (!backupJobIds || backupJobIds.length === 0) return null;
-  return fetchRecordsForBackup({
-    backupJobIds,
+  return fetchCsvRecords({
+    source,
     objectApiName,
-    columnNames,
+    columns,
     userId,
-    filterWhere,
-    deletedOnly,
-    filteringFields: params.filteringFields,
-    recordIds: params.bulkCsvIds,
-    changedSinceStart: params.changedSince?.startDate,
-    page,
+    filterWhere: params.filterWhere ?? null,
+    ...(selection?.restoreScope ? { scope: selection.restoreScope } : {}),
+    page: resolvePage(params),
   });
 };
 
