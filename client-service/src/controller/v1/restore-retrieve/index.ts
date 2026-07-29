@@ -24,6 +24,7 @@ import {
   getRestoreJobsByRestoreId,
   CursorError,
   PAGE_SIZE,
+  initalizeRestoreTransform,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -461,7 +462,8 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   makeResponse(req, res, 201, true, 'create');
   try {
     const restoreJob = await createRestoreJob(payload);
-    await tiggerRestoreJob(restoreJob);
+    initalizeRestoreTransform(restoreJob.restoreJobId);
+    // await tiggerRestoreJob(restoreJob);
   } catch (error) {
     console.error('Error creating restore job:', error);
   }
