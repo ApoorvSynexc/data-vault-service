@@ -13,8 +13,6 @@ import { decryptSalesforceRequest, decryptSalesforceQueryRequest } from '../../u
  */
 export const attachDecryptedSalesforceRequest = (source: 'body' | 'query') =>
   async (req: IRequest, res: Response, next: NextFunction): Promise<void> => {
-    console.log('REQUEST BODY:', req.body);
-    console.log('REQUEST QUERY:', JSON.stringify(req.query));
     try {
       req.salesforcePayload = source === 'body'
         ? await decryptSalesforceRequest(req.body)

@@ -99,7 +99,6 @@ const salesforceRequest = async <T = any>(
 
   try {
     const data = await makeCall(tokens.accessToken);
-    console.log('DATA ==> ' + JSON.stringify(data));
     return { data, accessToken: tokens.accessToken };
   } catch (error: any) {
     console.log('Salesforce request failed, checking for 401 to refresh token...', error?.message);
