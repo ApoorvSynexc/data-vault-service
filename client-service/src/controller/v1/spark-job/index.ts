@@ -7,7 +7,8 @@ import { COMPRESSION_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreJobById, tiggerRestoreJob } from '../../../services';
+import { getRestoreById, getRestoreJobById, tiggerRestoreJob, updateRestoreJob } from '../../../services';
+import { v4 as uuidv4 } from 'uuid';
 
 // Decrypts a request, or returns null if it isn't decryptable. Accepts both shapes
 // Spark sends: a base64 transport string, or the raw { ciphertext, iv } envelope
@@ -207,6 +208,26 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     const restoreJob = await getRestoreJobById(restoreConfigId);
     if (!restoreJob) {
       return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    const restore = await getRestoreById(restoreJob.restoreId);
+    if (!restore) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    if (restore.source.type !== 'ENTIRE') {
+      const updatedObjects: { id: string; name: string; status: "PENDING" }[] = objects.map((object) => ({
+        id: uuidv4(),
+        name: object,
+        status: "PENDING",
+      }));
+
+      await updateRestoreJob({
+        restoreJobId: restoreConfigId,
+        objects: updatedObjects,
+      });
+
+      restoreJob.destination.objects = updatedObjects;
     }
 
     await tiggerRestoreJob(restoreJob);
