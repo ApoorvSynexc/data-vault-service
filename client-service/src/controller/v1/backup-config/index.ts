@@ -24,6 +24,7 @@ import {
   initalizePayloadTransform,
   syncMetadataAndTriggers,
   unwrapApex,
+  getUser,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from '../../../constant';
@@ -211,6 +212,11 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
       const crm = await getCrmById(document.crmId);
       if (crm) {
         documents[index].crm = { name: crm.name, crmName: crm.crmName };
+      }
+
+      const user = await getUser({ userId: document.userId });
+      if (user) {
+        documents[index].crm = { ...documents[index].crm, username: user.crmProfile?.username };
       }
 
       const destination = await getDestinationById(document.destinationId);
