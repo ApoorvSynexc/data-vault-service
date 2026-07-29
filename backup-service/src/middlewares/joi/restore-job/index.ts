@@ -22,12 +22,18 @@ const destinationSchema = Joi.object({
   encryptedTokens: Joi.object().required(),
   instanceUrl: Joi.string().uri().required(),
 
+  // Mirrors IRestoreJobDestination['objects']: a re-triggered job carries the
+  // progress fields written by the previous run, so they must be accepted here.
   objects: Joi.array().items(
     Joi.object({
       id: Joi.string().optional(),
       name: Joi.string().required(),
       status: Joi.string().required(),
-    }).required()
+      processedRecordCount: Joi.number().optional(),
+      failedRecordCount: Joi.number().optional(),
+      errorMessage: Joi.string().allow('').optional(),
+      errors: Joi.array().items(Joi.string()).optional(),
+    })
   ),
 });
 
