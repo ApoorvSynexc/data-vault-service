@@ -161,6 +161,9 @@ export const createRestoreValidation = (req: Request, res: Response, next: NextF
     crmId: Joi.string().optional(),
     source: Joi.object({
       backupConfigId: Joi.string().required(),
+      type: Joi.string().valid("ENTIRE", "PARTIAL", "CHANGED_BETWEEN").required(),
+      startDate: Joi.string().isoDate().required(),
+      endDate: Joi.string().isoDate().required(),
       backupJobIds: Joi.array().items(Joi.string()).min(1).required(),
     }).required(),
     selection: Joi.object({
