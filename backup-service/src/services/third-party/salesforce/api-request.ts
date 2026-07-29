@@ -44,13 +44,13 @@ const salesforceRequest = async <T = any>(
   options: SalesforceRequestOptions,
   tokens: SalesforceTokens
 ): Promise<T> => {
-  const makeCall = (accessToken: string) =>{
+  const makeCall = (accessToken: string) => {
     const { headers, ...opt } = options;
     return httpRequest<T>({
       ...opt,
       headers: { ...headers, Authorization: `Bearer ${accessToken}` },
     });
-  }
+  };
 
   try {
     return await makeCall(tokens.accessToken);

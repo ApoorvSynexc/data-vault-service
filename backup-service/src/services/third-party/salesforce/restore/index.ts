@@ -1,7 +1,7 @@
 import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
-import { updateRestoreJobStatus, updateRestoreObject } from '../../../restore-job';
+import { updateRestoreObject } from '../../../restore-job';
 import { SalesforceTokens } from '../api-request';
 import {
   createBulkJob,
@@ -76,10 +76,14 @@ const parseCsvRow = (line: string): string[] => {
 
 const parseFirstNErrors = (failedCsv: string, limit: number): string[] => {
   const lines = failedCsv.split('\n').filter((l) => l.trim());
-  if (lines.length < 2) return [];
+  if (lines.length < 2) {
+    return [];
+  }
   const headers = parseCsvRow(lines[0]);
   const errorColIndex = headers.findIndex((h) => h.trim() === 'sf__Error');
-  if (errorColIndex === -1) return [];
+  if (errorColIndex === -1) {
+    return [];
+  }
   return lines
     .slice(1, limit + 1)
     .map((line) => parseCsvRow(line)[errorColIndex]?.trim())
@@ -96,7 +100,13 @@ const submitIngestChunk = async (
   chunk: CsvChunk
 ): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
-  const job = await createBulkJob({ instanceUrl, tokens, objectName, operation, externalIdFieldName });
+  const job = await createBulkJob({
+    instanceUrl,
+    tokens,
+    objectName,
+    operation,
+    externalIdFieldName,
+  });
   await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
   await closeBulkJob(instanceUrl, tokens, job.id);
   const status = await pollBulkJobUntilDone(instanceUrl, tokens, job.id);
@@ -107,7 +117,12 @@ const submitIngestChunk = async (
     errors = parseFirstNErrors(failedCsv, 25);
   }
 
-  return { jobId: job.id, processed: status.numberRecordsProcessed ?? 0, failed: status.numberRecordsFailed ?? 0, errors };
+  return {
+    jobId: job.id,
+    processed: status.numberRecordsProcessed ?? 0,
+    failed: status.numberRecordsFailed ?? 0,
+    errors,
+  };
 };
 
 // Streams every backed-up CSV file for this object from S3 — one line at a time,
@@ -146,7 +161,14 @@ const restoreObjectData = async (
     if (!chunk || !chunk.rows.length) {
       return;
     }
-    const job = await submitIngestChunk(instanceUrl, tokens, objectName, operation, externalIdFieldName, chunk);
+    const job = await submitIngestChunk(
+      instanceUrl,
+      tokens,
+      objectName,
+      operation,
+      externalIdFieldName,
+      chunk
+    );
     submittedJobIds.push(job.jobId);
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
@@ -266,6 +288,8 @@ export const runSalesforceRestore = async (
     externalIdFieldName
   );
 
-  logger.info(`[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`);
+  logger.info(
+    `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`
+  );
   return 'SUCCESS';
 };

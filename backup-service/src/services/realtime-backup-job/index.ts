@@ -143,7 +143,7 @@ const createRealtimeJob = async (params: UpsertRealtimeBackupJobParams): Promise
   } = params;
 
   const now = new Date().toISOString();
-  const encryptedDest = encrypt(JSON.stringify(destination.config));
+  const encryptedDest: any = encrypt(JSON.stringify(destination.config));
 
   const item: IBackupJob = {
     backupJobId: uuidv4(),

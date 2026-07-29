@@ -58,6 +58,8 @@ export async function httpRequest<TResponse = any, TBody = any>(
   }
 
   const text = await response.text();
-  if (!text) return undefined as TResponse;
+  if (!text) {
+    return undefined as TResponse;
+  }
   return JSON.parse(text) as TResponse;
 }
