@@ -40,7 +40,7 @@ export interface IRestoreScope {
 
 export interface IRestoreSource {
   backupConfigId: string;
-  type?: string; // ENTIRE | PARTIAL | CHANGED_BETWEEN
+  type?: 'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN'; // ENTIRE | PARTIAL | CHANGED_BETWEEN
   startDate?: string;
   endDate?: string;
   backupJobIds: string[];

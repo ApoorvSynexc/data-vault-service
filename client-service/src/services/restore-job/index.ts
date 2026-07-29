@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, RESTORE_JOB_TABLE } from '../../constant';
@@ -89,6 +89,135 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   return cleanItem;
 };
 
+interface UpdateRestoreObjectParams {
+  name: string;
+  status?: 'PENDING' | 'SUCCESS' | 'FAILED';
+  // Added to the object's running total, not overwritten — a single object
+  // can span multiple ingest chunks reported across multiple calls.
+  processedRecordCount?: number;
+  failedRecordCount?: number;
+  errorMessage?: string;
+}
+
+interface UpdateRestoreJobParams {
+  restoreJobId: string;
+  status?: string;
+  startedAt?: string;
+  completedAt?: string;
+  errorMessage?: string;
+  // Per-object updates, each targeting one entry in destination.objects[] by
+  // name (names are unique within that array). Any number of objects can be
+  // updated in the same write.
+  objects?: UpdateRestoreObjectParams[];
+}
+
+// Updates job-level fields (status/timestamps/errorMessage) and, optionally,
+// any number of objects' progress in the same write.
+//
+// Object updates are resolved via a fresh read + literal SET rather than
+// DynamoDB's ADD or if_not_exists() — both were tried against this exact shape
+// in backup-service's mirror of this function and both fail with "The document
+// path provided in the update expression is invalid for update": ADD can only
+// implicitly create a *top-level* item attribute (not one nested inside a list
+// element, which is what processedRecordCount/failedRecordCount are on first
+// write), and if_not_exists() is unreliable once the path includes a list index
+// (objects[n].field). Reading the job first to resolve each object's index and
+// current counts sidesteps both restrictions with a plain literal SET.
+const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<void> => {
+  const { restoreJobId, status, startedAt, completedAt, errorMessage, objects } = params;
+  const now = new Date().toISOString();
+
+  const job = objects?.length ? await getRestoreJobById(restoreJobId) : null;
+
+  const setParts = ['updatedAt = :updatedAt'];
+  const removeParts: string[] = [];
+  const expressionNames: Record<string, string> = {};
+  const expressionValues: Record<string, any> = { ':updatedAt': now };
+
+  if (status !== undefined) {
+    setParts.push('#status = :status');
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = status;
+  }
+  if (startedAt) {
+    setParts.push('startedAt = :startedAt');
+    expressionValues[':startedAt'] = startedAt;
+  }
+  if (completedAt) {
+    setParts.push('completedAt = :completedAt');
+    expressionValues[':completedAt'] = completedAt;
+  }
+  if (errorMessage) {
+    setParts.push('errorMessage = :errorMessage');
+    expressionValues[':errorMessage'] = errorMessage;
+  } else if (status === 'RUNNING') {
+    // Clear stale error from a previous failed run when the job is retried.
+    removeParts.push('errorMessage');
+  }
+
+  if (job && objects?.length) {
+    expressionNames['#objects'] = 'objects';
+
+    // Value placeholders are suffixed by position (not objectIndex) so multiple
+    // objects with different values never collide on the same :name in one
+    // expression — name aliases (#objectStatus etc.) can be reused across
+    // objects since they just alias the same underlying attribute name.
+    objects.forEach((object, position) => {
+      const objectIndex = job.destination.objects.findIndex((o) => o.name === object.name);
+      if (objectIndex === -1) {
+        return;
+      }
+      const currentObject = job.destination.objects[objectIndex];
+
+      if (object.status !== undefined) {
+        setParts.push(`#objects[${objectIndex}].#objectStatus = :objectStatus${position}`);
+        expressionNames['#objectStatus'] = 'status';
+        expressionValues[`:objectStatus${position}`] = object.status;
+      }
+      if (object.errorMessage !== undefined) {
+        setParts.push(`#objects[${objectIndex}].#objectErrorMessage = :objectErrorMessage${position}`);
+        expressionNames['#objectErrorMessage'] = 'errorMessage';
+        expressionValues[`:objectErrorMessage${position}`] = object.errorMessage;
+      }
+      if (object.processedRecordCount) {
+        setParts.push(`#objects[${objectIndex}].#processedRecordCount = :processedRecordCount${position}`);
+        expressionNames['#processedRecordCount'] = 'processedRecordCount';
+        expressionValues[`:processedRecordCount${position}`] =
+          (currentObject?.processedRecordCount ?? 0) + object.processedRecordCount;
+      }
+      if (object.failedRecordCount) {
+        setParts.push(`#objects[${objectIndex}].#failedRecordCount = :failedRecordCount${position}`);
+        expressionNames['#failedRecordCount'] = 'failedRecordCount';
+        expressionValues[`:failedRecordCount${position}`] =
+          (currentObject?.failedRecordCount ?? 0) + object.failedRecordCount;
+      }
+    });
+  }
+
+  const updateExpression = [
+    `SET ${setParts.join(', ')}`,
+    ...(removeParts.length ? [`REMOVE ${removeParts.join(', ')}`] : []),
+  ].join(' ');
+
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: RESTORE_JOB_TABLE,
+        Key: { restoreJobId },
+        UpdateExpression: updateExpression,
+        ...(Object.keys(expressionNames).length > 0 && { ExpressionAttributeNames: expressionNames }),
+        ExpressionAttributeValues: expressionValues,
+        ConditionExpression: 'attribute_exists(restoreJobId)',
+      })
+    );
+  } catch (error: any) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
+  }
+};
+
 const getRestoreJobById = async (restoreJobId: string): Promise<IRestoreJob | null> => {
   const result = await docClient.send(
     new GetCommand({
@@ -150,4 +279,11 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
   return result;
 }
 
-export { createRestoreJob, getRestoreJobById, getRestoreJobsByUserId, getRestoreJobsByRestoreId, tiggerRestoreJob };
+export {
+  createRestoreJob,
+  updateRestoreJob,
+  getRestoreJobById,
+  getRestoreJobsByUserId,
+  getRestoreJobsByRestoreId,
+  tiggerRestoreJob,
+};
