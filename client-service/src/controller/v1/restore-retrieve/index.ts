@@ -471,7 +471,7 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
       console.error('Error creating restore job:', error);
     }
   }
-}
+};
 
 /**
  * POST /activate
@@ -552,7 +552,7 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
   const restoreJobs = await getRestoreJobsByRestoreId(restoreId);
   const restoreJob = restoreJobs[0];
   makeResponse(req, res, 200, true, 'fetch', { ...restoreJob, destination: { ...restoreJob.destination, encryptedTokens: undefined }, source: undefined });
-}
+};
 
 export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
