@@ -1,5 +1,13 @@
 import dayjs from 'dayjs';
-import { IBackupJob, IBackupObject, IDestinationConfig, IRestoreJob, ISource } from '../../models';
+import {
+  IBackupJob,
+  IBackupObject,
+  IDestinationConfig,
+  IRestoreJob,
+  IRestoreJobDestination,
+  IRestoreJobSource,
+  ISource,
+} from '../../models';
 import {
   BACKUP_STATUS,
   JOB_STATUS,
@@ -301,8 +309,17 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       throw new Error(`Restore job ${restoreJobId}: parent restore ${restoreId} not found`);
     }
 
-    const handler = getRestoreCrmHandler(destination.crmName);
-    const result = await handler.runRestore(restoreId, restoreJobId, source, destination, conflict);
+    const restoreSource = source as unknown as IRestoreJobSource;
+    const restoreDestination = destination as unknown as IRestoreJobDestination;
+
+    const handler = getRestoreCrmHandler(restoreDestination.crmName);
+    const result = await handler.runRestore(
+      restoreId,
+      restoreJobId,
+      restoreSource,
+      restoreDestination,
+      conflict
+    );
 
     await updateRestoreJobStatus({
       restoreJobId,

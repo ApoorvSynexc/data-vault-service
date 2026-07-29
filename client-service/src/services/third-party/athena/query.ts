@@ -107,11 +107,18 @@ const waitForQuery = async (queryExecutionId: string): Promise<void> => {
 export interface IQueryResult {
   columns: string[];
   rows: Record<string, string>[];
+  // Present on results that came from a real execution — the handle used to
+  // re-read the same rows later without re-scanning (see fetchStoredResults).
+  queryExecutionId?: string;
 }
 
-// Fetches all result pages for a completed query and returns them as
-// a flat array of row objects keyed by column name.
-const fetchQueryResults = async (queryExecutionId: string): Promise<IQueryResult> => {
+// Fetches result pages for a completed query and returns them as a flat array
+// of row objects keyed by column name. Stops early once `maxRows` is reached so
+// a capped read never drags the whole result set over the wire.
+const fetchQueryResults = async (
+  queryExecutionId: string,
+  maxRows = Infinity
+): Promise<IQueryResult> => {
   const columns: string[] = [];
   const rows: Record<string, string>[] = [];
   let nextToken: string | undefined;
@@ -146,14 +153,42 @@ const fetchQueryResults = async (queryExecutionId: string): Promise<IQueryResult
     }
 
     nextToken = NextToken;
-  } while (nextToken);
+  } while (nextToken && rows.length < maxRows);
 
-  return { columns, rows };
+  return { columns, rows: rows.slice(0, maxRows === Infinity ? rows.length : maxRows), queryExecutionId };
+};
+
+/**
+ * Re-reads the results of a query that has ALREADY run, by its execution id.
+ *
+ * This is the cheap half of the pagination design: Athena persists every result
+ * set in the workgroup's output location, so reading it back scans no data and
+ * costs nothing beyond an S3 GET. It also skips the ~2s submit/poll settle, so
+ * a replayed page returns in a fraction of the time a fresh query takes.
+ *
+ * Throws if the execution id has expired (Athena retains query metadata ~45
+ * days) or its result file is gone — callers treat that as "cursor expired".
+ */
+export const fetchStoredResults = async (
+  queryExecutionId: string,
+  maxRows?: number
+): Promise<IQueryResult> => {
+  const result = await fetchQueryResults(queryExecutionId, maxRows);
+  logger.info(
+    `[athena] result replay | queryExecutionId:${queryExecutionId} rows:${result.rows.length}`
+  );
+  return result;
 };
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
 // database must be a Glue Catalog database name (e.g. datavault_<crmId>).
-export const runAthenaQuery = async (sql: string, database: string): Promise<IQueryResult> => {
+// `maxRows` caps how many rows are pulled back; the returned queryExecutionId
+// lets a later request replay the same rows via fetchStoredResults.
+export const runAthenaQuery = async (
+  sql: string,
+  database: string,
+  maxRows?: number
+): Promise<IQueryResult> => {
   logger.info(`[athena] executing query | database:${database} sql:${sql}`);
 
   const queryExecutionId = await startQuery(sql, database);
@@ -162,7 +197,7 @@ export const runAthenaQuery = async (sql: string, database: string): Promise<IQu
 
   await waitForQuery(queryExecutionId);
 
-  const result = await fetchQueryResults(queryExecutionId);
+  const result = await fetchQueryResults(queryExecutionId, maxRows);
 
   logger.info(
     `[athena] query complete | queryExecutionId:${queryExecutionId} rows:${result.rows.length}`
