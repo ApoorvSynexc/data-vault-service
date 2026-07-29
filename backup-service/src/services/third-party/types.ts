@@ -5,7 +5,6 @@ import {
   IRestoreConflict,
   IRestoreJobDestination,
   IRestoreJobSource,
-  IRestoreScope,
   ISource,
 } from '../../models';
 

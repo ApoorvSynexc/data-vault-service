@@ -141,7 +141,6 @@ const pollBulkJobUntilDone = async (
   }
 };
 
-
 const getFailedResults = async (
   instanceUrl: string,
   tokens: SalesforceTokens,

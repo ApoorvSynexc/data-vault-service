@@ -59,6 +59,7 @@ const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<voi
     const { plaintext } = await decryptSalesforceRequest(req.body);
     decryptedBody = JSON.parse(plaintext);
   } catch (error) {
+    console.log('[Realtime Backup] 401: decrypt/envelope failed:', error);
     makeResponse(req, res, 401, false, 'unauthorized');
     return;
   }

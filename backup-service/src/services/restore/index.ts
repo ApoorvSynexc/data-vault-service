@@ -45,7 +45,9 @@ const updateRestore = async (params: UpdateRestoreParams): Promise<void> => {
         TableName: RESTORE_TABLE,
         Key: { restoreId },
         UpdateExpression: updateExpression,
-        ...(Object.keys(expressionNames).length > 0 && { ExpressionAttributeNames: expressionNames }),
+        ...(Object.keys(expressionNames).length > 0 && {
+          ExpressionAttributeNames: expressionNames,
+        }),
         ExpressionAttributeValues: expressionValues,
         ConditionExpression: 'attribute_exists(restoreId)',
       })
