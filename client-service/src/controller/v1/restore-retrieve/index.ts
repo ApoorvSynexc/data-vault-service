@@ -384,6 +384,14 @@ const parseFetchRecordsParams = (
     value.selection = { restoreScope: scope };
   }
 
+  // Full restore: return the version each record should be restored TO instead
+  // of its current state (UPDATE → the version underneath it, DELETE → the
+  // DELETE row, INSERT → itself).
+  if (body.fullRestore !== undefined && body.fullRestore !== null) {
+    if (typeof body.fullRestore !== 'boolean') return { ok: false, error: 'invalid_full_restore' };
+    value.fullRestore = body.fullRestore;
+  }
+
   // Opaque nextCursor echoed back from a previous response. Its contents are
   // validated in the service (fingerprint match), not here.
   if (body.cursor !== undefined && body.cursor !== null && body.cursor !== '') {
@@ -434,13 +442,22 @@ const parseFetchRecordsParams = (
  *       deletedOnly?: boolean
  *     }
  *   }
+ *   fullRestore?: boolean                           (default false)
  *   cursor?: string                                 (opaque nextCursor echo)
  * }
  *
  * Queries the raw CSV table for one object under one backup config. Source
- * filters always apply; `selection` narrows them further when present. Each row
- * carries a derived `type` of INSERT / UPDATE / DELETE, and a record appears
- * once, at its newest LastModifiedDate within the filtered scan.
+ * filters always apply; `selection` narrows them further when present. Each
+ * record comes back once, tagged with a derived `type` of INSERT / UPDATE /
+ * DELETE — its latest operation.
+ *
+ * Which version of the record is returned:
+ *   default        — the current state (newest LastModifiedDate in scan scope).
+ *   fullRestore    — the version to restore TO. An UPDATE returns the version
+ *                    beneath it (the original inserts/ row when the record was
+ *                    updated once); a DELETE returns the DELETE row, having no
+ *                    earlier version to roll back to; an INSERT is already the
+ *                    restore target.
  *
  * PARTIAL requires backupJobIds and CHANGED_BETWEEN requires a date bound —
  * without them the request would silently behave as ENTIRE.

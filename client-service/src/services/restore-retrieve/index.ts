@@ -272,6 +272,19 @@ export interface IFetchRecordsParams {
   // null / absent → source-level filters only.
   selection?: IFetchRecordsSelection | null;
   userId: string;
+  /**
+   * Full restore: return the version each record should be restored TO, rather
+   * than its current state.
+   *   UPDATE → the second-newest version (for a record updated once, the
+   *            original row in inserts/) — the state before the change.
+   *   DELETE → the DELETE row itself; a deleted record has no earlier version to
+   *            roll back to.
+   *   INSERT → unchanged since it was written, so the current version already is
+   *            the restore target.
+   * `type` still reports the record's latest operation in every case, so the
+   * caller can see which change is being reverted.
+   */
+  fullRestore?: boolean;
   // Precompiled Athena WHERE body (AND/OR/SOQL) from the filter module. Built and
   // validated in the controller so filter errors map to 400 before hitting Athena.
   filterWhere?: string | null;
@@ -378,6 +391,7 @@ const fingerprintRequest = (p: IFetchRecordsParams): string => {
         p.source.startDate ?? null,
         p.source.endDate ?? null,
         [...(p.source.backupJobIds ?? [])].sort(),
+        p.fullRestore ?? false,
         p.filterWhere ?? null,
         scope?.type ?? null,
         [...(scope?.objects ?? [])].sort(),
@@ -553,6 +567,7 @@ interface IFetchCsvRecordsParams {
   columns: string[];
   userId: string;
   filterWhere: string | null;
+  fullRestore: boolean;
   scope?: IRestoreScope;
   page: IPageState;
 }
@@ -560,7 +575,7 @@ interface IFetchCsvRecordsParams {
 const fetchCsvRecords = async (
   params: IFetchCsvRecordsParams
 ): Promise<IFetchRecordsResult | null> => {
-  const { source, objectApiName, columns, userId, filterWhere, scope, page } = params;
+  const { source, objectApiName, columns, userId, filterWhere, fullRestore, scope, page } = params;
 
   const config = await getBackupConfigById(source.backupConfigId);
   if (!config || config.userId !== userId) return null;
@@ -592,6 +607,7 @@ const fetchCsvRecords = async (
       recordIds: resolved.recordIds,
       filterWhere,
       deletedOnly: resolved.deletedOnly,
+      fullRestore,
       limit: BLOCK_SIZE,
       cursor: page.cursor,
     })
@@ -837,6 +853,7 @@ const fetchRecordsByBackupJobs = async (
     columns,
     userId,
     filterWhere: params.filterWhere ?? null,
+    fullRestore: params.fullRestore === true,
     ...(selection?.restoreScope ? { scope: selection.restoreScope } : {}),
     page: resolvePage(params),
   });
