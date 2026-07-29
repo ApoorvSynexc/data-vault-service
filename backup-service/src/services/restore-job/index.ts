@@ -82,7 +82,7 @@ const updateRestoreJobStatus = async (params: UpdateRestoreJobStatusParams): Pro
 interface UpdateRestoreObjectParams {
   restoreJobId: string;
   objectName: string;
-  status?: "FAILED" | "SUCCESS";
+  status?: 'FAILED' | 'SUCCESS';
   // Accumulated across chunks — submitIngestChunk reports a delta per chunk, and
   // a single object can span multiple chunks/ingest jobs, so this must add to
   // the running total rather than overwrite it.
@@ -117,7 +117,15 @@ interface UpdateRestoreObjectParams {
 // objectIndex, the current counts are already in hand — compute the new total
 // here and SET a plain literal value, which has no such restriction.
 const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<void> => {
-  const { restoreJobId, objectName, status, processedRecordCount, failedRecordCount, errorMessage, errors } = params;
+  const {
+    restoreJobId,
+    objectName,
+    status,
+    processedRecordCount,
+    failedRecordCount,
+    errorMessage,
+    errors,
+  } = params;
   const now = new Date().toISOString();
 
   const job = await getRestoreJobById(restoreJobId);
@@ -128,7 +136,10 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
   const currentObject = job.destination.objects[objectIndex];
 
   const setParts = ['updatedAt = :updatedAt'];
-  const expressionNames: Record<string, string> = { '#destination': 'destination', '#objects': 'objects' };
+  const expressionNames: Record<string, string> = {
+    '#destination': 'destination',
+    '#objects': 'objects',
+  };
   const expressionValues: Record<string, any> = { ':updatedAt': now };
 
   if (status !== undefined) {
@@ -142,14 +153,18 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     expressionValues[':errorMessage'] = errorMessage;
   }
   if (processedRecordCount !== undefined) {
-    setParts.push(`#destination.#objects[${objectIndex}].#processedRecordCount = :processedRecordCount`);
+    setParts.push(
+      `#destination.#objects[${objectIndex}].#processedRecordCount = :processedRecordCount`
+    );
     expressionNames['#processedRecordCount'] = 'processedRecordCount';
-    expressionValues[':processedRecordCount'] = (currentObject.processedRecordCount ?? 0) + processedRecordCount;
+    expressionValues[':processedRecordCount'] =
+      (currentObject.processedRecordCount ?? 0) + processedRecordCount;
   }
   if (failedRecordCount !== undefined) {
     setParts.push(`#destination.#objects[${objectIndex}].#failedRecordCount = :failedRecordCount`);
     expressionNames['#failedRecordCount'] = 'failedRecordCount';
-    expressionValues[':failedRecordCount'] = (currentObject.failedRecordCount ?? 0) + failedRecordCount;
+    expressionValues[':failedRecordCount'] =
+      (currentObject.failedRecordCount ?? 0) + failedRecordCount;
   }
   if (errors !== undefined) {
     setParts.push(`#destination.#objects[${objectIndex}].#errors = :errors`);

@@ -6,7 +6,6 @@ import {
   IRestoreConflict,
   IRestoreJobDestination,
   IRestoreJobSource,
-  IRestoreScope,
   ISource,
 } from '../../../models';
 import { ICrmBackupHandler } from '../types';
@@ -315,8 +314,17 @@ const salesforceHandler: ICrmBackupHandler = {
               restoreId,
               restoreJobId,
               object,
-              sourceS3Credentials: {...sourceS3Credentials, backupConfigId: source.backupConfigId, bucketName: source.bucketName, region: source.region, csvFilePath: source.csvFilePath},
-              destinationSalesforceCredentials:{...destinationSalesforceCredentials, instanceUrl: destination.instanceUrl},
+              sourceS3Credentials: {
+                ...sourceS3Credentials,
+                backupConfigId: source.backupConfigId,
+                bucketName: source.bucketName,
+                region: source.region,
+                csvFilePath: source.csvFilePath,
+              },
+              destinationSalesforceCredentials: {
+                ...destinationSalesforceCredentials,
+                instanceUrl: destination.instanceUrl,
+              },
               conflict,
             }).catch((err: any) => {
               // Log and continue so remaining objects in the batch/job are not skipped.
