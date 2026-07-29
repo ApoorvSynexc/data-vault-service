@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
-import { DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_TYPE, WEEK_DAY } from '../../../constant';
+import { DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_TYPE, STATUS, WEEK_DAY } from '../../../constant';
 
 const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'CHNAGE_SINCE', 'BULK_CSV'];
 const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
@@ -175,6 +175,7 @@ export const createRestoreValidation = (req: Request, res: Response, next: NextF
     restoreType: Joi.string().valid(...RESTORE_TYPE).optional(),
     jobDetail: jobDetailSchema.optional(),
     schedule: scheduleConfigSchema.required(),
+    status: Joi.string().valid(...Object.values(STATUS)).optional(),
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });

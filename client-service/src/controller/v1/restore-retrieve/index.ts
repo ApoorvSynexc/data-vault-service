@@ -460,12 +460,14 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 
   makeResponse(req, res, 201, true, 'create');
-  try {
-    const restoreJob = await createRestoreJob(payload);
-    await initalizeRestoreTransform(restoreJob.restoreJobId);
-    // await tiggerRestoreJob(restoreJob);
-  } catch (error) {
-    console.error('Error creating restore job:', error);
+  if (body.status !== 'DRAFT') {
+    try {
+      const restoreJob = await createRestoreJob(payload);
+      await initalizeRestoreTransform(restoreJob.restoreJobId);
+      // await tiggerRestoreJob(restoreJob);
+    } catch (error) {
+      console.error('Error creating restore job:', error);
+    }
   }
 }
 
@@ -502,7 +504,7 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
 
   const restoreJobs = await getRestoreJobsByRestoreId(restoreId);
   const restoreJob = restoreJobs[0];
-  makeResponse(req, res, 200, true, 'fetch', {...restoreJob, destination: {...restoreJob.destination, encryptedTokens: undefined}, source: undefined});
+  makeResponse(req, res, 200, true, 'fetch', { ...restoreJob, destination: { ...restoreJob.destination, encryptedTokens: undefined }, source: undefined });
 }
 
 export const restoreRetrieveJobController = wrapController({
