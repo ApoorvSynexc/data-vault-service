@@ -139,6 +139,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
  */
 const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
+    console.log('PAYLOAD PROCESSING');
     const sf = req.salesforcePayload as DecryptedSalesforceRequest;
     makeResponse(req, res, 200, true, 'fetch');
 
