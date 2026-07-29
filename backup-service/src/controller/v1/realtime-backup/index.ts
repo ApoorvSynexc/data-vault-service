@@ -3,7 +3,6 @@ import { IDestinationConfig, IRealtimePayload } from '../../../models';
 import { upsertRealtimeBackupJob } from '../../../services/realtime-backup-job';
 import { runRealtimeBackupJob } from '../../../services/realtime-backup-job/runner';
 import { wrapController } from '../../../utils/helper';
-import { decryptSalesforceRequest } from '../../../utils/salesforce-crypto';
 
 /**
  * realtimeBackupHandler — entry point for every Salesforce webhook hit forwarded
@@ -40,32 +39,18 @@ import { decryptSalesforceRequest } from '../../../utils/salesforce-crypto';
  *   transactionId as the primary deduplication key.
  */
 const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  // Two-layer Salesforce envelope: outer Bootstrap Key wraps
-  //   { orgId, payload: inner-envelope }
-  // and the inner envelope is org-key-encrypted around the actual body. A
-  // decrypt failure means we can't identify the caller — respond 401 and
-  // drop the hit rather than continuing with a partial or spoofed payload.
-  // See utils/salesforce-crypto.ts for the exact scheme.
-  let decryptedBody: {
-    userId: string;
-    backupConfigId: string;
-    crmId: string;
-    crmName: string;
-    destination: { type: string; config: IDestinationConfig };
-    realtimePayload: IRealtimePayload;
-    spaceId?: string;
-  };
-  try {
-    const { plaintext } = await decryptSalesforceRequest(req.body);
-    decryptedBody = JSON.parse(plaintext);
-  } catch (error) {
-    console.log('[Realtime Backup] 401: decrypt/envelope failed:', error);
-    makeResponse(req, res, 401, false, 'unauthorized');
-    return;
-  }
-
+  // client-service already decrypted the Salesforce envelope in its own middleware
+  // and relays the plaintext body over the internal network — nothing to decrypt here.
   const { userId, backupConfigId, crmId, crmName, destination, realtimePayload, spaceId } =
-    decryptedBody;
+    req.body as {
+      userId: string;
+      backupConfigId: string;
+      crmId: string;
+      crmName: string;
+      destination: { type: string; config: IDestinationConfig };
+      realtimePayload: IRealtimePayload;
+      spaceId?: string;
+    };
 
   /**
    * Resolve (or create) the job for this hit.
