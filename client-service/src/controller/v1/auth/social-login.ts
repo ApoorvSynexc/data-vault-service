@@ -106,9 +106,7 @@ const socialLoginCallbackHandler = async (
   try {
     switch (authProviderStr) {
       case 'salesforce': {
-        console.log('[social-login-callback] oauthState:', { environment: oauthState.environment, customUrl: oauthState.customUrl });
         token = await getSalesforceToken(String(code), oauthState.codeVerifier, oauthState.environment, oauthState.customUrl, SALESFORCE_LOGIN_REDIRECT_URI);
-        console.log('[social-login-callback] token response:', { instance_url: token.instance_url, id: token.id, token_type: token.token_type });
         const { data } = await getSalesforceProfile(
           {
             accessToken: token.access_token,
@@ -168,7 +166,6 @@ const socialLoginCallbackHandler = async (
     const userId = uuidv4();
     const crmExist = await getCrmByOrgId(organizationId);
     const crmId = crmExist?.crmId ?? uuidv4();
-    console.log('[social-login-callback] Creating admin user for CRM profile:', { userId, organizationId, email });
     const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId };
     await createUser({ crmProfile, role: { name: roleName, roleId }, userId, crmId });
     await upsertCrm({

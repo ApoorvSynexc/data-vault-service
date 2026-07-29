@@ -139,13 +139,13 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    console.log("Job failed: ", { error });
+    console.log("Restore Job has been failed, ", { error });
 
     // await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
     throw error;
   }
 
-  console.log("job success");
+  console.log("Restore Job has been trigger to backup service");
   // await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
   return result;
 }
