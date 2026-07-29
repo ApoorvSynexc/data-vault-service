@@ -7,6 +7,7 @@ import { COMPRESSION_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
+import { getRestoreJobById, tiggerRestoreJob } from '../../../services';
 
 // Decrypts a request, or returns null if it isn't decryptable. Accepts both shapes
 // Spark sends: a base64 transport string, or the raw { ciphertext, iv } envelope
@@ -103,87 +104,113 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
  * the same error. setCompressionStatusBulk's per-job condition rejects any id that isn't
  * on this config, so a mismatched run can't write a foreign job.
  */
+
+interface IupdateSparkJobStatuBody {
+  type: "BACKUP" | "RESTORE",
+  backup: {
+    backupConfigId: string,
+    backupJobIds: string[],
+    success: boolean,
+    errorMessage?: string
+  },
+  restore: {
+    restoreConfigId: string,
+    objects: string[],
+    success: boolean,
+    errorMessage?: string
+  }
+}
+
 const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const payload = (req.body as { payload?: unknown })?.payload ?? req.body;
   logger.info('[COMPRESSION] update-spark-job-status request received');
 
-  const decrypted = decryptRequest<{
-    backupConfigId?: string;
-    backupJobIds?: string[];
-    success?: boolean;
-    errorMessage?: string;
-  }>(payload);
+  const decrypted = decryptRequest<IupdateSparkJobStatuBody>(payload);
   if (!decrypted) {
     return makeResponse(req, res, 400, false, 'invalid_payload');
   }
   logger.info('payload decrypted');
 
-  const { backupConfigId, backupJobIds, success, errorMessage } = decrypted;
-  if (!backupConfigId) {
-    return makeResponse(req, res, 400, false, 'id_required');
-  }
+  if (decrypted.type === "BACKUP") {
+    const { backupConfigId, backupJobIds, success, errorMessage } = decrypted.backup;
+    if (!backupConfigId) {
+      return makeResponse(req, res, 400, false, 'id_required');
+    }
 
-  if (typeof success !== 'boolean') {
-    return makeResponse(req, res, 400, false, 'params_required');
-  }
+    if (typeof success !== 'boolean') {
+      return makeResponse(req, res, 400, false, 'params_required');
+    }
 
-  if (!Array.isArray(backupJobIds) || !backupJobIds.length) {
-    return makeResponse(req, res, 400, false, 'jobs_required');
-  }
+    if (!Array.isArray(backupJobIds) || !backupJobIds.length) {
+      return makeResponse(req, res, 400, false, 'jobs_required');
+    }
 
-  if (backupJobIds.some((id) => !id || typeof id !== 'string')) {
-    return makeResponse(req, res, 400, false, 'job_id_required');
-  }
+    if (backupJobIds.some((id) => !id || typeof id !== 'string')) {
+      return makeResponse(req, res, 400, false, 'job_id_required');
+    }
 
-  const config = await getBackupConfigById(backupConfigId);
-  if (!config) {
-    return makeResponse(req, res, 400, false, 'backup_config_not_found');
-  }
+    const config = await getBackupConfigById(backupConfigId);
+    if (!config) {
+      return makeResponse(req, res, 400, false, 'backup_config_not_found');
+    }
 
-  const status = success ? COMPRESSION_STATUS.compressed : COMPRESSION_STATUS.failed;
-  logger.info(`[COMPRESSION] applying ${status} to ${backupJobIds.length} job(s) | configId=${backupConfigId}`);
+    const status = success ? COMPRESSION_STATUS.compressed : COMPRESSION_STATUS.failed;
+    logger.info(`[COMPRESSION] applying ${status} to ${backupJobIds.length} job(s) | configId=${backupConfigId}`);
 
-  const { updated, failed } = await setCompressionStatusBulk({
-    backupConfigId,
-    jobs: backupJobIds.map((backupJobId) => ({
-      backupJobId,
-      status,
-      // Failure carries the aggregated compression error; success must not keep a stale one.
-      ...(success ? {} : { errorMessage: errorMessage ?? 'compression_failed' }),
-    })),
-  });
+    const { updated, failed } = await setCompressionStatusBulk({
+      backupConfigId,
+      jobs: backupJobIds.map((backupJobId) => ({
+        backupJobId,
+        status,
+        // Failure carries the aggregated compression error; success must not keep a stale one.
+        ...(success ? {} : { errorMessage: errorMessage ?? 'compression_failed' }),
+      })),
+    });
 
-  logger.info(`[COMPRESSION] update-spark-job-status complete | configId=${backupConfigId} status=${status} updated=${updated.length} failed=${failed.length}`);
+    logger.info(`[COMPRESSION] update-spark-job-status complete | configId=${backupConfigId} status=${status} updated=${updated.length} failed=${failed.length}`);
 
-  // Every update failing is an infra problem (all writes errored), not a partial result.
-  if (!updated.length) {
-    return makeResponse(req, res, 400, false, 'compression_status_update_failed', { updated, failed });
-  }
+    // Every update failing is an infra problem (all writes errored), not a partial result.
+    if (!updated.length) {
+      return makeResponse(req, res, 400, false, 'compression_status_update_failed', { updated, failed });
+    }
 
-  // Compression succeeded — ensure the current-state Hudi and Delta Glue tables
-  // exist so Athena can query the compressed output. Best-effort: the job status
-  // is already committed, so a Glue failure is logged, never fatal to the
-  // response. Idempotent, so retries / duplicate completion events are safe.
-  if (success) {
-    try {
-      const glueResult = await ensureCompressionGlueTables(backupConfigId);
-      if (glueResult?.failed.length) {
-        logger.warn(
-          `[COMPRESSION] glue ensure partial | configId=${backupConfigId} ensured=${glueResult.ensured.length} failed=${JSON.stringify(glueResult.failed)}`
-        );
-      } else {
-        logger.info(
-          `[COMPRESSION] glue ensure complete | configId=${backupConfigId} ensured=${glueResult?.ensured.length ?? 0}`
+    // Compression succeeded — ensure the current-state Hudi and Delta Glue tables
+    // exist so Athena can query the compressed output. Best-effort: the job status
+    // is already committed, so a Glue failure is logged, never fatal to the
+    // response. Idempotent, so retries / duplicate completion events are safe.
+    if (success) {
+      try {
+        const glueResult = await ensureCompressionGlueTables(backupConfigId);
+        if (glueResult?.failed.length) {
+          logger.warn(
+            `[COMPRESSION] glue ensure partial | configId=${backupConfigId} ensured=${glueResult.ensured.length} failed=${JSON.stringify(glueResult.failed)}`
+          );
+        } else {
+          logger.info(
+            `[COMPRESSION] glue ensure complete | configId=${backupConfigId} ensured=${glueResult?.ensured.length ?? 0}`
+          );
+        }
+      } catch (err: any) {
+        logger.error(
+          `[COMPRESSION] glue ensure failed | configId=${backupConfigId} err:${err?.message ?? err}`
         );
       }
-    } catch (err: any) {
-      logger.error(
-        `[COMPRESSION] glue ensure failed | configId=${backupConfigId} err:${err?.message ?? err}`
-      );
     }
-  }
 
-  return makeResponse(req, res, 200, true, 'update', { updated, failed });
+    return makeResponse(req, res, 200, true, 'update', { updated, failed });
+  } else if (decrypted.type === "RESTORE") {
+    const { restoreConfigId, objects, success, errorMessage } = decrypted.restore;
+    if (!restoreConfigId) {
+      return makeResponse(req, res, 400, false, 'id_required');
+    }
+
+    const restoreJob = await getRestoreJobById(restoreConfigId);
+    if (!restoreJob) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    await tiggerRestoreJob(restoreJob);
+  }
 };
 
 export const sparkJobController = wrapController({ buildPayloadHandler, updateSparkJobStatusHandler });
