@@ -6,6 +6,7 @@ import { wrapController } from '../../../utils/helper';
 const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreJobId } = req.body as { restoreJobId: string };
 
+  console.log('createRestoreJobHandler', JSON.stringify({ body: req.body }));
   const restoreJob = await getRestoreJobById(restoreJobId);
   if (!restoreJob) {
     return makeResponse(req, res, 400, false, 'not_exist');
