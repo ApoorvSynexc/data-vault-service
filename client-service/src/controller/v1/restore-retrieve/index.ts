@@ -11,6 +11,8 @@ import {
   ConfigType,
   FetchRecordsConfigType,
   createRestore,
+  updateRestore,
+  getRestoreById,
   IFetchRecordsFilters,
   IFetchRecordsFilterField,
   IFetchRecordsParams,
@@ -471,6 +473,51 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 }
 
+/**
+ * POST /activate
+ * Body: { restoreId: string }
+ *
+ * Transitions a DRAFT restore to PENDING and kicks off the restore job — the
+ * step createRestoreHandler intentionally skips when a restore is created with
+ * status: 'DRAFT' (see the `if (body.status !== 'DRAFT')` branch there).
+ *
+ * Returns not_exist when the restore doesn't exist or isn't owned by the
+ * caller (isOwner returns false for both, same as getRestoreRetrieveJobHandler
+ * — avoids leaking whether a given ID exists), and restore_not_draft when the
+ * restore has already been activated or otherwise left DRAFT status.
+ */
+const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { restoreId } = req.body as Record<string, string>;
+  const userId = req.user!.userId;
+
+  if (!restoreId) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const restore = await getRestoreById(restoreId);
+  if (!isOwner(restore, userId)) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  if (restore!.status !== 'DRAFT') {
+    makeResponse(req, res, 400, false, 'restore_not_draft');
+    return;
+  }
+
+  await updateRestore({ restoreId, status: 'PENDING' });
+  makeResponse(req, res, 200, true, 'update');
+
+  try {
+    const restoreJob = await createRestoreJob({ ...restore!, status: 'PENDING' });
+    await initalizeRestoreTransform(restoreJob.restoreJobId);
+    // await tiggerRestoreJob(restoreJob);
+  } catch (error) {
+    console.error('Error creating restore job:', error);
+  }
+};
+
 const listRestoresHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { limit, cursor } = req.query as Record<string, string>;
   const userId = req.user!.userId;
@@ -515,6 +562,7 @@ export const restoreRetrieveJobController = wrapController({
   fetchObjectFieldsHandler,
   repairGlueTablesHandler,
   createRestoreHandler,
+  activateRestoreHandler,
   getPicklistFieldValuesHandler,
   listRestoresHandler,
   getRestoreJobHandler

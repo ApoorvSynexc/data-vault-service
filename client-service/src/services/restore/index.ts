@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { RESTORE_TABLE } from '../../constant';
@@ -63,6 +63,60 @@ const createRestore = async (params: CreateRestoreParams): Promise<IRestore> => 
 
   await docClient.send(new PutCommand({ TableName: RESTORE_TABLE, Item: item }));
   return item;
+};
+
+interface UpdateRestoreParams {
+  restoreId: string;
+  status?: string;
+  errorMessage?: string;
+}
+
+// Mirrors backup-service's updateRestore (SET/REMOVE, ConditionExpression
+// attribute_exists) — used here to flip a DRAFT restore to PENDING on activation.
+const updateRestore = async (params: UpdateRestoreParams): Promise<void> => {
+  const { restoreId, status, errorMessage } = params;
+  const now = new Date().toISOString();
+
+  const setParts = ['updatedAt = :updatedAt'];
+  const removeParts: string[] = [];
+  const expressionNames: Record<string, string> = {};
+  const expressionValues: Record<string, any> = { ':updatedAt': now };
+
+  if (status !== undefined) {
+    setParts.push('#status = :status');
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = status;
+  }
+  if (errorMessage) {
+    setParts.push('errorMessage = :errorMessage');
+    expressionValues[':errorMessage'] = errorMessage;
+  } else if (status && status !== 'FAILED') {
+    // Clear stale error from a previous failed run once the restore succeeds or retries.
+    removeParts.push('errorMessage');
+  }
+
+  const updateExpression = [
+    `SET ${setParts.join(', ')}`,
+    ...(removeParts.length ? [`REMOVE ${removeParts.join(', ')}`] : []),
+  ].join(' ');
+
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: RESTORE_TABLE,
+        Key: { restoreId },
+        UpdateExpression: updateExpression,
+        ...(Object.keys(expressionNames).length > 0 && { ExpressionAttributeNames: expressionNames }),
+        ExpressionAttributeValues: expressionValues,
+        ConditionExpression: 'attribute_exists(restoreId)',
+      })
+    );
+  } catch (error: any) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
+  }
 };
 
 const getRestoreById = async (restoreId: string): Promise<IRestore | null> => {
@@ -242,4 +296,4 @@ const getRestoresWithPagination = async (
   );
 };
 
-export { createRestore, getRestoreById, getRestoresByUserId, getRestoresWithPagination };
+export { createRestore, updateRestore, getRestoreById, getRestoresByUserId, getRestoresWithPagination };
