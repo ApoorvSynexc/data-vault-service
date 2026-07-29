@@ -8,6 +8,7 @@ import {
   IRestoreDestination,
   IRestoreJobDetail,
   IRestoreScope,
+  IRestoreSource,
   IScheduleConfig,
 } from '../../models';
 import { decodeCursor, encodeCursor } from '../../utils/cursor';
@@ -17,10 +18,7 @@ interface CreateRestoreParams {
   userId: string;
   crmId?: string;
   status?: string;
-  source: {
-    backupConfigId: string;
-    backupJobIds: string[];
-  };
+  source: IRestoreSource;
   selection: {
     restoreScope: IRestoreScope;
   };

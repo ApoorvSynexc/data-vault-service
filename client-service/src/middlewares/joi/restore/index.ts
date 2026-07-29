@@ -8,6 +8,7 @@ const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
 const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT'];
 const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP'];
 const RESTORE_TYPE = ['RESTORE_ONLY_CHANGED_FIELDS', 'RESTORE_ENTIRE_RECORD'];
+const RESTORE_SOURCE_TYPE = ['ENTIRE', 'PARTIAL', 'CHANGED_BETWEEN'];
 
 const scopeRecordSchema = Joi.object({
   objectName: Joi.string().required(),
@@ -161,10 +162,10 @@ export const createRestoreValidation = (req: Request, res: Response, next: NextF
     crmId: Joi.string().optional(),
     source: Joi.object({
       backupConfigId: Joi.string().required(),
-      type: Joi.string().valid("ENTIRE", "PARTIAL", "CHANGED_BETWEEN").required(),
-      startDate: Joi.string().isoDate().required(),
-      endDate: Joi.string().isoDate().required(),
-      backupJobIds: Joi.array().items(Joi.string()).optional(),
+      type: Joi.string().valid(...RESTORE_SOURCE_TYPE).optional(),
+      startDate: Joi.string().isoDate().optional(),
+      endDate: Joi.string().isoDate().optional(),
+      backupJobIds: Joi.array().items(Joi.string()).min(1).required(),
     }).required(),
     selection: Joi.object({
       restoreScope: restoreScopeSchema.required(),

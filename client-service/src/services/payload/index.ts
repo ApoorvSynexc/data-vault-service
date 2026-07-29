@@ -2,7 +2,7 @@ import { EMRServerlessClient, StartJobRunCommand, StartJobRunCommandOutput } fro
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
-import { getBackupJobsByConfig, getBackupJobById } from '../backup-job';
+import { getBackupJobsByConfig } from '../backup-job';
 import { getRestoreById } from '../restore';
 import { AWS_EMR_ACCESS_KEY_ID, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_EMR_REGION, AWS_EMR_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE } from '../../constant';
 import { runRealtimeSchemaSync } from './schema-sync';
@@ -245,13 +245,16 @@ async function buildPayload(backupConfigId: string) {
 
 // ─── Build EMR RESTORE payload from a restoreConfigId ─────────────────────────
 // Restore mirrors buildPayload's resolve-then-shape contract, but reads a restore
-// config instead of backup jobs. The stored restore already carries selection and
-// conflict in the exact shape Spark expects; the rest is resolved:
-//   - backupConfig.id: restores reference backup jobs, not a config, so we recover
-//     the owning config from the first selected job (all jobs share one config).
+// config instead of backup jobs. The stored restore already carries source,
+// selection and conflict in the exact shape Spark expects, so those three pass
+// through untouched; only these are resolved:
 //   - sourceDetails: the CRM the backup came from.
-//   - destinationConfigs: the user's restore destination + the S3 creds Spark needs
-//     to read the backup files (the source config's destination bucket).
+//   - destinationConfigs: the S3 creds Spark reads the backup files with (the
+//     source config's destination bucket). Shape matches Java DestinationConfigs:
+//     `destinationName` drives resolveBaseUri(), bucketName lives inside the creds.
+//
+// restore.destination (SAME/DIFFERENT target org) is deliberately NOT sent — Spark
+// writes restore.csv and never pushes to an org, so the target is a Node concern.
 //
 // Same credential rule as buildPayload: decrypted creds only ever leave through
 // /build-payload, which encrypts the whole response. Never hand this to submitEMR.
@@ -263,16 +266,10 @@ async function buildRestorePayload(restoreConfigId: string) {
         throw new Error('restore_config_not_found');
     }
 
-    const backupJobIds = restore.source?.backupJobIds ?? [];
-    if (!backupJobIds.length) {
-        throw new Error('restore_config_has_no_backup_jobs');
+    const backupConfigId = restore.source?.backupConfigId;
+    if (!backupConfigId) {
+        throw new Error('restore_config_has_no_backup_config');
     }
-
-    const firstJob = await getBackupJobById(backupJobIds[0]);
-    if (!firstJob) {
-        throw new Error(`backup_job_not_found:${backupJobIds[0]}`);
-    }
-    const backupConfigId = firstJob.backupConfigId;
 
     const backupConfig = await getBackupConfigById(backupConfigId);
     if (!backupConfig) {
@@ -289,38 +286,29 @@ async function buildRestorePayload(restoreConfigId: string) {
         throw new Error('destination_not_found');
     }
 
-    logger.info(`Built EMR RESTORE payload for restoreConfigId: ${restoreConfigId} jobs=${backupJobIds.length}`);
+    logger.info(`Built EMR RESTORE payload for restoreConfigId: ${restoreConfigId} jobs=${restore.source.backupJobIds?.length ?? 0}`);
 
     return {
         jobType: 'RESTORE',
         restoreConfigId,
+        // ponytail: hardcoded until Spark's non-demo restore path lands. Flip to a
+        // stored flag on IRestore when real restores ship.
+        isDemoOnly: true,
         details: {
             clientId: restore.userId,
             sourceDetails: {
                 sourceName: crm.crmName,
                 orgId: crm.crmId,
             },
+            // Stored as-is in the shape Spark reads.
             'restore-configs': {
-                source: {
-                    backupConfig: {
-                        id: backupConfigId,
-                        backupJobIds,
-                    },
-                },
-                // Stored as-is in the shape Spark reads.
+                source: restore.source,
                 selection: restore.selection,
                 conflict: restore.conflict,
-                restoreType: restore.restoreType ?? 'RESTORE_ONLY_CHANGED_FIELDS',
             },
-            // ponytail: destinationConfigs = restore destination descriptor + the S3
-            // creds Spark reads the backup from. Exact Spark contract for this block
-            // was elided in the spec ("..."); revisit if Spark expects a different shape.
             destinationConfigs: {
-                ...restore.destination,
-                storage: {
-                    name: destination.provider,
-                    creds: getDecryptedDestinationConfig(destination),
-                },
+                destinationName: destination.provider,
+                destinationRequiredCreds: getDecryptedDestinationConfig(destination),
             },
         },
     };
