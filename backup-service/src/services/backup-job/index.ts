@@ -153,7 +153,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   );
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
-  const encryptedDestConfig = encrypt(JSON.stringify(destination.config));
+  const encryptedDestConfig: any = encrypt(JSON.stringify(destination.config));
   const trackedObjects = expandedObjects?.map((item) => ({
     ...item,
     status: OBJECT_STATUS.created,
@@ -213,7 +213,7 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
   const now = new Date().toISOString();
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
-  const encryptedDestConfig = encrypt(JSON.stringify(destination.config));
+  const encryptedDestConfig: any = encrypt(JSON.stringify(destination.config));
   const trackedObjects = object?.length ? initializeNestedObjects(object) : undefined;
 
   const item: IBackupJob = {

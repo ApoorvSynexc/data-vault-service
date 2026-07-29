@@ -61,7 +61,6 @@ export const runRealtimeBackupJob = async (
       decrypt({
         ciphertext: destination.ciphertext,
         iv: destination.iv,
-        authTag: destination.authTag,
       })
     ) as IDestinationConfig;
 
