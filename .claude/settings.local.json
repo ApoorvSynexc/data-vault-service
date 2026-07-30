@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"C:\\\\Users\\\\hp\\\\OneDrive\\\\Documents\\\\GitHub\\\\data-vault-service\\\\\" | head -30)",
+      "Bash(npx ts-node -T -e ' *)",
+      "Bash(npm run *)",
+      "Bash(node *)",
+      "Bash(xargs -I{} sh -c 'echo \"--- {} ---\"; head -c 400 \"{}\"; echo')",
+      "Bash(git diff *)",
+      "Bash(grep -vE \"^[+-]\\\\s*$\")",
+      "Bash(grep -v \"2026-07-17\\\\|moved 2026\\\\|Moved 2026\\\\|Removed\\\\|not \\\\`validateAwsCredentials\\\\`\")",
+      "WebSearch",
+      "WebFetch(domain:hudi.apache.org)",
+      "Bash(awk '{print $6, $7, $9}')",
+      "Bash(npx ts-node *)",
+      "Bash(echo \"exit: $?\")",
+      "PowerShell(npm run *)",
+      "Bash(export AWS_ACCESS_KEY_ID='AKIA5BUGKB7G6FGEHRQG' AWS_SECRET_ACCESS_KEY='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')",
+      "Bash(echo \"--- ap-south-1 ---\")",
+      "Bash(aws emr-serverless *)",
+      "Bash(echo \"--- us-east-2 ---\")",
+      "PowerShell(npx ts-node src/services/restore-retrieve/athena-fetch.ts)",
+      "Bash(xargs wc -l)",
+      "Bash(echo \"--- exit: $? \\(no output above = clean\\) ---\")",
+      "Bash(python -)",
+      "Bash(npx tsc *)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/npm-build-check.sh\"",
+            "shell": "bash",
+            "timeout": 180,
+            "statusMessage": "Running npm run build on changed services..."
+          }
+        ]
+      }
+    ]
+  }
+}

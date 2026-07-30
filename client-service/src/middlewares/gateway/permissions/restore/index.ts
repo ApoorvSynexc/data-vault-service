@@ -25,6 +25,11 @@ const restorePermissions = [
         permissions: ['restore.read']
     },
     {
+        path : '/restore/fetch-change-between-backup-jobs',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
         path : '/restore/get-picklist-field-values',
         method: 'GET',
         permissions: ['restore.read']

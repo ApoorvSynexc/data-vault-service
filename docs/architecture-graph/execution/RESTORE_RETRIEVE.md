@@ -41,6 +41,55 @@ const jobs = await Promise.all(
 
 Also present but not previously documented: `GET /v1/restore/restore` (`getRestoreRetrieveJobHandler` — single restore/retrieve job by backupJobId; the doubled path segment is real — it's `router.get('/restore', ...)` mounted under the `/restore` prefix) and `POST /v1/restore/retrieve/repair-glue` (`repairGlueTablesHandler`).
 
+## GET /v1/restore/fetch-change-between-backup-jobs — added 2026-07-30
+
+```typescript
+// query: { backupConfigId, startTime, endTime, limit?, cursor? }
+```
+
+Returns the backup jobs of one config that RAN inside a time window, as a bare
+`string[]` of backupJobIds (newest first) — the input a client needs before it
+can send a CHANGED_BETWEEN `/retrieve/fetch-records` call, which takes job ids,
+not a date window.
+
+### Validation
+1. `backupConfigId` required → else 400 `id_required`.
+2. `startTime` and `endTime` both required → else 400 `params_required`.
+3. Both must parse as dates → else 400 `invalid_time_format`. Both are
+   normalised to ISO UTC (`new Date(v).toISOString()`) before use — stored
+   timestamps are ISO UTC and DynamoDB range-compares them as plain strings, so
+   a date-only or offset-bearing input has to be converted first.
+4. `startTime <= endTime` → else 400 `invalid_time_range`.
+5. Config must exist and be owned by the caller → else 400 `not_exist` (same
+   collapsing as every other handler here).
+
+### Query
+```typescript
+// Query backupConfigId-index (PK backupConfigId, SK createdAt):
+KeyConditionExpression: 'backupConfigId = :backupConfigId AND createdAt <= :endTime'
+FilterExpression:       '#type <> :restoreType AND startedAt BETWEEN :startTime AND :endTime'
+ProjectionExpression:   'backupJobId'
+ScanIndexForward:       false
+```
+
+The window is matched on **`startedAt`**, not `createdAt` — a job created earlier
+but resumed inside the window recorded its changes inside the window. `createdAt
+<= endTime` is still a sound key-level prune (a job is always created before it
+starts); the lower bound cannot be, so it stays a filter.
+
+RESTORE jobs share this table and write no backup partitions, so they are
+excluded. NORMAL vs ARCHIVAL needs no filter — a config is one type, so its jobs
+are too.
+
+### Pagination
+`limit` defaults to 50 and is capped at 200; `nextCursor` uses the standard
+`encodeCursor`/`decodeCursor` pair. Because `startedAt` is a filter rather than a
+key condition, one index read may fill none of the page — the service re-queries
+for exactly the shortfall (never more, so no id can be stranded behind the
+cursor) for at most 5 rounds, then returns what it has plus a cursor. **A short
+page carrying a `nextCursor` is normal**: clients must follow the cursor rather
+than treat a short page as the end of the list.
+
 ## POST /v1/restore/retrieve/fetch-records
 
 ```typescript
