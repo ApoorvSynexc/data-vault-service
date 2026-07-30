@@ -163,8 +163,8 @@ export const createRestoreValidation = (req: Request, res: Response, next: NextF
     source: Joi.object({
       backupConfigId: Joi.string().required(),
       type: Joi.string().valid(...RESTORE_SOURCE_TYPE).optional(),
-      startDateTime: Joi.string().isoDate().optional(),
-      endDateTime: Joi.string().isoDate().optional(),
+      startDate: Joi.string().isoDate().optional(),
+      endDate: Joi.string().isoDate().optional(),
       backupJobIds: Joi.array().items(Joi.string()).optional(),
     }).required(),
     selection: Joi.object({
