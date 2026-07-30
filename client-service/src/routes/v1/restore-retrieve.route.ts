@@ -10,6 +10,8 @@ import { createRestoreValidation } from '../../middlewares';
  * GET  /fetch-change-between-backup-jobs — backupJobIds of a config that started inside a time window
  * POST /fetch-records                   — query Athena records for given backupJobIds, objectApiName,
  *                                         and columnNames
+ * POST /retrieve/show-preview           — same selection as fetch-records, every column, paired with
+ *                                         the live Salesforce record
  * GET  /fetch-object-fields             — latest S3 schema for objectApiName across the (single)
  *                                         backup config shared by the given backupJobIds
  * GET  /                                — single restore/retrieve job (by backupJobId)
@@ -27,6 +29,7 @@ router.get(
   restoreRetrieveJobController.fetchChangeBetweenBackupJobsHandler
 );
 router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);
+router.post('/retrieve/show-preview', restoreRetrieveJobController.showPreviewHandler);
 router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
 router.post('/retrieve/repair-glue', restoreRetrieveJobController.repairGlueTablesHandler);

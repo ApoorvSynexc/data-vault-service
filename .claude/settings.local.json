@@ -23,7 +23,9 @@
       "Bash(xargs wc -l)",
       "Bash(echo \"--- exit: $? \\(no output above = clean\\) ---\")",
       "Bash(python -)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(python -c ' *)"
     ]
   },
   "hooks": {

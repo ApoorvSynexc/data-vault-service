@@ -139,6 +139,79 @@ Both paths return `null` internally → controller sends 400 `not_exist` when:
 - Ownership mismatch (userId !== req.user.userId).
 - No completed ARCHIVAL job exists yet.
 
+## POST /v1/restore/retrieve/show-preview — added 2026-07-30
+
+What a restore would do to each record: the version that would be written,
+side by side with the record as Salesforce holds it right now.
+
+```jsonc
+// body: identical to /retrieve/fetch-records — source, objectApiName,
+// selection, cursor. `columns` is accepted but IGNORED.
+
+// response data:
+{
+  "columns": ["Name", "Phone"],
+  "rows": [
+    { "previous": { "Name": "Acme", "Phone": "111" },
+      "current":  { "Name": "Acme Corp", "Phone": "444" } },   // UPDATE / INSERT
+    { "previous": { "Name": "Beta", "Phone": "222" } }          // DELETE
+  ]
+}
+// meta: { limit: 50, hasMore, nextCursor? } — same cursor contract as fetch-records
+```
+
+Three differences from `fetch-records`, and nothing else:
+
+1. **Every column.** The projection is the object's latest stored schema — the
+   same list `/fetch-object-fields` serves — so a preview never depends on which
+   columns a grid happens to show. `restoreScope.fields` is dropped for the same
+   reason (it narrows the projection); every other narrowing — `records`,
+   `filters`, `changeSince`, `bulkCsvIds`, `deletedOnly`, the source window —
+   still applies.
+2. **`fullRestore` is forced on.** `previous` is always the version a restore
+   would write: an UPDATE's **second-newest** version, a DELETE's own row, an
+   INSERT unchanged. The request cannot turn this off.
+3. **`current` is read live from Salesforce** — `SELECT FIELDS(ALL) … WHERE Id
+   IN (…)` over the REST API (`services/third-party/salesforce/records.ts`),
+   one query per 50-record page, projected onto the same `columns` so the two
+   halves line up key for key.
+
+`current` is **absent**, leaving `{ previous }` alone, when there is nothing to
+compare against: the record's latest operation is DELETE (it is gone from
+Salesforce, and is never looked up), or Salesforce returned no row for the id.
+
+`FIELDS(ALL)` rather than an explicit field list: a list built from the backed-up
+schema fails the whole query with `INVALID_FIELD` as soon as one field has been
+deleted from the org — exactly the situation a restore preview looks at most.
+
+### Excluded from both halves
+
+`Id`, `LastModifiedDate`, `CreatedDate`, `SystemModstamp`, `LastModifiedById`,
+`CreatedById`, `IsDeleted` (case-insensitively). Salesforce owns all of them and
+a restore can never write them. `Id` and `LastModifiedDate` are still **scanned**
+— the pairing needs `Id`, the page order needs `LastModifiedDate` — and dropped
+only when the response is built. **Consequence: a row carries no record
+identifier.** The preview is positional; pair it with a `fetch-records` call that
+requests `Id` if the caller needs to act on a specific record.
+
+### Errors
+
+Every code `fetch-records` returns, plus:
+
+| Code | Meaning |
+|---|---|
+| `not_exist` | Config missing, not owned by the caller, CRM unresolvable, or no schema stored for the object yet |
+| `crm_not_connected` | No usable Salesforce credentials / instance URL for the org |
+
+### Known ceiling
+
+The projection is the whole stored schema, so it is fully exposed to drift
+between the schema file on S3 and the Glue table (backup-service updates the
+table schema fire-and-forget). A column in one and not the other fails the
+Athena query with `COLUMN_NOT_FOUND`. Same exposure as a UI that feeds
+`/fetch-object-fields` into `fetch-records`, but this endpoint hits it on every
+call rather than only when the missing column is on screen.
+
 ## POST /v1/restore/fetch-object-fields — added 2026-07-17, currently unreachable
 
 **Route bug:** `restore-retrieve.route.ts:28` registers this as `router.post('fetch-object-fields', ...)` — no leading slash. Express 5 accepts the registration silently, then matches nothing (verified against this repo's `express@^5.2.1`: 404 as written, 200 with the slash added). Everything below is live, tested-in-isolation code with no reachable entry point until the slash is added.

@@ -8,6 +8,7 @@ import {
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
   fetchRecordsByBackupJobs,
+  showRecordsPreview,
   fetchObjectFields,
   repairGlueTables,
   getTableCounter,
@@ -354,10 +355,15 @@ const parseObjectScopedLists = <K extends string>(
  * Body shape:
  *   source     — backupConfigId + type + optional job/date window (required)
  *   selection  — restoreScope narrowing, or null for source-level filters only
+ *
+ * `columnsOptional` is for /show-preview, which projects the object's whole
+ * schema and so has no column list to demand. Everything else about the body is
+ * identical between the two endpoints, which is why they share this parser.
  */
 const parseFetchRecordsParams = (
   body: Record<string, unknown>,
-  userId: string
+  userId: string,
+  options: { columnsOptional?: boolean } = {}
 ):
   | { ok: true; value: IFetchRecordsParams }
   | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
@@ -411,8 +417,10 @@ const parseFetchRecordsParams = (
   if (!objectApiName || typeof objectApiName !== 'string') {
     return { ok: false, error: 'object_api_name_required' };
   }
-  const columnList = toStringList(columns);
-  if (columnList === null || columnList.length === 0) {
+  // An absent list is only allowed where the endpoint supplies its own; a
+  // present-but-malformed one is still a 400 either way.
+  const columnList = columns === undefined || columns === null ? [] : toStringList(columns);
+  if (columnList === null || (!options.columnsOptional && columnList.length === 0)) {
     return { ok: false, error: 'column_names_required' };
   }
 
@@ -619,6 +627,79 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 };
 
 /**
+ * POST /retrieve/show-preview
+ *
+ * Body: identical to /retrieve/fetch-records (source, objectApiName, selection,
+ * cursor), except that `columns` is not required — see below.
+ *
+ * Shows what a restore would do to each record, one page of 50 at a time:
+ *
+ *   {
+ *     "columns": ["Name", "Phone", …],
+ *     "rows": [
+ *       { "previous": { "Name": "Acme",  … }, "current": { "Name": "Acme Corp", … } },
+ *       { "previous": { "Name": "Beta",  … } }
+ *     ]
+ *   }
+ *
+ *   previous — the version the restore would write, read from the backup. An
+ *              updated record comes back at its SECOND-NEWEST version (the state
+ *              before the change), a deleted record at its DELETE row, an
+ *              inserted record unchanged. Same picking as `fullRestore`, which
+ *              is always on here and cannot be turned off.
+ *   current  — the record as it stands in Salesforce right now, queried live
+ *              over the REST API and projected onto the same columns.
+ *
+ * `current` is absent when there is nothing to compare against: the record's
+ * latest operation is DELETE (it is gone from Salesforce), or Salesforce
+ * returned no row for that id.
+ *
+ * Both records carry EVERY backed-up column — the object's latest stored schema
+ * — minus the Salesforce system fields (Id, LastModifiedDate, CreatedDate,
+ * SystemModstamp, LastModifiedById, CreatedById, IsDeleted), which a restore can
+ * never write. A `columns` list in the body is therefore ignored, as is
+ * `restoreScope.fields`; every other narrowing still applies.
+ *
+ * Returns not_exist when the config/object can't be resolved or isn't owned by
+ * the caller, and crm_not_connected when the org has no usable Salesforce
+ * credentials to read the live half with.
+ */
+const showPreviewHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseFetchRecordsParams(req.body as Record<string, unknown>, req.user!.userId, {
+    columnsOptional: true,
+  });
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
+    return;
+  }
+
+  let result;
+  try {
+    result = await showRecordsPreview({ ...parsed.value, user: req.user! });
+  } catch (e) {
+    // Same contract as fetch-records: a stale cursor is reported so the UI
+    // restarts from page 1 rather than assuming it got the page it asked for.
+    if (e instanceof CursorError) {
+      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
+      return;
+    }
+    throw e;
+  }
+
+  if (!result.ok) {
+    makeResponse(req, res, 400, false, result.reason);
+    return;
+  }
+
+  const { nextCursor, hasMore, ...data } = result.page;
+  makeResponse(req, res, 200, true, 'fetch', data, {
+    limit: PAGE_SIZE,
+    hasMore,
+    ...(nextCursor ? { nextCursor } : {}),
+  });
+};
+
+/**
  * GET /fetch-object-fields
  * Query: {
  *   objectApiName:  string
@@ -809,6 +890,7 @@ export const restoreRetrieveJobController = wrapController({
   getObjectListByConfigIdHandler,
   fetchChangeBetweenBackupJobsHandler,
   fetchRecordsHandler,
+  showPreviewHandler,
   fetchObjectFieldsHandler,
   repairGlueTablesHandler,
   createRestoreHandler,

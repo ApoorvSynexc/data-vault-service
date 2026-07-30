@@ -78,6 +78,7 @@ Every module, what it owns, and where it lives.
 | src/services/destination/index.ts | DESTINATION_TABLE CRUD |
 | src/services/backup-job/index.ts | BACKUP_JOB_TABLE CRUD |
 | src/services/restore-retrieve/index.ts | Snapshot logs, object list queries |
+| src/services/restore-retrieve/preview-merge.ts | Pure show-preview helpers: system-field exclusion, previous/current pairing (added 2026-07-30, has a self-check) |
 | src/services/counter/index.ts | TABLE_COUNTER_TABLE atomic increments |
 | src/services/payload/index.ts | EMR payload build (per-job `objectOperations`, decrypted `destination.creds`) + EMR Serverless submit (ids-only `EmrTriggerPayload`). **Moved 2026-07-17** from `services/third-party/payload-transform-service/`; reworked for compression 2026-07-18. Re-exported from `services/index.ts` |
 | src/services/spark-job/index.ts | `ensureCompressionGlueTables` — post-compression, delegates Hudi/Delta Glue table creation to backup-service over HTTP. **New 2026-07-18, not exported from `services/index.ts`** (imported directly by the spark-job controller) |
@@ -86,6 +87,7 @@ Every module, what it owns, and where it lives.
 | src/services/third-party/salesforce/apex.ts | Apex REST endpoints (objects, fields, count) |
 | src/services/third-party/salesforce/trigger.ts | Apex trigger lifecycle management |
 | src/services/third-party/salesforce/metadata.ts | Salesforce Metadata API helpers |
+| src/services/third-party/salesforce/records.ts | fetchSalesforceRecordsByIds — `SELECT FIELDS(ALL)` over the REST query API; the live half of /restore/retrieve/show-preview (added 2026-07-30) |
 | src/services/third-party/salesforce/dry-run/ | Dry-run SOQL builder, executor, validator |
 | src/services/third-party/athena/index.ts | Athena bucket policy grant |
 | src/services/third-party/athena/query.ts | Athena SQL execution |

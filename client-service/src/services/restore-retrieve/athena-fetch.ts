@@ -73,9 +73,23 @@ export const validateColumns = (columnNames: string[]): void => {
 const LMD = 'LastModifiedDate';
 const ID = 'Id';
 
-// The derived operation column. Not a real column name, so it is never passed
-// through quoteCol/validateColumns — it is emitted by the builder itself.
-const TYPE = 'type';
+/**
+ * Alias of the derived operation column. Not a real column name, so it is never
+ * passed through quoteCol/validateColumns — the builder emits it itself.
+ *
+ * It is NOT called `type`, even though that is what the API returns it as.
+ * Trino identifiers are case-insensitive *even when quoted*, so on an object
+ * with a real `Type` field — Account, Case, Opportunity, Task, Contract — the
+ * projection would hold two columns Trino considers the same name, and every
+ * reference to the alias (versionPick, deletedOnly, the outer projection) would
+ * fail as ambiguous. A `dv_` prefix cannot collide: standard field names are a
+ * fixed set and custom ones always end in `__c`.
+ *
+ * The service maps this back to `type` when it builds the response, so the API
+ * contract is unaffected.
+ */
+export const ROW_TYPE_COLUMN = 'dv_row_type';
+const TYPE = ROW_TYPE_COLUMN;
 
 // Values are server-issued ids / cursor echoes; escaped as defence in depth.
 const lit = (value: string): string => `'${value.replace(/'/g, "''")}'`;
@@ -597,7 +611,7 @@ if (require.main === module) {
   assert.ok(all.includes(`SELECT "Id", "Name", "Amount", "LastModifiedDate", FIRST_VALUE(CASE WHEN "$path" LIKE '%/deletes/%' THEN 'DELETE'`));
   assert.ok(all.includes(`WHEN "$path" LIKE '%/updates/%' THEN 'UPDATE' ELSE 'INSERT' END)`));
   // type is the record's LATEST operation, not the returned row's own folder.
-  assert.ok(all.includes(`OVER (PARTITION BY "Id" ORDER BY "LastModifiedDate" DESC, "$path" DESC) AS "type"`));
+  assert.ok(all.includes(`OVER (PARTITION BY "Id" ORDER BY "LastModifiedDate" DESC, "$path" DESC) AS "dv_row_type"`));
   assert.ok(all.includes(`ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY "LastModifiedDate" DESC, "$path" DESC) AS rn`));
   assert.ok(all.includes(`) r WHERE (rn = 1)`), 'default mode returns the current version');
   assert.ok(!all.includes('versions'), 'the version count is only computed for fullRestore');
@@ -611,19 +625,19 @@ if (require.main === module) {
   assert.ok(restore.includes(`COUNT(*) OVER (PARTITION BY "Id") AS versions`));
   assert.ok(
     restore.includes(
-      `) r WHERE (("type" = 'UPDATE' AND (rn = 2 OR versions = 1)) OR ("type" <> 'UPDATE' AND rn = 1))`
+      `) r WHERE (("dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)) OR ("dv_row_type" <> 'UPDATE' AND rn = 1))`
     ),
     'UPDATE rolls back to the second-newest version; DELETE and INSERT return rank 1'
   );
   // A deleted record has no version to roll back to — the DELETE row is the answer.
-  assert.ok(restore.includes(`"type" <> 'UPDATE' AND rn = 1`));
+  assert.ok(restore.includes(`"dv_row_type" <> 'UPDATE' AND rn = 1`));
   // An UPDATE with no earlier row still comes back rather than being dropped.
   assert.ok(restore.includes(`rn = 2 OR versions = 1`));
 
   // deletedOnly must AND against the WHOLE pick, not just its last arm.
   const restoreDeleted = buildCsvRecordsSql('t', { ...base, fullRestore: true, deletedOnly: true });
   assert.ok(
-    restoreDeleted.includes(`OR ("type" <> 'UPDATE' AND rn = 1)) AND "type" = 'DELETE'`),
+    restoreDeleted.includes(`OR ("dv_row_type" <> 'UPDATE' AND rn = 1)) AND "dv_row_type" = 'DELETE'`),
     'the pick is parenthesised so AND cannot bind to one OR arm'
   );
 
@@ -649,7 +663,7 @@ if (require.main === module) {
   assert.ok(changed.includes(`FROM "t" WHERE ("LastModifiedDate" <= '2026-06-30T23:59:59.999Z')`));
   // Restore-to picking without the caller asking for fullRestore.
   assert.ok(
-    changed.includes(`WHERE (("type" = 'UPDATE' AND (rn = 2 OR versions = 1)) OR ("type" <> 'UPDATE' AND rn = 1)) AND changed = 1`),
+    changed.includes(`WHERE (("dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)) OR ("dv_row_type" <> 'UPDATE' AND rn = 1)) AND changed = 1`),
     'CHANGED_BETWEEN implies restore-to picking, gated to records that changed'
   );
   assert.ok(changed.includes(`COUNT(*) OVER (PARTITION BY "Id") AS versions`));
@@ -657,13 +671,13 @@ if (require.main === module) {
   // fullRestore: false cannot turn CHANGED_BETWEEN's picking back off.
   assert.ok(
     buildCsvRecordsSql('t', { ...base, changedBetween: true, startDate: '2026-03-01', fullRestore: false })
-      .includes(`"type" = 'UPDATE' AND (rn = 2 OR versions = 1)`)
+      .includes(`"dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)`)
   );
 
   // Only an endDate → nothing to gate on; reads as "restore-to state as of endDate".
   const changedOpenBelow = buildCsvRecordsSql('t', { ...base, changedBetween: true, endDate: '2026-06-30' });
   assert.ok(!changedOpenBelow.includes('changed'), 'no lower bound → no change gate');
-  assert.ok(changedOpenBelow.includes(`"type" = 'UPDATE' AND (rn = 2 OR versions = 1)`));
+  assert.ok(changedOpenBelow.includes(`"dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)`));
 
   // ENTIRE/PARTIAL keep the plain row-filter window and newest-version picking.
   const entire = buildCsvRecordsSql('t', { ...base, startDate: '2026-03-01', endDate: '2026-06-30' });
@@ -679,7 +693,7 @@ if (require.main === module) {
     deletedOnly: true,
   });
   assert.ok(
-    changedDeleted.includes(`OR ("type" <> 'UPDATE' AND rn = 1)) AND changed = 1 AND "type" = 'DELETE'`),
+    changedDeleted.includes(`OR ("dv_row_type" <> 'UPDATE' AND rn = 1)) AND changed = 1 AND "dv_row_type" = 'DELETE'`),
     'both gates AND against the parenthesised pick, not one OR arm'
   );
 
@@ -711,10 +725,28 @@ if (require.main === module) {
       .includes(`("Id" IN ('001A', '001B'))`)
   );
 
+  // ── The derived column cannot collide with a real field ────────────────────
+  // Trino identifiers are case-insensitive EVEN QUOTED, so aliasing the derived
+  // operation "type" would make every reference to it ambiguous on an object
+  // that has a Type field — Account, Case, Opportunity, Task, Contract.
+  const withType = buildCsvRecordsSql('t', {
+    ...base,
+    columnNames: ['Type', 'Name'],
+    fullRestore: true,
+    deletedOnly: true,
+  });
+  assert.ok(withType.includes(`"Id", "Type", "Name", "LastModifiedDate"`), 'the real field is projected');
+  assert.ok(withType.includes(`AS "dv_row_type"`));
+  assert.ok(
+    !withType.includes('"type"'),
+    'nothing may reference a bare "type" — Trino would not tell it apart from "Type"'
+  );
+  assert.ok(withType.includes(`"dv_row_type" = 'DELETE'`));
+
   // ── deletedOnly tests the DERIVED column, so it sits outside the scan ───────
   const del = buildCsvRecordsSql('t', { ...base, deletedOnly: true });
-  assert.ok(del.includes(`) r WHERE (rn = 1) AND "type" = 'DELETE'`));
-  assert.ok(!buildCsvRecordsSql('t', base).includes(`"type" = 'DELETE'`));
+  assert.ok(del.includes(`) r WHERE (rn = 1) AND "dv_row_type" = 'DELETE'`));
+  assert.ok(!buildCsvRecordsSql('t', base).includes(`"dv_row_type" = 'DELETE'`));
 
   // ── Caller filter joins the scan-level predicates ──────────────────────────
   const filtered = buildCsvRecordsSql('t', { ...base, backupJobIds: ['j1'], filterWhere: `"Name" LIKE '%Acme%'` });
@@ -736,7 +768,7 @@ if (require.main === module) {
         `"LastModifiedDate" <= '2026-02-01T23:59:59.999Z') AND ("Id" IN ('r1')) AND ("Name" = 'Acme')`
     )
   );
-  assert.ok(everything.includes(`AND "type" = 'DELETE'`));
+  assert.ok(everything.includes(`AND "dv_row_type" = 'DELETE'`));
 
   // ── Keyset pagination ──────────────────────────────────────────────────────
   const cursor = { lmd: '2026-07-20T00:00:00Z', id: '001A' };
