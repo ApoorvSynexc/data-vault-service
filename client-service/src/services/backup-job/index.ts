@@ -344,20 +344,27 @@ const getBackupJobsByConfig = async (
     expressionValues[':jobType'] = options.jobType;
   }
 
-  if (options?.dateFrom) {
-    filterParts.push('createdAt >= :dateFrom');
+  // createdAt is the sort key on backupConfigId-index, not a plain attribute —
+  // DynamoDB rejects a key attribute referenced inside FilterExpression
+  // ("Filter Expression can only contain non-primary key attributes"). The date
+  // range has to go into KeyConditionExpression instead.
+  let keyConditionExpression = 'backupConfigId = :backupConfigId';
+  if (options?.dateFrom && options?.dateTo) {
+    keyConditionExpression += ' AND createdAt BETWEEN :dateFrom AND :dateTo';
     expressionValues[':dateFrom'] = options.dateFrom;
-  }
-
-  if (options?.dateTo) {
-    filterParts.push('createdAt <= :dateTo');
+    expressionValues[':dateTo'] = options.dateTo;
+  } else if (options?.dateFrom) {
+    keyConditionExpression += ' AND createdAt >= :dateFrom';
+    expressionValues[':dateFrom'] = options.dateFrom;
+  } else if (options?.dateTo) {
+    keyConditionExpression += ' AND createdAt <= :dateTo';
     expressionValues[':dateTo'] = options.dateTo;
   }
 
   const queryParams: any = {
     TableName: BACKUP_JOB_TABLE,
     IndexName: 'backupConfigId-index',
-    KeyConditionExpression: 'backupConfigId = :backupConfigId',
+    KeyConditionExpression: keyConditionExpression,
     ExpressionAttributeValues: expressionValues,
     Limit: limit,
     ScanIndexForward: false,
