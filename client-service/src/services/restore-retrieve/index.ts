@@ -219,7 +219,7 @@ export type RestoreScopeType =
   | 'FILTER'
   | 'DELETED_ONLY'
   // Spelled as the client sends it.
-  | 'CHNAGE_SINCE'
+  | 'CHANGE_SINCE'
   | 'BULK_CSV';
 
 export interface IFetchSource {
