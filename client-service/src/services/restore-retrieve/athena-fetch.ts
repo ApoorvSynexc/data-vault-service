@@ -153,10 +153,15 @@ const ROW_TYPE_EXPR =
   `ELSE 'INSERT' END`;
 
 /**
- * Upper date bounds arrive as either a bare date (`2026-07-29`) or a full
- * timestamp. LastModifiedDate is varchar, so `<= '2026-07-29'` would exclude
- * every record modified DURING that day. Extend a bare date to end-of-day so an
+ * LastModifiedDate is varchar, so `<= '2026-07-29'` would exclude every record
+ * modified DURING that day. A bare upper bound is extended to end-of-day so an
  * inclusive range means what the caller meant.
+ *
+ * The /fetch-records path already resolves bare dates this way at the request
+ * boundary (toIsoDateString with bound 'end'), so this never fires for it. It
+ * stays because these builders are exported and unit-checked on their own: a
+ * direct caller passing `2026-07-29` gets the same window the API would give it,
+ * rather than silently losing a day.
  */
 const endOfDay = (value: string): string =>
   /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? `${value.trim()}T23:59:59.999Z` : value;
