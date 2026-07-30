@@ -150,7 +150,9 @@ const restoreObjectData = async (
       failedRecordCount: 0,
       status: 'SUCCESS',
     });
-    throw new Error(`No backed-up data found for object ${objectName} under ${csvFilePath}`);
+
+    console.log(`[Restore] No backed-up data found for object ${objectName} under ${csvFilePath}`);
+    return [];
   }
 
   const submittedJobIds: string[] = [];
