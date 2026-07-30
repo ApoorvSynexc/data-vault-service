@@ -182,7 +182,7 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
         ':backupResume': STATUS.resumed,
         ':schedule': 'SCHEDULE',
         ':scheduleType': 'INCREMENTAL',
-        ':archivalType': 'ARCHIVAL',
+        ':archivalType': 'NORMAL',
         ':backupSuccess': BACKUP_STATUS.success,
         ':backupFailed': BACKUP_STATUS.failed,
         ':backupPartialFailure': BACKUP_STATUS.partialFailure,
