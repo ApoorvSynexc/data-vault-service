@@ -230,7 +230,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       restoreJob.destination.objects = updatedObjects;
     }
 
-    console.log('SIUUUUUUUUUUU ==> ',JSON.stringify({ restoreJob, restore }));
+    console.log(JSON.stringify({ restoreJob, restore, decrypted }));
     tiggerRestoreJob(restoreJob);
     return makeResponse(req, res, 200, true, 'update');
   }
