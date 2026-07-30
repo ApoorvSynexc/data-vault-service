@@ -6,6 +6,15 @@ tags:
 
 # API — `POST /v1/restore-retrieve/retrieve/fetch-records`
 
+> ⚠ **STALE as of 2026-07-30.** The request shape below (`configType`,
+> `columnNames`, `changedSince`, `filteringFields`, `deletedOnly` at the top
+> level) predates the `source` / `selection` refactor and no longer matches the
+> endpoint. The current body — including `recordIds`, `isDeleteOnly`, and the
+> rule that `source.backupJobIds` overrides the date window under
+> CHANGED_BETWEEN — is documented in
+> [[RESTORE_RETRIEVE]] § POST /v1/restore/retrieve/fetch-records. The
+> pagination, cost and `columns` sections here are still accurate.
+
 Returns backed-up records with the **requested backup jobs' changes reverted**,
 50 at a time. This is the contract the UI codes against. How the records are
 reconstructed: [[RETRIEVE_FLOW_WALKTHROUGH]] (plain English) and

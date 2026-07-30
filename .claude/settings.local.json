@@ -25,7 +25,10 @@
       "Bash(python -)",
       "Bash(npx tsc *)",
       "Bash(npx eslint *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(grep -n \"restoreScope.fields\\\\` is dropped\" -A 4 -B 3 docs/architecture-graph/execution/RESTORE_RETRIEVE.md)",
+      "Bash(git check-ignore *)",
+      "Bash(echo \"exit=$?\")"
     ]
   },
   "hooks": {

@@ -96,48 +96,86 @@ than treat a short page as the end of the list.
 
 ## POST /v1/restore/retrieve/fetch-records
 
-```typescript
-// body: { configType: 'BACKUP' | 'ARCHIVAL', objectApiName, columnNames, backupJobIds?, backupConfigId? }
+> **Rewritten 2026-07-30.** Everything previously in this section described the
+> pre-refactor body (`configType: 'BACKUP' | 'ARCHIVAL'`, `columnNames`, a
+> separate ARCHIVAL path resolving the newest archival job, results grouped by
+> `backupJobId`). None of that exists any more: there is no `configType`, no
+> ARCHIVAL branch — a config's archival snapshot is reached through the CSV path
+> by naming its `backupJobIds` — and the response is a single flat page.
+> `API_FETCH_RECORDS.md` still documents the old shape and is stale.
+
+```jsonc
+{
+  "source": {
+    "backupConfigId": "CFG1",              // required — owns the CRM, destination, Glue table
+    "type": "ENTIRE",                      // ENTIRE | PARTIAL | CHANGED_BETWEEN
+    "startDate": "2026-06-01",             // ISO 8601, LastModifiedDate lower bound
+    "endDate":   "2026-06-30",             // ISO 8601, upper bound
+    "backupJobIds": ["JOB_2"]              // absent → every job on the config
+  },
+  "objectApiName": "Account",
+  "columns": ["Name", "Phone"],            // required here; ignored by show-preview
+  "recordIds":    ["001A", "002B"],        // added 2026-07-30
+  "isDeleteOnly": false,                   // added 2026-07-30
+  "selection": null,                       // or { restoreScope: { … } }
+  "fullRestore": false,
+  "cursor": "eyJmcCI6…"
+}
 ```
 
 ### Validation
-1. `configType` must be `'BACKUP'` or `'ARCHIVAL'` → else 400 `invalid_config_type`.
-2. `objectApiName` must be a non-empty string → else 400 `object_api_name_required`.
-3. `columnNames` must be a non-empty array → else 400 `column_names_required`.
-4. For `BACKUP`: `backupJobIds` must be a non-empty array → else 400 `id_required`. Deduplicated.
-5. For `ARCHIVAL`: `backupConfigId` must be present → else 400 `id_required`.
+1. `source` must be an object → 400 `invalid_source`; `backupConfigId` non-empty → `id_required`; `type` in the enum → `invalid_source_type`.
+2. Dates ISO 8601 → `invalid_source_date`; start after end → `invalid_time_range`.
+3. `PARTIAL` requires `backupJobIds` → `backup_job_ids_required`.
+4. `CHANGED_BETWEEN` requires `backupJobIds` **or** a date bound → `date_range_required`.
+5. `objectApiName` non-empty → `object_api_name_required`; `columns` non-empty → `column_names_required`.
+6. `recordIds` an array → `invalid_record_ids`; `isDeleteOnly` a boolean → `invalid_is_delete_only`.
+7. Column names and the filter block compile here, so `invalid_column_name` / `invalid_filter_*` / `soql_*` are all 400s before Athena is touched.
 
-### BACKUP path
+### recordIds and isDeleteOnly — added 2026-07-30
+
+Flat spellings of `restoreScope.bulkCsvIds` and `restoreScope.deletedOnly`, added
+because most callers want the narrowing without building a `restoreScope`.
+
+- `recordIds` restricts the whole query to those ids, whatever happened to them
+  (update, insert or delete). A row filter on `"Id"` in the scan — safe under
+  every picking mode, because it selects whole records, never versions.
+- `isDeleteOnly` keeps only records whose **selected change** is a DELETE.
+
+They **merge** with their `restoreScope` counterparts rather than overriding:
+record scopes union (top-level ∪ `bulkCsvIds` ∪ `records[].recordIds`) and the
+delete flags OR (top-level ∨ `deletedOnly` ∨ a `DELETED_ONLY` scope type). So the
+two shapes can be mixed, and neither can cancel the other. Both are in the cursor
+fingerprint.
+
+### CHANGED_BETWEEN: job ids override the date window — added 2026-07-30
+
+`CHANGED_BETWEEN` names the change to roll back, and there are now two ways to
+name it. When a request carries **both**, `backupJobIds` wins and `startDate` /
+`endDate` are **dropped** — along with `restoreScope.changeSince`. Naming the
+jobs names the change exactly; a window around it could only widen or contradict
+it.
+
+They are dropped in the controller, not ignored downstream, so they stay out of
+the SQL *and* out of the cursor fingerprint — otherwise two requests that behave
+identically would hash differently and reject each other's cursors.
+
+### Execution
+
 ```typescript
-// 1. Ownership check: GetItem backupJobIds[0] → verify userId matches caller
-// 2. GetItem config from backupConfigId on that job
-// 3. Build Glue identifiers:
+// 1. GetItem config → 400 not_exist unless config.userId === caller.
+//    Ownership is checked ONCE, on the config: the jobs a request names are the
+//    config's own jobs, so owning the config owns them.
+// 2. Glue identifiers off the config:
 const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
-const tableName    = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
-// 4. Run Athena:
-const sql = `SELECT "col1","col2" FROM "tableName" WHERE backup_job_id IN ('id1','id2')`;
-const result = await runAthenaQuery(sql, databaseName);
-// 5. Group rows by backup_job_id column value
-// 6. Return [{ backupJobId, records: { columns, rows } }]
+const csvTable     = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}`;
+// 3. resolveScope → columns, recordIds, deletedOnly (top-level merged with scope)
+// 4. ONE Athena query — buildCsvRecordsSql — then toPage slices 50 out of the
+//    2000-row block. See RESTORE_RECORD_RETRIEVAL.md for the SQL shape.
 ```
 
-### ARCHIVAL path
-```typescript
-// 1. GetItem config → verify userId matches caller and config exists
-// 2. Query most recent successful ARCHIVAL job:
-const { items } = await getBackupJobsByConfig(backupConfigId, {
-  limit: 1, status: 'SUCCESS', type: 'ARCHIVAL'   // ScanIndexForward:false → newest first
-});
-const latestJob = items[0];
-// 3. Same Glue identifier construction as BACKUP
-// 4. Run Athena with WHERE backup_job_id IN ('latestJob.backupJobId')
-// 5. Return [{ backupJobId: latestJob.backupJobId, records }]
-```
-
-Both paths return `null` internally → controller sends 400 `not_exist` when:
-- Job / config not found.
-- Ownership mismatch (userId !== req.user.userId).
-- No completed ARCHIVAL job exists yet.
+Returns `null` internally → controller sends 400 `not_exist` when the config is
+missing or not owned by the caller.
 
 ## POST /v1/restore/retrieve/show-preview — added 2026-07-30
 
@@ -146,7 +184,7 @@ side by side with the record as Salesforce holds it right now.
 
 ```jsonc
 // body: identical to /retrieve/fetch-records — source, objectApiName,
-// selection, cursor. `columns` is accepted but IGNORED.
+// recordIds, isDeleteOnly, selection, cursor. `columns` is accepted but IGNORED.
 
 // response data:
 {
@@ -165,9 +203,11 @@ Three differences from `fetch-records`, and nothing else:
 1. **Every column.** The projection is the object's latest stored schema — the
    same list `/fetch-object-fields` serves — so a preview never depends on which
    columns a grid happens to show. `restoreScope.fields` is dropped for the same
-   reason (it narrows the projection); every other narrowing — `records`,
-   `filters`, `changeSince`, `bulkCsvIds`, `deletedOnly`, the source window —
-   still applies.
+   reason (it narrows the projection); every other narrowing — `recordIds`,
+   `isDeleteOnly`, `records`, `filters`, `changeSince`, `bulkCsvIds`,
+   `deletedOnly`, the source window — still applies. `isDeleteOnly: true` makes
+   every row come back as `{ previous }` alone, since a deleted record has no
+   live counterpart.
 2. **`fullRestore` is forced on.** `previous` is always the version a restore
    would write: an UPDATE's **second-newest** version, a DELETE's own row, an
    INSERT unchanged. The request cannot turn this off.
