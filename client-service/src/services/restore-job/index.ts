@@ -47,6 +47,8 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
     destinationObjects = selection.restoreScope.objects.map(name => ({ id: uuidv4(), name, status: "PENDING" }));
   } else if (selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
     destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "PENDING" }));
+  } else {
+    destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "PENDING" })) ?? [];
   }
 
   const updatedSource = {
