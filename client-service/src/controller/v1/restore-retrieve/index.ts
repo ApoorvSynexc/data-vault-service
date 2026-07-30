@@ -176,7 +176,7 @@ const VALID_RESTORE_SCOPE_TYPES: RestoreScopeType[] = [
   'FIELD',
   'FILTER',
   'DELETED_ONLY',
-  'CHNAGE_SINCE',
+  'CHANGE_SINCE',
   'BULK_CSV',
 ];
 
@@ -432,7 +432,7 @@ const parseFetchRecordsParams = (
  *   selection:     null | {
  *     restoreScope: {
  *       type:        'ALL' | 'OBJECT' | 'RECORD' | 'FIELD' | 'FILTER' |
- *                    'DELETED_ONLY' | 'CHNAGE_SINCE' | 'BULK_CSV'
+ *                    'DELETED_ONLY' | 'CHANGE_SINCE' | 'BULK_CSV'
  *       objects?:    string[]                       (allow-list; excludes → empty page)
  *       records?:    { objectName, recordIds[] }[]  (only the matching object applies)
  *       fields?:     { objectName, fieldNames[] }[] (matching object REPLACES columns)
