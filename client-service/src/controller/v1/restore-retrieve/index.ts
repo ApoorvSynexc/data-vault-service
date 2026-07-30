@@ -32,11 +32,17 @@ import {
   CursorError,
   PAGE_SIZE,
   initalizeRestoreTransform,
+  getUser,
+  getDestinationById,
+  getBackupJobById,
+  getBackupJobsByConfig,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
+import { decrypt } from '../../../utils/encryption';
+import { removeCsvColumnsInFolder } from '../../../utils/restore-csv-format';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -678,8 +684,44 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   if (body.status !== 'DRAFT') {
     try {
       const restoreJob = await createRestoreJob(payload);
-      await initalizeRestoreTransform(restoreJob.restoreJobId);
-      // await tiggerRestoreJob(restoreJob);
+
+      const s3Keys = JSON.parse(decrypt(restoreJob.source.encryptedKeys as any));
+      const s3Config = {
+        bucketName: restoreJob.source.bucketName,
+        region: restoreJob.source.region,
+        accessKeyId: s3Keys.accessKeyId,
+        secretAccessKey: s3Keys.secretAccessKey,
+      };
+
+      let jobIds = payload.source?.backupJobIds;
+      if (!jobIds?.length) {
+        const backupJobs = await getBackupJobsByConfig(restoreJob.source.backupConfigId);
+        jobIds = backupJobs.items.map(job => job.backupJobId);
+      }
+
+      for await (const backupJobId of jobIds) {
+        const destinationPath = restoreJob.source.csvFilePath || "";
+        const sourcePaths = [];
+        for (const object of restoreJob.destination.objects) {
+          const sourcePath = `${restoreJob.source.crmName}/${restoreJob.source.crmId}/${'backup'}/${restoreJob.source.backupConfigId}/raw_data/${backupJobId}/${object.name}`;
+          sourcePaths.push(sourcePath);
+        }
+
+        console.log({
+          s3Config,
+          sourceFolderKeys: sourcePaths,
+          destinationFolderKey: destinationPath,
+          columnsToRemove: ["Id"],
+        });
+
+        await removeCsvColumnsInFolder({
+          s3Config,
+          sourceFolderKeys: sourcePaths,
+          destinationFolderKey: destinationPath,
+          columnsToRemove: ["Id"],
+        })
+      }
+
     } catch (error) {
       console.error('Error creating restore job:', error);
     }

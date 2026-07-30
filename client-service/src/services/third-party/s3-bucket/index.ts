@@ -1,6 +1,7 @@
 import {
     GetObjectCommand,
     ListObjectsV2Command,
+    PutObjectCommand,
     S3Client,
 } from '@aws-sdk/client-s3';
 import { IS3Config } from '../../../models';
@@ -48,6 +49,25 @@ const downloadFromS3 = async (
     }
 };
 
+const uploadToS3 = async (
+    config: IS3Config,
+    key: string,
+    body: Buffer
+): Promise<string> => {
+    const client = getS3Client(config);
+
+    await client.send(
+        new PutObjectCommand({
+            Bucket: config.bucketName,
+            Key: key,
+            Body: body,
+            ContentType: 'text/csv',
+        })
+    );
+
+    return `s3://${config.bucketName}/${key}`;
+};
+
 // Returns all S3 object keys under a given prefix, sorted alphabetically.
 // Paginates through all pages (each page capped at 1,000 keys by the S3 API).
 const listS3Objects = async (
@@ -80,5 +100,6 @@ const listS3Objects = async (
 
 export {
     downloadFromS3,
-    listS3Objects
+    listS3Objects,
+    uploadToS3,
 }
