@@ -3,18 +3,21 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
-import { IBackupJob, IObject } from '../../models';
+import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
+import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records';
 import { httpRequest } from '../../utils/http-request';
 import { IsoDateString } from '../../utils/iso-date';
 import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
 
 export { buildAthenaFilterWhere, FilterError } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import { buildCsvRecordsSql, pairedColumns, IPageKey } from './athena-fetch';
+export { PREVIEW_SYSTEM_FIELDS, IPreviewRow } from './preview-merge';
+import { buildCsvRecordsSql, pairedColumns, ROW_TYPE_COLUMN, IPageKey } from './athena-fetch';
+import { buildPreviewRows, previewColumns, IPreviewRow } from './preview-merge';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 
@@ -561,12 +564,16 @@ const resolvePage = (params: IFetchRecordsParams): IPageState => {
  * is derived by the SQL (from "$path"), not a stored field, so it can never
  * appear in `columns`. toPage keeps it as an extra and reports it in the
  * response's `columns` list.
+ *
+ * The SQL aliases it ROW_TYPE_COLUMN rather than `type` — see that constant for
+ * why — and it is renamed back here, so the response contract is unchanged. An
+ * object with a real `Type` field therefore keeps both, under distinct keys.
  */
 const toCsvRows = (result: IQueryResult, columns: string[]): IRankedRecord[] =>
   result.rows.map((row) => {
     const record: Record<string, string> = {};
     for (const c of columns) record[c] = row[c] ?? '';
-    record['type'] = row['type'] ?? '';
+    record['type'] = row[ROW_TYPE_COLUMN] ?? '';
     return { record, key: { lmd: record['LastModifiedDate'] ?? '', id: record['Id'] ?? '' } };
   });
 
@@ -699,6 +706,9 @@ interface IFetchCsvRecordsParams {
   fullRestore: boolean;
   scope?: IRestoreScope;
   page: IPageState;
+  // Already-resolved config, when the caller had to read it anyway (show-preview
+  // needs the CRM off it). Ownership is re-checked here either way.
+  config?: IBackupConfig | null;
 }
 
 const fetchCsvRecords = async (
@@ -706,7 +716,7 @@ const fetchCsvRecords = async (
 ): Promise<IFetchRecordsResult | null> => {
   const { source, objectApiName, columns, userId, filterWhere, fullRestore, scope, page } = params;
 
-  const config = await getBackupConfigById(source.backupConfigId);
+  const config = params.config ?? (await getBackupConfigById(source.backupConfigId));
   if (!config || config.userId !== userId) return null;
 
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
@@ -997,6 +1007,138 @@ const fetchRecordsByBackupJobs = async (
 };
 
 // ---------------------------------------------------------------------------
+// Show preview — restored record vs live Salesforce record
+// ---------------------------------------------------------------------------
+
+export interface IShowPreviewParams extends IFetchRecordsParams {
+  // The caller, whose stored Salesforce credentials read the live half of the
+  // pair. Ownership is still checked against `userId`, as everywhere else.
+  user: IUser;
+}
+
+export interface IShowPreviewPage {
+  columns: string[];
+  rows: IPreviewRow[];
+  nextCursor?: string;
+  hasMore: boolean;
+}
+
+export type ShowPreviewResult =
+  | { ok: true; page: IShowPreviewPage }
+  | { ok: false; reason: 'not_exist' | 'crm_not_connected' };
+
+// Field API names out of a stored schema file — an array of Salesforce field
+// descriptors, of which only `apiName` is needed here. Anything else in the
+// file (a shape change, a partial write) contributes nothing rather than
+// producing a column name that would fail the Athena query.
+const schemaFieldNames = (schema: unknown): string[] => {
+  if (!Array.isArray(schema)) return [];
+  const names = schema.map((f) =>
+    f && typeof f === 'object' ? (f as { apiName?: unknown }).apiName : undefined
+  );
+  return [...new Set(names.filter((n): n is string => typeof n === 'string' && n.trim() !== ''))];
+};
+
+/**
+ * Entry point for POST /retrieve/show-preview.
+ *
+ * Same selection machinery as /retrieve/fetch-records — same source window,
+ * same restoreScope, same 50-per-page cursor — with three differences:
+ *
+ *   1. **Every column**, not a caller-supplied list. The projection is the
+ *      object's latest backed-up schema (the list /fetch-object-fields serves),
+ *      so a preview never depends on which columns a grid happens to show.
+ *      `columns` in the request is ignored, and so is `restoreScope.fields`:
+ *      narrowing the projection contradicts previewing the whole record. Every
+ *      other narrowing (records, filters, dates, deletedOnly) still applies.
+ *   2. **Always the restore-to version** (`fullRestore`): an updated record
+ *      comes back at its second-newest version — the state a restore would put
+ *      back — a deleted record at its DELETE row, an inserted one unchanged.
+ *   3. Each restored record is **paired with its live Salesforce record**, read
+ *      over the REST API, so the caller can show before/after side by side.
+ *
+ * Returns a discriminated result rather than throwing, so the controller maps
+ * "not yours / not there" and "Salesforce not connected" to their own messages.
+ */
+const showRecordsPreview = async (params: IShowPreviewParams): Promise<ShowPreviewResult> => {
+  const { source, objectApiName, userId, user, selection } = params;
+  if (!source?.backupConfigId) return { ok: false, reason: 'not_exist' };
+
+  // Read once here: the CRM (for the Salesforce call) hangs off it, and passing
+  // it down saves fetchCsvRecords the same read.
+  const config = await getBackupConfigById(source.backupConfigId);
+  if (!config || config.userId !== userId) return { ok: false, reason: 'not_exist' };
+
+  const [schema, crm] = await Promise.all([
+    fetchObjectFields({ objectApiName, backupConfigId: source.backupConfigId, userId }),
+    getCrmById(config.crmId),
+  ]);
+  if (!schema.ok || !crm) return { ok: false, reason: 'not_exist' };
+
+  // pairedColumns adds Id and LastModifiedDate: the pairing needs Id and the
+  // page order needs LastModifiedDate. Both are dropped from the response by
+  // previewColumns — they are system fields.
+  const columns = pairedColumns(schemaFieldNames(schema.schema));
+  const visibleColumns = previewColumns(columns);
+  // Nothing but system fields — no schema has been written for this object yet,
+  // or the file holds no usable field names.
+  if (!visibleColumns.length) return { ok: false, reason: 'not_exist' };
+
+  const scope = selection?.restoreScope;
+  // The scope is narrowed BEFORE the fingerprint so page 2 hashes what page 1
+  // hashed; the resolved column list is in there for the same reason, which is
+  // what makes a schema change mid-pagination a cursor_mismatch rather than a
+  // silently different result set.
+  const previewParams: IFetchRecordsParams = {
+    ...params,
+    columns,
+    fullRestore: true,
+    ...(scope ? { selection: { restoreScope: { ...scope, fields: undefined } } } : {}),
+  };
+
+  const page = await fetchCsvRecords({
+    source,
+    objectApiName,
+    columns,
+    userId,
+    config,
+    filterWhere: params.filterWhere ?? null,
+    fullRestore: true,
+    ...(previewParams.selection?.restoreScope
+      ? { scope: previewParams.selection.restoreScope }
+      : {}),
+    page: resolvePage(previewParams),
+  });
+  if (!page) return { ok: false, reason: 'not_exist' };
+
+  // A deleted record has no live counterpart, so it is never looked up — that
+  // is also what keeps the id list inside the FIELDS(ALL) row cap on a page
+  // made mostly of deletions.
+  const liveIds = page.rows
+    .filter(({ record }) => record['type'] !== 'DELETE')
+    .map(({ record }) => record['Id'])
+    .filter(Boolean);
+
+  const currentById = await fetchSalesforceRecordsByIds({
+    user,
+    crm,
+    objectApiName,
+    recordIds: liveIds,
+  });
+  if (!currentById) return { ok: false, reason: 'crm_not_connected' };
+
+  return {
+    ok: true,
+    page: {
+      columns: visibleColumns,
+      rows: buildPreviewRows(page.rows, visibleColumns, currentById),
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      hasMore: page.hasMore,
+    },
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Glue table repair
 // ---------------------------------------------------------------------------
 
@@ -1204,6 +1346,7 @@ export {
   getBackupJobIdsChangedBetween,
   getObjectListByConfigId,
   fetchRecordsByBackupJobs,
+  showRecordsPreview,
   repairGlueTables,
   fetchObjectFields,
   fetchPicklistValues,
