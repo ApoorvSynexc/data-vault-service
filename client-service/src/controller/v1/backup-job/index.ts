@@ -23,7 +23,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
   const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
 
   if (slug) {
-    const { startDateTime, endDateTime } = req.query as Record<string, string>;
+    const { startDate, endDate } = req.query as Record<string, string>;
     const config = await getBackupConfigBySlug({
       userId,
       slug,
@@ -35,7 +35,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
     }
 
     const [{ items, nextCursor }, counter] = await Promise.all([
-      getBackupJobsByConfig(config.backupConfigId, { limit: limitNum, cursor, status, dateFrom: startDateTime, dateTo: endDateTime }),
+      getBackupJobsByConfig(config.backupConfigId, { limit: limitNum, cursor, status, dateFrom: startDate, dateTo: endDate }),
       getTableCounter(BACKUP_JOB_TABLE, config.backupConfigId),
     ]);
 
