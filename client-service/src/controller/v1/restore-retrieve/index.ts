@@ -741,23 +741,14 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
         for (const object of restoreJob.destination.objects) {
           const sourcePath = `${restoreJob.source.crmName}/${restoreJob.source.crmId}/${'backup'}/${restoreJob.source.backupConfigId}/raw_data/${backupJobId}/${object.name}/inserts`;
           sourcePaths.push(sourcePath);
-        }
-
-        console.log({
+           await removeCsvColumnsInFolder({
           s3Config,
-          sourceFolderKeys: sourcePaths,
-          destinationFolderKey: destinationPath,
-          columnsToRemove: ["Id"],
-        });
-
-        await removeCsvColumnsInFolder({
-          s3Config,
-          sourceFolderKeys: sourcePaths,
-          destinationFolderKey: destinationPath,
+          sourceFolderKey: sourcePath,
+          destinationFolderKey: `${destinationPath}/${object.name}`,
           columnsToRemove: ["Id"],
         })
+        }
       }
-
     } catch (error) {
       console.error('Error creating restore job:', error);
     }

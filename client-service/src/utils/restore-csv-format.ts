@@ -106,38 +106,32 @@ export const removeCsvColumns = (csvContent: string, columnsToRemove: string[]):
     .join('\n');
 };
 
-// Downloads every CSV under each of sourceFolderKeys, strips columnsToRemove
-// from each one, and re-uploads the result under destinationFolderKey — a
-// ready-to-call wrapper around transformCsvFolder for this one specific
-// operation. Processed sequentially, one source folder at a time.
+// Downloads every CSV under sourceFolderKey, strips columnsToRemove from each
+// one, and re-uploads the result under destinationFolderKey — a ready-to-call
+// wrapper around transformCsvFolder for this one specific operation.
 //
 // A source folder with no files (transformCsvFolder throws "No files found
-// under ...") or any other per-folder failure is logged and skipped rather
-// than aborting the whole call — one empty/missing object folder shouldn't
-// stop the remaining folders from being processed.
+// under ...") or any other failure is logged and swallowed rather than thrown,
+// returning an empty array instead — so a caller processing several restore
+// objects one at a time can keep going past one empty/missing object folder.
 export const removeCsvColumnsInFolder = async (params: {
   s3Config: IS3Config;
-  sourceFolderKeys: string[];
+  sourceFolderKey: string;
   destinationFolderKey: string;
   columnsToRemove: string[];
 }): Promise<string[]> => {
-  const { s3Config, sourceFolderKeys, destinationFolderKey, columnsToRemove } = params;
+  const { s3Config, sourceFolderKey, destinationFolderKey, columnsToRemove } = params;
 
-  const writtenKeys: string[] = [];
-  for (const sourceFolderKey of sourceFolderKeys) {
-    try {
-      const keys = await transformCsvFolder({
-        s3Config,
-        sourceFolderKey,
-        destinationFolderKey,
-        transform: (csvContent) => removeCsvColumns(csvContent, columnsToRemove),
-        mapDestinationFileName: (sourceFileName) => toCsvFileName(sourceFileName),
-      });
-      writtenKeys.push(...keys);
-    } catch (error: any) {
-      console.error(`[removeCsvColumnsInFolder] skipping ${sourceFolderKey}: ${error?.message ?? error}`);
-    }
+  try {
+    return await transformCsvFolder({
+      s3Config,
+      sourceFolderKey,
+      destinationFolderKey,
+      transform: (csvContent) => removeCsvColumns(csvContent, columnsToRemove),
+      mapDestinationFileName: (sourceFileName) => toCsvFileName(sourceFileName),
+    });
+  } catch (error: any) {
+    console.error(`[removeCsvColumnsInFolder] skipping ${sourceFolderKey}: ${error?.message ?? error}`);
+    return [];
   }
-
-  return writtenKeys;
 };
