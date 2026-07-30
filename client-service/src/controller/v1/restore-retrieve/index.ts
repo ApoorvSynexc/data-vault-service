@@ -410,9 +410,19 @@ const parseFetchRecordsParams = (
   if (sourceType === 'PARTIAL' && backupJobIds.length === 0) {
     return { ok: false, error: 'backup_job_ids_required' };
   }
-  if (sourceType === 'CHANGED_BETWEEN' && !startDate && !endDate) {
+  // CHANGED_BETWEEN names a change to roll back. Job ids and a date window are
+  // two ways of naming it, so either will do.
+  if (sourceType === 'CHANGED_BETWEEN' && backupJobIds.length === 0 && !startDate && !endDate) {
     return { ok: false, error: 'date_range_required' };
   }
+
+  // Job ids are the more specific of the two, so they win: a caller who listed
+  // the jobs has said exactly which change they mean, and a window around it
+  // could only widen or contradict that. Dropped here rather than ignored
+  // downstream so they stay out of the SQL AND out of the cursor fingerprint —
+  // otherwise two requests that behave identically would hash differently and
+  // reject each other's cursors.
+  const windowApplies = !(sourceType === 'CHANGED_BETWEEN' && backupJobIds.length > 0);
 
   if (!objectApiName || typeof objectApiName !== 'string') {
     return { ok: false, error: 'object_api_name_required' };
@@ -428,14 +438,28 @@ const parseFetchRecordsParams = (
     source: {
       backupConfigId: source.backupConfigId.trim(),
       type: sourceType,
-      ...(startDate && { startDate }),
-      ...(endDate && { endDate }),
+      ...(windowApplies && startDate && { startDate }),
+      ...(windowApplies && endDate && { endDate }),
       ...(backupJobIds.length && { backupJobIds }),
     },
     objectApiName,
     columns: columnList,
     userId,
   };
+
+  // ── top-level record scope / deletes-only ─────────────────────────────────
+  // Both also exist inside restoreScope; the service merges the two rather than
+  // letting either override, so a caller can use whichever shape suits it.
+  if (body.recordIds !== undefined && body.recordIds !== null) {
+    const ids = toStringList(body.recordIds);
+    if (ids === null) return { ok: false, error: 'invalid_record_ids' };
+    if (ids.length) value.recordIds = ids;
+  }
+
+  if (body.isDeleteOnly !== undefined && body.isDeleteOnly !== null) {
+    if (typeof body.isDeleteOnly !== 'boolean') return { ok: false, error: 'invalid_is_delete_only' };
+    value.isDeleteOnly = body.isDeleteOnly;
+  }
 
   // ── selection (nullable) ──────────────────────────────────────────────────
   // Every column list the scope can contribute is validated as an identifier,
@@ -553,6 +577,8 @@ const parseFetchRecordsParams = (
  *   }
  *   objectApiName: string
  *   columns:       string[]
+ *   recordIds?:    string[]                        (run on these records only)
+ *   isDeleteOnly?: boolean                         (deleted records only)
  *   selection:     null | {
  *     restoreScope: {
  *       type:        'ALL' | 'OBJECT' | 'RECORD' | 'FIELD' | 'FILTER' |
@@ -583,8 +609,18 @@ const parseFetchRecordsParams = (
  *                    earlier version to roll back to; an INSERT is already the
  *                    restore target.
  *
- * PARTIAL requires backupJobIds and CHANGED_BETWEEN requires a date bound —
- * without them the request would silently behave as ENTIRE.
+ * `recordIds` and `isDeleteOnly` are the flat spellings of
+ * restoreScope.bulkCsvIds and restoreScope.deletedOnly. Record scopes union and
+ * the delete flags OR, so the two shapes can be mixed and neither can cancel
+ * the other. `isDeleteOnly` keeps only records whose selected change is a
+ * DELETE; `recordIds` restricts the whole query to those ids, whatever happened
+ * to them.
+ *
+ * PARTIAL requires backupJobIds. CHANGED_BETWEEN requires backupJobIds OR a date
+ * bound — without one the request would silently behave as ENTIRE. When it has
+ * BOTH, the job ids win and the window is dropped: naming the jobs names the
+ * change exactly, and a window around it could only widen or contradict that.
+ * (restoreScope.changeSince is dropped with it, for the same reason.)
  *
  * Dates must be ISO 8601 and are canonicalised to UTC before use. A date-only
  * value resolves to the end of the day it bounds, so `endDate: "2026-06-30"`
@@ -629,8 +665,9 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 /**
  * POST /retrieve/show-preview
  *
- * Body: identical to /retrieve/fetch-records (source, objectApiName, selection,
- * cursor), except that `columns` is not required — see below.
+ * Body: identical to /retrieve/fetch-records (source, objectApiName, recordIds,
+ * isDeleteOnly, selection, cursor), except that `columns` is not required — see
+ * below.
  *
  * Shows what a restore would do to each record, one page of 50 at a time:
  *
@@ -658,7 +695,9 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
  * — minus the Salesforce system fields (Id, LastModifiedDate, CreatedDate,
  * SystemModstamp, LastModifiedById, CreatedById, IsDeleted), which a restore can
  * never write. A `columns` list in the body is therefore ignored, as is
- * `restoreScope.fields`; every other narrowing still applies.
+ * `restoreScope.fields`; every other narrowing still applies — including
+ * `recordIds` (preview only these records) and `isDeleteOnly` (preview only
+ * deletions, so every row comes back as `{ previous }` alone).
  *
  * Returns not_exist when the config/object can't be resolved or isn't owned by
  * the caller, and crm_not_connected when the org has no usable Salesforce

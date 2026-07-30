@@ -405,6 +405,19 @@ export interface IFetchRecordsParams {
   selection?: IFetchRecordsSelection | null;
   userId: string;
   /**
+   * Top-level record scope: run on these record ids only, whatever happened to
+   * them. Unioned with restoreScope.bulkCsvIds and restoreScope.records[] —
+   * they are three ways of saying the same thing, so they add up rather than
+   * override, and a caller using only this field gets exactly "only these".
+   */
+  recordIds?: string[];
+  /**
+   * Top-level "deletes only". ORed with restoreScope.deletedOnly (and with a
+   * DELETED_ONLY scope type), so either place can switch it on and neither can
+   * switch the other off.
+   */
+  isDeleteOnly?: boolean;
+  /**
    * Full restore: return the version each record should be restored TO, rather
    * than its current state.
    *   UPDATE → the second-newest version (for a record updated once, the
@@ -524,6 +537,8 @@ const fingerprintRequest = (p: IFetchRecordsParams): string => {
         p.source.endDate ?? null,
         [...(p.source.backupJobIds ?? [])].sort(),
         p.fullRestore ?? false,
+        [...(p.recordIds ?? [])].sort(),
+        p.isDeleteOnly ?? false,
         p.filterWhere ?? null,
         scope?.type ?? null,
         [...(scope?.objects ?? [])].sort(),
@@ -654,9 +669,22 @@ interface IResolvedScope {
 const resolveScope = (
   objectApiName: string,
   columns: string[],
-  scope: IRestoreScope | undefined
+  scope: IRestoreScope | undefined,
+  // Top-level request fields that say the same thing as their restoreScope
+  // counterparts, and are merged with them rather than overriding.
+  top: { recordIds?: string[]; isDeleteOnly?: boolean } = {}
 ): IResolvedScope => {
-  if (!scope) return { selects: true, columns, recordIds: [], deletedOnly: false };
+  const topRecordIds = top.recordIds ?? [];
+  const topDeleteOnly = top.isDeleteOnly === true;
+
+  if (!scope) {
+    return {
+      selects: true,
+      columns,
+      recordIds: [...new Set(topRecordIds)].filter(Boolean),
+      deletedOnly: topDeleteOnly,
+    };
+  }
 
   // An empty/absent objects list is "no object restriction", not "no objects".
   if (scope.objects?.length && !scope.objects.includes(objectApiName)) {
@@ -669,16 +697,19 @@ const resolveScope = (
   const fieldNames = scope.fields?.find((f) => f.objectName === objectApiName)?.fieldNames;
   const resolvedColumns = fieldNames?.length ? [...new Set(fieldNames)] : columns;
 
-  // records[].recordIds and bulkCsvIds are both record scopes on the same query,
-  // so they union rather than override.
+  // The top-level recordIds, records[].recordIds and bulkCsvIds are three record
+  // scopes on the same query, so they union rather than override.
   const scoped = scope.records?.find((r) => r.objectName === objectApiName)?.recordIds ?? [];
-  const recordIds = [...new Set([...scoped, ...(scope.bulkCsvIds ?? [])])].filter(Boolean);
+  const recordIds = [
+    ...new Set([...topRecordIds, ...scoped, ...(scope.bulkCsvIds ?? [])]),
+  ].filter(Boolean);
 
   return {
     selects: true,
     columns: resolvedColumns,
     recordIds,
-    deletedOnly: scope.deletedOnly === true,
+    // Either place can switch it on; neither can switch the other off.
+    deletedOnly: topDeleteOnly || scope.deletedOnly === true,
     ...(scope.changeSince?.date ? { changedSinceStart: scope.changeSince.date } : {}),
   };
 };
@@ -709,6 +740,8 @@ interface IFetchCsvRecordsParams {
   // Already-resolved config, when the caller had to read it anyway (show-preview
   // needs the CRM off it). Ownership is re-checked here either way.
   config?: IBackupConfig | null;
+  // Top-level recordIds / isDeleteOnly, merged with their scope counterparts.
+  top?: { recordIds?: string[]; isDeleteOnly?: boolean };
 }
 
 const fetchCsvRecords = async (
@@ -722,7 +755,7 @@ const fetchCsvRecords = async (
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
   const csvTable = `cfg_${toGlueId(source.backupConfigId)}_${toGlueId(objectApiName)}`;
 
-  const resolved = resolveScope(objectApiName, columns, scope);
+  const resolved = resolveScope(objectApiName, columns, scope, params.top);
   const { run, executions } = makeRunner(databaseName, page.replay);
 
   // Scope excludes this object — an empty page, not an Athena scan.
@@ -1002,6 +1035,7 @@ const fetchRecordsByBackupJobs = async (
     filterWhere: params.filterWhere ?? null,
     fullRestore: params.fullRestore === true,
     ...(selection?.restoreScope ? { scope: selection.restoreScope } : {}),
+    top: { recordIds: params.recordIds, isDeleteOnly: params.isDeleteOnly },
     page: resolvePage(params),
   });
 };
@@ -1107,6 +1141,7 @@ const showRecordsPreview = async (params: IShowPreviewParams): Promise<ShowPrevi
     ...(previewParams.selection?.restoreScope
       ? { scope: previewParams.selection.restoreScope }
       : {}),
+    top: { recordIds: params.recordIds, isDeleteOnly: params.isDeleteOnly },
     page: resolvePage(previewParams),
   });
   if (!page) return { ok: false, reason: 'not_exist' };

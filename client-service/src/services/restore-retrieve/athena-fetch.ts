@@ -194,8 +194,17 @@ const inWhere = (column: string, values?: string[] | null): string | null =>
 
 export interface ICsvFetchParams {
   columnNames: string[];
-  // Absent/empty → every backup job registered on the table. Present → the
-  // partition filter, which is also the only pruning lever this table has.
+  /**
+   * Absent/empty → every backup job registered on the table.
+   *
+   * Present, it means one of two different things:
+   *   default picking  — a row filter on the partition key, and the only
+   *                      pruning lever this table has.
+   *   restore-to picking — a record SELECTOR, exactly like `startDate` under
+   *                      `changedBetween`, and for the same reason. It leaves
+   *                      the scan's WHERE and the partition prune is lost. See
+   *                      buildCsvRecordsSql.
+   */
   backupJobIds?: string[] | null;
   // LastModifiedDate window (source.startDate / source.endDate, and the lower
   // bound contributed by restoreScope.chnageSince.date).
@@ -206,11 +215,14 @@ export interface ICsvFetchParams {
   //           which records qualify. See buildCsvRecordsSql.
   startDate?: string | null;
   endDate?: string | null;
-  // Record scope: restoreScope.records[].recordIds ∪ restoreScope.bulkCsvIds.
+  // Record scope: the request's top-level recordIds ∪ restoreScope.bulkCsvIds ∪
+  // restoreScope.records[].recordIds. A row filter on Id — safe in the scan
+  // under any picking mode, because it selects whole records, never versions.
   recordIds?: string[] | null;
   // Precompiled WHERE body from athena-filter (AND / OR / SOQL).
   filterWhere?: string | null;
-  // Keep only records whose newest operation is DELETE.
+  // Keep only records whose selected change is a DELETE (their newest operation
+  // under default picking, the anchored one under restore-to picking).
   deletedOnly?: boolean;
   // Return the version to restore TO rather than the current one — see
   // VERSION PICKING below.
@@ -224,12 +236,35 @@ export interface ICsvFetchParams {
   cursor?: IPageKey | null;
 }
 
+// Carried out of the scan so a later layer can still order by the file path and
+// read each row's own operation — `"$path"` is a pseudo-column and does not
+// survive a subquery, and neither does an unaliased CASE.
+const PATH = 'dv_path';
+const ROW_OP = 'dv_row_op';
+// LastModifiedDate of the change being previewed — see buildCsvRecordsSql.
+const ANCHOR = 'dv_anchor';
+
 /**
- * Per-record version ordering. Newest first, with "$path" breaking ties so two
- * rows sharing a LastModifiedDate rank deterministically — which matters once
- * `fullRestore` selects rank 2 by position rather than by value.
+ * Per-record version ordering. Newest first, with the file path breaking ties so
+ * two rows sharing a LastModifiedDate rank deterministically — which matters
+ * once restore-to picking selects rank 2 by position rather than by value.
  */
-const VERSION_ORDER = `ORDER BY ${quoteCol(LMD)} DESC, "$path" DESC`;
+const versionOrder = (pathExpr: string): string =>
+  `ORDER BY ${quoteCol(LMD)} DESC, ${pathExpr} DESC`;
+
+/**
+ * The window functions the pick reads, over one shared ordering.
+ *
+ * `type` is FIRST_VALUE rather than the row's own operation, so it always
+ * answers "what happened to this record" for the change being returned. Under
+ * restore-to picking the VALUES come from an earlier version while `type` still
+ * names the change being reverted; at rank 1 the two coincide, so the default
+ * path is unaffected. `versions` is only computed where the pick uses it.
+ */
+const rankingColumns = (opExpr: string, pathExpr: string, withVersions: boolean): string =>
+  `FIRST_VALUE(${opExpr}) OVER (PARTITION BY ${quoteCol(ID)} ${versionOrder(pathExpr)}) AS ${quoteCol(TYPE)}, ` +
+  `ROW_NUMBER() OVER (PARTITION BY ${quoteCol(ID)} ${versionOrder(pathExpr)}) AS rn` +
+  (withVersions ? `, COUNT(*) OVER (PARTITION BY ${quoteCol(ID)}) AS versions` : '');
 
 /**
  * Picks which ranked version of each record to return.
@@ -262,52 +297,72 @@ const versionPick = (restoreTo: boolean): string => {
 
 /**
  * The one active query: raw CSV rows for a single object, one row per record,
- * tagged with the record's latest INSERT/UPDATE/DELETE operation.
+ * tagged with the INSERT/UPDATE/DELETE operation being returned.
  *
- * Shape (inside → out):
- *   1. scan   — read the CSV table under every row-level filter (jobs, date
- *               window, record scope, caller filter), deriving `type` and
- *               ranking the record's versions.
- *   2. pick   — keep one version per record (see versionPick), then apply the
- *               change gate and deletedOnly. All three live here because they
- *               test DERIVED columns, which the scan's WHERE cannot see.
+ * ── Row filters vs. selectors ────────────────────────────────────────────────
+ *
+ * Every input is one of two things, and confusing them is the single easiest way
+ * to make this query silently wrong.
+ *
+ *   A ROW FILTER decides which versions are scanned at all. `endDate`, the
+ *   record scope and the caller's filter are row filters, and so is the whole
+ *   date window under default picking.
+ *
+ *   A SELECTOR decides which RECORDS qualify and, with them, WHICH CHANGE is
+ *   being previewed. It must never reach the scan's WHERE, because the version
+ *   a restore rolls back to is BY DEFINITION older than the change being
+ *   reverted — filtering rows by the selector would discard the very version
+ *   being asked for, the record would rank as `versions = 1`, and the query
+ *   would return its own post-change values. Silently the opposite of the
+ *   request.
+ *
+ * Under restore-to picking (`fullRestore`, or `changedBetween`) there are two
+ * possible selectors, and **`backupJobIds` wins over `startDate`** when both are
+ * present:
+ *
+ *   backupJobIds — "the change these jobs recorded". Costs the partition prune:
+ *                  every version of a candidate record has to be scanned, not
+ *                  just the requested jobs' rows.
+ *   startDate    — "the change inside this window" (CHANGED_BETWEEN only).
+ *
+ * A job list under DEFAULT picking stays a plain row filter on the partition
+ * key, which is what makes ENTIRE/PARTIAL cheap.
+ *
+ * ── Shape ────────────────────────────────────────────────────────────────────
+ *
+ * Without a selector (inside → out):
+ *   1. scan   — read the table under the row filters, deriving `type` and
+ *               ranking each record's versions in one pass.
+ *   2. pick   — keep one version per record (versionPick) and apply
+ *               `deletedOnly`. Both test DERIVED columns, which the scan's
+ *               WHERE cannot see.
  *   3. page   — keyset seek + ORDER BY + LIMIT (pageWrap).
  *
- * `type` is FIRST_VALUE over the same ordering, not the returned row's own
- * operation, so it always answers "what last happened to this record" — the
- * same meaning in every mode. Under restore-to picking the values come from an
- * earlier version while `type` still reports the change being reverted; at rank
- * 1 the two coincide, so the default path is unaffected.
+ * With a selector, one layer is inserted between 1 and 2:
+ *   1. scan   — the same row filters, plus each row's own operation, its path,
+ *               and `dv_anchor`: MAX(LastModifiedDate) over the versions the
+ *               selector matches, per record. NULL means the selector never
+ *               matched, i.e. the record does not qualify.
+ *   1b. rank  — drop non-qualifying records and everything ABOVE the anchor,
+ *               then rank what is left. Truncating at the anchor is what makes
+ *               rank 1 the selected change itself and rank 2 the state
+ *               immediately beneath it: a later change nobody asked about
+ *               cannot become the anchor, and `type` names the selected change
+ *               rather than whatever happened afterwards. WHERE is evaluated
+ *               before window functions, so one layer does both.
  *
  * Filtering before ranking is deliberate: the versions considered are the ones
- * the caller's filters admit, not all of them (ranking first would let a
- * filtered-out newest version hide a record that does match).
+ * the caller's ROW filters admit (ranking first would let a filtered-out newest
+ * version hide a record that does match).
  *
- * ── CHANGED_BETWEEN: why startDate leaves the scan's WHERE ───────────────────
+ * With neither selector — `fullRestore` alone, or CHANGED_BETWEEN with only an
+ * `endDate` — there is nothing to qualify on: every record in scope is returned
+ * at the version beneath its newest change, which reads as "restore-to state as
+ * of `endDate`".
  *
- * The two date modes differ in WHAT the lower bound filters, not just in which
- * version is picked:
- *
- *   changedBetween = false — `startDate` is a row filter. Versions older than it
- *     are never scanned. Correct for "show me the state of rows in this window".
- *
- *   changedBetween = true — `startDate` is a record SELECTOR. Leaving it in the
- *     scan's WHERE would be a bug: the version an UPDATE rolls back to is BY
- *     DEFINITION older than the change being reverted, so a row filter would
- *     discard the very version being asked for. The record would then rank as
- *     `versions = 1` and fall through to returning its own post-update values —
- *     silently the opposite of what was requested.
- *
- *     So only `endDate` bounds the scan, and the lower bound becomes a per-record
- *     window flag (`changed`). Truncating above at `endDate` is what makes rank 1
- *     the newest change AT OR BEFORE the window's end, so rank 2 is the state
- *     immediately before it — a later change outside the window cannot become the
- *     anchor. `type` follows the same truncated ordering, so it reports the change
- *     inside the window rather than whatever happened afterwards.
- *
- * With no `startDate` (CHANGED_BETWEEN accepts either bound) there is nothing to
- * gate on: every record at or before `endDate` qualifies, and the query reads as
- * "restore-to state as of endDate".
+ * ponytail: a job selector could still prune partitions if the caller passed the
+ * newest requested job's timestamp — no version above it can be the anchor. That
+ * needs a DynamoDB read of the job rows, so it is not done here.
  */
 export const buildCsvRecordsSql = (tableName: string, p: ICsvFetchParams): string => {
   const cols = projectionColumns(p.columnNames);
@@ -316,46 +371,53 @@ export const buildCsvRecordsSql = (tableName: string, p: ICsvFetchParams): strin
   // CHANGED_BETWEEN asks for the version to restore TO, so it implies restore-to
   // picking on its own — fullRestore cannot turn it back off.
   const restoreTo = p.fullRestore === true || changedBetween;
+  const jobIds = p.backupJobIds?.length ? p.backupJobIds : null;
 
-  // A record qualifies when ANY of its versions falls inside the window. MAX over
-  // the partition is that "any": it sees every version, so the pre-change one
-  // survives to be picked while records untouched in the window drop out.
-  const changeStart = changedBetween && p.startDate ? p.startDate : null;
-  const changeGate = changeStart ? 'changed = 1' : null;
-  const changedFlag = changeStart
-    ? `, MAX(CASE WHEN ${quoteCol(LMD)} >= ${lit(changeStart)} THEN 1 ELSE 0 END) ` +
-      `OVER (PARTITION BY ${quoteCol(ID)}) AS changed`
-    : '';
+  // Jobs win over the date bound: a caller who named the jobs has said exactly
+  // which change they mean, which is more specific than a window around it.
+  const jobSelector = restoreTo && jobIds ? inWhere('backup_job_id', jobIds) : null;
+  const dateSelector =
+    !jobSelector && changedBetween && p.startDate
+      ? `${quoteCol(LMD)} >= ${lit(p.startDate)}`
+      : null;
+  const selector = jobSelector ?? dateSelector;
 
-  const scan =
-    `SELECT ${colList}, ` +
-    `FIRST_VALUE(${ROW_TYPE_EXPR}) OVER (PARTITION BY ${quoteCol(ID)} ${VERSION_ORDER}) AS ${quoteCol(TYPE)}, ` +
-    `ROW_NUMBER() OVER (PARTITION BY ${quoteCol(ID)} ${VERSION_ORDER}) AS rn` +
-    // Only restore-to picking needs the per-record version count; the default
-    // path keeps exactly the window functions it uses.
-    (restoreTo ? `, COUNT(*) OVER (PARTITION BY ${quoteCol(ID)}) AS versions` : '') +
-    changedFlag +
-    ` FROM "${tableName}"` +
-    whereClause(
-      [
-        inWhere('backup_job_id', p.backupJobIds),
-        // Under changedBetween the lower bound is the `changed` flag above, not a
-        // row filter — see the block comment.
-        changedBetween ? dateWhere(null, p.endDate) : dateWhere(p.startDate, p.endDate),
-        inWhere(quoteCol(ID), p.recordIds),
-        p.filterWhere,
-      ],
-      'WHERE'
-    );
+  const rowFilters = [
+    // A job list that selects records must not also filter rows away.
+    inWhere('backup_job_id', jobSelector ? null : jobIds),
+    // Under changedBetween the lower bound is a selector, not a row filter.
+    changedBetween ? dateWhere(null, p.endDate) : dateWhere(p.startDate, p.endDate),
+    inWhere(quoteCol(ID), p.recordIds),
+    p.filterWhere,
+  ];
 
-  // The pick is parenthesised: it can be an OR expression, and the gates below
-  // append ANDs that would otherwise bind to only its last arm.
-  const picked =
-    `SELECT ${colList}, ${quoteCol(TYPE)} FROM (${scan}) r WHERE (${versionPick(restoreTo)})` +
-    (changeGate ? ` AND ${changeGate}` : '') +
+  // The pick is parenthesised: it can be an OR expression, and this AND would
+  // otherwise bind to only its last arm.
+  const gate = (inner: string): string =>
+    `SELECT ${colList}, ${quoteCol(TYPE)} FROM (${inner}) r WHERE (${versionPick(restoreTo)})` +
     (p.deletedOnly ? ` AND ${quoteCol(TYPE)} = 'DELETE'` : '');
 
-  return pageWrap(picked, p, quoteCol(LMD), quoteCol(ID));
+  if (!selector) {
+    const scan =
+      `SELECT ${colList}, ${rankingColumns(ROW_TYPE_EXPR, '"$path"', restoreTo)}` +
+      ` FROM "${tableName}"` +
+      whereClause(rowFilters, 'WHERE');
+    return pageWrap(gate(scan), p, quoteCol(LMD), quoteCol(ID));
+  }
+
+  const scan =
+    `SELECT ${colList}, ${ROW_TYPE_EXPR} AS ${quoteCol(ROW_OP)}, "$path" AS ${quoteCol(PATH)}, ` +
+    `MAX(CASE WHEN ${selector} THEN ${quoteCol(LMD)} END) ` +
+    `OVER (PARTITION BY ${quoteCol(ID)}) AS ${quoteCol(ANCHOR)}` +
+    ` FROM "${tableName}"` +
+    whereClause(rowFilters, 'WHERE');
+
+  const ranked =
+    `SELECT ${colList}, ${rankingColumns(quoteCol(ROW_OP), quoteCol(PATH), true)} ` +
+    `FROM (${scan}) a WHERE ${quoteCol(ANCHOR)} IS NOT NULL ` +
+    `AND ${quoteCol(LMD)} <= ${quoteCol(ANCHOR)}`;
+
+  return pageWrap(gate(ranked), p, quoteCol(LMD), quoteCol(ID));
 };
 
 // =============================================================================
@@ -641,30 +703,46 @@ if (require.main === module) {
     'the pick is parenthesised so AND cannot bind to one OR arm'
   );
 
-  // ── CHANGED_BETWEEN: restore-to picking + change gate ──────────────────────
+  // ── CHANGED_BETWEEN by date: the lower bound anchors, it does not filter ───
   const changed = buildCsvRecordsSql('t', {
     ...base,
     changedBetween: true,
     startDate: '2026-03-01',
     endDate: '2026-06-30',
   });
-  // The lower bound is a per-record flag, NOT a row filter: the version an UPDATE
-  // rolls back to is older than the change, so filtering rows would delete it.
+  // The version an UPDATE rolls back to is older than the change, so a row
+  // filter on startDate would discard the very version being asked for. It
+  // becomes a per-record anchor instead.
   assert.ok(
     changed.includes(
-      `MAX(CASE WHEN "LastModifiedDate" >= '2026-03-01' THEN 1 ELSE 0 END) OVER (PARTITION BY "Id") AS changed`
+      `MAX(CASE WHEN "LastModifiedDate" >= '2026-03-01' THEN "LastModifiedDate" END) ` +
+        `OVER (PARTITION BY "Id") AS "dv_anchor"`
     ),
-    'startDate becomes a window flag under changedBetween'
+    'startDate anchors the change under changedBetween'
   );
-  // endDate DOES bound the scan — that is what makes rank 1 the newest change at
-  // or before the window's end, so rank 2 is the state just before it. This exact
-  // match also proves the lower bound is NOT in the scan WHERE: whereClause would
-  // have joined it in with an AND.
+  // Only endDate bounds the scan. This exact match also proves the lower bound is
+  // NOT in the scan WHERE: whereClause would have joined it in with an AND.
   assert.ok(changed.includes(`FROM "t" WHERE ("LastModifiedDate" <= '2026-06-30T23:59:59.999Z')`));
+  // Records the selector never matched drop out; everything above the anchor is
+  // dropped so rank 1 is the selected change and rank 2 the state beneath it.
+  assert.ok(
+    changed.includes(`a WHERE "dv_anchor" IS NOT NULL AND "LastModifiedDate" <= "dv_anchor"`),
+    'the anchor both qualifies the record and truncates its version history'
+  );
+  // Ranking happens AFTER that filter — WHERE runs before window functions, so
+  // one layer does both — and reads the aliased op/path, not the pseudo-column.
+  assert.ok(
+    changed.includes(
+      `FIRST_VALUE("dv_row_op") OVER (PARTITION BY "Id" ORDER BY "LastModifiedDate" DESC, "dv_path" DESC) AS "dv_row_type"`
+    )
+  );
+  assert.ok(changed.includes(`"$path" AS "dv_path"`), '"$path" does not survive a subquery');
   // Restore-to picking without the caller asking for fullRestore.
   assert.ok(
-    changed.includes(`WHERE (("dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)) OR ("dv_row_type" <> 'UPDATE' AND rn = 1)) AND changed = 1`),
-    'CHANGED_BETWEEN implies restore-to picking, gated to records that changed'
+    changed.includes(
+      `) r WHERE (("dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)) OR ("dv_row_type" <> 'UPDATE' AND rn = 1))`
+    ),
+    'CHANGED_BETWEEN implies restore-to picking'
   );
   assert.ok(changed.includes(`COUNT(*) OVER (PARTITION BY "Id") AS versions`));
 
@@ -674,18 +752,65 @@ if (require.main === module) {
       .includes(`"dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)`)
   );
 
-  // Only an endDate → nothing to gate on; reads as "restore-to state as of endDate".
+  // ── A job list under restore-to picking is a SELECTOR, not a row filter ────
+  // The bug this prevents: with `backup_job_id IN (…)` in the scan's WHERE, the
+  // pre-change version (written by an EARLIER job) is never scanned, the record
+  // ranks as versions = 1, and the query returns its own post-update values.
+  const jobAnchored = buildCsvRecordsSql('t', {
+    ...base,
+    changedBetween: true,
+    backupJobIds: ['JOB_2'],
+    fullRestore: true,
+  });
+  assert.ok(
+    jobAnchored.includes(
+      `MAX(CASE WHEN backup_job_id IN ('JOB_2') THEN "LastModifiedDate" END) ` +
+        `OVER (PARTITION BY "Id") AS "dv_anchor"`
+    ),
+    'the job list anchors the change'
+  );
+  assert.ok(
+    !jobAnchored.includes(`FROM "t" WHERE`),
+    'and leaves the scan WHERE entirely — every version of a candidate record is scanned'
+  );
+  assert.ok(jobAnchored.includes(`"dv_anchor" IS NOT NULL AND "LastModifiedDate" <= "dv_anchor"`));
+
+  // Jobs win over startDate when both are present.
+  const jobsBeatDates = buildCsvRecordsSql('t', {
+    ...base,
+    changedBetween: true,
+    backupJobIds: ['JOB_2'],
+    startDate: '2026-03-01',
+  });
+  assert.ok(jobsBeatDates.includes(`MAX(CASE WHEN backup_job_id IN ('JOB_2')`));
+  assert.ok(!jobsBeatDates.includes(`>= '2026-03-01'`), 'the date bound is not also an anchor');
+
+  // fullRestore + jobs outside CHANGED_BETWEEN gets the same treatment — the
+  // trap is restore-to picking, not the source type. This is the combination
+  // /show-preview produces for a PARTIAL request.
+  assert.ok(
+    buildCsvRecordsSql('t', { ...base, fullRestore: true, backupJobIds: ['JOB_2'] })
+      .includes(`MAX(CASE WHEN backup_job_id IN ('JOB_2') THEN "LastModifiedDate" END)`)
+  );
+
+  // …but under DEFAULT picking a job list stays a plain partition filter, which
+  // is what keeps ENTIRE/PARTIAL cheap.
+  const jobFilter = buildCsvRecordsSql('t', { ...base, backupJobIds: ['JOB_2'] });
+  assert.ok(jobFilter.includes(`FROM "t" WHERE (backup_job_id IN ('JOB_2'))`));
+  assert.ok(!jobFilter.includes('dv_anchor'), 'no anchor without restore-to picking');
+
+  // Only an endDate → no selector at all; reads as "restore-to state as of endDate".
   const changedOpenBelow = buildCsvRecordsSql('t', { ...base, changedBetween: true, endDate: '2026-06-30' });
-  assert.ok(!changedOpenBelow.includes('changed'), 'no lower bound → no change gate');
+  assert.ok(!changedOpenBelow.includes('dv_anchor'), 'no lower bound and no jobs → nothing to anchor on');
   assert.ok(changedOpenBelow.includes(`"dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)`));
 
   // ENTIRE/PARTIAL keep the plain row-filter window and newest-version picking.
   const entire = buildCsvRecordsSql('t', { ...base, startDate: '2026-03-01', endDate: '2026-06-30' });
   assert.ok(entire.includes(`("LastModifiedDate" >= '2026-03-01' AND "LastModifiedDate" <= '2026-06-30T23:59:59.999Z')`));
   assert.ok(entire.includes(`) r WHERE (rn = 1)`), 'ENTIRE returns the newest version');
-  assert.ok(!entire.includes('changed'), 'the change gate is CHANGED_BETWEEN-only');
+  assert.ok(!entire.includes('dv_anchor'), 'anchoring is restore-to-only');
 
-  // The change gate must AND against the WHOLE pick, and coexist with deletedOnly.
+  // deletedOnly ANDs against the whole parenthesised pick on the anchored path too.
   const changedDeleted = buildCsvRecordsSql('t', {
     ...base,
     changedBetween: true,
@@ -693,9 +818,19 @@ if (require.main === module) {
     deletedOnly: true,
   });
   assert.ok(
-    changedDeleted.includes(`OR ("dv_row_type" <> 'UPDATE' AND rn = 1)) AND changed = 1 AND "dv_row_type" = 'DELETE'`),
-    'both gates AND against the parenthesised pick, not one OR arm'
+    changedDeleted.includes(`OR ("dv_row_type" <> 'UPDATE' AND rn = 1)) AND "dv_row_type" = 'DELETE'`),
+    'the gate ANDs against the parenthesised pick, not one OR arm'
   );
+
+  // deletedOnly + recordIds together: only the named records, and only those
+  // whose selected change is a delete.
+  const deletedSubset = buildCsvRecordsSql('t', {
+    ...base,
+    deletedOnly: true,
+    recordIds: ['001A', '002B'],
+  });
+  assert.ok(deletedSubset.includes(`FROM "t" WHERE ("Id" IN ('001A', '002B'))`));
+  assert.ok(deletedSubset.includes(`) r WHERE (rn = 1) AND "dv_row_type" = 'DELETE'`));
 
   // ── backupJobIds → partition filter ────────────────────────────────────────
   assert.ok(
