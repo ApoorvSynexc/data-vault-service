@@ -1,3 +1,4 @@
+import { UNSUPPORTED_SALESFORCE_OBJECTS } from '../../../constant';
 import { IUser } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
 import { getCrmById } from '../../crm';
@@ -40,6 +41,42 @@ const unwrapApex = <T = any>(result: any): T =>
     ? (result.data as T)
     : (result as T);
 
+/**
+ * True only for a name that is explicitly on UNSUPPORTED_SALESFORCE_OBJECTS. Anything
+ * unrecognised — including an entry with no apiName — is deliberately *not* denied, so
+ * a reply shape we did not anticipate loses nothing it should have kept.
+ */
+const isUnsupportedObject = (apiName: unknown): boolean =>
+  typeof apiName === 'string' && UNSUPPORTED_SALESFORCE_OBJECTS.has(apiName.trim().toLowerCase());
+
+/**
+ * Drops unsupported objects from an accessible-objects reply, whatever its shape:
+ * Apex answers { success, data: [...] }, but the same list is read as a bare array
+ * and under `objects` by different callers, so all three are handled and anything
+ * else passes through untouched.
+ *
+ * Filtering here rather than per-controller keeps one denylist for every consumer —
+ * the object picker, dry-run counts, and metadata sync all see the same list.
+ */
+const rejectUnsupportedObjects = <T>(reply: T): T => {
+  const keep = (objects: unknown[]) => objects.filter((obj: any) => !isUnsupportedObject(obj?.apiName));
+
+  if (Array.isArray(reply)) {
+    return keep(reply) as unknown as T;
+  }
+  if (!reply || typeof reply !== 'object') {
+    return reply;
+  }
+
+  const envelope = reply as Record<string, unknown>;
+  for (const key of ['data', 'objects']) {
+    if (Array.isArray(envelope[key])) {
+      return { ...envelope, [key]: keep(envelope[key] as unknown[]) } as T;
+    }
+  }
+  return reply;
+};
+
 const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = {}) => {
   if (!user || !user.crmId) {
     return [];
@@ -61,10 +98,12 @@ const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = 
     url += `?mode=${mode}`;
   }
 
-  return callApex(
+  const reply = await callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
   );
+
+  return rejectUnsupportedObjects(reply);
 };
 
 const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: object } = {}) => {

@@ -219,6 +219,82 @@ const SESSION_STATUS = {
   revoked: 'REVOKED',
 };
 
+/**
+ * Salesforce reports these as "accessible" on accessible-objects, but none of them
+ * can be backed up or archived: they are describe/metadata views (FieldDefinition,
+ * EntityParticle, RelatedListDefinition), picklist-backing status tables
+ * (CaseStatus, TaskStatus, WorkOrderStatus), access-check views (UserRecordAccess),
+ * or non-queryable system entities. Offering them in an object picker produces
+ * configs whose backup jobs fail at query time, so they are dropped at the source.
+ *
+ * Matched case-insensitively — Salesforce API names are case-insensitive and this
+ * list mixes conventions (e.g. DATACLOUD_ADDRESS).
+ */
+const UNSUPPORTED_SALESFORCE_OBJECTS = new Set(
+  [
+    'AcceptedEventRelation',
+    'ApexTypeImplementor',
+    'AppTabMember',
+    'CaseStatus',
+    'ChatterConversation',
+    'ChatterMessage',
+    'ChatterMessageThread',
+    'ColorDefinition',
+    'ContentDocumentSubscription',
+    'ContentFolderItem',
+    'ContentFolderMember',
+    'ContentVersionComment',
+    'ContentVersionRating',
+    'ContractStatus',
+    'DataStatistics',
+    'DataType',
+    'DATACLOUD_ADDRESS',
+    'DeclinedEventRelation',
+    'EmbeddedServiceDetail',
+    'EmbeddedServiceLabel',
+    'EntityParticle',
+    'EventWhoRelation',
+    'FieldChangeSnapshot',
+    'FieldDefinition',
+    'FieldSecurityClassification',
+    'FlexQueueItem',
+    'FlowTestView',
+    'FlowVariableView',
+    'FlowVersionView',
+    'FormulaFunction',
+    'FormulaFunctionAllowedType',
+    'FormulaFunctionCategory',
+    'IconDefinition',
+    'ListViewChartInstance',
+    'OrderStatus',
+    'OutgoingEmail',
+    'OwnerChangeOptionInfo',
+    'PartnerRole',
+    'PicklistValueInfo',
+    'PlatformAction',
+    'Publisher',
+    'RecentFieldChange',
+    'RecentlyViewed',
+    'RelatedListColumnDefinition',
+    'RelatedListDefinition',
+    'RelationshipDomain',
+    'RelationshipInfo',
+    'SearchLayout',
+    'SiteDetail',
+    'SolutionStatus',
+    'TabDefinition',
+    'TaskPriority',
+    'TaskStatus',
+    'TaskWhoRelation',
+    'UndecidedEventRelation',
+    'UserEntityAccess',
+    'UserFieldAccess',
+    'UserRecordAccess',
+    'WorkOrderLineItemStatus',
+    'WorkOrderStatus',
+  ].map((name) => name.toLowerCase())
+);
+
 export {
   HOST,
   PORT,
@@ -310,4 +386,7 @@ export {
   OBJECT_TYPE,
   BACKUP_TYPE,
   ENVIRONMENT_TYPE,
+
+  // Salesforce
+  UNSUPPORTED_SALESFORCE_OBJECTS,
 };

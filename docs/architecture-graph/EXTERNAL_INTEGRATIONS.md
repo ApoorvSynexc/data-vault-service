@@ -29,7 +29,7 @@ Every third-party system the platform integrates with.
 - Namespace: `SYX_DVV` (managed package)
 - Handler class: `DataVaultRecordSyncTriggerHandler`
 - Endpoints:
-  - `accessible-objects?mode={mode}` — list objects accessible for backup/archival.
+  - `accessible-objects?mode={mode}` — list objects accessible for backup/archival. Node filters the reply through `constant.UNSUPPORTED_SALESFORCE_OBJECTS` before any caller sees it, so objects Salesforce reports as accessible but that cannot be backed up never reach a picker or a backup config. See SERVICES.md § `getApexObjects`.
   - `object-fields-metadata?objectApiName={name}&mode={mode}` — field names + types.
   - `object-children?apiName={name}&mode={mode}` — child relationship objects.
   - `preview-records` (POST) — sample records for UI preview.
