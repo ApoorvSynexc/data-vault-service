@@ -329,7 +329,7 @@ export type RestoreScopeType =
   | 'FILTER'
   | 'DELETED_ONLY'
   // Spelled as the client sends it.
-  | 'CHNAGE_SINCE'
+  | 'CHANGE_SINCE'
   | 'BULK_CSV';
 
 export interface IFetchSource {
@@ -365,7 +365,7 @@ export interface IRestoreScope {
   fields?: IRestoreScopeFields[];
   filters?: IFetchRecordsFilters;
   // Spelled as the client sends it. Contributes a LastModifiedDate lower bound.
-  chnageSince?: { date?: string };
+  changeSince?: { date?: string };
   // Additional record scope, unioned with records[].recordIds.
   bulkCsvIds?: string[];
   deletedOnly?: boolean;
@@ -507,7 +507,7 @@ const fingerprintRequest = (p: IFetchRecordsParams): string => {
         [...(scope?.objects ?? [])].sort(),
         scope?.records ?? null,
         scope?.fields ?? null,
-        scope?.chnageSince?.date ?? null,
+        scope?.changeSince?.date ?? null,
         [...(scope?.bulkCsvIds ?? [])].sort(),
         scope?.deletedOnly ?? false,
       ])
@@ -653,7 +653,7 @@ const resolveScope = (
     columns: resolvedColumns,
     recordIds,
     deletedOnly: scope.deletedOnly === true,
-    ...(scope.chnageSince?.date ? { changedSinceStart: scope.chnageSince.date } : {}),
+    ...(scope.changeSince?.date ? { changedSinceStart: scope.changeSince.date } : {}),
   };
 };
 
