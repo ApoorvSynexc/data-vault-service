@@ -356,14 +356,14 @@ const parseFetchRecordsParams = (
       scope.filters = parsed.value;
     }
 
-    if (rawScope.chnageSince !== undefined && rawScope.chnageSince !== null) {
-      const c = rawScope.chnageSince;
+    if (rawScope.changeSince !== undefined && rawScope.changeSince !== null) {
+      const c = rawScope.changeSince;
       if (!isRecord(c)) return { ok: false, error: 'invalid_changed_since' };
       if (c.date !== undefined && c.date !== null && typeof c.date !== 'string') {
         return { ok: false, error: 'invalid_changed_since' };
       }
       const date = (c.date as string | undefined)?.trim();
-      if (date) scope.chnageSince = { date };
+      if (date) scope.changeSince = { date };
     }
 
     if (rawScope.bulkCsvIds !== undefined && rawScope.bulkCsvIds !== null) {
@@ -437,7 +437,7 @@ const parseFetchRecordsParams = (
  *       records?:    { objectName, recordIds[] }[]  (only the matching object applies)
  *       fields?:     { objectName, fieldNames[] }[] (matching object REPLACES columns)
  *       filters?:    { type: 'AND'|'OR'|'SOQL', soqlQuery?, fields?[] }
- *       chnageSince?:{ date: string }               (extra LastModifiedDate lower bound)
+ *       changeSince?:{ date: string }               (extra LastModifiedDate lower bound)
  *       bulkCsvIds?: string[]                       (record scope, unioned with records)
  *       deletedOnly?: boolean
  *     }
