@@ -252,6 +252,91 @@ Athena query with `COLUMN_NOT_FOUND`. Same exposure as a UI that feeds
 `/fetch-object-fields` into `fetch-records`, but this endpoint hits it on every
 call rather than only when the missing column is on screen.
 
+## POST /v1/restore — createRestoreHandler, rewired 2026-07-30
+
+The restore run no longer goes through EMR/Spark. `initalizeRestoreTransform`
+(and the raw-CSV copy that briefly replaced it) are **commented out, not
+deleted**, in `controller/v1/restore-retrieve/index.ts`.
+
+```
+createRestore            → the stored request (201 is sent here; the rest is fire-and-forget)
+createRestoreJob         → the job row, which fixes source.csvFilePath
+prepareRestoreCsvFiles   → writes that path's CSVs from show-preview's rows
+tiggerRestoreJob         → POST backup-service /v1/restore → Bulk API 2.0 ingest
+```
+
+Why: show-preview already answers "which records, at which version". Serialising
+those rows *is* the restore input — no cluster, no second implementation of the
+version picking, and what the user approved on screen is byte-for-byte what gets
+written.
+
+### Layout
+
+```
+<csvFilePath>/<objectApiName>/file.csv       ← first block
+<csvFilePath>/<objectApiName>/file-2.csv     ← only when the object spans several
+```
+
+`csvFilePath` is `salesforce/<crmId>/restore/<restoreJobId>/csv`, set by
+`createRestoreJob`. Multiple files are safe: backup-service takes the header from
+the first file and skips every later one's, and the column order is identical
+across them because it is resolved once per object.
+
+An object with no records in scope writes **nothing** — not even a header.
+backup-service throws `No data rows found` for a folder whose files hold only a
+header, but reports an absent folder as a clean zero-record success. If no object
+produced rows, the ingest is not triggered at all.
+
+### Id handling — the delete case
+
+The ingest runs ONE Bulk operation per object, chosen from
+`conflict.restoreMode`:
+
+| restoreMode | operation | CSV |
+| --- | --- | --- |
+| `OVERWRITE` | `upsert`, external id `Id` | **Id column present.** A row whose selected change was a DELETE carries a **blank Id** — the record is gone from Salesforce, so upsert inserts it; keeping the old id would target an update at a record that no longer exists. Every other row keeps its id and is updated in place. |
+| `APPEND_NEW` | `insert` | **Id column omitted entirely** — Salesforce rejects an insert job that carries one. |
+| `SKIP` | — | No files written. |
+| `REPLACE_ENTIRE_OBJECT` | — | Rejected up front (`unsupported_restore_mode`); backup-service throws on it too. |
+
+Everything else in the row is the restore-to version: the second-newest version
+of an updated record, the DELETE row of a deleted one, an inserted record
+unchanged.
+
+### Skipped fields
+
+The seven system fields (`Id` — emitted from its own branch — `CreatedDate`,
+`CreatedById`, `LastModifiedDate`, `LastModifiedById`, `SystemModstamp`,
+`IsDeleted`). Salesforce owns all of them; leaving one in fails the whole ingest
+job rather than a row.
+
+### Paging
+
+`fetchRestoreToPage` is called with `pageSize = BLOCK_SIZE`, so one iteration
+drains one Athena block. At the API's 50 the builder would replay the same stored
+result set 40 times, re-downloading up to 2000 rows each time. Capped at
+`RESTORE_CSV_MAX_PAGES` (1000 blocks); hitting it means a cursor that is not
+advancing, not a genuinely huge object.
+
+### Known ceilings
+
+- **`RESTORE_CSV_OBJECTS` is pinned to `['Customer__c']`** while the flow is
+  proven end to end. `resolveRestoreCsvObjects` already loops the job's own
+  object list — swapping it is one line.
+- **Only the system fields are skipped.** Formula, roll-up summary and
+  auto-number fields are equally unwritable and Bulk API 2.0 rejects the whole
+  job on the header row when one is present, but the stored schema file is
+  `{ label, dataType, apiName }` and carries no writability flags. Safe for
+  objects of plain writable fields; will fail the ingest for an object with a
+  formula field. Fix: persist `createable`/`updateable` at backup time, or
+  describe the object at CSV-build time.
+- **`restore.restoreType` is not honoured** — every row is written whole
+  (RESTORE_ENTIRE_RECORD). RESTORE_ONLY_CHANGED_FIELDS needs the per-field delta,
+  whose query builders are commented out in athena-fetch.
+- **`activateRestoreHandler` still calls `initalizeRestoreTransform`** — a
+  restore saved as DRAFT and activated later takes the old EMR path, not this
+  one.
+
 ## POST /v1/restore/fetch-object-fields — added 2026-07-17, currently unreachable
 
 **Route bug:** `restore-retrieve.route.ts:28` registers this as `router.post('fetch-object-fields', ...)` — no leading slash. Express 5 accepts the registration silently, then matches nothing (verified against this repo's `express@^5.2.1`: 404 as written, 200 with the slash added). Everything below is live, tested-in-isolation code with no reachable entry point until the slash is added.
