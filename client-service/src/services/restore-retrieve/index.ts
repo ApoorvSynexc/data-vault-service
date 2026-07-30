@@ -9,6 +9,7 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { httpRequest } from '../../utils/http-request';
+import { IsoDateString } from '../../utils/iso-date';
 import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
 
 export { buildAthenaFilterWhere, FilterError } from './athena-filter';
@@ -337,8 +338,24 @@ export interface IFetchSource {
   // table name — everything the query needs is resolved from this one id.
   backupConfigId: string;
   type: FetchSourceType;
-  startDate?: string;
-  endDate?: string;
+  /**
+   * LastModifiedDate window, as canonical ISO 8601 UTC instants
+   * (`YYYY-MM-DDTHH:mm:ss.sssZ`) — see IsoDateString.
+   *
+   * The type is branded rather than plain `string` because these values are
+   * compared as STRINGS, not as dates: they go into Athena predicates against a
+   * varchar column, they are lexicographically merged with
+   * restoreScope.changeSince.date (later bound wins), and they are hashed into
+   * the pagination fingerprint. Any of those silently produces the wrong answer
+   * if a bare date, a local time, or a `+05:30` offset reaches it — so the only
+   * way to populate them is toIsoDateString, at the request boundary.
+   *
+   * A date-only input is resolved against the bound it serves: `2026-06-30` as
+   * an `endDate` becomes that day's LAST moment, so an inclusive range covers
+   * the whole day.
+   */
+  startDate?: IsoDateString;
+  endDate?: IsoDateString;
   // Absent/empty → every backup job on the config.
   backupJobIds?: string[];
 }
@@ -364,8 +381,10 @@ export interface IRestoreScope {
   // `columns`.
   fields?: IRestoreScopeFields[];
   filters?: IFetchRecordsFilters;
-  // Spelled as the client sends it. Contributes a LastModifiedDate lower bound.
-  changeSince?: { date?: string };
+  // Spelled as the client sends it. Contributes a LastModifiedDate lower bound,
+  // merged with source.startDate by string comparison — so it carries the same
+  // canonical ISO type, or the merge would compare two different shapes.
+  changeSince?: { date?: IsoDateString };
   // Additional record scope, unioned with records[].recordIds.
   bulkCsvIds?: string[];
   deletedOnly?: boolean;
@@ -622,7 +641,7 @@ interface IResolvedScope {
   columns: string[];
   recordIds: string[];
   deletedOnly: boolean;
-  changedSinceStart?: string;
+  changedSinceStart?: IsoDateString;
 }
 
 const resolveScope = (
@@ -705,8 +724,13 @@ const fetchCsvRecords = async (
   // LastModifiedDate; the tighter one wins so neither can widen the other. Under
   // CHANGED_BETWEEN the merged bound selects which records changed rather than
   // filtering rows out of the scan — see buildCsvRecordsSql.
+  //
+  // Sorting picks the later bound by STRING order, which is the same as instant
+  // order only because both sides are canonical ISO UTC (IsoDateString) —
+  // mixing in a bare date or an offset-bearing timestamp would pick the wrong
+  // one and silently widen or narrow the window.
   const startDate = [source.startDate, resolved.changedSinceStart]
-    .filter((d): d is string => Boolean(d))
+    .filter((d): d is IsoDateString => Boolean(d))
     .sort()
     .pop();
 
