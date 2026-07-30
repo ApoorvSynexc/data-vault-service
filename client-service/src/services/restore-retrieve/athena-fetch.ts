@@ -171,7 +171,7 @@ export interface ICsvFetchParams {
   // partition filter, which is also the only pruning lever this table has.
   backupJobIds?: string[] | null;
   // LastModifiedDate window (source.startDate / source.endDate, and the lower
-  // bound contributed by restoreScope.chnageSince.date).
+  // bound contributed by restoreScope.changeSince.date).
   startDate?: string | null;
   endDate?: string | null;
   // Record scope: restoreScope.records[].recordIds ∪ restoreScope.bulkCsvIds.

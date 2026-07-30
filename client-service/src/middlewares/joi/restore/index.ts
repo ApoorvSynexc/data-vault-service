@@ -73,7 +73,7 @@ const restoreScopeSchema = Joi.object({
     then: filtersSchema.required(),
     otherwise: Joi.forbidden(),
   }),
-  chnageSince: Joi.when('type', {
+  changeSince: Joi.when('type', {
     is: 'CHNAGE_SINCE',
     then: changeSinceSchema.required(),
     otherwise: Joi.forbidden(),

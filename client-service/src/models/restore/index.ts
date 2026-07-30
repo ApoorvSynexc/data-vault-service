@@ -33,7 +33,7 @@ export interface IRestoreScope {
   records?: IRestoreScopeRecord[];
   fields?: IRestoreScopeField[];
   filters?: IRestoreFilters;
-  chnageSince?: IRestoreChangeSince;
+  changeSince?: IRestoreChangeSince;
   bulkCsvIds?: string[];
   deletedOnly?: boolean;
 }
