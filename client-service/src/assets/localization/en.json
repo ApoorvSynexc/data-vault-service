@@ -97,5 +97,7 @@
   "invalid_scope_objects": "restoreScope.objects must be an array of object names",
   "invalid_scope_records": "each restoreScope.records entry must have a string objectName and a recordIds array",
   "invalid_scope_fields": "each restoreScope.fields entry must have a string objectName and a fieldNames array",
-  "invalid_full_restore": "fullRestore must be a boolean"
+  "invalid_full_restore": "fullRestore must be a boolean",
+  "invalid_time_format": "startTime and endTime must be valid date strings",
+  "invalid_time_range": "startTime must not be later than endTime"
 }

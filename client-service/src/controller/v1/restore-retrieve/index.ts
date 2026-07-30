@@ -4,6 +4,9 @@ import {
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
   getObjectListByConfigId,
+  getBackupJobIdsChangedBetween,
+  CHANGED_BETWEEN_JOBS_LIMIT,
+  CHANGED_BETWEEN_JOBS_MAX_LIMIT,
   fetchRecordsByBackupJobs,
   fetchObjectFields,
   repairGlueTables,
@@ -165,6 +168,87 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   }
 
   makeResponse(req, res, 200, true, 'fetch', objects);
+};
+
+// Normalises a client-supplied timestamp to ISO UTC. Stored timestamps are
+// always ISO UTC and DynamoDB range-compares them as plain strings, so a
+// date-only or offset-bearing input has to be converted before it can be
+// compared — "2026-07-01T00:00+05:30" would otherwise sort after
+// "2026-07-01T00:00:00.000Z" it precedes.
+const toIsoTimestamp = (value: string): string | null => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+};
+
+/**
+ * GET /fetch-change-between-backup-jobs?backupConfigId=&startTime=&endTime=&limit=&cursor=
+ *
+ * Backup job ids for the config whose run started inside the window, newest
+ * first — the job list to hand to /retrieve/fetch-records as
+ * source.backupJobIds under a CHANGED_BETWEEN request.
+ *
+ * The window applies to when a job STARTED (startedAt), not when it was
+ * created: a job created earlier but resumed inside the window recorded its
+ * changes inside the window.
+ *
+ * Paginated with the same limit/cursor contract as the other list endpoints. A
+ * page can come back shorter than `limit` and still carry a nextCursor — the
+ * window filter is applied after the index read — so follow nextCursor rather
+ * than a short page to decide when the list ends.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller
+ * — same collapsing as the handlers above, which avoids confirming that another
+ * user's config id exists.
+ */
+const fetchChangeBetweenBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupConfigId, startTime, endTime, limit, cursor } = req.query as Record<string, string>;
+  const userId = req.user!.userId;
+  const limitNum = Math.min(
+    Math.max(1, parseInt(limit ?? String(CHANGED_BETWEEN_JOBS_LIMIT), 10) || CHANGED_BETWEEN_JOBS_LIMIT),
+    CHANGED_BETWEEN_JOBS_MAX_LIMIT
+  );
+
+  if (!backupConfigId) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  if (!startTime || !endTime) {
+    makeResponse(req, res, 400, false, 'params_required');
+    return;
+  }
+
+  const from = toIsoTimestamp(startTime);
+  const to = toIsoTimestamp(endTime);
+
+  if (!from || !to) {
+    makeResponse(req, res, 400, false, 'invalid_time_format');
+    return;
+  }
+
+  if (from > to) {
+    makeResponse(req, res, 400, false, 'invalid_time_range');
+    return;
+  }
+
+  const result = await getBackupJobIdsChangedBetween({
+    backupConfigId,
+    startTime: from,
+    endTime: to,
+    userId,
+    limit: limitNum,
+    ...(cursor ? { cursor } : {}),
+  });
+
+  if (!result) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result.backupJobIds, {
+    limit: limitNum,
+    ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+  });
 };
 
 const VALID_FETCH_FILTER_TYPES = ['AND', 'OR', 'SOQL'] as const;
@@ -687,6 +771,7 @@ export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
   getObjectListByConfigIdHandler,
+  fetchChangeBetweenBackupJobsHandler,
   fetchRecordsHandler,
   fetchObjectFieldsHandler,
   repairGlueTablesHandler,
