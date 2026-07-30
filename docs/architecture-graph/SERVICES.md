@@ -78,6 +78,7 @@ Every service function, what it does, and its side effects.
 ### services/restore-retrieve/index.ts
 - `getObjectListByConfigId(configId)` — Returns object list from latest job for the config.
 - `getObjectListByBackupJobIds(jobIds[])` — Batch fetch jobs, extract object lists.
+- `getBackupJobIdsChangedBetween({ backupConfigId, startTime, endTime, userId, limit?, cursor? })` — Added 2026-07-30. Config-ownership check, then a `backupConfigId-index` query keyed on `createdAt <= endTime` and filtered on `startedAt BETWEEN startTime AND endTime` (plus `#type <> 'RESTORE'`), newest first. Returns `{ backupJobIds, nextCursor? }`, or `null` when the config is missing/not owned. Limit defaults to 50, caps at 200; the query is re-issued for the shortfall up to 5 rounds because the window is a filter, not a key condition — so a short page with a cursor is expected. See execution/RESTORE_RETRIEVE.md.
 - `fetchRecordsByBackupJobs(params)` — Queries Athena for records. Two paths based on `configType`:
   - `BACKUP`: verifies ownership of `backupJobIds[0]`, resolves Glue DB+table from that job's config, runs `SELECT cols FROM table WHERE backup_job_id IN (...)`, returns results grouped by jobId.
   - `ARCHIVAL`: verifies config ownership, resolves most recent `SUCCESS` ARCHIVAL job via `getBackupJobsByConfig(configId, { limit:1, status:'SUCCESS', type:'ARCHIVAL' })`, then runs the same Athena query for that single job partition.
