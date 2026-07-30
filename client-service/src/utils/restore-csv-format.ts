@@ -109,11 +109,12 @@ export const removeCsvColumns = (csvContent: string, columnsToRemove: string[]):
 // Downloads every CSV under each of sourceFolderKeys, strips columnsToRemove
 // from each one, and re-uploads the result under destinationFolderKey — a
 // ready-to-call wrapper around transformCsvFolder for this one specific
-// operation. Each source folder gets its own subfolder under
-// destinationFolderKey (named after the source folder's own last path
-// segment — e.g. the per-object "Account"/"Contact" folders in a restore),
-// so files from different source folders never collide on the same
-// destination key. Processed sequentially, one source folder at a time.
+// operation. Processed sequentially, one source folder at a time.
+//
+// A source folder with no files (transformCsvFolder throws "No files found
+// under ...") or any other per-folder failure is logged and skipped rather
+// than aborting the whole call — one empty/missing object folder shouldn't
+// stop the remaining folders from being processed.
 export const removeCsvColumnsInFolder = async (params: {
   s3Config: IS3Config;
   sourceFolderKeys: string[];
@@ -124,14 +125,18 @@ export const removeCsvColumnsInFolder = async (params: {
 
   const writtenKeys: string[] = [];
   for (const sourceFolderKey of sourceFolderKeys) {
-    const keys = await transformCsvFolder({
-      s3Config,
-      sourceFolderKey,
-      destinationFolderKey:destinationFolderKey,
-      transform: (csvContent) => removeCsvColumns(csvContent, columnsToRemove),
-      mapDestinationFileName: (sourceFileName) => toCsvFileName(sourceFileName),
-    });
-    writtenKeys.push(...keys);
+    try {
+      const keys = await transformCsvFolder({
+        s3Config,
+        sourceFolderKey,
+        destinationFolderKey,
+        transform: (csvContent) => removeCsvColumns(csvContent, columnsToRemove),
+        mapDestinationFileName: (sourceFileName) => toCsvFileName(sourceFileName),
+      });
+      writtenKeys.push(...keys);
+    } catch (error: any) {
+      console.error(`[removeCsvColumnsInFolder] skipping ${sourceFolderKey}: ${error?.message ?? error}`);
+    }
   }
 
   return writtenKeys;
