@@ -739,7 +739,7 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
         const destinationPath = restoreJob.source.csvFilePath || "";
         const sourcePaths = [];
         for (const object of restoreJob.destination.objects) {
-          const sourcePath = `${restoreJob.source.crmName}/${restoreJob.source.crmId}/${'backup'}/${restoreJob.source.backupConfigId}/raw_data/${backupJobId}/${object.name}`;
+          const sourcePath = `${restoreJob.source.crmName}/${restoreJob.source.crmId}/${'backup'}/${restoreJob.source.backupConfigId}/raw_data/${backupJobId}/${object.name}/inserts`;
           sourcePaths.push(sourcePath);
         }
 
