@@ -222,6 +222,72 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<void> =
   }
 };
 
+interface RestoreJobStats {
+  totalRestoreJobs: number;
+  pendingRestore: number;
+  failedRestore: number;
+  // processedRecordCount already counts both successes and failures (matches
+  // Salesforce Bulk API's numberRecordsProcessed semantics — see
+  // submitIngestChunk in backup-service), so actual successes are the
+  // difference, not processedRecordCount on its own.
+  successRecordCount: number;
+}
+
+// Mirrors computeJobStats's paginated-scan-and-tally shape (backup-job
+// service), scoped down to just the counts asked for here — no time-window
+// breakdowns. Sums processedRecordCount/failedRecordCount across every job's
+// destination.objects[] list.
+const computeRestoreJobStats = async (query: {
+  indexName: string;
+  keyName: string;
+  keyValue: string;
+}): Promise<RestoreJobStats> => {
+  let totalRestoreJobs = 0;
+  let pendingRestore = 0;
+  let failedRestore = 0;
+  let totalProcessedRecordCount = 0;
+  let totalFailedRecordCount = 0;
+
+  let lastKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: RESTORE_JOB_TABLE,
+        IndexName: query.indexName,
+        KeyConditionExpression: `${query.keyName} = :keyValue`,
+        ExpressionAttributeValues: { ':keyValue': query.keyValue },
+        Limit: 100,
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      })
+    );
+
+    const jobs = (result.Items ?? []) as IRestoreJob[];
+    lastKey = result.LastEvaluatedKey;
+
+    for (const job of jobs) {
+      totalRestoreJobs++;
+      if (job.status === 'PENDING') {
+        pendingRestore++;
+      } else if (job.status === 'FAILED') {
+        failedRestore++;
+      }
+
+      for (const object of job.destination.objects ?? []) {
+        totalProcessedRecordCount += object.processedRecordCount ?? 0;
+        totalFailedRecordCount += object.failedRecordCount ?? 0;
+      }
+    }
+  } while (lastKey);
+
+  return {
+    totalRestoreJobs,
+    pendingRestore,
+    failedRestore,
+    successRecordCount: totalProcessedRecordCount - totalFailedRecordCount,
+  };
+};
+
 const getRestoreJobById = async (restoreJobId: string): Promise<IRestoreJob | null> => {
   const result = await docClient.send(
     new GetCommand({
@@ -289,5 +355,6 @@ export {
   getRestoreJobById,
   getRestoreJobsByUserId,
   getRestoreJobsByRestoreId,
+  computeRestoreJobStats,
   tiggerRestoreJob,
 };

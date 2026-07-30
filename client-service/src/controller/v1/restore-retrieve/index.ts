@@ -31,6 +31,7 @@ import {
   tiggerRestoreJob,
   getRestoresWithPagination,
   getRestoreJobsByRestoreId,
+  computeRestoreJobStats,
   CursorError,
   PAGE_SIZE,
   initalizeRestoreTransform,
@@ -1022,6 +1023,28 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
   makeResponse(req, res, 200, true, 'fetch', { ...restoreJob, destination: { ...restoreJob.destination, encryptedTokens: undefined }, source: undefined });
 };
 
+/**
+ * GET /job/stats?restoreId=
+ * Mirrors getBackupJobStatsHandler's shape: with restoreId, stats are scoped
+ * to that restore's own jobs (restoreId-index); without it, scoped to every
+ * restore job the authenticated user has (userId-index).
+ *
+ * successRecordCount = processedRecordCount - failedRecordCount, summed across
+ * every job's destination.objects[] — processedRecordCount already counts
+ * both successes and failures (Salesforce Bulk API's numberRecordsProcessed
+ * semantics), so the difference is the actual success count.
+ */
+const getRestoreJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { restoreId } = req.query as Record<string, string>;
+  const userId = req.user!.userId;
+
+  const stats = restoreId
+    ? await computeRestoreJobStats({ indexName: 'restoreId-index', keyName: 'restoreId', keyValue: restoreId })
+    : await computeRestoreJobStats({ indexName: 'userId-index', keyName: 'userId', keyValue: userId });
+
+  makeResponse(req, res, 200, true, 'fetch', stats);
+};
+
 export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
@@ -1035,5 +1058,6 @@ export const restoreRetrieveJobController = wrapController({
   activateRestoreHandler,
   getPicklistFieldValuesHandler,
   listRestoresHandler,
-  getRestoreJobHandler
+  getRestoreJobHandler,
+  getRestoreJobStatsHandler
 });
