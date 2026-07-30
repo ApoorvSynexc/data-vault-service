@@ -195,21 +195,27 @@ export const toPage = (
   columnNames: string[],
   offset: number,
   fingerprint: string,
-  executions: Record<string, string>
+  executions: Record<string, string>,
+  // Rows per page. Defaults to the API's PAGE_SIZE; internal readers that
+  // consume a whole result set pass BLOCK_SIZE so one iteration drains one
+  // Athena block instead of replaying it 40 times. The cursor maths is the
+  // same either way — `off` is a row offset, not a page number — but a caller
+  // must keep it constant for the whole run, since it is not fingerprinted.
+  pageSize: number = PAGE_SIZE
 ): IFetchRecordsResult => {
   const requested = [...new Set(columnNames)];
   const keep = new Set(requested.map((c) => c.toLowerCase()));
   const internal = ['Id', 'LastModifiedDate'].filter((c) => !keep.has(c.toLowerCase()));
 
   const extras = new Set<string>();
-  const rows = block.slice(offset, offset + PAGE_SIZE).map(({ record }) => {
+  const rows = block.slice(offset, offset + pageSize).map(({ record }) => {
     const projected = { ...record };
     for (const c of internal) delete projected[c];
     for (const c of Object.keys(projected)) if (!keep.has(c.toLowerCase())) extras.add(c);
     return { record: projected };
   });
 
-  const nextOffset = offset + PAGE_SIZE;
+  const nextOffset = offset + pageSize;
   const last = block[block.length - 1];
   // Rows left in this block → keep replaying it. Block came back full → there
   // may be another one, so seek past its last row. Short block → the end.
