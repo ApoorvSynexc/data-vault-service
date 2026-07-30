@@ -75,6 +75,23 @@ Note: Must use base64url (URL-safe) not base64. Mixing caused silent decode fail
 
 ---
 
+## client-service/src/utils/iso-date.ts
+
+### IsoDateString
+Branded string type — an ISO 8601 UTC instant, `YYYY-MM-DDTHH:mm:ss.sssZ`. Assignable TO `string`, but no plain `string` is assignable to it, so a field typed `IsoDateString` (e.g. `IFetchSource.startDate` / `.endDate`, `IRestoreScope.changeSince.date`) can only be populated by the validator below. The brand is what makes the invariant hold at compile time instead of by convention.
+
+### toIsoDateString(value: string, bound: 'start' | 'end' = 'start'): IsoDateString | null
+Validates ISO 8601 and canonicalises to a UTC instant. Returns null on anything else, so each caller maps the failure to its own error code.
+
+- `bound` resolves a **date-only** input: `2026-06-30` is `T00:00:00.000Z` as a lower bound, `T23:59:59.999Z` as an upper one. A calendar day is a range, so an inclusive upper bound must cover the whole day or same-day records vanish.
+- Offsets are converted to UTC; a zone-less timestamp is read as UTC, never as the server's local zone.
+- Accepts the spellings real callers send — Salesforce's colon-less `+0000`, sub-millisecond fractions (truncated, never rounded).
+- Rejects non-ISO formats `new Date()` would otherwise accept (`07/29/2026`), and impossible days (`2026-02-30`), which `new Date` silently ROLLS forward to March 2.
+
+Note: every date in the retrieve flow ends up in a **string** comparison — Athena's `LastModifiedDate` is a varchar, DynamoDB range-compares timestamps lexicographically, the `chnageSince`/`source.startDate` merge takes the later by string order, and the pagination fingerprint hashes the raw value. Mixed shapes therefore produce silently wrong windows rather than errors, which is why canonicalisation happens once at the request boundary. Self-check: `npx ts-node src/utils/iso-date.ts`.
+
+---
+
 ## client-service/src/utils/helper.ts
 
 ### generateTokens(userId, sessionId, spaceId?)
