@@ -220,39 +220,54 @@ const SESSION_STATUS = {
 };
 
 /**
- * Salesforce reports these as "accessible" on accessible-objects, but none of them
- * can be backed up or archived: they are describe/metadata views (FieldDefinition,
- * EntityParticle, RelatedListDefinition), picklist-backing status tables
- * (CaseStatus, TaskStatus, WorkOrderStatus), access-check views (UserRecordAccess),
- * or non-queryable system entities. Offering them in an object picker produces
- * configs whose backup jobs fail at query time, so they are dropped at the source.
+ * Objects this product does not offer for backup or archival, even when Salesforce
+ * reports them as accessible on accessible-objects. Most are describe/metadata views
+ * (FieldDefinition, EntityParticle, RelatedListDefinition), picklist-backing status
+ * tables (CaseStatus, TaskStatus, WorkOrderStatus), access-check views
+ * (UserRecordAccess), usage/metric tables (OrgMetric, MacroUsage) or otherwise
+ * non-queryable system entities — offering those in the object picker produces configs
+ * whose backup jobs fail at query time.
  *
- * Matched case-insensitively — Salesforce API names are case-insensitive and this
- * list mixes conventions (e.g. DATACLOUD_ADDRESS).
+ * The list also excludes some ordinary business objects (Asset, Event, Order,
+ * ContentDocument, Location, Image, Recommendation, VoiceCall) that the product does
+ * not support today. Keep them together in one list: the filter's contract is "not
+ * selectable", not "not queryable".
+ *
+ * Kept in case-insensitive alphabetical order and matched case-insensitively —
+ * Salesforce API names are case-insensitive and this list mixes conventions
+ * (e.g. DATACLOUD_ADDRESS).
  */
 const UNSUPPORTED_SALESFORCE_OBJECTS = new Set(
   [
     'AcceptedEventRelation',
+    'AIRecordInsight',
     'ApexTypeImplementor',
+    'AppAnalyticsQueryRequest',
     'AppTabMember',
+    'Asset',
+    'BroadcastTopic',
     'CaseStatus',
     'ChatterConversation',
     'ChatterMessage',
     'ChatterMessageThread',
     'ColorDefinition',
+    'ContentDocument',
     'ContentDocumentSubscription',
     'ContentFolderItem',
     'ContentFolderMember',
     'ContentVersionComment',
     'ContentVersionRating',
     'ContractStatus',
+    'DATACLOUD_ADDRESS',
     'DataStatistics',
     'DataType',
-    'DATACLOUD_ADDRESS',
     'DeclinedEventRelation',
+    'DuplicateRecordSet',
     'EmbeddedServiceDetail',
     'EmbeddedServiceLabel',
     'EntityParticle',
+    'Event',
+    'EventRelayFeedback',
     'EventWhoRelation',
     'FieldChangeSnapshot',
     'FieldDefinition',
@@ -265,16 +280,30 @@ const UNSUPPORTED_SALESFORCE_OBJECTS = new Set(
     'FormulaFunctionAllowedType',
     'FormulaFunctionCategory',
     'IconDefinition',
+    'Image',
     'ListViewChartInstance',
+    'Location',
+    'LocationTrustMeasure',
+    'MacroUsage',
+    'MLModel',
+    'MLModelMetric',
+    'Order',
     'OrderStatus',
+    'OrgMetric',
     'OutgoingEmail',
     'OwnerChangeOptionInfo',
     'PartnerRole',
     'PicklistValueInfo',
     'PlatformAction',
+    'PromptAction',
+    'PromptError',
     'Publisher',
+    'QuickTextUsage',
     'RecentFieldChange',
     'RecentlyViewed',
+    'Recommendation',
+    'RecommendationResponse',
+    'RecordAction',
     'RelatedListColumnDefinition',
     'RelatedListDefinition',
     'RelationshipDomain',
@@ -282,6 +311,7 @@ const UNSUPPORTED_SALESFORCE_OBJECTS = new Set(
     'SearchLayout',
     'SiteDetail',
     'SolutionStatus',
+    'StreamingChannel',
     'TabDefinition',
     'TaskPriority',
     'TaskStatus',
@@ -289,7 +319,11 @@ const UNSUPPORTED_SALESFORCE_OBJECTS = new Set(
     'UndecidedEventRelation',
     'UserEntityAccess',
     'UserFieldAccess',
+    'UserProvAccount',
+    'UserProvAccountStaging',
     'UserRecordAccess',
+    'VoiceCall',
+    'WorkBadgeDefinition',
     'WorkOrderLineItemStatus',
     'WorkOrderStatus',
   ].map((name) => name.toLowerCase())
