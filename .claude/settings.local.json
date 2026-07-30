@@ -29,7 +29,15 @@
       "Bash(grep -n \"restoreScope.fields\\\\` is dropped\" -A 4 -B 3 docs/architecture-graph/execution/RESTORE_RETRIEVE.md)",
       "Bash(git check-ignore *)",
       "Bash(echo \"exit=$?\")",
-      "Bash(xargs grep -ln \"createRestoreValidation\")"
+      "Bash(xargs grep -ln \"createRestoreValidation\")",
+      "Bash(cat)",
+      "Bash(cp /c/Users/hp/AppData/Local/Temp/claude/C--Users-hp-OneDrive-Documents-GitHub-data-vault-service/90e1a072-ec07-44ef-bb7a-90af6f84a515/scratchpad/check.ts ./__check.ts)",
+      "Bash(rm -f ./__check.ts)",
+      "Bash(python \"C:/Users/hp/AppData/Local/Temp/claude/C--Users-hp-OneDrive-Documents-GitHub-data-vault-service/8fb5cdb2-ce88-4940-8e2a-2ce349cd6641/scratchpad/patch_selfcheck.py\")",
+      "Bash(grep -v \"^\\\\s*[0-9]*: *//\")",
+      "Bash(grep -v \"// \")",
+      "Bash(python - \"controller/v1/restore-retrieve/index.ts\")",
+      "Bash(grep -vE \"^\\\\S+:[0-9]+: *\\(//|\\\\*|/\\\\*\\)\")"
     ]
   },
   "hooks": {
