@@ -53,6 +53,11 @@ const restorePermissions = [
         path : '/restore/job',
         method: 'GET',
         permissions: ['restore.read']
+    },
+    {
+        path : '/restore/job/stats',
+        method: 'GET',
+        permissions: ['restore.read']
     }
 ];
 
