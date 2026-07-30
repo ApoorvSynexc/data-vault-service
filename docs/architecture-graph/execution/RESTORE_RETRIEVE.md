@@ -55,10 +55,14 @@ not a date window.
 ### Validation
 1. `backupConfigId` required → else 400 `id_required`.
 2. `startTime` and `endTime` both required → else 400 `params_required`.
-3. Both must parse as dates → else 400 `invalid_time_format`. Both are
-   normalised to ISO UTC (`new Date(v).toISOString()`) before use — stored
-   timestamps are ISO UTC and DynamoDB range-compares them as plain strings, so
-   a date-only or offset-bearing input has to be converted first.
+3. Both must be **ISO 8601** → else 400 `invalid_time_format`. Both are
+   canonicalised to a UTC instant (`utils/iso-date.toIsoDateString`) before use —
+   stored timestamps are ISO UTC and DynamoDB range-compares them as plain
+   strings, so a date-only or offset-bearing input has to be converted first.
+   `endTime` is resolved as an UPPER bound, so a date-only window includes its
+   final day whole — the same reading `/retrieve/fetch-records` gives
+   `source.endDate`, which is what lets a window picked here mean the same thing
+   when its job ids are passed on.
 4. `startTime <= endTime` → else 400 `invalid_time_range`.
 5. Config must exist and be owned by the caller → else 400 `not_exist` (same
    collapsing as every other handler here).

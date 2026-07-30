@@ -54,8 +54,8 @@ Failure modes: `401 unauthorized` (no/expired cookie, dead session), `403 blocke
   "source": {                       // REQUIRED object
     "backupConfigId": "string",     // REQUIRED — resolves CRM, Glue db + table, ownership
     "type": "ENTIRE",               // REQUIRED — "ENTIRE" | "PARTIAL" | "CHANGED_BETWEEN"
-    "startDate": "2026-01-01",      // optional — LastModifiedDate lower bound
-    "endDate":   "2026-07-30",      // optional — LastModifiedDate upper bound
+    "startDate": "2026-01-01",      // optional — ISO 8601, LastModifiedDate lower bound
+    "endDate":   "2026-07-30",      // optional — ISO 8601, LastModifiedDate upper bound
     "backupJobIds": ["job_1"]       // optional for ENTIRE/CHANGED_BETWEEN, required for PARTIAL
   },
   "objectApiName": "Account",       // REQUIRED
@@ -258,7 +258,19 @@ Reordering `columns` or job ids is safe; changing any value is not.
 }
 ```
 
-Bare dates are fine. `endDate: "2026-07-29"` is auto-extended to `2026-07-29T23:59:59.999Z`, so the range is inclusive of that whole day. Full ISO timestamps are passed through as-is.
+**Dates must be ISO 8601.** Both bounds are validated and canonicalised to a UTC instant before anything is queried, so what the SQL, the `chnageSince` merge and the cursor fingerprint all see is one shape.
+
+| You send | Server uses | Why |
+|---|---|---|
+| `2026-07-29` (as `endDate`) | `2026-07-29T23:59:59.999Z` | A bare date is a whole day. As an upper bound it means that day's LAST moment, so the range is inclusive of it. |
+| `2026-07-29` (as `startDate` or `chnageSince.date`) | `2026-07-29T00:00:00.000Z` | Same day, lower bound — its FIRST moment. |
+| `2026-07-29T10:00:00Z` | `2026-07-29T10:00:00.000Z` | Already an instant; only padded to millisecond precision. |
+| `2026-07-29T10:00:00+05:30` | `2026-07-29T04:30:00.000Z` | Converted to UTC. `LastModifiedDate` is compared as a *string*, so an offset left in place would order against stored `…Z` timestamps wrongly and silently return the wrong window. |
+| `2026-07-29T10:00:00` | `2026-07-29T10:00:00.000Z` | No zone → read as UTC, never as the server's local time. |
+
+Anything that is not ISO 8601 is a `400 invalid_source_date` — including formats `new Date()` happens to accept, such as `07/29/2026` or `June 30, 2026`. Impossible days (`2026-02-30`, `2026-06-31`) are rejected rather than rolled forward into March 2 / July 1.
+
+A `startDate` later than the `endDate` is `400 invalid_time_range` — it can only ever match zero records.
 
 **What this returns:** only records that changed between those dates, each at the version to restore TO — an updated record comes back with its pre-change values (that row usually lives in `inserts/`), a deleted record comes back as the whole `deletes/` row, and records untouched in the window are omitted. `type` tells you which change is being reverted.
 
@@ -427,7 +439,7 @@ Keeps only records whose **newest** operation is `DELETE`; every row comes back 
 }
 ```
 
-`CHNAGE_SINCE` / `chnageSince` is the accepted spelling in both the type and the key — the server matches what the client already sends. `chnageSince` and `source.startDate` are both lower bounds; **the later (tighter) of the two wins**, so neither can widen the other.
+`CHNAGE_SINCE` / `chnageSince` is the accepted spelling in both the type and the key — the server matches what the client already sends. `chnageSince` and `source.startDate` are both lower bounds; **the later (tighter) of the two wins**, so neither can widen the other. The date is ISO 8601 on the same terms as the source window (§5.5) — it is canonicalised to a UTC instant, as a lower bound, before the two are compared.
 
 ### 5.14 `fullRestore` — restore preview
 
@@ -503,6 +515,10 @@ Use this to get restore-to versions **without** restricting to a date window. On
 | `source.backupConfigId` missing or blank | `id_required` |
 | `source.type: "FOO"` | `invalid_source_type` |
 | `source.startDate: 20260101` (number) | `invalid_source_date` |
+| `source.startDate: "07/29/2026"` (not ISO 8601) | `invalid_source_date` |
+| `source.endDate: "2026-02-30"` (impossible day) | `invalid_source_date` |
+| `startDate` later than `endDate` | `invalid_time_range` |
+| `restoreScope.changeSince.date: "yesterday"` | `invalid_changed_since` |
 | `source.backupJobIds: "job_1"` (string, not array) | `invalid_backup_job_ids` |
 | `type: "PARTIAL"` with no `backupJobIds` | `backup_job_ids_required` |
 | `type: "CHANGED_BETWEEN"` with no dates | `date_range_required` |

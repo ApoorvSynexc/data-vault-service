@@ -35,6 +35,7 @@ import {
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
+import { IsoBound, IsoDateString, toIsoDateString } from '../../../utils/iso-date';
 import { IBackupJob } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -170,16 +171,6 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   makeResponse(req, res, 200, true, 'fetch', objects);
 };
 
-// Normalises a client-supplied timestamp to ISO UTC. Stored timestamps are
-// always ISO UTC and DynamoDB range-compares them as plain strings, so a
-// date-only or offset-bearing input has to be converted before it can be
-// compared — "2026-07-01T00:00+05:30" would otherwise sort after
-// "2026-07-01T00:00:00.000Z" it precedes.
-const toIsoTimestamp = (value: string): string | null => {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-};
-
 /**
  * GET /fetch-change-between-backup-jobs?backupConfigId=&startTime=&endTime=&limit=&cursor=
  *
@@ -218,8 +209,13 @@ const fetchChangeBetweenBackupJobsHandler = async (req: IRequest, res: IResponse
     return;
   }
 
-  const from = toIsoTimestamp(startTime);
-  const to = toIsoTimestamp(endTime);
+  // Stored timestamps are ISO UTC and DynamoDB range-compares them as plain
+  // strings, so the window is canonicalised before it can be compared. `endTime`
+  // is resolved as an upper bound, which makes a date-only window inclusive of
+  // its final day — the same reading /fetch-records gives source.endDate, so a
+  // window picked here means the same thing when its job ids are passed on.
+  const from = toIsoDateString(startTime, 'start');
+  const to = toIsoDateString(endTime, 'end');
 
   if (!from || !to) {
     makeResponse(req, res, 400, false, 'invalid_time_format');
@@ -272,6 +268,30 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const toStringList = (v: unknown): string[] | null => {
   if (!Array.isArray(v)) return null;
   return [...new Set(v.map((x) => String(x).trim()).filter(Boolean))];
+};
+
+/**
+ * Parses an optional ISO 8601 date field into a canonical UTC instant.
+ *
+ * Three outcomes, kept distinct so "not supplied" can never be mistaken for
+ * "malformed": absent → `{ ok: true }` with no value, valid → the canonical
+ * instant, anything else → `{ ok: false }` for the caller to map to its own 400.
+ *
+ * A blank string counts as absent rather than malformed — a UI that clears its
+ * date picker sends `""`, and that means "no bound", not "bad request".
+ *
+ * `bound` decides what a date-only input means; see IsoBound.
+ */
+const parseOptionalIsoDate = (
+  value: unknown,
+  bound: IsoBound
+): { ok: true; value?: IsoDateString } | { ok: false } => {
+  if (value === undefined || value === null) return { ok: true };
+  if (typeof value !== 'string') return { ok: false };
+  if (!value.trim()) return { ok: true };
+
+  const iso = toIsoDateString(value, bound);
+  return iso ? { ok: true, value: iso } : { ok: false };
 };
 
 // Parses the `filters` block (shared by the top-level and restoreScope shapes).
@@ -353,13 +373,24 @@ const parseFetchRecordsParams = (
   }
   const sourceType = source.type as FetchSourceType;
 
-  for (const key of ['startDate', 'endDate'] as const) {
-    if (source[key] !== undefined && source[key] !== null && typeof source[key] !== 'string') {
-      return { ok: false, error: 'invalid_source_date' };
-    }
+  // The window is canonicalised to ISO UTC HERE, once, because everything
+  // downstream compares these values as strings: the Athena predicate on a
+  // varchar LastModifiedDate, the "later bound wins" merge with
+  // changeSince.date, and the cursor fingerprint. Each bound resolves a
+  // date-only input to its own end of the day, so `2026-06-30` as an endDate
+  // still covers that whole day.
+  const start = parseOptionalIsoDate(source.startDate, 'start');
+  const end = parseOptionalIsoDate(source.endDate, 'end');
+  if (!start.ok || !end.ok) return { ok: false, error: 'invalid_source_date' };
+  const { value: startDate } = start;
+  const { value: endDate } = end;
+
+  // A backwards window selects nothing. Rejecting it beats billing an Athena
+  // scan that cannot return a row, and it is almost always a swapped pair of
+  // date-picker values rather than a deliberate request for zero records.
+  if (startDate && endDate && startDate > endDate) {
+    return { ok: false, error: 'invalid_time_range' };
   }
-  const startDate = (source.startDate as string | undefined)?.trim() || undefined;
-  const endDate = (source.endDate as string | undefined)?.trim() || undefined;
 
   let backupJobIds: string[] = [];
   if (source.backupJobIds !== undefined && source.backupJobIds !== null) {
@@ -443,11 +474,12 @@ const parseFetchRecordsParams = (
     if (rawScope.changeSince !== undefined && rawScope.changeSince !== null) {
       const c = rawScope.changeSince;
       if (!isRecord(c)) return { ok: false, error: 'invalid_changed_since' };
-      if (c.date !== undefined && c.date !== null && typeof c.date !== 'string') {
-        return { ok: false, error: 'invalid_changed_since' };
-      }
-      const date = (c.date as string | undefined)?.trim();
-      if (date) scope.changeSince = { date };
+      // Another LastModifiedDate lower bound, merged with source.startDate by
+      // string comparison — so it is canonicalised the same way, or the merge
+      // would order two different shapes against each other.
+      const date = parseOptionalIsoDate(c.date, 'start');
+      if (!date.ok) return { ok: false, error: 'invalid_changed_since' };
+      if (date.value) scope.changeSince = { date: date.value };
     }
 
     if (rawScope.bulkCsvIds !== undefined && rawScope.bulkCsvIds !== null) {
@@ -507,8 +539,8 @@ const parseFetchRecordsParams = (
  *     backupConfigId: string                        (required — owns the CRM,
  *                                                    destination and Glue table)
  *     type:           'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN'
- *     startDate?:     string                        (LastModifiedDate lower bound)
- *     endDate?:       string                        (LastModifiedDate upper bound)
+ *     startDate?:     ISO 8601                      (LastModifiedDate lower bound)
+ *     endDate?:       ISO 8601                      (LastModifiedDate upper bound)
  *     backupJobIds?:  string[]                      (absent → every job)
  *   }
  *   objectApiName: string
@@ -521,7 +553,7 @@ const parseFetchRecordsParams = (
  *       records?:    { objectName, recordIds[] }[]  (only the matching object applies)
  *       fields?:     { objectName, fieldNames[] }[] (matching object REPLACES columns)
  *       filters?:    { type: 'AND'|'OR'|'SOQL', soqlQuery?, fields?[] }
- *       changeSince?:{ date: string }               (extra LastModifiedDate lower bound)
+ *       changeSince?:{ date: ISO 8601 }             (extra LastModifiedDate lower bound)
  *       bulkCsvIds?: string[]                       (record scope, unioned with records)
  *       deletedOnly?: boolean
  *     }
@@ -545,6 +577,10 @@ const parseFetchRecordsParams = (
  *
  * PARTIAL requires backupJobIds and CHANGED_BETWEEN requires a date bound —
  * without them the request would silently behave as ENTIRE.
+ *
+ * Dates must be ISO 8601 and are canonicalised to UTC before use. A date-only
+ * value resolves to the end of the day it bounds, so `endDate: "2026-06-30"`
+ * covers that whole day; a start later than an end is rejected outright.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
