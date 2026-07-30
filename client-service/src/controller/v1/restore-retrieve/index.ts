@@ -745,7 +745,7 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
           s3Config,
           sourceFolderKey: sourcePath,
           destinationFolderKey: `${destinationPath}/${object.name}`,
-          columnsToRemove: ["Id"],
+          columnsToRemove: ["Id", "LastModifiedDate"],
         })
         }
       }
