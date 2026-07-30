@@ -3,21 +3,26 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, AWS_GLUE_DATABASE_PREFIX, BACKUP_SERVICE, INTERNAL_SECRET } from '../../constant';
-import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
+import { IBackupConfig, IBackupJob, IObject, IRestore, IRestoreJob, IUser } from '../../models';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records';
+import { uploadToS3 } from '../third-party/s3-bucket';
+import { decrypt, EncryptedPayload } from '../../utils/encryption';
 import { httpRequest } from '../../utils/http-request';
-import { IsoDateString } from '../../utils/iso-date';
+import { IsoDateString, toIsoDateString } from '../../utils/iso-date';
 import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
 
 export { buildAthenaFilterWhere, FilterError } from './athena-filter';
 export { validateColumns } from './athena-fetch';
 export { PREVIEW_SYSTEM_FIELDS, IPreviewRow } from './preview-merge';
+export { RESTORE_ID_COLUMN } from './restore-csv';
 import { buildCsvRecordsSql, pairedColumns, ROW_TYPE_COLUMN, IPageKey } from './athena-fetch';
 import { buildPreviewRows, previewColumns, IPreviewRow } from './preview-merge';
+import { buildAthenaFilterWhere } from './athena-filter';
+import { buildRestoreCsv } from './restore-csv';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 
@@ -742,6 +747,8 @@ interface IFetchCsvRecordsParams {
   config?: IBackupConfig | null;
   // Top-level recordIds / isDeleteOnly, merged with their scope counterparts.
   top?: { recordIds?: string[]; isDeleteOnly?: boolean };
+  // Rows per page. Defaults to the API's PAGE_SIZE — see toPage.
+  pageSize?: number;
 }
 
 const fetchCsvRecords = async (
@@ -760,7 +767,7 @@ const fetchCsvRecords = async (
 
   // Scope excludes this object — an empty page, not an Athena scan.
   if (!resolved.selects) {
-    return toPage([], resolved.columns, page.offset, page.fingerprint, executions);
+    return toPage([], resolved.columns, page.offset, page.fingerprint, executions, params.pageSize);
   }
 
   // The scope's changedSince date and the source window are both lower bounds on
@@ -799,7 +806,8 @@ const fetchCsvRecords = async (
     resolved.columns,
     page.offset,
     page.fingerprint,
-    executions
+    executions,
+    params.pageSize
   );
 };
 
@@ -1074,6 +1082,88 @@ const schemaFieldNames = (schema: unknown): string[] => {
 };
 
 /**
+ * Everything a restore-to read of one object needs, resolved once.
+ *
+ * Split out because the two callers page differently: show-preview serves one
+ * 50-row page per request, the restore CSV builder loops whole 2000-row blocks
+ * to exhaustion. Both need the same config, the same whole-schema column list
+ * and the same ownership check, and none of that may be re-read per page — the
+ * column list is in the cursor fingerprint, so a mid-loop schema change has to
+ * surface as a cursor_mismatch rather than silently reshaping the query.
+ */
+interface IRestoreToScope {
+  config: IBackupConfig;
+  // Every backed-up column, plus Id and LastModifiedDate: the pairing and the
+  // CSV need Id, the page order needs LastModifiedDate.
+  columns: string[];
+  // The same list minus the system fields — what a caller actually sees.
+  visibleColumns: string[];
+}
+
+const resolveRestoreToScope = async (
+  objectApiName: string,
+  backupConfigId: string,
+  userId: string
+): Promise<IRestoreToScope | null> => {
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config || config.userId !== userId) return null;
+
+  const schema = await fetchObjectFields({ objectApiName, backupConfigId, userId });
+  if (!schema.ok) return null;
+
+  const columns = pairedColumns(schemaFieldNames(schema.schema));
+  const visibleColumns = previewColumns(columns);
+  // Nothing but system fields — no schema has been written for this object yet,
+  // or the file holds no usable field names.
+  if (!visibleColumns.length) return null;
+
+  return { config, columns, visibleColumns };
+};
+
+/**
+ * One page of restore-to records for an object: the version each record should
+ * be restored TO, over every backed-up column.
+ *
+ * `restoreScope.fields` is dropped — it narrows the projection, which
+ * contradicts reading the whole record — and `fullRestore` is forced on. Both
+ * happen BEFORE the fingerprint is taken, so page 2 hashes what page 1 hashed.
+ *
+ * `pageSize` overrides the 50-row API page. The restore builder passes
+ * BLOCK_SIZE so each iteration consumes exactly one Athena block: at 50 a
+ * caller reading everything would replay the same stored result set 40 times,
+ * re-downloading up to 2000 rows on each one.
+ */
+const fetchRestoreToPage = async (
+  params: IFetchRecordsParams,
+  scope: IRestoreToScope,
+  pageSize?: number
+): Promise<IFetchRecordsResult | null> => {
+  const restoreScope = params.selection?.restoreScope;
+  const effective: IFetchRecordsParams = {
+    ...params,
+    columns: scope.columns,
+    fullRestore: true,
+    ...(restoreScope
+      ? { selection: { restoreScope: { ...restoreScope, fields: undefined } } }
+      : {}),
+  };
+
+  return fetchCsvRecords({
+    source: params.source,
+    objectApiName: params.objectApiName,
+    columns: scope.columns,
+    userId: params.userId,
+    config: scope.config,
+    filterWhere: params.filterWhere ?? null,
+    fullRestore: true,
+    ...(effective.selection?.restoreScope ? { scope: effective.selection.restoreScope } : {}),
+    top: { recordIds: params.recordIds, isDeleteOnly: params.isDeleteOnly },
+    page: resolvePage(effective),
+    ...(pageSize ? { pageSize } : {}),
+  });
+};
+
+/**
  * Entry point for POST /retrieve/show-preview.
  *
  * Same selection machinery as /retrieve/fetch-records — same source window,
@@ -1095,55 +1185,17 @@ const schemaFieldNames = (schema: unknown): string[] => {
  * "not yours / not there" and "Salesforce not connected" to their own messages.
  */
 const showRecordsPreview = async (params: IShowPreviewParams): Promise<ShowPreviewResult> => {
-  const { source, objectApiName, userId, user, selection } = params;
+  const { source, objectApiName, userId, user } = params;
   if (!source?.backupConfigId) return { ok: false, reason: 'not_exist' };
 
-  // Read once here: the CRM (for the Salesforce call) hangs off it, and passing
-  // it down saves fetchCsvRecords the same read.
-  const config = await getBackupConfigById(source.backupConfigId);
-  if (!config || config.userId !== userId) return { ok: false, reason: 'not_exist' };
+  const scope = await resolveRestoreToScope(objectApiName, source.backupConfigId, userId);
+  if (!scope) return { ok: false, reason: 'not_exist' };
 
-  const [schema, crm] = await Promise.all([
-    fetchObjectFields({ objectApiName, backupConfigId: source.backupConfigId, userId }),
-    getCrmById(config.crmId),
-  ]);
-  if (!schema.ok || !crm) return { ok: false, reason: 'not_exist' };
+  const crm = await getCrmById(scope.config.crmId);
+  if (!crm) return { ok: false, reason: 'not_exist' };
 
-  // pairedColumns adds Id and LastModifiedDate: the pairing needs Id and the
-  // page order needs LastModifiedDate. Both are dropped from the response by
-  // previewColumns — they are system fields.
-  const columns = pairedColumns(schemaFieldNames(schema.schema));
-  const visibleColumns = previewColumns(columns);
-  // Nothing but system fields — no schema has been written for this object yet,
-  // or the file holds no usable field names.
-  if (!visibleColumns.length) return { ok: false, reason: 'not_exist' };
-
-  const scope = selection?.restoreScope;
-  // The scope is narrowed BEFORE the fingerprint so page 2 hashes what page 1
-  // hashed; the resolved column list is in there for the same reason, which is
-  // what makes a schema change mid-pagination a cursor_mismatch rather than a
-  // silently different result set.
-  const previewParams: IFetchRecordsParams = {
-    ...params,
-    columns,
-    fullRestore: true,
-    ...(scope ? { selection: { restoreScope: { ...scope, fields: undefined } } } : {}),
-  };
-
-  const page = await fetchCsvRecords({
-    source,
-    objectApiName,
-    columns,
-    userId,
-    config,
-    filterWhere: params.filterWhere ?? null,
-    fullRestore: true,
-    ...(previewParams.selection?.restoreScope
-      ? { scope: previewParams.selection.restoreScope }
-      : {}),
-    top: { recordIds: params.recordIds, isDeleteOnly: params.isDeleteOnly },
-    page: resolvePage(previewParams),
-  });
+  const visibleColumns = scope.visibleColumns;
+  const page = await fetchRestoreToPage(params, scope);
   if (!page) return { ok: false, reason: 'not_exist' };
 
   // A deleted record has no live counterpart, so it is never looked up — that
@@ -1171,6 +1223,268 @@ const showRecordsPreview = async (params: IShowPreviewParams): Promise<ShowPrevi
       hasMore: page.hasMore,
     },
   };
+};
+
+// ---------------------------------------------------------------------------
+// Restore CSV generation — show-preview rows → the ingest job's input files
+// ---------------------------------------------------------------------------
+
+/**
+ * Objects a restore currently writes CSVs for.
+ *
+ * Deliberately pinned to one object while the show-preview-driven restore is
+ * being proven end to end. Widening it to the restore job's own
+ * `destination.objects` is a one-line change (see resolveRestoreCsvObjects) —
+ * everything below already loops.
+ */
+export const RESTORE_CSV_OBJECTS = ['Customer__c'];
+
+// Most pages the builder will pull for one object before giving up. At
+// BLOCK_SIZE rows per page that is 2M records — far past anything the Bulk API
+// would ingest in one job — so hitting it means a cursor that is not advancing,
+// not a genuinely huge object.
+const RESTORE_CSV_MAX_PAGES = 1000;
+
+export interface IPrepareRestoreCsvParams {
+  // The stored restore request: supplies the source window and the restoreScope
+  // that decide WHICH records are restored.
+  restore: IRestore;
+  // The job just created for it: supplies the destination csvFilePath and the
+  // source bucket credentials.
+  restoreJob: IRestoreJob;
+  userId: string;
+}
+
+export interface IRestoreCsvObjectResult {
+  objectApiName: string;
+  rows: number;
+  keys: string[];
+  // Set when the object produced nothing, and why — resolution failure or
+  // simply no records in scope. Never throws for one object: the others still
+  // have to be written.
+  skipped?: 'not_exist' | 'no_records';
+}
+
+export interface IPrepareRestoreCsvResult {
+  csvFilePath: string;
+  // 'upsert' keeps the Id column; 'insert' drops it. See buildRestoreCsv.
+  operation: 'upsert' | 'insert';
+  objects: IRestoreCsvObjectResult[];
+}
+
+/**
+ * Maps the restore's conflict mode onto the Bulk API operation backup-service
+ * will run, which is what decides whether the CSV carries an `Id` column.
+ *
+ * Mirrors the switch in backup-service's runSalesforceRestore. SKIP writes no
+ * files at all — that object is not restored — and REPLACE_ENTIRE_OBJECT throws
+ * there, so it is rejected here rather than after a pile of S3 writes.
+ */
+const restoreOperationFor = (restoreMode: string): 'upsert' | 'insert' | 'skip' => {
+  switch (restoreMode) {
+    case 'OVERWRITE':
+      return 'upsert';
+    case 'APPEND_NEW':
+      return 'insert';
+    case 'SKIP':
+      return 'skip';
+    default:
+      throw new Error(`unsupported_restore_mode:${restoreMode}`);
+  }
+};
+
+// The restore's own source/selection, in the shape the retrieval path takes.
+// The two models already line up field for field — IRestoreSource/IRestoreScope
+// are the stored twins of IFetchSource/IRestoreScope — so this is a widening
+// cast plus the two things the stored shape leaves implicit: a source type, and
+// the compiled filter.
+const toFetchParams = (
+  restore: IRestore,
+  objectApiName: string,
+  userId: string
+): IFetchRecordsParams => {
+  const source = restore.source;
+  const scope = restore.selection?.restoreScope;
+  // A stored restore may not carry a type. Naming jobs means PARTIAL; naming
+  // neither jobs nor dates means the whole config.
+  const type: FetchSourceType =
+    (source.type as FetchSourceType | undefined) ?? (source.backupJobIds?.length ? 'PARTIAL' : 'ENTIRE');
+
+  const startDate = toIsoDateString(source.startDate ?? '', 'start');
+  const endDate = toIsoDateString(source.endDate ?? '', 'end');
+  // Under CHANGED_BETWEEN the job ids override the window — the same precedence
+  // the HTTP parser applies, kept identical so a preview and the restore it
+  // previews select the same records.
+  const windowApplies = !(type === 'CHANGED_BETWEEN' && (source.backupJobIds?.length ?? 0) > 0);
+
+  return {
+    source: {
+      backupConfigId: source.backupConfigId,
+      type,
+      ...(windowApplies && startDate ? { startDate } : {}),
+      ...(windowApplies && endDate ? { endDate } : {}),
+      ...(source.backupJobIds?.length ? { backupJobIds: source.backupJobIds } : {}),
+    },
+    objectApiName,
+    // Replaced by the object's whole schema in fetchRestoreToPage.
+    columns: [],
+    ...(scope ? { selection: { restoreScope: scope as IRestoreScope } } : {}),
+    userId,
+    fullRestore: true,
+    ...(scope?.filters ? { filterWhere: buildAthenaFilterWhere(scope.filters as IFetchRecordsFilters) } : {}),
+  };
+};
+
+/**
+ * Writes the CSV files a restore job ingests, from the same restore-to records
+ * /retrieve/show-preview shows.
+ *
+ * This is what replaced the EMR/Spark transform: the preview already answers
+ * "which records, at which version", so the restore input is just those rows
+ * serialised — no cluster, no second implementation of the version picking, and
+ * what the user approved on screen is byte-for-byte what gets written.
+ *
+ * Layout, which is what backup-service lists:
+ *
+ *   <csvFilePath>/<objectApiName>/file.csv          ← first page
+ *   <csvFilePath>/<objectApiName>/file-2.csv        ← only if the object
+ *   <csvFilePath>/<objectApiName>/file-3.csv          spans several blocks
+ *
+ * where csvFilePath is `salesforce/<crmId>/restore/<restoreJobId>/csv`, set by
+ * createRestoreJob. Multiple files are safe: the ingest takes the header from
+ * the first file and skips every later one's, and the column order is identical
+ * across them because it is resolved once per object.
+ *
+ * An object that resolves to no records writes NOTHING — not even a header. The
+ * ingest throws "No data rows found" on a folder whose files hold only a header,
+ * but reports an absent folder as a clean zero-record success.
+ *
+ * One object's failure does not sink the others: each is caught and reported in
+ * its own result entry.
+ *
+ * ponytail: `restore.restoreType` is not honoured. Every row is written whole,
+ * i.e. RESTORE_ENTIRE_RECORD. RESTORE_ONLY_CHANGED_FIELDS would need the CSV to
+ * carry only the fields the selected change touched, which the CSV-only model
+ * cannot tell apart — the per-field delta lived in the `_delta` table, and those
+ * query builders are commented out in athena-fetch.
+ */
+const prepareRestoreCsvFiles = async (
+  params: IPrepareRestoreCsvParams
+): Promise<IPrepareRestoreCsvResult> => {
+  const { restore, restoreJob, userId } = params;
+
+  const operation = restoreOperationFor(restore.conflict?.restoreMode);
+  const csvFilePath = restoreJob.source.csvFilePath ?? '';
+
+  const result: IPrepareRestoreCsvResult = {
+    csvFilePath,
+    operation: operation === 'skip' ? 'insert' : operation,
+    objects: [],
+  };
+
+  if (operation === 'skip') {
+    // restoreMode SKIP restores nothing, so there is nothing to write.
+    return result;
+  }
+
+  const s3Keys = JSON.parse(decrypt(restoreJob.source.encryptedKeys as EncryptedPayload));
+  const s3Config: S3Config = {
+    bucketName: restoreJob.source.bucketName,
+    region: restoreJob.source.region,
+    accessKeyId: s3Keys.accessKeyId,
+    secretAccessKey: s3Keys.secretAccessKey,
+  };
+
+  for (const objectApiName of resolveRestoreCsvObjects(restoreJob)) {
+    try {
+      result.objects.push(
+        await writeRestoreCsvForObject({
+          objectApiName,
+          restore,
+          userId,
+          s3Config,
+          csvFilePath,
+          includeId: operation === 'upsert',
+        })
+      );
+    } catch (error) {
+      // Logged and recorded rather than thrown: the remaining objects still
+      // have files to write, and the job's own per-object status reporting is
+      // what surfaces the failure to the user.
+      console.error(
+        `[restore-csv] ${objectApiName} failed: ${(error as Error)?.message ?? String(error)}`
+      );
+      result.objects.push({ objectApiName, rows: 0, keys: [], skipped: 'not_exist' });
+    }
+  }
+
+  return result;
+};
+
+/**
+ * Which objects get CSVs. Currently pinned to RESTORE_CSV_OBJECTS; the job's
+ * own object list is what this becomes once the flow is proven on one object.
+ */
+const resolveRestoreCsvObjects = (restoreJob: IRestoreJob): string[] => {
+  // return restoreJob.destination.objects.map((o) => o.name);
+  const wanted = new Set(RESTORE_CSV_OBJECTS.map((o) => o.toLowerCase()));
+  const onJob = restoreJob.destination.objects
+    .map((o) => o.name)
+    .filter((name) => wanted.has(name.toLowerCase()));
+  // Fall back to the pinned list even when the job does not name it, so the
+  // flow can be exercised against a config whose object list has not caught up.
+  return onJob.length ? onJob : RESTORE_CSV_OBJECTS;
+};
+
+const writeRestoreCsvForObject = async (params: {
+  objectApiName: string;
+  restore: IRestore;
+  userId: string;
+  s3Config: S3Config;
+  csvFilePath: string;
+  includeId: boolean;
+}): Promise<IRestoreCsvObjectResult> => {
+  const { objectApiName, restore, userId, s3Config, csvFilePath, includeId } = params;
+
+  const scope = await resolveRestoreToScope(objectApiName, restore.source.backupConfigId, userId);
+  if (!scope) {
+    return { objectApiName, rows: 0, keys: [], skipped: 'not_exist' };
+  }
+
+  const fetchParams = toFetchParams(restore, objectApiName, userId);
+  const keys: string[] = [];
+  let rows = 0;
+  let cursor: string | undefined;
+  let part = 0;
+
+  // One iteration per Athena block, not per API page — see fetchRestoreToPage.
+  for (let page = 0; page < RESTORE_CSV_MAX_PAGES; page++) {
+    const result = await fetchRestoreToPage(
+      { ...fetchParams, ...(cursor ? { cursor } : {}) },
+      scope,
+      BLOCK_SIZE
+    );
+    if (!result) {
+      return { objectApiName, rows: 0, keys: [], skipped: 'not_exist' };
+    }
+
+    const csv = buildRestoreCsv(result.rows, { columns: scope.visibleColumns, includeId });
+    if (csv) {
+      part += 1;
+      // The first file keeps the plain name; only an object that spans several
+      // blocks needs suffixes.
+      const fileName = part === 1 ? 'file.csv' : `file-${part}.csv`;
+      const key = `${csvFilePath}/${objectApiName}/${fileName}`;
+      await uploadToS3(s3Config, key, Buffer.from(csv, 'utf8'));
+      keys.push(key);
+      rows += result.rows.length;
+    }
+
+    if (!result.hasMore || !result.nextCursor) break;
+    cursor = result.nextCursor;
+  }
+
+  return { objectApiName, rows, keys, ...(rows === 0 ? { skipped: 'no_records' as const } : {}) };
 };
 
 // ---------------------------------------------------------------------------
@@ -1382,6 +1696,7 @@ export {
   getObjectListByConfigId,
   fetchRecordsByBackupJobs,
   showRecordsPreview,
+  prepareRestoreCsvFiles,
   repairGlueTables,
   fetchObjectFields,
   fetchPicklistValues,
