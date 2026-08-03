@@ -37,7 +37,10 @@
       "Bash(grep -v \"^\\\\s*[0-9]*: *//\")",
       "Bash(grep -v \"// \")",
       "Bash(python - \"controller/v1/restore-retrieve/index.ts\")",
-      "Bash(grep -vE \"^\\\\S+:[0-9]+: *\\(//|\\\\*|/\\\\*\\)\")"
+      "Bash(grep -vE \"^\\\\S+:[0-9]+: *\\(//|\\\\*|/\\\\*\\)\")",
+      "PowerShell($p='C:\\\\Users\\\\hp\\\\OneDrive\\\\Documents\\\\GitHub\\\\data-vault-service\\\\client-service\\\\src\\\\constant\\\\index.ts'; $l=Get-Content $p; \"221:[$\\($l[220]\\)] 222:[$\\($l[221]\\)] 330:[$\\($l[329]\\)] 331:[$\\($l[330]\\)]\")",
+      "PowerShell(Set-Content *)",
+      "PowerShell(Get-Content *)"
     ]
   },
   "hooks": {
