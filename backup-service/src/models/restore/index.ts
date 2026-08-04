@@ -28,7 +28,7 @@ export interface IRestoreChangeSince {
 }
 
 export interface IRestoreScope {
-  type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | CHANGE_SINCE | BULK_CSV
+  type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | INSERTS_ONLY | CHANGE_SINCE | BULK_CSV
   objects?: string[];
   records?: IRestoreScopeRecord[];
   fields?: IRestoreScopeField[];
