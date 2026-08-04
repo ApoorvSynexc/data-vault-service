@@ -11,16 +11,19 @@ const aclGateway = async (req: IRequest, res: IResponse, next: NextFunction): Pr
         const requestaPath = req.path;
         const requestMethod = req.method;
         const user = req.user;
+
+        console.log("11111", user);
         if (!user) {
             return makeResponse(req, res, 401, false, 'unauthorized');
         }
 
         const role = await getRole({ roleId: user.role.roleId });
+        console.log("2222222", role);
         if (!role || !role.permissions || !Object.keys(role.permissions).length) {
             return makeResponse(req, res, 401, false, 'unauthorized');
         }
 
-        
+
         const submodule = requestaPath.split('/')[1] as IAclGatewayPermissions;
         if (!allowedModules.includes(submodule)) {
             const modulePermissions = aclGatewayPermissions[submodule];
