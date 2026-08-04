@@ -4,22 +4,28 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE } from '../../constant';
+import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE, NODE_ENV } from '../../constant';
 import { runRealtimeSchemaSync } from './schema-sync';
 import { logger } from '../../middlewares';
-import { IBackupConfig, IBackupJob } from '../../models';
+import { IAwsCredentials, IBackupConfig, IBackupJob } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
 import { encryptWithKey } from '../../utils/encryption';
 import { getRestoreJobById } from '../restore-job';
 
+
+const awsCredentials: IAwsCredentials = {
+  region: AWS_REGION
+}
+
+if (NODE_ENV === 'dev' && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+  awsCredentials.credentials = {
+    accessKeyId: AWS_ACCESS_KEY_ID,
+    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+  }
+}
+
 // EMR runs in the same AWS account and region as the rest of the service.
-const client = new EMRServerlessClient({
-    region: AWS_REGION,
-    credentials: {
-        accessKeyId: AWS_ACCESS_KEY_ID,
-        secretAccessKey: AWS_SECRET_ACCESS_KEY,
-    },
-});
+const client = new EMRServerlessClient(awsCredentials);
 
 // ─── Process object operations from backup jobs ────────────────────────────────
 function processArchivalObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
