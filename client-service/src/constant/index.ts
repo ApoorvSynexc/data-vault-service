@@ -1,4 +1,5 @@
-﻿const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
+﻿const NODE_ENV =  String(process.env.NODE_ENV);
+const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
 // AWS / DynamoDB Config
@@ -220,6 +221,7 @@ const SESSION_STATUS = {
 };
 
 export {
+  NODE_ENV,
   HOST,
   PORT,
 
