@@ -9,7 +9,7 @@ import { runRealtimeSchemaSync } from './schema-sync';
 import { logger } from '../../middlewares';
 import { IAwsCredentials, IBackupConfig, IBackupJob } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
-import { encryptWithKey } from '../../utils/encryption';
+import { encrypt } from '../../utils/encryption';
 import { getRestoreJobById } from '../restore-job';
 
 
@@ -342,7 +342,7 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
         // Encrypted with AWS_EMR_ENCRYPTION_KEY (the same key Spark gets as ENCRYPTION_KEY),
         // framed the same way decryptFromTransport expects to unpack it: base64(JSON({ ciphertext, iv })).
         const payloadB64 = Buffer.from(
-            JSON.stringify(encryptWithKey(JSON.stringify(payload), AWS_EMR_ENCRYPTION_KEY))
+            JSON.stringify(encrypt(JSON.stringify(payload), AWS_EMR_ENCRYPTION_KEY))
         ).toString('base64');
 
         logger.info('Initializing EMR job...');
