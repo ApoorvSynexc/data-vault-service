@@ -15,6 +15,9 @@ export interface IOAuthState {
     email: string;
     instanceUrl: string;
     organizationId: string;
+    firstName: string;
+    lastName: string;
+    crmUserId: string;
   };
   ttl: number; // Unix epoch seconds — DynamoDB TTL attribute
   createdAt: string;

@@ -151,7 +151,7 @@ const socialLoginCallbackHandler = async (
   if (!user && oauthState.isAdminUser && oauthState.adminUserSfProfile) {
     // First-time admin: authorize-org deferred role + user creation to here,
     // after Salesforce has confirmed the login.
-    const { username, email, instanceUrl, organizationId } = oauthState.adminUserSfProfile;
+    const { username, email, instanceUrl, organizationId, firstName, lastName, crmUserId } = oauthState.adminUserSfProfile;
 
     const permissions: IRolePermissions = [];
     defaultPermissions.forEach((module) => {
@@ -166,8 +166,8 @@ const socialLoginCallbackHandler = async (
     const userId = uuidv4();
     const crmExist = await getCrmByOrgId(organizationId);
     const crmId = crmExist?.crmId ?? uuidv4();
-    const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId };
-    await createUser({ crmProfile, role: { name: roleName, roleId }, userId, crmId });
+    const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId, firstName, lastName };
+    await createUser({ crmProfile, role: { name: roleName, roleId }, userId, crmId, firstName: firstName, lastName: lastName, status: STATUS.active });
     await upsertCrm({
       userId,
       crmId,
