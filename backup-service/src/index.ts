@@ -14,6 +14,7 @@ const validateEnv = (): void => {
   const required = [
     'CORE_SERVICE',
     'INTERNAL_SECRET',
+    'ENCRYPTION_KEY',
     'SALESFORCE_CLIENT_ID',
     'SALESFORCE_CLIENT_SECRET',
     'SALESFORCE_REDIRECT_URI',
