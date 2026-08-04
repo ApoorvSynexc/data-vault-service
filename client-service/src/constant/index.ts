@@ -40,9 +40,8 @@ const AWS_ATHENA_OUTPUT_LOCATION = String(process.env.AWS_ATHENA_OUTPUT_LOCATION
 const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
 const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
 
-// JWT Config
-const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
-const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
+const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET);
+const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET);
 const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
 const JWT_REFRESH_EXPIRY = String(process.env.JWT_REFRESH_EXPIRY || '7d');
 
