@@ -9,6 +9,7 @@ import {
   getUser,
   unwrapApex,
   initalizePayloadTransform,
+  getDecryptedCrmCredential,
 } from '../../../services';
 import { BACKUP_STATUS, STATUS } from '../../../constant';
 import {
@@ -16,7 +17,6 @@ import {
   SalesforceAuthExpiredError,
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
-import { decrypt } from '../../../utils/encryption';
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupConfigId, objectName, mode } = req.query;
@@ -120,7 +120,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
-  const tokens = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const tokens = getDecryptedCrmCredential(user) ?? {};
   let refreshed: any;
   try {
     refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);

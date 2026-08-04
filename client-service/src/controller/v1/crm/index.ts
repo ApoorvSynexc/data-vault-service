@@ -13,6 +13,7 @@ import {
   updateUser,
   getUsersByContactEmail,
   getUser,
+  getDecryptedCrmCredential,
 } from '../../../services';
 import {
   refreashSalesforceToken,
@@ -20,7 +21,7 @@ import {
   SalesforceEnvironment,
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
-import { decrypt, encrypt } from '../../../utils/encryption';
+import { encrypt } from '../../../utils/encryption';
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
 // e.g. "HTTP Error 400: {"error":"invalid_grant",...}" → "invalid_grant"
@@ -207,7 +208,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
 
-  const tokens = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const tokens = getDecryptedCrmCredential(user) ?? {};
   let refreshed: any;
   try {
     refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);

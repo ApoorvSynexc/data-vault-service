@@ -11,7 +11,7 @@ import { getDestinationById, getDecryptedDestinationConfig } from '../destinatio
 import { incrementTableCounter } from '../counter';
 import { flattenBackupObjects } from '../../utils/helper';
 import { logger } from '../../middlewares';
-import { decrypt } from '../../utils/encryption';
+import { getDecryptedCrmCredential } from '../user';
 
 const getSourceObjects = (objects?: IObject[]) => {
   if (objects?.length) {
@@ -91,7 +91,7 @@ const triggerArchivalBackupJob = async (params: {
 
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=PENDING`);
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
-  const credentials = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
+  const credentials = getDecryptedCrmCredential(user);
   const payload = {
     userId: config.userId,
     backupConfigId: config.backupConfigId,
@@ -162,7 +162,7 @@ const triggerBackupJob = async (params: {
   if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
-  const credentials = user?.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
+  const credentials = getDecryptedCrmCredential(user);
   // Master-Detail children are expanded (and persisted back onto the config) by
   // backup-service at job creation — see expandWithMasterChildren there.
   const payload = {

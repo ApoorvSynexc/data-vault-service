@@ -26,6 +26,7 @@ import {
     getBackupJobById,
     getDecryptedDestinationConfig,
     unwrapApex,
+    getDecryptedCrmCredential,
 } from "../../../services";
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
@@ -33,7 +34,6 @@ import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
-import { decrypt } from "../../../utils/encryption";
 
 // ── Parent chain types ────────────────────────────────────────────────────────
 
@@ -448,7 +448,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         if (config.schedule === SCHEDULE_MODE.realtime) {
             const crm = await getCrmById(config.crmId);
             if (crm) {
-                const credentials = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
+                const credentials = getDecryptedCrmCredential(user);
                 await getSalesforceProfile(
                     {
                         accessToken: credentials.access_token,
