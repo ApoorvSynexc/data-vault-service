@@ -140,9 +140,9 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
     'salesforce',
     environment,
     instanceUrl,
-    undefined,
+    firstName + ' ' + lastName,
     existingUser ? undefined : true,
-    existingUser ? undefined : { username, email: userEmail, instanceUrl, organizationId: orgId }
+    existingUser ? undefined : { username, email: userEmail, instanceUrl, organizationId: orgId, firstName, lastName, crmUserId }
   );
 
   return { authorizationUrl: url };
