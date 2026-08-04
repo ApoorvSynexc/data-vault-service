@@ -133,16 +133,14 @@ const readEnvelope = (raw: any): EncryptedPayload => {
 
 // ---------------------------------------------------------------------------
 // Single-string transport for the master-key envelope.
-// Packs the { ciphertext, iv } master-key envelope into one opaque base64 string
-// so endpoints can exchange a single `payload` field. Same aes-256-cbc scheme as
-// encrypt/decrypt — this only frames it, it is not a new algorithm.
+// Decodes the opaque base64 string produced by base64(JSON({ ciphertext, iv })) —
+// the framing used to pass a master-key envelope as a single `payload` field.
+// Same aes-256-cbc scheme as encrypt/decrypt — this only unframes it, it is not
+// a new algorithm.
 // ---------------------------------------------------------------------------
-
-const encryptToTransport = (plaintext: string): string =>
-  Buffer.from(JSON.stringify(encrypt(plaintext))).toString('base64');
 
 const decryptFromTransport = (payload: string): string =>
   decrypt(JSON.parse(Buffer.from(payload, 'base64').toString('utf8')));
 
-export { encrypt, encryptForTenant, decrypt, decryptWithKey, encryptWithKey, readEnvelope, generateOrgEncryptionKey, encryptToTransport, decryptFromTransport };
+export { encrypt, encryptForTenant, decrypt, decryptWithKey, encryptWithKey, readEnvelope, generateOrgEncryptionKey, decryptFromTransport };
 export type { EncryptedPayload };
