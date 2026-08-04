@@ -2,12 +2,12 @@ import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { AUTH_PROVIDER, GENDER } from '../../../constant';
 import { makeResponse } from '../../../lib';
-import { phoneJoiSchema } from '../shared';
+import { phoneJoiSchema, passwordJoiSchema } from '../shared';
 
 export const changePasswordValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     oldPassword: Joi.string().required(),
-    newPassword: Joi.string().min(8).required(),
+    newPassword: passwordJoiSchema,
   });
 
   const { error } = schema.validate(req.body);
@@ -31,7 +31,7 @@ export const signupValidation = (req: Request, res: Response, next: NextFunction
     })
       .or('email', 'mobile')
       .required(),
-    password: Joi.string().min(8).required(),
+    password: passwordJoiSchema,
     authProvider: Joi.string()
       .valid(...Object.values(AUTH_PROVIDER))
       .required(),
