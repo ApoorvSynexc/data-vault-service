@@ -166,28 +166,39 @@ const ROW_TYPE_EXPR =
   `WHEN "$path" LIKE '%/updates/%' THEN 'UPDATE' ` +
   `ELSE 'INSERT' END`;
 
-/**
- * LastModifiedDate is varchar, so `<= '2026-07-29'` would exclude every record
- * modified DURING that day. A bare upper bound is extended to end-of-day so an
- * inclusive range means what the caller meant.
- *
- * The /fetch-records path already resolves bare dates this way at the request
- * boundary (toIsoDateString with bound 'end'), so this never fires for it. It
- * stays because these builders are exported and unit-checked on their own: a
- * direct caller passing `2026-07-29` gets the same window the API would give it,
- * rather than silently losing a day.
- */
-const endOfDay = (value: string): string =>
-  /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? `${value.trim()}T23:59:59.999Z` : value;
-
-// LastModifiedDate window. Lower bounds need no adjustment — a bare date already
-// sorts before every timestamp on that day.
-const dateWhere = (from?: string | null, to?: string | null): string | null => {
-  const parts: string[] = [];
-  if (from) parts.push(`${quoteCol(LMD)} >= ${lit(from)}`);
-  if (to) parts.push(`${quoteCol(LMD)} <= ${lit(endOfDay(to))}`);
-  return parts.length ? parts.join(' AND ') : null;
-};
+// =============================================================================
+// DISABLED 2026-07-30 — the LastModifiedDate window
+// =============================================================================
+//
+// Records are now selected by `backupJobIds` ALONE. `startDate` / `endDate` are
+// still accepted on ICsvFetchParams (and still travel through the request
+// models) but nothing reads them, so no date predicate reaches Athena.
+//
+// To re-enable: uncomment the two helpers and the two commented lines in
+// buildCsvRecordsSql (the `dateSelector` and the `dateWhere(...)` row filter).
+//
+// /**
+//  * LastModifiedDate is varchar, so `<= '2026-07-29'` would exclude every record
+//  * modified DURING that day. A bare upper bound is extended to end-of-day so an
+//  * inclusive range means what the caller meant.
+//  *
+//  * The /fetch-records path already resolves bare dates this way at the request
+//  * boundary (toIsoDateString with bound 'end'), so this never fires for it. It
+//  * stays because these builders are exported and unit-checked on their own: a
+//  * direct caller passing `2026-07-29` gets the same window the API would give it,
+//  * rather than silently losing a day.
+//  */
+// const endOfDay = (value: string): string =>
+//   /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? `${value.trim()}T23:59:59.999Z` : value;
+//
+// // LastModifiedDate window. Lower bounds need no adjustment — a bare date already
+// // sorts before every timestamp on that day.
+// const dateWhere = (from?: string | null, to?: string | null): string | null => {
+//   const parts: string[] = [];
+//   if (from) parts.push(`${quoteCol(LMD)} >= ${lit(from)}`);
+//   if (to) parts.push(`${quoteCol(LMD)} <= ${lit(endOfDay(to))}`);
+//   return parts.length ? parts.join(' AND ') : null;
+// };
 
 const inWhere = (column: string, values?: string[] | null): string | null =>
   values?.length ? `${column} IN (${idList(values)})` : null;
@@ -206,13 +217,15 @@ export interface ICsvFetchParams {
    *                      buildCsvRecordsSql.
    */
   backupJobIds?: string[] | null;
-  // LastModifiedDate window (source.startDate / source.endDate, and the lower
-  // bound contributed by restoreScope.chnageSince.date).
-  //
-  // `startDate` means two different things depending on `changedBetween`:
-  //   false — a row filter. Only versions inside the window are scanned at all.
-  //   true  — a record SELECTOR. Every version is scanned; the date only decides
-  //           which records qualify. See buildCsvRecordsSql.
+  /**
+   * DISABLED 2026-07-30 — accepted, never read. Records are selected by
+   * `backupJobIds` alone and no date predicate reaches Athena.
+   *
+   * Kept on the interface (rather than deleted) so the request models above it
+   * still type-check while the window is switched off, and so re-enabling is
+   * uncommenting rather than re-threading. See the disabled block above
+   * `inWhere` for what they used to do.
+   */
   startDate?: string | null;
   endDate?: string | null;
   // Record scope: the request's top-level recordIds ∪ restoreScope.bulkCsvIds ∪
@@ -304,9 +317,9 @@ const versionPick = (restoreTo: boolean): string => {
  * Every input is one of two things, and confusing them is the single easiest way
  * to make this query silently wrong.
  *
- *   A ROW FILTER decides which versions are scanned at all. `endDate`, the
- *   record scope and the caller's filter are row filters, and so is the whole
- *   date window under default picking.
+ *   A ROW FILTER decides which versions are scanned at all. The record scope and
+ *   the caller's filter are row filters, and so is a job list under default
+ *   picking.
  *
  *   A SELECTOR decides which RECORDS qualify and, with them, WHICH CHANGE is
  *   being previewed. It must never reach the scan's WHERE, because the version
@@ -316,17 +329,18 @@ const versionPick = (restoreTo: boolean): string => {
  *   would return its own post-change values. Silently the opposite of the
  *   request.
  *
- * Under restore-to picking (`fullRestore`, or `changedBetween`) there are two
- * possible selectors, and **`backupJobIds` wins over `startDate`** when both are
- * present:
- *
- *   backupJobIds — "the change these jobs recorded". Costs the partition prune:
- *                  every version of a candidate record has to be scanned, not
- *                  just the requested jobs' rows.
- *   startDate    — "the change inside this window" (CHANGED_BETWEEN only).
+ * Under restore-to picking (`fullRestore`, or `changedBetween`) the selector is
+ * **`backupJobIds`** — "the change these jobs recorded". It costs the partition
+ * prune: every version of a candidate record has to be scanned, not just the
+ * requested jobs' rows.
  *
  * A job list under DEFAULT picking stays a plain row filter on the partition
  * key, which is what makes ENTIRE/PARTIAL cheap.
+ *
+ * DISABLED 2026-07-30: `startDate` was the other selector (the change inside a
+ * window, CHANGED_BETWEEN only) and `startDate`/`endDate` were row filters
+ * otherwise. The whole date window is switched off — see the disabled block
+ * above `inWhere` — so job ids are now the only way to select a change.
  *
  * ── Shape ────────────────────────────────────────────────────────────────────
  *
@@ -355,10 +369,9 @@ const versionPick = (restoreTo: boolean): string => {
  * the caller's ROW filters admit (ranking first would let a filtered-out newest
  * version hide a record that does match).
  *
- * With neither selector — `fullRestore` alone, or CHANGED_BETWEEN with only an
- * `endDate` — there is nothing to qualify on: every record in scope is returned
- * at the version beneath its newest change, which reads as "restore-to state as
- * of `endDate`".
+ * With no selector — restore-to picking and no `backupJobIds` — there is nothing
+ * to qualify on: every record in scope is returned at the version beneath its
+ * newest change, which reads as "restore-to state as of now".
  *
  * ponytail: a job selector could still prune partitions if the caller passed the
  * newest requested job's timestamp — no version above it can be the anchor. That
@@ -373,20 +386,21 @@ export const buildCsvRecordsSql = (tableName: string, p: ICsvFetchParams): strin
   const restoreTo = p.fullRestore === true || changedBetween;
   const jobIds = p.backupJobIds?.length ? p.backupJobIds : null;
 
-  // Jobs win over the date bound: a caller who named the jobs has said exactly
-  // which change they mean, which is more specific than a window around it.
+  // The job list is the only selector — see the DISABLED block above `inWhere`
+  // for the date bound that used to be the other one.
   const jobSelector = restoreTo && jobIds ? inWhere('backup_job_id', jobIds) : null;
-  const dateSelector =
-    !jobSelector && changedBetween && p.startDate
-      ? `${quoteCol(LMD)} >= ${lit(p.startDate)}`
-      : null;
-  const selector = jobSelector ?? dateSelector;
+  // const dateSelector =
+  //   !jobSelector && changedBetween && p.startDate
+  //     ? `${quoteCol(LMD)} >= ${lit(p.startDate)}`
+  //     : null;
+  const selector = jobSelector;
 
   const rowFilters = [
     // A job list that selects records must not also filter rows away.
     inWhere('backup_job_id', jobSelector ? null : jobIds),
-    // Under changedBetween the lower bound is a selector, not a row filter.
-    changedBetween ? dateWhere(null, p.endDate) : dateWhere(p.startDate, p.endDate),
+    // DISABLED 2026-07-30 — the LastModifiedDate window. Under changedBetween the
+    // lower bound was a selector, not a row filter.
+    // changedBetween ? dateWhere(null, p.endDate) : dateWhere(p.startDate, p.endDate),
     inWhere(quoteCol(ID), p.recordIds),
     p.filterWhere,
   ];
@@ -703,26 +717,24 @@ if (require.main === module) {
     'the pick is parenthesised so AND cannot bind to one OR arm'
   );
 
-  // ── CHANGED_BETWEEN by date: the lower bound anchors, it does not filter ───
+  // ── CHANGED_BETWEEN: the job list anchors, it does not filter ─────────
   const changed = buildCsvRecordsSql('t', {
     ...base,
     changedBetween: true,
-    startDate: '2026-03-01',
-    endDate: '2026-06-30',
+    backupJobIds: ['JOB_2'],
   });
   // The version an UPDATE rolls back to is older than the change, so a row
-  // filter on startDate would discard the very version being asked for. It
+  // filter on the job list would discard the very version being asked for. It
   // becomes a per-record anchor instead.
   assert.ok(
     changed.includes(
-      `MAX(CASE WHEN "LastModifiedDate" >= '2026-03-01' THEN "LastModifiedDate" END) ` +
+      `MAX(CASE WHEN backup_job_id IN ('JOB_2') THEN "LastModifiedDate" END) ` +
         `OVER (PARTITION BY "Id") AS "dv_anchor"`
     ),
-    'startDate anchors the change under changedBetween'
+    'the job list anchors the change under changedBetween'
   );
-  // Only endDate bounds the scan. This exact match also proves the lower bound is
-  // NOT in the scan WHERE: whereClause would have joined it in with an AND.
-  assert.ok(changed.includes(`FROM "t" WHERE ("LastModifiedDate" <= '2026-06-30T23:59:59.999Z')`));
+  // Nothing bounds the scan — the selector left the WHERE entirely.
+  assert.ok(!changed.includes(`FROM "t" WHERE`));
   // Records the selector never matched drop out; everything above the anchor is
   // dropped so rank 1 is the selected change and rank 2 the state beneath it.
   assert.ok(
@@ -748,7 +760,7 @@ if (require.main === module) {
 
   // fullRestore: false cannot turn CHANGED_BETWEEN's picking back off.
   assert.ok(
-    buildCsvRecordsSql('t', { ...base, changedBetween: true, startDate: '2026-03-01', fullRestore: false })
+    buildCsvRecordsSql('t', { ...base, changedBetween: true, backupJobIds: ['JOB_2'], fullRestore: false })
       .includes(`"dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)`)
   );
 
@@ -775,15 +787,32 @@ if (require.main === module) {
   );
   assert.ok(jobAnchored.includes(`"dv_anchor" IS NOT NULL AND "LastModifiedDate" <= "dv_anchor"`));
 
-  // Jobs win over startDate when both are present.
-  const jobsBeatDates = buildCsvRecordsSql('t', {
+  // ── DISABLED 2026-07-30: the date window is accepted and ignored ────────
+  // Records are selected by backupJobIds alone, so no supplied date may reach
+  // the SQL in ANY position — not as a selector, not as a row filter.
+  const withDates = buildCsvRecordsSql('t', {
     ...base,
     changedBetween: true,
     backupJobIds: ['JOB_2'],
     startDate: '2026-03-01',
+    endDate: '2026-06-30',
   });
-  assert.ok(jobsBeatDates.includes(`MAX(CASE WHEN backup_job_id IN ('JOB_2')`));
-  assert.ok(!jobsBeatDates.includes(`>= '2026-03-01'`), 'the date bound is not also an anchor');
+  assert.ok(withDates.includes(`MAX(CASE WHEN backup_job_id IN ('JOB_2')`), 'jobs still anchor');
+  assert.ok(!withDates.includes('2026-03-01'), 'startDate is ignored');
+  assert.ok(!withDates.includes('2026-06-30'), 'endDate is ignored');
+  // Byte-identical to the same request with no dates at all.
+  assert.strictEqual(
+    withDates,
+    buildCsvRecordsSql('t', { ...base, changedBetween: true, backupJobIds: ['JOB_2'] }),
+    'supplying a window changes nothing about the query'
+  );
+  // Same under default picking, where the window used to be a plain row filter.
+  assert.strictEqual(
+    buildCsvRecordsSql('t', { ...base, startDate: '2026-01-01', endDate: '2026-07-29' }),
+    buildCsvRecordsSql('t', base)
+  );
+  // A date-only request now selects the whole table.
+  assert.ok(!buildCsvRecordsSql('t', { ...base, startDate: '2026-01-01' }).includes('LastModifiedDate" >='));
 
   // fullRestore + jobs outside CHANGED_BETWEEN gets the same treatment — the
   // trap is restore-to picking, not the source type. This is the combination
@@ -799,14 +828,14 @@ if (require.main === module) {
   assert.ok(jobFilter.includes(`FROM "t" WHERE (backup_job_id IN ('JOB_2'))`));
   assert.ok(!jobFilter.includes('dv_anchor'), 'no anchor without restore-to picking');
 
-  // Only an endDate → no selector at all; reads as "restore-to state as of endDate".
-  const changedOpenBelow = buildCsvRecordsSql('t', { ...base, changedBetween: true, endDate: '2026-06-30' });
-  assert.ok(!changedOpenBelow.includes('dv_anchor'), 'no lower bound and no jobs → nothing to anchor on');
-  assert.ok(changedOpenBelow.includes(`"dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)`));
+  // CHANGED_BETWEEN with no jobs has nothing to anchor on: every record comes
+  // back at the version beneath its newest change.
+  const noSelector = buildCsvRecordsSql('t', { ...base, changedBetween: true });
+  assert.ok(!noSelector.includes('dv_anchor'), 'no jobs → nothing to anchor on');
+  assert.ok(noSelector.includes(`"dv_row_type" = 'UPDATE' AND (rn = 2 OR versions = 1)`));
 
-  // ENTIRE/PARTIAL keep the plain row-filter window and newest-version picking.
-  const entire = buildCsvRecordsSql('t', { ...base, startDate: '2026-03-01', endDate: '2026-06-30' });
-  assert.ok(entire.includes(`("LastModifiedDate" >= '2026-03-01' AND "LastModifiedDate" <= '2026-06-30T23:59:59.999Z')`));
+  // ENTIRE/PARTIAL keep newest-version picking.
+  const entire = buildCsvRecordsSql('t', { ...base });
   assert.ok(entire.includes(`) r WHERE (rn = 1)`), 'ENTIRE returns the newest version');
   assert.ok(!entire.includes('dv_anchor'), 'anchoring is restore-to-only');
 
@@ -814,7 +843,7 @@ if (require.main === module) {
   const changedDeleted = buildCsvRecordsSql('t', {
     ...base,
     changedBetween: true,
-    startDate: '2026-03-01',
+    backupJobIds: ['JOB_2'],
     deletedOnly: true,
   });
   assert.ok(
@@ -839,20 +868,6 @@ if (require.main === module) {
   );
   // Empty array is treated as "not supplied", not as "match nothing".
   assert.ok(!buildCsvRecordsSql('t', { ...base, backupJobIds: [] }).includes('backup_job_id'));
-
-  // ── Date window on LastModifiedDate ────────────────────────────────────────
-  assert.ok(
-    buildCsvRecordsSql('t', { ...base, startDate: '2026-01-01', endDate: '2026-07-29' })
-      .includes(`("LastModifiedDate" >= '2026-01-01' AND "LastModifiedDate" <= '2026-07-29T23:59:59.999Z')`),
-    'a bare end date extends to end-of-day, else same-day records are dropped'
-  );
-  // A full timestamp is used verbatim — no end-of-day rewrite.
-  assert.ok(
-    buildCsvRecordsSql('t', { ...base, endDate: '2026-07-29T10:00:00Z' })
-      .includes(`"LastModifiedDate" <= '2026-07-29T10:00:00Z'`)
-  );
-  // One-sided windows work.
-  assert.ok(buildCsvRecordsSql('t', { ...base, startDate: '2026-01-01' }).includes(`("LastModifiedDate" >= '2026-01-01')`));
 
   // ── Record scope ───────────────────────────────────────────────────────────
   assert.ok(
@@ -887,7 +902,8 @@ if (require.main === module) {
   const filtered = buildCsvRecordsSql('t', { ...base, backupJobIds: ['j1'], filterWhere: `"Name" LIKE '%Acme%'` });
   assert.ok(filtered.includes(`WHERE (backup_job_id IN ('j1')) AND ("Name" LIKE '%Acme%')`));
 
-  // Every filter at once, in the documented order.
+  // Every filter at once, in the documented order. The dates are supplied and
+  // make no difference — the window is disabled.
   const everything = buildCsvRecordsSql('t', {
     ...base,
     backupJobIds: ['j1'],
@@ -899,10 +915,10 @@ if (require.main === module) {
   });
   assert.ok(
     everything.includes(
-      `WHERE (backup_job_id IN ('j1')) AND ("LastModifiedDate" >= '2026-01-01' AND ` +
-        `"LastModifiedDate" <= '2026-02-01T23:59:59.999Z') AND ("Id" IN ('r1')) AND ("Name" = 'Acme')`
+      `WHERE (backup_job_id IN ('j1')) AND ("Id" IN ('r1')) AND ("Name" = 'Acme')`
     )
   );
+  assert.ok(!everything.includes('2026-01-01') && !everything.includes('2026-02-01'));
   assert.ok(everything.includes(`AND "dv_row_type" = 'DELETE'`));
 
   // ── Keyset pagination ──────────────────────────────────────────────────────

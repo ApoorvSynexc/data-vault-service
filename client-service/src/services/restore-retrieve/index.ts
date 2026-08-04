@@ -12,7 +12,10 @@ import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records';
 import { uploadToS3 } from '../third-party/s3-bucket';
 import { decrypt, EncryptedPayload } from '../../utils/encryption';
 import { httpRequest } from '../../utils/http-request';
-import { IsoDateString, toIsoDateString } from '../../utils/iso-date';
+// toIsoDateString went with toFetchParams' date resolution — see the disabled
+// block there. IsoDateString still types the (accepted, ignored) window fields.
+// import { IsoDateString, toIsoDateString } from '../../utils/iso-date';
+import { IsoDateString } from '../../utils/iso-date';
 import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
 
 export { buildAthenaFilterWhere, FilterError } from './athena-filter';
@@ -304,29 +307,30 @@ export interface IFetchRecordsFilters {
 // ── /fetch-records request model ──────────────────────────────────────────────
 
 /**
- * What the source window selects, before any restoreScope narrowing:
+ * What the source selects, before any restoreScope narrowing:
  *
  *   ENTIRE          — every record the config holds, each at its NEWEST version,
  *                     whether that version sits in inserts/, updates/ or
  *                     deletes/.
  *   PARTIAL         — the same, restricted to source.backupJobIds.
- *   CHANGED_BETWEEN — only records that changed inside the startDate/endDate
- *                     window, each at the version it should be restored TO: an
- *                     UPDATE returns the version beneath the change (which is
- *                     often a row in inserts/), a DELETE has no earlier version
- *                     so the DELETE row is returned whole, an INSERT is already
- *                     its own restore target.
+ *   CHANGED_BETWEEN — only records those jobs changed, each at the version it
+ *                     should be restored TO: an UPDATE returns the version
+ *                     beneath the change (often a row in inserts/), a DELETE has
+ *                     no earlier version so the DELETE row is returned whole, an
+ *                     INSERT is already its own restore target.
  *
  * ENTIRE/PARTIAL and CHANGED_BETWEEN therefore produce genuinely different SQL —
- * both in which version of a record is picked and in what the date bounds filter.
- * Under CHANGED_BETWEEN `startDate` selects which RECORDS qualify instead of
- * filtering rows out of the scan, because the version an UPDATE rolls back to is
- * necessarily older than the change being reverted; see buildCsvRecordsSql for
- * the full reasoning. CHANGED_BETWEEN implies restore-to picking on its own, so
- * `fullRestore` is redundant with it (setting it false does not turn it off).
+ * both in which version of a record is picked, and in whether the job list
+ * filters rows or selects records. Under CHANGED_BETWEEN `backupJobIds` selects
+ * which RECORDS qualify instead of filtering rows out of the scan, because the
+ * version an UPDATE rolls back to is necessarily older than the change being
+ * reverted; see buildCsvRecordsSql for the full reasoning. CHANGED_BETWEEN
+ * implies restore-to picking on its own, so `fullRestore` is redundant with it
+ * (setting it false does not turn it off).
  *
- * The type also drives validation: PARTIAL and CHANGED_BETWEEN reject a request
- * that omits the input they exist to apply.
+ * The type also drives validation: PARTIAL and CHANGED_BETWEEN both reject a
+ * request with no backupJobIds — since the date window was disabled
+ * (2026-07-30) that is the only narrowing either of them can carry.
  */
 export type FetchSourceType = 'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN';
 
@@ -347,6 +351,11 @@ export interface IFetchSource {
   backupConfigId: string;
   type: FetchSourceType;
   /**
+   * DISABLED 2026-07-30 — still accepted on the request, never read. Records are
+   * selected by `backupJobIds` alone; nothing populates these and nothing
+   * consumes them. Kept typed so re-enabling is uncommenting rather than
+   * re-threading. Everything below describes what they did.
+   *
    * LastModifiedDate window, as canonical ISO 8601 UTC instants
    * (`YYYY-MM-DDTHH:mm:ss.sssZ`) — see IsoDateString.
    *
@@ -389,7 +398,10 @@ export interface IRestoreScope {
   // `columns`.
   fields?: IRestoreScopeFields[];
   filters?: IFetchRecordsFilters;
-  // Spelled as the client sends it. Contributes a LastModifiedDate lower bound,
+  // DISABLED 2026-07-30 with source.startDate — the same window under another
+  // name. Still accepted, never read.
+  //
+  // Spelled as the client sends it. Contributed a LastModifiedDate lower bound,
   // merged with source.startDate by string comparison — so it carries the same
   // canonical ISO type, or the merge would compare two different shapes.
   changeSince?: { date?: IsoDateString };
@@ -538,8 +550,11 @@ const fingerprintRequest = (p: IFetchRecordsParams): string => {
         [...p.columns].sort(),
         p.source.backupConfigId,
         p.source.type,
-        p.source.startDate ?? null,
-        p.source.endDate ?? null,
+        // DISABLED 2026-07-30 — the window no longer changes which rows come
+        // back, so it must not change the fingerprint either: a cursor taken
+        // with dates has to stay valid for the same request without them.
+        // p.source.startDate ?? null,
+        // p.source.endDate ?? null,
         [...(p.source.backupJobIds ?? [])].sort(),
         p.fullRestore ?? false,
         [...(p.recordIds ?? [])].sort(),
@@ -549,7 +564,7 @@ const fingerprintRequest = (p: IFetchRecordsParams): string => {
         [...(scope?.objects ?? [])].sort(),
         scope?.records ?? null,
         scope?.fields ?? null,
-        scope?.changeSince?.date ?? null,
+        // scope?.changeSince?.date ?? null,   // DISABLED 2026-07-30 — see above
         [...(scope?.bulkCsvIds ?? [])].sort(),
         scope?.deletedOnly ?? false,
       ])
@@ -715,7 +730,10 @@ const resolveScope = (
     recordIds,
     // Either place can switch it on; neither can switch the other off.
     deletedOnly: topDeleteOnly || scope.deletedOnly === true,
-    ...(scope.changeSince?.date ? { changedSinceStart: scope.changeSince.date } : {}),
+    // DISABLED 2026-07-30 — restoreScope.changeSince.date was the scope's own
+    // LastModifiedDate lower bound. It is the same window under another name,
+    // so it goes with source.startDate rather than becoming a way around it.
+    // ...(scope.changeSince?.date ? { changedSinceStart: scope.changeSince.date } : {}),
   };
 };
 
@@ -770,26 +788,28 @@ const fetchCsvRecords = async (
     return toPage([], resolved.columns, page.offset, page.fingerprint, executions, params.pageSize);
   }
 
-  // The scope's changedSince date and the source window are both lower bounds on
-  // LastModifiedDate; the tighter one wins so neither can widen the other. Under
-  // CHANGED_BETWEEN the merged bound selects which records changed rather than
-  // filtering rows out of the scan — see buildCsvRecordsSql.
+  // DISABLED 2026-07-30 — the LastModifiedDate window. Records are selected by
+  // backupJobIds alone, so neither bound is passed to the SQL builder (which
+  // ignores them anyway — see the disabled block in athena-fetch).
   //
-  // Sorting picks the later bound by STRING order, which is the same as instant
+  // The scope's changedSince date and the source window were both lower bounds
+  // on LastModifiedDate; the tighter one won so neither could widen the other.
+  // Sorting picked the later bound by STRING order, which is the same as instant
   // order only because both sides are canonical ISO UTC (IsoDateString) —
   // mixing in a bare date or an offset-bearing timestamp would pick the wrong
   // one and silently widen or narrow the window.
-  const startDate = [source.startDate, resolved.changedSinceStart]
-    .filter((d): d is IsoDateString => Boolean(d))
-    .sort()
-    .pop();
+  //
+  // const startDate = [source.startDate, resolved.changedSinceStart]
+  //   .filter((d): d is IsoDateString => Boolean(d))
+  //   .sort()
+  //   .pop();
 
   const result = await run('csv', () =>
     buildCsvRecordsSql(csvTable, {
       columnNames: resolved.columns,
       backupJobIds: source.backupJobIds,
-      startDate,
-      endDate: source.endDate,
+      // startDate,
+      // endDate: source.endDate,
       recordIds: resolved.recordIds,
       filterWhere,
       deletedOnly: resolved.deletedOnly,
@@ -1310,19 +1330,22 @@ const toFetchParams = (
   const type: FetchSourceType =
     (source.type as FetchSourceType | undefined) ?? (source.backupJobIds?.length ? 'PARTIAL' : 'ENTIRE');
 
-  const startDate = toIsoDateString(source.startDate ?? '', 'start');
-  const endDate = toIsoDateString(source.endDate ?? '', 'end');
-  // Under CHANGED_BETWEEN the job ids override the window — the same precedence
-  // the HTTP parser applies, kept identical so a preview and the restore it
+  // DISABLED 2026-07-30 — the LastModifiedDate window. Records are selected by
+  // backupJobIds alone, so a stored restore's dates are not carried into the
+  // query. Kept identical to the HTTP parser so a preview and the restore it
   // previews select the same records.
-  const windowApplies = !(type === 'CHANGED_BETWEEN' && (source.backupJobIds?.length ?? 0) > 0);
+  //
+  // const startDate = toIsoDateString(source.startDate ?? '', 'start');
+  // const endDate = toIsoDateString(source.endDate ?? '', 'end');
+  // // Under CHANGED_BETWEEN the job ids override the window.
+  // const windowApplies = !(type === 'CHANGED_BETWEEN' && (source.backupJobIds?.length ?? 0) > 0);
 
   return {
     source: {
       backupConfigId: source.backupConfigId,
       type,
-      ...(windowApplies && startDate ? { startDate } : {}),
-      ...(windowApplies && endDate ? { endDate } : {}),
+      // ...(windowApplies && startDate ? { startDate } : {}),
+      // ...(windowApplies && endDate ? { endDate } : {}),
       ...(source.backupJobIds?.length ? { backupJobIds: source.backupJobIds } : {}),
     },
     objectApiName,

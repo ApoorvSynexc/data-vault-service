@@ -1,4 +1,4 @@
-const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
+﻿const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
 // AWS / DynamoDB Config
@@ -57,14 +57,14 @@ const DESTINATION_TABLE = String(process.env.DESTINATION_TABLE || 'data-vault-de
 const RESTORE_TABLE = String(process.env.RESTORE_TABLE || 'data-vault-restores');
 const RESTORE_JOB_TABLE = String(process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs');
 
-// Encryption — must be a 64-char hex string (32 bytes for AES-256)
+// Encryption â€” must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
 // Webhook
 const SALESFORCE_WEBHOOK_URL = String(process.env.SALESFORCE_WEBHOOK_URL);
 const SALESFORCE_WEBHOOK_SECRET = String(process.env.SALESFORCE_WEBHOOK_SECRET);
 
-// Internal service auth — shared secret between this service and the backup service
+// Internal service auth â€” shared secret between this service and the backup service
 const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 
 // Services
@@ -154,7 +154,7 @@ const JOB_STATUS = {
 };
 // Compression lifecycle. Written to the same `status` field as JOB_STATUS, so a
 // compressed job no longer reports the backup outcome it had before compression.
-// ponytail: one-way door — SUCCESS vs FAILED is lost once compression starts.
+// ponytail: one-way door â€” SUCCESS vs FAILED is lost once compression starts.
 // Move to a separate `compressionStatus` attribute if that outcome is ever needed.
 const COMPRESSION_STATUS = {
   inProgress: 'COMPRESSION_JOB_IN_PROGRESS',
@@ -218,82 +218,6 @@ const SESSION_STATUS = {
   active: 'ACTIVE',
   revoked: 'REVOKED',
 };
-
-/**
- * Salesforce reports these as "accessible" on accessible-objects, but none of them
- * can be backed up or archived: they are describe/metadata views (FieldDefinition,
- * EntityParticle, RelatedListDefinition), picklist-backing status tables
- * (CaseStatus, TaskStatus, WorkOrderStatus), access-check views (UserRecordAccess),
- * or non-queryable system entities. Offering them in an object picker produces
- * configs whose backup jobs fail at query time, so they are dropped at the source.
- *
- * Matched case-insensitively — Salesforce API names are case-insensitive and this
- * list mixes conventions (e.g. DATACLOUD_ADDRESS).
- */
-const UNSUPPORTED_SALESFORCE_OBJECTS = new Set(
-  [
-    'AcceptedEventRelation',
-    'ApexTypeImplementor',
-    'AppTabMember',
-    'CaseStatus',
-    'ChatterConversation',
-    'ChatterMessage',
-    'ChatterMessageThread',
-    'ColorDefinition',
-    'ContentDocumentSubscription',
-    'ContentFolderItem',
-    'ContentFolderMember',
-    'ContentVersionComment',
-    'ContentVersionRating',
-    'ContractStatus',
-    'DataStatistics',
-    'DataType',
-    'DATACLOUD_ADDRESS',
-    'DeclinedEventRelation',
-    'EmbeddedServiceDetail',
-    'EmbeddedServiceLabel',
-    'EntityParticle',
-    'EventWhoRelation',
-    'FieldChangeSnapshot',
-    'FieldDefinition',
-    'FieldSecurityClassification',
-    'FlexQueueItem',
-    'FlowTestView',
-    'FlowVariableView',
-    'FlowVersionView',
-    'FormulaFunction',
-    'FormulaFunctionAllowedType',
-    'FormulaFunctionCategory',
-    'IconDefinition',
-    'ListViewChartInstance',
-    'OrderStatus',
-    'OutgoingEmail',
-    'OwnerChangeOptionInfo',
-    'PartnerRole',
-    'PicklistValueInfo',
-    'PlatformAction',
-    'Publisher',
-    'RecentFieldChange',
-    'RecentlyViewed',
-    'RelatedListColumnDefinition',
-    'RelatedListDefinition',
-    'RelationshipDomain',
-    'RelationshipInfo',
-    'SearchLayout',
-    'SiteDetail',
-    'SolutionStatus',
-    'TabDefinition',
-    'TaskPriority',
-    'TaskStatus',
-    'TaskWhoRelation',
-    'UndecidedEventRelation',
-    'UserEntityAccess',
-    'UserFieldAccess',
-    'UserRecordAccess',
-    'WorkOrderLineItemStatus',
-    'WorkOrderStatus',
-  ].map((name) => name.toLowerCase())
-);
 
 export {
   HOST,
@@ -386,7 +310,4 @@ export {
   OBJECT_TYPE,
   BACKUP_TYPE,
   ENVIRONMENT_TYPE,
-
-  // Salesforce
-  UNSUPPORTED_SALESFORCE_OBJECTS,
 };

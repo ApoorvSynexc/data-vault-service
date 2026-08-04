@@ -40,7 +40,7 @@ Core domain logic and constraints that must be preserved across changes.
 
 ## Object Processing Rules
 
-- **Object eligibility**: an object Salesforce reports on `accessible-objects` is still not selectable if it appears in `client-service/src/constant.UNSUPPORTED_SALESFORCE_OBJECTS` (60 entries). These are describe/metadata views (`FieldDefinition`, `EntityParticle`, `RelatedListDefinition`), picklist-backing status tables (`CaseStatus`, `TaskStatus`, `WorkOrderStatus`), access-check views (`UserRecordAccess`, `UserFieldAccess`) and other non-queryable system entities — a backup config containing one produces a job that fails at query time. Enforced in `getApexObjects`, so it applies to the object picker, dry-run counts and metadata sync alike. The denylist is **not** retroactive: configs saved before it was added keep any such object until edited.
+- **Object eligibility**: every object Salesforce reports on `accessible-objects` is selectable. Apex is the single authority — anything that should not be offered (describe/metadata views, status pickers, non-queryable system entities) must be excluded there.
 - CONCURRENCY_LIMIT = 6 objects processed in parallel within a single backup job.
 - MAX_RETRIES = 3 per object before marking that object FAILED.
 - One object failing does not immediately fail the entire job (continues other objects).
