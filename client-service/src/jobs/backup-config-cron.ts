@@ -93,4 +93,4 @@ const startBackupConfigCron = (): void => {
   logger.info(`[ARCH-CRON] cron registered | expression=*/5 * * * *`);
 };
 
-export { startBackupConfigCron, runScheduledIncrementalBackups };
+export { startBackupConfigCron };
