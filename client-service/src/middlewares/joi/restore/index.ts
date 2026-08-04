@@ -3,7 +3,7 @@ import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 import { DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_TYPE, STATUS, WEEK_DAY } from '../../../constant';
 
-const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'CHANGE_SINCE', 'BULK_CSV'];
+const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'INSERTS_ONLY', 'CHANGE_SINCE', 'BULK_CSV'];
 const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
 const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT'];
 const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP'];
@@ -85,6 +85,11 @@ const restoreScopeSchema = Joi.object({
   }),
   deletedOnly: Joi.when('type', {
     is: 'DELETED_ONLY',
+    then: Joi.boolean().required(),
+    otherwise: Joi.forbidden(),
+  }),
+  insertsOnly: Joi.when('type', {
+    is: 'INSERTS_ONLY',
     then: Joi.boolean().required(),
     otherwise: Joi.forbidden(),
   }),
