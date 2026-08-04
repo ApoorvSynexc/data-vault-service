@@ -75,7 +75,7 @@ const SPACE_TABLE = String(process.env.SPACE_TABLE || 'data-vault-spaces');
 
 // S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
-const LOGS_S3_BUCKET = String(process.env.LOGS_S3_BUCKET);
+const AWS_S3_LOGS_BUCKET = String(process.env.AWS_S3_LOGS_BUCKET);
 
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
@@ -290,7 +290,7 @@ export {
   BACKUP_SERVICE,
   BACKUP_JOB_TABLE,
   SPACE_TABLE,
-  LOGS_S3_BUCKET,
+  AWS_S3_LOGS_BUCKET,
 
   // Enums
   STATUS,

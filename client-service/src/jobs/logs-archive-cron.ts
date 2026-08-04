@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../middlewares';
 import { uploadToS3 } from '../services/third-party/s3-bucket';
-import { AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, LOGS_S3_BUCKET } from '../constant';
+import { AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_LOGS_BUCKET } from '../constant';
 
 // Matches middlewares/logger's own getLogFolder() — same relative depth from
 // this file's compiled location (dist/jobs/) to dist/assets/logs as
@@ -11,7 +11,7 @@ import { AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, LOGS_S3_BUCKET } 
 const LOGS_ROOT = path.join(__dirname, '../assets/logs');
 
 const s3Config = {
-  bucketName: LOGS_S3_BUCKET,
+  bucketName: AWS_S3_LOGS_BUCKET,
   region: AWS_REGION,
   accessKeyId: AWS_ACCESS_KEY_ID,
   secretAccessKey: AWS_SECRET_ACCESS_KEY,
