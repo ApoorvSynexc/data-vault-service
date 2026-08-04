@@ -1,4 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../lib';
+import { logger } from '../middlewares';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -36,6 +37,7 @@ const asyncHandler =
     } catch (error: unknown) {
       const statusCode = error instanceof HttpError ? error.statusCode : 500;
       const message = error instanceof Error ? error.message : 'unknown_error';
+      logger.error(`[${statusCode}] ${req.method} ${req.originalUrl} : ${message}`);
       makeResponse(
         req,
         res,
