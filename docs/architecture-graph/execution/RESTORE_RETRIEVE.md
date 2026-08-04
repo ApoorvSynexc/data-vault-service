@@ -109,8 +109,8 @@ than treat a short page as the end of the list.
   "source": {
     "backupConfigId": "CFG1",              // required — owns the CRM, destination, Glue table
     "type": "ENTIRE",                      // ENTIRE | PARTIAL | CHANGED_BETWEEN
-    "startDate": "2026-06-01",             // ISO 8601, LastModifiedDate lower bound
-    "endDate":   "2026-06-30",             // ISO 8601, upper bound
+    "startDate": "2026-06-01",             // DISABLED 2026-07-30 — accepted, ignored
+    "endDate":   "2026-06-30",             // DISABLED 2026-07-30 — accepted, ignored
     "backupJobIds": ["JOB_2"]              // absent → every job on the config
   },
   "objectApiName": "Account",
@@ -125,12 +125,13 @@ than treat a short page as the end of the list.
 
 ### Validation
 1. `source` must be an object → 400 `invalid_source`; `backupConfigId` non-empty → `id_required`; `type` in the enum → `invalid_source_type`.
-2. Dates ISO 8601 → `invalid_source_date`; start after end → `invalid_time_range`.
-3. `PARTIAL` requires `backupJobIds` → `backup_job_ids_required`.
-4. `CHANGED_BETWEEN` requires `backupJobIds` **or** a date bound → `date_range_required`.
-5. `objectApiName` non-empty → `object_api_name_required`; `columns` non-empty → `column_names_required`.
-6. `recordIds` an array → `invalid_record_ids`; `isDeleteOnly` a boolean → `invalid_is_delete_only`.
-7. Column names and the filter block compile here, so `invalid_column_name` / `invalid_filter_*` / `soql_*` are all 400s before Athena is touched.
+2. `PARTIAL` **and** `CHANGED_BETWEEN` require `backupJobIds` → `backup_job_ids_required`.
+3. `objectApiName` non-empty → `object_api_name_required`; `columns` non-empty → `column_names_required`.
+4. `recordIds` an array → `invalid_record_ids`; `isDeleteOnly` a boolean → `invalid_is_delete_only`.
+5. Column names and the filter block compile here, so `invalid_column_name` / `invalid_filter_*` / `soql_*` are all 400s before Athena is touched.
+
+`invalid_source_date`, `invalid_time_range` and `date_range_required` are no
+longer reachable — see the disabled window below.
 
 ### recordIds and isDeleteOnly — added 2026-07-30
 
@@ -148,17 +149,35 @@ delete flags OR (top-level ∨ `deletedOnly` ∨ a `DELETED_ONLY` scope type). S
 two shapes can be mixed, and neither can cancel the other. Both are in the cursor
 fingerprint.
 
-### CHANGED_BETWEEN: job ids override the date window — added 2026-07-30
+### The date window is DISABLED — 2026-07-30
 
-`CHANGED_BETWEEN` names the change to roll back, and there are now two ways to
-name it. When a request carries **both**, `backupJobIds` wins and `startDate` /
-`endDate` are **dropped** — along with `restoreScope.changeSince`. Naming the
-jobs names the change exactly; a window around it could only widen or contradict
-it.
+Records are selected by **`backupJobIds` alone**. `source.startDate`,
+`source.endDate` and `restoreScope.changeSince.date` are still **accepted** — an
+existing client sending them gets a 200, not a 400 — but nothing reads them:
 
-They are dropped in the controller, not ignored downstream, so they stay out of
-the SQL *and* out of the cursor fingerprint — otherwise two requests that behave
-identically would hash differently and reject each other's cursors.
+- no date predicate reaches Athena, in any position (verified: no date literal
+  appears in the emitted SQL for ENTIRE, PARTIAL, CHANGED_BETWEEN, fullRestore or
+  deletedOnly requests that supply a window);
+- no date enters the cursor fingerprint, so a cursor taken with dates stays valid
+  for the same request without them;
+- `CHANGED_BETWEEN` therefore requires `backupJobIds` (it was "jobs **or** a date
+  bound"; a date-only CHANGED_BETWEEN would now select the whole config).
+
+Under restore-to picking the job list is the **selector** — it leaves the scan's
+`WHERE` and becomes the per-record `dv_anchor` — which is what it already was
+when jobs and dates were both allowed. See RESTORE_RECORD_RETRIEVAL.md.
+
+**To select records by time**, resolve the window to job ids first with
+`GET /fetch-change-between-backup-jobs` and pass those ids. That endpoint takes
+`startTime`/`endTime`, queries DynamoDB rather than Athena, and is deliberately
+**unaffected** — a time window is now a way of choosing *jobs*, never a way of
+filtering *records*.
+
+Everything is commented out rather than deleted, in matched blocks marked
+`DISABLED 2026-07-30`: `parseFetchRecordsParams` and `parseOptionalIsoDate`
+(controller), `fetchCsvRecords` / `resolveScope` / `fingerprintRequest` /
+`toFetchParams` (service), and `dateWhere` / `endOfDay` / the `dateSelector` and
+date row filter in `buildCsvRecordsSql` (athena-fetch).
 
 ### Execution
 
