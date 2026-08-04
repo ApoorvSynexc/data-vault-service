@@ -9,6 +9,7 @@ import {
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
 import { IBackupObject, IObject } from '../models';
+import { logger } from '../middlewares';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 type S3KeyType = 'backup' | 'archival';
@@ -56,8 +57,7 @@ const asyncHandler =
           return;
         }
         const message = error instanceof Error ? error.message : 'unknown_error';
-        console.log("Error: ", message);
-        console.log("Stack: ", error instanceof Error ? error.stack : 'no stack trace');
+        logger.error(`[400] ${req.method} ${req.originalUrl} : ${message}`);
         makeResponse(
           req,
           res,
