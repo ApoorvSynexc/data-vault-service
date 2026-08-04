@@ -40,8 +40,6 @@ const SALESFORCE_BOOTSTRAP_KEY = String(process.env.SALESFORCE_BOOTSTRAP_KEY ?? 
 const CORE_SERVICE = String(process.env.CORE_SERVICE);
 const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 
-const AWS_S3_LOGS_BUCKET = String(process.env.AWS_S3_LOGS_BUCKET);
-
 const LANGUAGE = {
   en: 'en',
   hi: 'hi',
@@ -144,7 +142,6 @@ export {
   //service
   CORE_SERVICE,
   INTERNAL_SECRET,
-  AWS_S3_LOGS_BUCKET,
 
   // Enums
   LANGUAGE,
