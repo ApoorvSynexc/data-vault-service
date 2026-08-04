@@ -3,6 +3,7 @@ dotenv.config();
 import initializeDatabase from './config/database';
 import { initializeApp } from './config';
 import { startStaleJobSweeper } from './services/common/sweeper';
+import { startLogsArchiveCron } from './jobs/logs-archive-cron';
 
 // ---------------------------------------------------------------------------
 // Fail fast if any required environment variable is missing or malformed.
@@ -50,6 +51,7 @@ initializeDatabase()
   .then(() => {
     initializeApp();
     startStaleJobSweeper();
+    startLogsArchiveCron();
   })
   .catch((error) => {
     console.log(error);
