@@ -7,6 +7,8 @@ export interface ICrmProfile {
   username?: string;
   email?: string;
   photoUrl?: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 export interface IUser {
