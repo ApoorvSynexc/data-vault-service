@@ -39,12 +39,14 @@ const validateEnv = (): void => {
 validateEnv();
 
 process.on('uncaughtException', (err) => {
-  console.log(' UNCAUGHT EXCEPTION ');
-  console.log("[Inside 'uncaughtException' event] " + err.stack || err.message);
+  console.error('UNCAUGHT EXCEPTION — exiting');
+  console.error(err.stack || err.message);
+  process.exit(1);
 });
 process.on('unhandledRejection', (reason, promise) => {
-  console.log(' UNHANDLED REJECTION ');
-  console.log('Unhandled Rejection at: ', promise, 'REASON: ', reason);
+  console.error('UNHANDLED REJECTION — exiting');
+  console.error('Unhandled Rejection at: ', promise, 'REASON: ', reason);
+  process.exit(1);
 });
 
 initializeDatabase()
