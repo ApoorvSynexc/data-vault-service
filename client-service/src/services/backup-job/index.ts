@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, INTERNAL_SECRET, JOB_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
@@ -121,6 +121,7 @@ const triggerArchivalBackupJob = async (params: {
     result = await httpRequest({
       url,
       method: 'POST',
+      headers: { 'x-internal-secret': INTERNAL_SECRET },
       body: bodyStr,
     });
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ok | durationMs=${Date.now() - postStart}`);
@@ -189,6 +190,7 @@ const triggerBackupJob = async (params: {
     result = await httpRequest({
       url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
       method: 'POST',
+      headers: { 'x-internal-secret': INTERNAL_SECRET },
       body: JSON.stringify(payload),
     });
   } catch (error) {
@@ -388,6 +390,7 @@ const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type:
   return httpRequest({
     url,
     method: 'GET',
+    headers: { 'x-internal-secret': INTERNAL_SECRET },
   });
 };
 
