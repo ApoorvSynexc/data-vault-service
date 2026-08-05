@@ -19,7 +19,7 @@ export const deleteUserTrigger = async () => {
             const count = await deleteTriggers(
                 user.crmProfile?.instanceUrl,
                 {
-                    accessToken: tokens.access_token,
+                    accessToken: "00DdN00000wY1pt!AQEAQCkRxVV1ajMnqGE0SjmpOjMfUE9nW4PLVvOE3yI7SHDUZhkCg8_t4hcLzUP3Gv5jBFTnlD9MaceKjDdoE6e.5yBvmwAu",
                     refreshToken: tokens.refresh_token,
                 },
                 backupConfig
