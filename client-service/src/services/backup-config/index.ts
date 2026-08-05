@@ -164,14 +164,19 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
   const result = await docClient.send(
     new ScanCommand({
       TableName: BACKUP_CONFIG_TABLE,
+      // NORMAL and ARCHIVAL configs are both eligible here on equal footing —
+      // the caller (jobs/backup-config-cron.ts) already branches on config.type
+      // to run the right job for each, so this scan shouldn't be the thing that
+      // silently drops one type. Previously ARCHIVAL configs only passed when
+      // scheduleConfig.type happened to be INCREMENTAL, while NORMAL configs
+      // passed unconditionally — an archival config scheduled any other way
+      // never reached the cron at all.
       FilterExpression:
-        '(#status = :active OR #status = :backupResume) AND #schedule = :schedule AND (#scheduleConfig.#scheduleType = :scheduleType OR #configType = :archivalType) AND (#backupStatus = :backupSuccess OR #backupStatus = :backupFailed OR #backupStatus = :backupPartialFailure OR attribute_not_exists(#backupStatus))',
+        '(#status = :active OR #status = :backupResume) AND #schedule = :schedule AND (#configType = :normalType OR #configType = :archivalType) AND (#backupStatus = :backupSuccess OR #backupStatus = :backupFailed OR #backupStatus = :backupPartialFailure OR attribute_not_exists(#backupStatus))',
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #configType, objectNames, #objects, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, spaceId, createdAt, updatedAt',
       ExpressionAttributeNames: {
         '#status': 'status',
         '#schedule': 'schedule',
-        '#scheduleConfig': 'scheduleConfig',
-        '#scheduleType': 'type',
         '#configType': 'type',
         '#name': 'name',
         '#backupStatus': 'backupStatus',
@@ -181,8 +186,8 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
         ':active': STATUS.active,
         ':backupResume': STATUS.resumed,
         ':schedule': 'SCHEDULE',
-        ':scheduleType': 'INCREMENTAL',
-        ':archivalType': 'NORMAL',
+        ':normalType': BACKUP_TYPE.normal,
+        ':archivalType': BACKUP_TYPE.archival,
         ':backupSuccess': BACKUP_STATUS.success,
         ':backupFailed': BACKUP_STATUS.failed,
         ':backupPartialFailure': BACKUP_STATUS.partialFailure,
