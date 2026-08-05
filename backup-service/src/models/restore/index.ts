@@ -44,8 +44,65 @@ export interface IRestoreDestination {
   tagRestoredRecord?: string;
 }
 
+export interface IRestoreEdgeCaseFieldMapping {
+  sourceObject: string;
+  sourceFields: string;
+  destinationObject: string;
+  destinationFields: string;
+}
+
+export interface IRestoreMissingFieldInDestination {
+  type: string;
+  sourceDestinationMapping: IRestoreEdgeCaseFieldMapping[];
+}
+
+export interface IRestoreOwnerInactive {
+  type: string;
+  fallbackValue: string;
+}
+
+export interface IRestoreRecordTypeMapping {
+  object: string;
+  field: string;
+  type: string;
+}
+
+export interface IRestoreRecordTypeMissing {
+  type: string;
+  mapping: IRestoreRecordTypeMapping[];
+}
+
+export interface IRestoreMissingRequiredField {
+  name: string;
+  type: string;
+  value: string;
+}
+
+export interface IRestoreMissingRequiredFieldMapping {
+  object: string;
+  fields: IRestoreMissingRequiredField[];
+}
+
+export interface IRestoreMissingRequiredFieldValue {
+  type: string;
+  mapping: IRestoreMissingRequiredFieldMapping[];
+}
+
+// Mirrors client-service's models/restore/index.ts — this is the shape client-service
+// sends in the POST /v1/restore payload, so it has to stay in sync with that side or
+// createRestoreJobValidation below will reject any restore that populates edgeCases.
+export interface IRestoreEdgeCases {
+  onDuplicateRecord?: string; // SKIP | OVERWRITE
+  missingFieldInDestination?: IRestoreMissingFieldInDestination;
+  ownerInactive?: IRestoreOwnerInactive;
+  parentMissing?: string;
+  recordTypeMissing?: IRestoreRecordTypeMissing;
+  missingRequiredFieldValue?: IRestoreMissingRequiredFieldValue;
+}
+
 export interface IRestoreConflict {
   restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
+  edgeCases?: IRestoreEdgeCases;
 }
 
 export interface IRestoreJobDetail {

@@ -107,10 +107,64 @@ const destinationSchema = Joi.object({
   tagRestoredRecord: Joi.string().optional().allow(''),
 });
 
+const edgeCaseFieldMappingSchema = Joi.object({
+  sourceObject: Joi.string().required(),
+  sourceFields: Joi.string().required(),
+  destinationObject: Joi.string().required(),
+  destinationFields: Joi.string().required(),
+});
+
+const missingFieldInDestinationSchema = Joi.object({
+  type: Joi.string().required(),
+  sourceDestinationMapping: Joi.array().items(edgeCaseFieldMappingSchema).min(1).required(),
+});
+
+const ownerInactiveSchema = Joi.object({
+  type: Joi.string().required(),
+  fallbackValue: Joi.string().allow('').required(),
+});
+
+const recordTypeMappingSchema = Joi.object({
+  object: Joi.string().required(),
+  field: Joi.string().required(),
+  type: Joi.string().required(),
+});
+
+const recordTypeMissingSchema = Joi.object({
+  type: Joi.string().required(),
+  mapping: Joi.array().items(recordTypeMappingSchema).min(1).required(),
+});
+
+const missingRequiredFieldSchema = Joi.object({
+  name: Joi.string().required(),
+  type: Joi.string().required(),
+  value: Joi.string().allow('').required(),
+});
+
+const missingRequiredFieldMappingSchema = Joi.object({
+  object: Joi.string().required(),
+  fields: Joi.array().items(missingRequiredFieldSchema).min(1).required(),
+});
+
+const missingRequiredFieldValueSchema = Joi.object({
+  type: Joi.string().required(),
+  mapping: Joi.array().items(missingRequiredFieldMappingSchema).min(1).required(),
+});
+
+const edgeCasesSchema = Joi.object({
+  onDuplicateRecord: Joi.string().valid('SKIP', 'OVERWRITE').optional(),
+  missingFieldInDestination: missingFieldInDestinationSchema.optional(),
+  ownerInactive: ownerInactiveSchema.optional(),
+  parentMissing: Joi.string().allow('').optional(),
+  recordTypeMissing: recordTypeMissingSchema.optional(),
+  missingRequiredFieldValue: missingRequiredFieldValueSchema.optional(),
+});
+
 const conflictSchema = Joi.object({
   restoreMode: Joi.string()
     .valid(...RESTORE_CONFLICT_MODE)
     .required(),
+  edgeCases: edgeCasesSchema.optional(),
 });
 
 const jobDetailSchema = Joi.object({
