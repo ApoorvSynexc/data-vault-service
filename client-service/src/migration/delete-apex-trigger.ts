@@ -24,7 +24,9 @@ export const deleteUserTrigger = async () => {
                 },
                 backupConfig
             );
-            console.log(`Trigger deleted length: ${count}`);
+            console.log(`Trigger deleted length: ${count.length}`);
+            console.log(JSON.stringify({count}));
+            
         }
     } catch (error) {
         console.log("Error in migration: ", error);
