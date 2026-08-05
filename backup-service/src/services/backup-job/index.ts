@@ -4,10 +4,9 @@ import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE, OBJECT_STATUS } from '../../constant';
 import { IBackupJob, IBackupObject, ISource, IDestinationConfig } from '../../models';
 import { encrypt } from '../../utils/encryption';
-import { buildChildsS3Key } from '../../utils/helper';
 import { incrementTableCounter } from '../counter';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
-import { uploadToS3 } from '../destination/s3';
+import { writeSchemaFile } from '../schema';
 import { getMasterChilds, SalesforceTokens } from '../third-party/salesforce/api-request';
 
 // Appends children discovered during this run to the backup config, so every
@@ -60,7 +59,8 @@ const persistChildrenToConfig = async (
 // not go through here.
 //
 // For every object in the job: fetch its Master-Detail children, store the raw child
-// payload at schema/childs/{objectName}/childs.json, and append any child missing
+// payload at schema/main/childs/{objectName}/childs.json (with a copy in this job's
+// delta/ folder when the relationship tree changed), and append any child missing
 // from the list so it gets backed up in full (field: []). New children are written
 // back to the backup config, so the next run starts from them and picks up *their*
 // children — the tree deepens one level per run instead of recursing here, which
@@ -71,6 +71,7 @@ const expandWithMasterChildren = async (
   source: ISource,
   backupConfigId: string,
   destConfig: IDestinationConfig,
+  backupJobId: string,
   objects?: IBackupObject[]
 ): Promise<IBackupObject[] | undefined> => {
   if (!objects?.length || !source.instanceUrl || !source.access_token) {
@@ -95,16 +96,18 @@ const expandWithMasterChildren = async (
       try {
         const childs = await getMasterChilds(source.instanceUrl, tokens, obj.name);
 
-        await uploadToS3(
+        await writeSchemaFile(
           destConfig,
-          buildChildsS3Key({
+          {
             crmId: source.crmId,
             crmName: source.crmName,
             backupConfigId,
             objectName: obj.name,
             type: 'backup',
-          }),
-          Buffer.from(JSON.stringify(childs, null, 2))
+            kind: 'childs',
+            backupJobId,
+          },
+          childs
         );
 
         for (const child of childs) {
@@ -144,6 +147,8 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
+  // Minted up front so child schema written during expansion lands in this job's delta/.
+  const backupJobId = uuidv4();
 
   // Master-Detail expansion disabled — back up only the objects the user selected.
   // Uncomment to resume auto-adding Master-Detail children to every scheduled run.
@@ -151,6 +156,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   //   source,
   //   backupConfigId,
   //   destination.config,
+  //   backupJobId,
   //   object
   // );
   const expandedObjects = object;
@@ -165,7 +171,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   }));
 
   const item: IBackupJob = {
-    backupJobId: uuidv4(),
+    backupJobId,
     jobType: JOB_TYPE.bulk as 'BULK',
     type: 'NORMAL',
     userId,
