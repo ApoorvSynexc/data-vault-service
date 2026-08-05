@@ -84,10 +84,24 @@ Every third-party system the platform integrates with.
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/inserts/{locator}.csv
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/updates/{locator}.csv
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/deletes/{locator}.csv
-{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields.json
-{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields_{timestamp}.json  (versioned)
+{crmName}/{crmId}/backup/{backupConfigId}/schema/main/fields/{objectName}/fields.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/main/childs/{objectName}/childs.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/main/picklist/{objectName}/{fieldApiName}/values.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/main/recordTypes/{objectName}/record-types.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/delta/{backupJobId}/<same four kinds>
+{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields.json             (legacy, read-only)
+{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields_{timestamp}.json (legacy, read-only)
 {crmName}/{crmId}/archive/{backupConfigId}/{objectName}/inserts/{locator}.csv
 ```
+
+`main/` always holds the latest version of each schema kind; `delta/{backupJobId}/`
+holds only what that scheduled backup or archival job changed. Realtime jobs read
+schema but never write it.
+
+The legacy keys are **no longer written** — they survive only as a read fallback for
+configs that have not run a job since the migration. The Java Spark middleware read
+them directly and must be pointed at `schema/main/fields/{object}/fields.json`
+([[java/JAVA_SCHEMA_EVOLUTION]]).
 
 ### S3 Client Caching
 

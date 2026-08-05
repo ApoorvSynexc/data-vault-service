@@ -155,12 +155,25 @@ Archival processes the object tree in two passes:
 
 This mirrors Salesforce referential integrity: you can't delete a parent with child records (foreign key constraints). Upload from root ensures all data is backed up before deletion starts.
 
-## 13. Schema Versioning via Timestamped Files
+## 13. Schema Versioning via main/ + delta/
 
-Schema evolution is tracked as `fields_{timestamp}.json` files on S3:
+Every scheduled backup and archival job writes each schema artifact (fields, childs,
+picklist, recordTypes) through `writeSchemaFile`:
 ```
-schema/Account/fields/fields.json           (original)
-schema/Account/fields/fields_1718000000000.json  (first change)
-schema/Account/fields/fields_1718100000000.json  (second change)
+schema/main/fields/Account/fields.json              (always the latest version)
+schema/delta/{backupJobId}/fields/Account/fields.json  (only if that job changed it)
 ```
-Latest version = last entry when sorted alphabetically (timestamps are fixed-width, so alpha = chrono).
+`main/` is overwritten only when content differs, and the delta copy is written in the
+same step — so a delta folder is a real change set, never a full snapshot. Readers
+(`readSchemaFile` in client-service, `readLatestSchema` in backup-service) go to
+`main/` first.
+
+`writeSchemaFile` returns `'created' | 'changed' | 'unchanged'`, which is also what
+drives Glue: `created` → `createCsvGlueTable`, `changed` → `updateGlueTableSchema` plus
+`schemaChange: true` on the object (the flag the EMR payload turns into a
+`schema-change` operation).
+
+Legacy layout — `fields_{timestamp}.json` beside `fields.json` under
+`schema/{object}/fields/`, latest = last entry sorted alphabetically. **No longer
+written**; kept only as the read fallback for configs that have not run since the
+migration, and the Java middleware must be repointed at `main/`.

@@ -10,13 +10,15 @@ import { getDestinationById, getDecryptedDestinationConfig } from '../destinatio
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records';
 import { uploadToS3 } from '../third-party/s3-bucket';
+import { readSchemaFile } from '../schema';
+import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { decrypt, EncryptedPayload } from '../../utils/encryption';
 import { httpRequest } from '../../utils/http-request';
 // toIsoDateString went with toFetchParams' date resolution — see the disabled
 // block there. IsoDateString still types the (accepted, ignored) window fields.
 // import { IsoDateString, toIsoDateString } from '../../utils/iso-date';
 import { IsoDateString } from '../../utils/iso-date';
-import { listS3Keys, getS3Text, S3Config } from '../../utils/validate-aws-credentials';
+import { S3Config } from '../../utils/validate-aws-credentials';
 
 export { buildAthenaFilterWhere, FilterError } from './athena-filter';
 export { validateColumns } from './athena-fetch';
@@ -1610,19 +1612,19 @@ export type FetchObjectFieldsResult =
  *
  * Flow:
  *   1. Resolve the config's CRM and destination, decrypt the S3 credentials.
- *   2. Read the most recent schema file from S3 and return its parsed contents.
+ *   2. Read the latest schema file from S3 and return its parsed contents.
  *
- * Schema S3 layout (written by backup-service): every schema version is stored
- * as a new fields_<timestamp>.json — fields.json is the original and is never
- * overwritten — so the highest-timestamped versioned file is the latest schema,
- * falling back to fields.json when no versioned files exist yet.
+ * Schema S3 layout: backup and archival jobs keep the current version at
+ * schema/main/fields/{object}/fields.json and copy each job's changes into
+ * schema/delta/{backupJobId}/. readSchemaFile handles the legacy
+ * schema/{object}/fields/ fallback for configs that have not run since.
  */
 // Resolves a caller-owned config down to its decrypted S3 destination and the
-// schema root prefix (.../schema/) — shared by the fields and picklist readers.
+// key parameters shared by the fields and picklist readers.
 const resolveSchemaS3 = async (
   backupConfigId: string,
   userId: string
-): Promise<{ destConfig: S3Config; schemaRoot: string } | null> => {
+): Promise<{ destConfig: S3Config; keyParams: ISchemaS3KeyParams } | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) {
     return null;
@@ -1639,8 +1641,16 @@ const resolveSchemaS3 = async (
   }
 
   const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
-  const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
-  return { destConfig, schemaRoot: `${crm.crmName}/${crm.crmId}/${type}/${backupConfigId}/schema/` };
+  return {
+    destConfig,
+    keyParams: {
+      crmId: crm.crmId,
+      crmName: crm.crmName,
+      backupConfigId,
+      objectName: '',
+      type: config.type === 'ARCHIVAL' ? 'archival' : 'backup',
+    },
+  };
 };
 
 const fetchObjectFields = async (
@@ -1653,31 +1663,20 @@ const fetchObjectFields = async (
     return { ok: false, reason: 'not_exist' };
   }
 
-  const { destConfig, schemaRoot } = resolved;
-  const schemaFolder = `${schemaRoot}${objectApiName}/fields/`;
-
-  const keys = await listS3Keys(destConfig, schemaFolder);
-  const versionedKeys = keys.filter((k) => /fields_\d+\.json$/.test(k));
-  const latestKey =
-    versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : `${schemaFolder}fields.json`;
+  const schema = await readSchemaFile(resolved.destConfig, {
+    ...resolved.keyParams,
+    objectName: objectApiName,
+    kind: 'fields',
+  });
 
   // No schema has been written for this object on this config yet.
-  if (!keys.includes(latestKey)) {
-    return { ok: false, reason: 'not_exist' };
-  }
-
-  const raw = await getS3Text(destConfig, latestKey);
-  if (!raw) {
-    return { ok: false, reason: 'not_exist' };
-  }
-
-  return { ok: true, schema: JSON.parse(raw) };
+  return schema ? { ok: true, schema } : { ok: false, reason: 'not_exist' };
 };
 
 /**
  * Returns the picklist values persisted on S3 by backup-service at
- * .../schema/{objectApiName}/picklist/{fieldApiName}/values.json — exactly as
- * stored. { ok:false } when the config isn't resolvable/owned or no values
+ * .../schema/main/picklist/{objectApiName}/{fieldApiName}/values.json — exactly
+ * as stored. { ok:false } when the config isn't resolvable/owned or no values
  * file exists for the field.
  */
 const fetchPicklistValues = async (params: {
@@ -1693,22 +1692,14 @@ const fetchPicklistValues = async (params: {
     return { ok: false, reason: 'not_exist' };
   }
 
-  const key = `${resolved.schemaRoot}${objectApiName}/picklist/${fieldApiName}/values.json`;
-  let raw: string;
-  try {
-    raw = await getS3Text(resolved.destConfig, key);
-  } catch (err: any) {
-    // No values.json for this field (not a picklist / not backed up yet).
-    if (err?.name === 'NoSuchKey') {
-      return { ok: false, reason: 'not_exist' };
-    }
-    throw err;
-  }
-  if (!raw) {
-    return { ok: false, reason: 'not_exist' };
-  }
+  const values = await readSchemaFile(resolved.destConfig, {
+    ...resolved.keyParams,
+    objectName: objectApiName,
+    kind: 'picklist',
+    fieldApiName,
+  });
 
-  return { ok: true, values: JSON.parse(raw) };
+  return values ? { ok: true, values } : { ok: false, reason: 'not_exist' };
 };
 
 export {
