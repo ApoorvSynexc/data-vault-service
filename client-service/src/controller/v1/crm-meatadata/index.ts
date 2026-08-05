@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { downloadFromS3, getApexFields, getApexObjects, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, listS3Objects } from "../../../services";
+import { downloadFromS3, getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, listS3Objects } from "../../../services";
 import { buildSchemaS3Key, wrapController } from "../../../utils/helper";
 
 
@@ -49,7 +49,11 @@ const getSalesforceObjectSchema = async (req: IRequest, res: IResponse) => {
 
 const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
-  const { crmId, mode } = req.query;
+  // Generic listing endpoint: `mode` says what the objects are for (default backup),
+  // `type` the schedule/realtime split — which older clients sent as `mode`.
+  const { crmId, mode, type } = req.query;
+  const apexMode = toApexMode(mode) ?? 'backup';
+  const apexType = toApexType(type ?? mode);
 
   if (!user.contactEmail) {
     return makeResponse(req, res, 400, false, 'unauthorized');
@@ -66,19 +70,21 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    const objects = await getApexObjects({ user: crmUser, mode: mode ? String(mode) : undefined })
+    const objects = await getApexObjects({ user: crmUser, mode: apexMode, type: apexType })
     const result = objects?.data ? objects.data : [];
     return makeResponse(req, res, 200, true, 'fetch', result);
   }
 
-  const objects = await getApexObjects({ user, mode: mode ? String(mode) : undefined })
+  const objects = await getApexObjects({ user, mode: apexMode, type: apexType })
   const result = objects?.data ? objects.data : [];
   return makeResponse(req, res, 200, true, 'fetch', result);
 }
 
 const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
+  // Field metadata is mode-only — schedule vs realtime does not change the fields.
   const { crmId, objectName, mode } = req.query;
+  const apexMode = toApexMode(mode) ?? 'backup';
 
   if (!user.contactEmail) {
     return makeResponse(req, res, 400, false, 'unauthorized');
@@ -95,12 +101,12 @@ const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    const objects = await getApexFields({ user: crmUser, objectName: String(objectName), mode: mode ? String(mode) : undefined })
+    const objects = await getApexFields({ user: crmUser, objectName: String(objectName), mode: apexMode })
     const result = objects?.data ? objects.data : [];
     return makeResponse(req, res, 200, true, 'fetch', result);
   }
 
-  const objects = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined })
+  const objects = await getApexFields({ user, objectName: String(objectName), mode: apexMode })
   const result = objects?.data ? objects.data : [];
   return makeResponse(req, res, 200, true, 'fetch', result);
 }

@@ -56,7 +56,7 @@ const objectHasDrift = async (
 ): Promise<boolean> => {
   // ── Schema ──────────────────────────────────────────────────────────────────
   const fieldsReply = unwrapApex<{ fields?: any[] }>(
-    await getApexFields({ user, objectName, mode: 'schedule' })
+    await getApexFields({ user, objectName, mode: 'backup' })
   );
   const currentFields: any[] = fieldsReply?.fields ?? (Array.isArray(fieldsReply) ? fieldsReply : []);
 

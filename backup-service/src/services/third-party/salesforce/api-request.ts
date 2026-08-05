@@ -169,7 +169,8 @@ interface ISalesforceChild {
 }
 
 // Master-Detail children of one object, via the object-children apex endpoint
-// (type=MASTER). The reply is { success, data: { childs: [{ apiName, ... }] } }.
+// (relationshipType=MASTER). `mode` is what the objects are listed for, `type` the
+// schedule/realtime split. The reply is { success, data: { childs: [{ apiName, ... }] } }.
 // Returns the raw child entries — the caller uses `apiName` to expand the backup
 // list and persists the full payload to S3. Throws on transport failure so the
 // caller decides whether a missing children lookup is fatal (for backup, it isn't).
@@ -177,11 +178,11 @@ const getMasterChilds = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectName: string,
-  mode: 'SCHEDULE' | 'REALTIME' = 'SCHEDULE'
+  type: 'schedule' | 'realtime' = 'schedule'
 ): Promise<ISalesforceChild[]> => {
   const url =
     `${instanceUrl}/services/apexrest/${SALESFORCE_NAMESPACE}/v1/data-vault/object-children` +
-    `?apiName=${encodeURIComponent(objectName)}&mode=${mode}&type=MASTER`;
+    `?apiName=${encodeURIComponent(objectName)}&mode=backup&type=${type}&relationshipType=MASTER`;
   const res = await salesforceRequest<{ data?: { childs?: ISalesforceChild[] } }>(
     { url, method: 'GET' },
     tokens
