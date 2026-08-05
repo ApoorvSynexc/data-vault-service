@@ -29,9 +29,9 @@ Every third-party system the platform integrates with.
 - Namespace: `SYX_DVV` (managed package)
 - Handler class: `DataVaultRecordSyncTriggerHandler`
 - Endpoints:
-  - `accessible-objects?mode={mode}` — list objects accessible for backup/archival. Node passes the reply through untouched; Apex is the only place object eligibility is decided. See SERVICES.md § `getApexObjects`.
-  - `object-fields-metadata?objectApiName={name}&mode={mode}` — field names + types.
-  - `object-children?apiName={name}&mode={mode}` — child relationship objects.
+  - `accessible-objects?mode={backup|archival|restore}&type={schedule|realtime}` — list objects accessible for that purpose and run style. Node passes the reply through untouched; Apex is the only place object eligibility is decided. See SERVICES.md § `getApexObjects`.
+  - `object-fields-metadata?apiName={name}&mode={backup|archival|restore}` — field names + types. Takes `mode` only.
+  - `object-children?apiName={name}&mode={backup|archival|restore}&type={schedule|realtime}&relationshipType={MASTER|LOOKUP|REQUIRED_LOOKUP|ALL}&relationshipDepth={n}` — child relationship objects. `relationshipType` selects which relationships come back (it is what `type=MASTER` meant before `type` became the schedule/realtime split).
   - `preview-records` (POST) — sample records for UI preview.
   - `object-record-count` (POST) — batch count query (dry-run).
   - `validate-soql` (POST) — validate a WHERE clause via Apex.

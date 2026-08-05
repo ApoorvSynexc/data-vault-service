@@ -8,7 +8,6 @@ import { getUser } from '../../user';
 import { timer } from '../../../utils/helper';
 import { decrypt } from '../../../utils/encryption';
 import { getMasterChildApiNames } from './apex';
-import { SCHEDULE_MODE } from '../../../constant';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
 const NAMESPACE_PREFIX = 'SYX_DVV';
@@ -741,7 +740,7 @@ const expandWithMasterChildren = async (
   await Promise.all(
     objectApiNames.map(async (name) => {
       try {
-        const childNames = await getMasterChildApiNames(user, name, SCHEDULE_MODE.realtime);
+        const childNames = await getMasterChildApiNames(user, name, 'realtime');
         for (const child of childNames) {
           const key = child.toLowerCase();
           if (!byName.has(key)) byName.set(key, child);
