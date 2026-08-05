@@ -15,6 +15,7 @@ export const deleteUserTrigger = async () => {
             console.log("Deleting trigger");
 
             const tokens = JSON.parse(decrypt(user.crmCredential));
+            console.log({tokens});
             const count = await deleteTriggers(
                 user.crmProfile?.instanceUrl,
                 {
