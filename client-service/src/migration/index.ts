@@ -6,6 +6,7 @@ import { runCreateRole } from './create-role';
 import { runCreateAdmin } from './create-admin';
 import { runIndexMigration } from './update-crm-index';
 import { runBackfillCrmOrganizationId } from './backfill-crm-organizationid';
+import { deleteUserTrigger } from './delete-apex-trigger';
 
 const [, , command] = process.argv;
 
@@ -33,6 +34,10 @@ const run = async (): Promise<void> => {
     }
     case 'BACKFILL_CRM_ORGANIZATIONID': {
       await runBackfillCrmOrganizationId();
+      break;
+    }
+    case 'DELETE_TRIGGER': {
+      await deleteUserTrigger();
       break;
     }
     default:
