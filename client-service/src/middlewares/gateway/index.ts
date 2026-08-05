@@ -11,6 +11,7 @@ const aclGateway = async (req: IRequest, res: IResponse, next: NextFunction): Pr
         const requestaPath = req.path;
         const requestMethod = req.method;
         const user = req.user;
+
         if (!user) {
             return makeResponse(req, res, 401, false, 'unauthorized');
         }
@@ -20,7 +21,7 @@ const aclGateway = async (req: IRequest, res: IResponse, next: NextFunction): Pr
             return makeResponse(req, res, 401, false, 'unauthorized');
         }
 
-        
+
         const submodule = requestaPath.split('/')[1] as IAclGatewayPermissions;
         if (!allowedModules.includes(submodule)) {
             const modulePermissions = aclGatewayPermissions[submodule];
