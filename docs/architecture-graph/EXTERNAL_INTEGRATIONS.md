@@ -29,9 +29,9 @@ Every third-party system the platform integrates with.
 - Namespace: `SYX_DVV` (managed package)
 - Handler class: `DataVaultRecordSyncTriggerHandler`
 - Endpoints:
-  - `accessible-objects?mode={mode}` — list objects accessible for backup/archival. Node passes the reply through untouched; Apex is the only place object eligibility is decided. See SERVICES.md § `getApexObjects`.
-  - `object-fields-metadata?objectApiName={name}&mode={mode}` — field names + types.
-  - `object-children?apiName={name}&mode={mode}` — child relationship objects.
+  - `accessible-objects?mode={backup|archival|restore}&type={schedule|realtime}` — list objects accessible for that purpose and run style. Node passes the reply through untouched; Apex is the only place object eligibility is decided. See SERVICES.md § `getApexObjects`.
+  - `object-fields-metadata?apiName={name}&mode={backup|archival|restore}` — field names + types. Takes `mode` only.
+  - `object-children?apiName={name}&mode={backup|archival|restore}&type={schedule|realtime}&relationshipType={MASTER|LOOKUP|REQUIRED_LOOKUP|ALL}&relationshipDepth={n}` — child relationship objects. `relationshipType` selects which relationships come back (it is what `type=MASTER` meant before `type` became the schedule/realtime split).
   - `preview-records` (POST) — sample records for UI preview.
   - `object-record-count` (POST) — batch count query (dry-run).
   - `validate-soql` (POST) — validate a WHERE clause via Apex.
@@ -84,10 +84,24 @@ Every third-party system the platform integrates with.
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/inserts/{locator}.csv
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/updates/{locator}.csv
 {crmName}/{crmId}/backup/{backupConfigId}/raw_data/{backupJobId}/{objectName}/deletes/{locator}.csv
-{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields.json
-{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields_{timestamp}.json  (versioned)
+{crmName}/{crmId}/backup/{backupConfigId}/schema/main/fields/{objectName}/fields.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/main/childs/{objectName}/childs.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/main/picklist/{objectName}/{fieldApiName}/values.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/main/recordTypes/{objectName}/record-types.json
+{crmName}/{crmId}/backup/{backupConfigId}/schema/delta/{backupJobId}/<same four kinds>
+{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields.json             (legacy, read-only)
+{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields_{timestamp}.json (legacy, read-only)
 {crmName}/{crmId}/archive/{backupConfigId}/{objectName}/inserts/{locator}.csv
 ```
+
+`main/` always holds the latest version of each schema kind; `delta/{backupJobId}/`
+holds only what that scheduled backup or archival job changed. Realtime jobs read
+schema but never write it.
+
+The legacy keys are **no longer written** — they survive only as a read fallback for
+configs that have not run a job since the migration. The Java Spark middleware read
+them directly and must be pointed at `schema/main/fields/{object}/fields.json`
+([[java/JAVA_SCHEMA_EVOLUTION]]).
 
 ### S3 Client Caching
 

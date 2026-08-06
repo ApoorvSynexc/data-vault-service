@@ -171,9 +171,20 @@ The bucket/region/credential shape these helpers take.
 
 Additional helpers for the backup-service:
 
-### buildSchemaS3Key(params)
-Constructs the S3 key for schema JSON files:
-`{crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields.json`
+### buildSchemaKey(params)
+Constructs the S3 key for any schema artifact in the versioned layout. `kind` is
+`fields | childs | picklist | recordTypes`; passing `backupJobId` scopes the key to
+that job's delta folder instead of `main/`:
+`{crmName}/{crmId}/{type}/{backupConfigId}/schema/main/{kind}/{objectName}/...`
+`{crmName}/{crmId}/{type}/{backupConfigId}/schema/delta/{backupJobId}/{kind}/{objectName}/...`
+Picklists carry an extra `{fieldApiName}` level. Mirrored in client-service/src/utils/helper.ts.
+
+### buildSchemaS3Key(params) — legacy, read-only
+The pre-versioning key, `.../schema/{objectName}/fields/fields.json`. Nothing writes it
+any more; it is the read fallback for configs that have not run a job since the
+migration, paired with `pickLegacyFieldsKey(keys, baseKey)` which resolves the newest
+`fields_{timestamp}.json` in that folder. client-service also keeps
+`buildPicklistS3Key` / `buildRecordTypeS3Key` for the same fallback.
 
 ### schemasAreEqual(schema1, schema2)
 Compares two schema arrays for field set equality (used in realtime schema change detection).
