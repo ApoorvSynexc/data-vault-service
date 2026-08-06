@@ -85,6 +85,13 @@ assert.strictEqual(
 
 // ─── 4. which children of an object get backed up (and so get a bulk job) ─────
 // Master-Detail always, required lookups always, optional lookups never.
+//
+// NOTE the two vocabularies: 'master' is what the object-children *request*
+// filters on, but the child DTO *reports* 'MasterDetail'. Only the reported form
+// ever reaches this function from a live reply — the filter spellings are kept
+// working for childs.json files written before that was noticed.
+assert.strictEqual(isBackupChild({ relationshipType: 'MasterDetail', isRequired: false }), true);
+assert.strictEqual(isBackupChild({ relationshipType: 'masterdetail' }), true);
 assert.strictEqual(isBackupChild({ relationshipType: 'MASTER', isRequired: false }), true);
 assert.strictEqual(isBackupChild({ relationshipType: 'master' }), true);
 assert.strictEqual(isBackupChild({ relationshipType: 'LOOKUP', isRequired: true }), true);

@@ -16,16 +16,24 @@ import { downloadFromS3, listS3Objects, uploadToS3 } from '../destination/s3';
  * Both PUTs every time. Callers that need to know whether the schema actually moved
  * (Glue table create/update, the schemaChange flag) read the stored schema themselves
  * with readLatestSchema before calling this.
+ *
+ * `changesOnly` skips the main/ write. It exists for the realtime webhook, whose
+ * descriptor is scoped to the permissions of whoever triggered the DML: letting a
+ * restricted user's narrower view overwrite main/ would shrink the authoritative
+ * schema (and with it the Glue columns) for every reader.
  */
 const writeSchemaFile = async (
   destConfig: IDestinationConfig,
   params: ISchemaKeyParams,
-  content: unknown
+  content: unknown,
+  { changesOnly = false }: { changesOnly?: boolean } = {}
 ): Promise<void> => {
   const { backupJobId, ...mainParams } = params;
   const buffer = Buffer.from(JSON.stringify(content, null, 2));
 
-  await uploadToS3(destConfig, buildSchemaKey(mainParams), buffer);
+  if (!changesOnly) {
+    await uploadToS3(destConfig, buildSchemaKey(mainParams), buffer);
+  }
   if (backupJobId) {
     await uploadToS3(destConfig, buildSchemaKey(params), buffer);
   }

@@ -180,8 +180,13 @@ const buildErrorLogsS3Prefix = ({
 // Optional lookups are still stored in the schema file; the user adds them to the
 // config themselves if they want them backed up.
 // ---------------------------------------------------------------------------
-const isBackupChild = (child: { relationshipType?: string; isRequired?: boolean }): boolean =>
-  String(child?.relationshipType ?? '').toUpperCase() === 'MASTER' || child?.isRequired === true;
+// NOTE: the request vocabulary and the response vocabulary differ. `relationshipType`
+// as a *filter* is master|lookup|required_lookup, but the child DTO *reports*
+// 'MasterDetail'|'Lookup' — so both spellings are accepted here.
+const isBackupChild = (child: { relationshipType?: string; isRequired?: boolean }): boolean => {
+  const type = String(child?.relationshipType ?? '').toUpperCase();
+  return type === 'MASTER' || type === 'MASTERDETAIL' || child?.isRequired === true;
+};
 
 // ---------------------------------------------------------------------------
 // Order-independent schema equality check.
