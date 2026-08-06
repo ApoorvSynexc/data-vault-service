@@ -1,5 +1,5 @@
 import { ICrm, IUser } from '../../../models';
-import { decrypt } from '../../../utils/encryption';
+import { getDecryptedCrmCredential } from '../../user';
 import { salesforceRequest, SalesforceTokens } from './index';
 
 const API_VERSION = '66.0';
@@ -52,9 +52,7 @@ export const fetchSalesforceRecordsByIds = async (
   }
 
   const instanceUrl = crm.instanceUrl ?? user.crmProfile?.instanceUrl;
-  const { access_token: accessToken, refresh_token: refreshToken } = user.crmCredential
-    ? JSON.parse(decrypt(user.crmCredential))
-    : {};
+  const { access_token: accessToken, refresh_token: refreshToken } = getDecryptedCrmCredential(user) ?? {};
 
   if (!instanceUrl || !accessToken || !refreshToken) {
     return null;

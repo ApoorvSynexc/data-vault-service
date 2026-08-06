@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import { NextFunction } from 'express';
 import { JWT_ACCESS_SECRET, SESSION_STATUS, STATUS } from '../../constant';
 import { IRequest, IResponse, makeResponse } from '../../lib';
-import { getSession, getUser } from '../../services';
+import { getSession, getUser, getUserByCrmProfileUserId } from '../../services';
 
 const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): Promise<void> => {
   const token = req.cookies?.accessToken ?? null;
@@ -37,6 +37,14 @@ const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): 
 
     req.user = user;
     req.sessionId = payload.sessionId;
+
+    const xCrmUserId = req.headers?.["x-crm-userid"];
+    if(xCrmUserId){
+      const userDetail = await getUserByCrmProfileUserId(xCrmUserId as string);
+      if(userDetail){
+        req.user = userDetail;
+      }
+    }
     next();
   } catch {
     await makeResponse(req, res, 401, false, 'unauthorized');

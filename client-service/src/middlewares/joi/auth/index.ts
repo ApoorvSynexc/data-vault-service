@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { OTP_CHANNEL, OTP_TYPE } from '../../../constant';
 import { makeResponse } from '../../../lib';
-import { phoneJoiSchema } from '../shared';
+import { phoneJoiSchema, passwordJoiSchema } from '../shared';
 
 export const sendOtpValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
@@ -70,7 +70,7 @@ export const resetPasswordValidation = (req: Request, res: Response, next: NextF
         .required(),
       otherwise: phoneJoiSchema.required(),
     }),
-    newPassword: Joi.string().min(8).required(),
+    newPassword: passwordJoiSchema,
   });
 
   const { error } = schema.validate(req.body);

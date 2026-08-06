@@ -26,6 +26,7 @@ import {
   syncMetadataAndTriggers,
   unwrapApex,
   getUser,
+  getDecryptedCrmCredential,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from '../../../constant';
@@ -54,7 +55,6 @@ const buildEventScheduleInput = (config: IBackupConfig) => ({
 });
 import { wrapController, isOwner } from '../../../utils/helper';
 import { logger } from '../../../middlewares';
-import { decrypt } from '../../../utils/encryption';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -351,7 +351,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const crm = await getCrmById(config.crmId);
       if (crm && crmCredential) {
-        const tokens = JSON.parse(decrypt(crmCredential));
+        const tokens = getDecryptedCrmCredential(req.user!);
         await getSalesforceProfile(
           {
             userId,

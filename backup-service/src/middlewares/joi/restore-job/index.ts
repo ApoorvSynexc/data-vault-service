@@ -37,8 +37,68 @@ const destinationSchema = Joi.object({
   ),
 });
 
+const edgeCaseFieldMappingSchema = Joi.object({
+  sourceObject: Joi.string().required(),
+  sourceFields: Joi.string().required(),
+  destinationObject: Joi.string().required(),
+  destinationFields: Joi.string().required(),
+});
+
+const missingFieldInDestinationSchema = Joi.object({
+  type: Joi.string().required(),
+  sourceDestinationMapping: Joi.array().items(edgeCaseFieldMappingSchema).min(1).required(),
+});
+
+const ownerInactiveSchema = Joi.object({
+  type: Joi.string().required(),
+  fallbackValue: Joi.string().allow('').required(),
+});
+
+const recordTypeMappingSchema = Joi.object({
+  object: Joi.string().required(),
+  field: Joi.string().required(),
+  type: Joi.string().required(),
+});
+
+const recordTypeMissingSchema = Joi.object({
+  type: Joi.string().required(),
+  mapping: Joi.array().items(recordTypeMappingSchema).min(1).required(),
+});
+
+const missingRequiredFieldSchema = Joi.object({
+  name: Joi.string().required(),
+  type: Joi.string().required(),
+  value: Joi.string().allow('').required(),
+});
+
+const missingRequiredFieldMappingSchema = Joi.object({
+  object: Joi.string().required(),
+  fields: Joi.array().items(missingRequiredFieldSchema).min(1).required(),
+});
+
+const missingRequiredFieldValueSchema = Joi.object({
+  type: Joi.string().required(),
+  mapping: Joi.array().items(missingRequiredFieldMappingSchema).min(1).required(),
+});
+
+const edgeCasesSchema = Joi.object({
+  onDuplicateRecord: Joi.string().valid('SKIP', 'OVERWRITE').optional(),
+  missingFieldInDestination: missingFieldInDestinationSchema.optional(),
+  ownerInactive: ownerInactiveSchema.optional(),
+  parentMissing: Joi.string().allow('').optional(),
+  recordTypeMissing: recordTypeMissingSchema.optional(),
+  missingRequiredFieldValue: missingRequiredFieldValueSchema.optional(),
+});
+
+// NOTE: restoreMode only accepts OVERWRITE/APPEND_NEW here, while client-service's
+// own conflictSchema accepts two more values (REPLACE_ENTIRE_OBJECT, SKIP) — a
+// pre-existing mismatch between the two services, not something this change
+// introduces. A restore created with either of those two modes would already fail
+// this validation today, before edgeCases existed. Worth a follow-up separate from
+// this fix.
 const conflictSchema = Joi.object({
   restoreMode: Joi.string().valid('OVERWRITE', 'APPEND_NEW').required(),
+  edgeCases: edgeCasesSchema.optional(),
 });
 
 export const createRestoreJobValidation = (req: Request, res: Response, next: NextFunction) => {

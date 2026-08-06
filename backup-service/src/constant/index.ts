@@ -1,5 +1,6 @@
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
+const NODE_ENV = String(process.env.NODE_ENV);
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
@@ -112,6 +113,7 @@ const FILTER_OPERATOR = {
 export {
   HOST,
   PORT,
+  NODE_ENV,
   ENCRYPTION_KEY,
   SALESFORCE_BOOTSTRAP_KEY,
 
