@@ -4,11 +4,11 @@ import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE, OBJECT_STATUS } from '../../constant';
 import { IBackupJob, IBackupObject, ISource, IDestinationConfig } from '../../models';
 import { encrypt } from '../../utils/encryption';
-import { buildChildsS3Key } from '../../utils/helper';
 import { incrementTableCounter } from '../counter';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
-import { uploadToS3 } from '../destination/s3';
-import { getMasterChilds, SalesforceTokens } from '../third-party/salesforce/api-request';
+import { writeSchemaFile } from '../schema';
+import { isBackupChild } from '../../utils/helper';
+import { getObjectChilds, SalesforceTokens } from '../third-party/salesforce/api-request';
 
 // Appends children discovered during this run to the backup config, so every
 // config-driven reader (compression Glue tables, Glue repair, restore listing, UI)
@@ -55,22 +55,26 @@ const persistChildrenToConfig = async (
   }
 };
 
-// Master-Detail expansion — backup jobs only. Archival children are configured by
-// the user with their own filters and stay a nested tree, so createArchivalJob does
-// not go through here.
+// Child expansion — backup jobs only. Archival children are configured by the user
+// with their own filters and stay a nested tree, so createArchivalJob does not go
+// through here.
 //
-// For every object in the job: fetch its Master-Detail children, store the raw child
-// payload at schema/childs/{objectName}/childs.json, and append any child missing
-// from the list so it gets backed up in full (field: []). New children are written
-// back to the backup config, so the next run starts from them and picks up *their*
-// children — the tree deepens one level per run instead of recursing here, which
-// keeps a single deep or cyclic relationship chain from stalling job creation.
+// For every object in the job: fetch *all* its children, store the whole raw child
+// payload at schema/main/childs/{objectName}/childs.json (with a copy in this job's
+// changes/ folder, so a tree that gained or lost a child is visible per job), and
+// append the backup-eligible
+// ones missing from the list so they get backed up in full (field: []) — each one
+// then gets its own bulk query job. New children are written back to the backup
+// config, so the next run starts from them and picks up *their* children — the tree
+// deepens one level per run instead of recursing here, which keeps a single deep or
+// cyclic relationship chain from stalling job creation.
 // Best-effort per object: a failed lookup or upload leaves the rest intact.
 // No-op when the source carries no Salesforce tokens.
-const expandWithMasterChildren = async (
+const expandWithBackupChildren = async (
   source: ISource,
   backupConfigId: string,
   destConfig: IDestinationConfig,
+  backupJobId: string,
   objects?: IBackupObject[]
 ): Promise<IBackupObject[] | undefined> => {
   if (!objects?.length || !source.instanceUrl || !source.access_token) {
@@ -93,21 +97,24 @@ const expandWithMasterChildren = async (
   await Promise.all(
     objects.map(async (obj) => {
       try {
-        const childs = await getMasterChilds(source.instanceUrl, tokens, obj.name);
+        const childs = await getObjectChilds(source.instanceUrl, tokens, obj.name);
 
-        await uploadToS3(
+        // The whole relationship tree is stored, not just what gets backed up.
+        await writeSchemaFile(
           destConfig,
-          buildChildsS3Key({
+          {
             crmId: source.crmId,
             crmName: source.crmName,
             backupConfigId,
             objectName: obj.name,
             type: 'backup',
-          }),
-          Buffer.from(JSON.stringify(childs, null, 2))
+            kind: 'childs',
+            backupJobId,
+          },
+          childs
         );
 
-        for (const child of childs) {
+        for (const child of childs.filter(isBackupChild)) {
           const name = child?.apiName;
           if (!name) {
             continue;
@@ -144,16 +151,16 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
+  // Minted up front so child schema written during expansion lands in this job's changes/.
+  const backupJobId = uuidv4();
 
-  // Master-Detail expansion disabled — back up only the objects the user selected.
-  // Uncomment to resume auto-adding Master-Detail children to every scheduled run.
-  // const expandedObjects = await expandWithMasterChildren(
-  //   source,
-  //   backupConfigId,
-  //   destination.config,
-  //   object
-  // );
-  const expandedObjects = object;
+  const expandedObjects = await expandWithBackupChildren(
+    source,
+    backupConfigId,
+    destination.config,
+    backupJobId,
+    object
+  );
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
   const encryptedDestConfig: any = encrypt(JSON.stringify(destination.config));
@@ -165,7 +172,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   }));
 
   const item: IBackupJob = {
-    backupJobId: uuidv4(),
+    backupJobId,
     jobType: JOB_TYPE.bulk as 'BULK',
     type: 'NORMAL',
     userId,

@@ -2,6 +2,7 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   getApexFields,
   getApexObjects,
+  toApexType,
   createBackupConfig,
   getBackupConfigById,
   getBackupConfigBySlug,
@@ -57,13 +58,14 @@ import { logger } from '../../../middlewares';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
-  const { crmId, mode } = req.query;
+  // `type` is the schedule/realtime split; older clients sent it as `mode`.
+  const { crmId, type, mode } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
 
   const [apexResult, backupConfigs] = await Promise.all([
-    getApexObjects({ user, mode: mode ? String(mode) : undefined }),
+    getApexObjects({ user, mode: 'backup', type: toApexType(type ?? mode) }),
     getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
   ]);
 
@@ -121,14 +123,14 @@ const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<vo
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
-  const { crmId, objectName, mode } = req.query;
+  const { crmId, objectName } = req.query;
   if (!crmId) {
     return makeResponse(req, res, 400, false, 'crm_id_required');
   }
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
-  const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
+  const result = await getApexFields({ user, objectName: String(objectName), mode: 'backup' });
   makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 

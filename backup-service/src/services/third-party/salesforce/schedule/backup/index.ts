@@ -2,13 +2,13 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
-import { buildS3KeyPrefix, buildSchemaS3Key, schemasAreEqual } from '../../../../../utils/helper';
-import { downloadFromS3, listS3Objects, uploadToS3 } from '../../../../destination/s3';
+import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { uploadPicklistValues } from '../../picklist';
 import { uploadRecordTypeMetadata } from '../../record-type';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
+import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import {
   createCsvGlueTable,
   registerBackupJobPartition,
@@ -129,6 +129,7 @@ export const exportFirstTime = async (
       backupConfigId,
       objectName,
       type: 'backup',
+      backupJobId,
     });
     await uploadRecordTypeMetadata({
       destConfig,
@@ -137,6 +138,7 @@ export const exportFirstTime = async (
       backupConfigId,
       objectName,
       type: 'backup',
+      backupJobId,
     });
 
     if (object.bulkJobId) {
@@ -225,14 +227,11 @@ export const exportFirstTime = async (
     }
     await updateBackupConfig(backupConfigId, updateParams);
 
-    const schemaKey = buildSchemaS3Key({
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      type: 'backup',
-    });
-    await uploadToS3(destConfig, schemaKey, Buffer.from(JSON.stringify(schema, null, 2)));
+    await writeSchemaFile(
+      destConfig,
+      { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
+      schema
+    );
 
     await createCsvGlueTable({
       crmId,
@@ -316,6 +315,7 @@ export const exportIncremental = async (
       backupConfigId,
       objectName,
       type: 'backup',
+      backupJobId,
     });
     await uploadRecordTypeMetadata({
       destConfig,
@@ -324,6 +324,7 @@ export const exportIncremental = async (
       backupConfigId,
       objectName,
       type: 'backup',
+      backupJobId,
     });
 
     // ── Phase 1: query new + updated + deleted records in one queryAll job ────
@@ -450,36 +451,26 @@ export const exportIncremental = async (
     }
 
     // ── Phase 3: schema comparison ─────────────────────────────────────────────
-    // Compare against the latest versioned file (fields_<timestamp>.json with the
-    // highest timestamp). Fall back to the original fields.json only when no
-    // versioned files exist yet. fields.json is never overwritten — every new
-    // schema version is written as a new fields_<timestamp>.json so no version
-    // is ever lost.
-    const schemaKey = buildSchemaS3Key({
+    // The write below is unconditional (main/ + this job's changes/ folder). The read
+    // is only here to answer "did the schema move?" — Glue and the EMR schema-change
+    // operation key off that, and claiming a change every run would force a Hudi
+    // rewrite on every job.
+    const storedSchema = await readLatestSchema(destConfig, {
       crmId,
       crmName,
       backupConfigId,
       objectName,
       type: 'backup',
     });
-    const schemaFolder = schemaKey.replace('/fields.json', '/');
-    const allSchemaKeys = await listS3Objects(destConfig, schemaFolder);
-    const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
-    // Keys are sorted alphabetically; since timestamps are fixed-width numbers the
-    // last entry is also the most recent.
-    const currentSchemaKey =
-      versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
-    const existingSchemaBuffer = await downloadFromS3(destConfig, currentSchemaKey);
+    const schemaChanged = !storedSchema || !schemasAreEqual(storedSchema, latestSchema);
 
-    const schemaChanged =
-      !existingSchemaBuffer ||
-      !schemasAreEqual(JSON.parse(existingSchemaBuffer.toString()), latestSchema);
+    await writeSchemaFile(
+      destConfig,
+      { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
+      latestSchema
+    );
 
     if (schemaChanged) {
-      const newSchemaBuffer = Buffer.from(JSON.stringify(latestSchema, null, 2));
-      const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
-      await uploadToS3(destConfig, versionedKey, newSchemaBuffer);
-
       if (backupConfig?.objects) {
         const updatedObjects = backupConfig.objects.map((obj) =>
           obj.name === objectName ? { ...obj, schemaChange: true } : obj

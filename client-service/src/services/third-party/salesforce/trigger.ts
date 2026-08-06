@@ -7,9 +7,7 @@ import { appendObjectsToBackupConfig } from '../../backup-config';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
 import { getMasterChildApiNames } from './apex';
-import { SCHEDULE_MODE } from '../../../constant';
 
-const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
 const NAMESPACE_PREFIX = 'SYX_DVV';
 const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
 const API_VERSION = '66.0';
@@ -26,102 +24,201 @@ interface ITriggerResult {
 // Format: {Namespace}__{ExternalCredentialDeveloperName}-{PrincipalDeveloperName}
 const EXTERNAL_CREDENTIAL_PRINCIPAL_NAME = `${NAMESPACE_PREFIX}__Middleware_Endpoint-DataVaultParam`;
 
+// ---------------------------------------------------------------------------
+// Real-time sync is delivered as record-triggered Flows, not Apex triggers.
+//
+// A subscriber org's Apex must reach 75% coverage to deploy, and a managed
+// package's own tests do not count towards it — so an Apex trigger had to ship
+// with a generated test class, per object, that inserted a real record to cover
+// itself. Flows carry no coverage requirement at all, so the whole generator is
+// gone: the Flow just calls the package's existing @InvocableMethod
+// (DataVaultRecordSyncTriggerHandler.enqueueSyncFromFlow), which funnels into
+// the same enqueueSync the Apex trigger used to call.
+//
+// One Flow per DML event, because a record-triggered Flow has exactly one
+// trigger type and the handler needs to be told which operation fired. Delete
+// is before-save — Salesforce offers no after-delete record-triggered Flow —
+// which is harmless here: the handler enqueues a Queueable holding the records
+// in memory, so it still has the data after the row is gone.
+// ---------------------------------------------------------------------------
+const FLOW_EVENTS = [
+  { suffix: 'Insert', operation: 'AFTER_INSERT', recordTriggerType: 'Create', triggerType: 'RecordAfterSave' },
+  { suffix: 'Update', operation: 'AFTER_UPDATE', recordTriggerType: 'Update', triggerType: 'RecordAfterSave' },
+  { suffix: 'Delete', operation: 'AFTER_DELETE', recordTriggerType: 'Delete', triggerType: 'RecordBeforeDelete' },
+] as const;
 
-// ---------------------------------------------------------------------------
-// Fetch a trigger record by name — returns null if not found
-// ---------------------------------------------------------------------------
-const fetchTrigger = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  triggerName: string
-): Promise<{ Id: string; Status: string } | null> => {
-  const soql = `SELECT Id, Status FROM ApexTrigger WHERE Name = '${triggerName}' LIMIT 1`;
-  const url = `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`;
-  try {
-    const { data } = await salesforceRequest<{
-      totalSize: number;
-      records: { Id: string; Status: string }[];
-    }>({ url, method: 'GET' }, tokens);
-
-    return data.totalSize > 0 ? data.records[0] : null;
-  } catch (err) {
-    console.log(`Error fetching trigger ${triggerName}:`, err);
-    throw err;
-  }
-};
-
-// ---------------------------------------------------------------------------
-// Pure helper — builds the Apex trigger body string for a given object.
-// Centralised here so createTriggers and activateTriggers both use the same body.
-// ---------------------------------------------------------------------------
+// The per-object identifier stored on the backup config. Kept in the historical
+// `DataVault_<Object>_Trigger` shape so existing configs keep resolving after
+// the move off Apex triggers; the Flow names are derived from it.
 const triggerNameFor = (objectApiName: string): string =>
   `DataVault_${objectApiName.replace('__c', '')}_Trigger`;
 
-// Apex class and trigger names are capped at 40 characters. Objects with long
-// API names (AccountContactRelation, CollaborationGroupRecord) push the test
-// class past it, so the name is truncated and given a short digest of the
-// trigger name to keep it unique — two truncated names must not collide.
-const APEX_IDENTIFIER_MAX_LENGTH = 40;
-
-const testClassNameFor = (triggerName: string): string => {
-  const preferred = `${triggerName}Test`;
-  if (preferred.length <= APEX_IDENTIFIER_MAX_LENGTH) { return preferred; }
-
-  const digest = createHash('sha1').update(triggerName).digest('hex').slice(0, 6);
-  const stem = triggerName.slice(0, APEX_IDENTIFIER_MAX_LENGTH - digest.length - '_Test'.length);
-  return `${stem}${digest}_Test`;
+const flowNamesFor = (triggerName: string): string[] => {
+  const stem = triggerName.replace(/_Trigger$/, '');
+  return FLOW_EVENTS.map((event) => `${stem}_${event.suffix}_Flow`);
 };
 
-const buildTriggerBody = (objectApiName: string): string => {
-  const triggerName = triggerNameFor(objectApiName);
-  return (
-    `trigger ${triggerName} on ${objectApiName} (after insert, after update, after delete, after undelete) {\n` +
-    `    // The call, try and catch are deliberately on ONE line. Apex code coverage\n` +
-    `    // is line-based, and a 'catch' clause on its own line is a countable line\n` +
-    `    // that no passing test can reach — split across lines this trigger measures\n` +
-    `    // 66.667% and Salesforce rejects the deploy below 75%. On one line it is a\n` +
-    `    // single covered line. Do not reformat, and do not add a statement inside\n` +
-    `    // the catch. The catch itself must stay: a real-time backup must never make\n` +
-    `    // the user's own DML fail. Errors are reported by the handler, which\n` +
-    `    // notifies on failure.\n` +
-    `    try { ${NAMESPACE_PREFIX}.${HANDLER_CLASS_NAME}.enqueueSync(Trigger.new, Trigger.old, Trigger.operationType.name()); } catch (Exception e) {}\n` +
-    `}`
+// ---------------------------------------------------------------------------
+// Production orgs only expose the Metadata API for changing metadata, so every
+// write in this file is a deploy — nothing here touches the Tooling API. Reads
+// go through the standard Data API, where ApexClass, ApexTrigger and
+// FlowDefinitionView are all queryable.
+// ---------------------------------------------------------------------------
+const soqlUrl = (instanceUrl: string, soql: string): string =>
+  `${instanceUrl}/services/data/v${API_VERSION}/query?q=${encodeURIComponent(soql)}`;
+
+// Which of these flows exist, and which are live. A name absent from the map
+// does not exist in the org at all.
+const fetchFlowStates = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  flowNames: string[]
+): Promise<Map<string, boolean>> => {
+  const inList = flowNames.map((name) => `'${name}'`).join(',');
+  const { data } = await salesforceRequest<{ records: { ApiName: string; IsActive: boolean }[] }>(
+    {
+      url: soqlUrl(instanceUrl, `SELECT ApiName, IsActive FROM FlowDefinitionView WHERE ApiName IN (${inList})`),
+      method: 'GET',
+    },
+    tokens
+  );
+
+  return new Map((data.records ?? []).map((record) => [record.ApiName, record.IsActive]));
+};
+
+// Deactivation is a FlowDefinition deploy with activeVersionNumber 0 — the one
+// Metadata API route to turning a flow off, and a prerequisite for deleting it.
+// (FlowDefinition is deprecated for authoring flows; setting the active version
+// is the part that still works and has no replacement.)
+const deactivateFlows = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  flowNames: string[]
+): Promise<void> => {
+  const packageXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <types>\n` +
+    flowNames.map((name) => `        <members>${name}</members>\n`).join('') +
+    `        <name>FlowDefinition</name>\n` +
+    `    </types>\n` +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
+
+  const flowDefinitionXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<FlowDefinition xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <activeVersionNumber>0</activeVersionNumber>\n` +
+    `</FlowDefinition>`;
+
+  const zip = new JSZip();
+  for (const flowName of flowNames) {
+    zip.file(`flowDefinitions/${flowName}.flowDefinition-meta.xml`, flowDefinitionXml);
+  }
+  zip.file('package.xml', packageXml);
+
+  await deployMetadata(
+    instanceUrl,
+    tokens,
+    zip,
+    {
+      allowMissingFiles: false,
+      autoUpdatePackage: false,
+      checkOnly: false,
+      ignoreWarnings: true,
+      rollbackOnError: true,
+      singlePackage: true,
+    },
+    `Flow deactivate: ${flowNames.join(', ')}`
   );
 };
 
 // ---------------------------------------------------------------------------
-// Test class generation.
+// Flow metadata.
 //
-// Salesforce requires each deployed trigger to reach 75% coverage, and a
-// managed package's own tests do not count towards subscriber-org coverage, so
-// coverage has to ship with the trigger. Firing the trigger means inserting a
-// record, and which fields that needs differs per object and per org.
-//
-// That lookup happens here in Node against the standard describe endpoint, so
-// the generated Apex stays a plain, readable test class with concrete field
-// values rather than runtime reflection.
+// $Record is a single record and the invocable takes a List<SObject>, so the
+// record is assigned into a collection variable first. Flow bulkifies invocable
+// calls across the whole DML batch into one Apex invocation, which is what the
+// handler's collectFlowRecords stitches back into a single record list.
 // ---------------------------------------------------------------------------
-interface ISalesforceField {
-  name: string;
-  type: string;
-  createable: boolean;
-  nillable: boolean;
-  defaultedOnCreate: boolean;
-  autoNumber: boolean;
-  length?: number;
-  referenceTo?: string[];
-  picklistValues?: { value: string; active: boolean }[];
-}
+const buildRecordTriggeredFlow = (
+  objectApiName: string,
+  flowName: string,
+  event: (typeof FLOW_EVENTS)[number]
+): string => {
+  const actionName = `${NAMESPACE_PREFIX}__${HANDLER_CLASS_NAME}`;
+  const label = flowName.replace(/_/g, ' ');
 
-// One level of parents (child → parent → grandparent). Also bounds self-
-// referencing lookups such as Account.ParentId.
-const MAX_PARENT_DEPTH = 2;
-
-const TEST_TEXT_VALUE = 'DataVault Test';
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Flow xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <apiVersion>${API_VERSION}</apiVersion>\n` +
+    `    <actionCalls>\n` +
+    `        <name>Enqueue_Record_Sync</name>\n` +
+    `        <label>Enqueue Record Sync</label>\n` +
+    `        <locationX>176</locationX>\n` +
+    `        <locationY>287</locationY>\n` +
+    `        <actionName>${actionName}</actionName>\n` +
+    `        <actionType>apex</actionType>\n` +
+    `        <inputParameters>\n` +
+    `            <name>records</name>\n` +
+    `            <value>\n` +
+    `                <elementReference>recordCollection</elementReference>\n` +
+    `            </value>\n` +
+    `        </inputParameters>\n` +
+    `        <inputParameters>\n` +
+    `            <name>operation</name>\n` +
+    `            <value>\n` +
+    `                <stringValue>${event.operation}</stringValue>\n` +
+    `            </value>\n` +
+    `        </inputParameters>\n` +
+    `        <nameSegment>${actionName}</nameSegment>\n` +
+    `    </actionCalls>\n` +
+    `    <assignments>\n` +
+    `        <name>Collect_Record</name>\n` +
+    `        <label>Collect Record</label>\n` +
+    `        <locationX>176</locationX>\n` +
+    `        <locationY>167</locationY>\n` +
+    `        <assignmentItems>\n` +
+    `            <assignToReference>recordCollection</assignToReference>\n` +
+    `            <operator>Add</operator>\n` +
+    `            <value>\n` +
+    `                <elementReference>$Record</elementReference>\n` +
+    `            </value>\n` +
+    `        </assignmentItems>\n` +
+    `        <connector>\n` +
+    `            <targetReference>Enqueue_Record_Sync</targetReference>\n` +
+    `        </connector>\n` +
+    `    </assignments>\n` +
+    `    <environments>Default</environments>\n` +
+    `    <interviewLabel>${label} {!$Flow.CurrentDateTime}</interviewLabel>\n` +
+    `    <label>${label}</label>\n` +
+    `    <processType>AutoLaunchedFlow</processType>\n` +
+    `    <start>\n` +
+    `        <locationX>50</locationX>\n` +
+    `        <locationY>0</locationY>\n` +
+    `        <connector>\n` +
+    `            <targetReference>Collect_Record</targetReference>\n` +
+    `        </connector>\n` +
+    `        <object>${objectApiName}</object>\n` +
+    `        <recordTriggerType>${event.recordTriggerType}</recordTriggerType>\n` +
+    `        <triggerType>${event.triggerType}</triggerType>\n` +
+    `    </start>\n` +
+    `    <status>Active</status>\n` +
+    `    <variables>\n` +
+    `        <name>recordCollection</name>\n` +
+    `        <dataType>SObject</dataType>\n` +
+    `        <isCollection>true</isCollection>\n` +
+    `        <isInput>false</isInput>\n` +
+    `        <isOutput>false</isOutput>\n` +
+    `        <objectType>${objectApiName}</objectType>\n` +
+    `    </variables>\n` +
+    `</Flow>`
+  );
+};
 
 interface ISalesforceDescribe {
   triggerable?: boolean;
-  fields?: ISalesforceField[];
 }
 
 const describeObject = async (
@@ -139,154 +236,11 @@ const describeObject = async (
   return data;
 };
 
-// SObject names are qualified with the Schema namespace because several of them
-// collide with built-in Apex types — `Location` resolves to System.Location (the
-// compound geolocation type), not the SObject, so `new Location(...)` fails to
-// compile. Schema.Location is unambiguous, and the prefix is valid for every
-// SObject, so it is applied uniformly rather than against a list of known
-// collisions that would need maintaining.
-const apexSObjectType = (objectApiName: string): string => `Schema.${objectApiName}`;
-
-// Populate a field only when it is writable, has no default, and rejects null.
-// Auto-number fields report as non-nillable but are assigned by the org.
-const isRequiredOnCreate = (field: ISalesforceField): boolean =>
-  field.createable && !field.nillable && !field.defaultedOnCreate && !field.autoNumber;
-
-const apexStringLiteral = (value: string): string => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-
-const apexLiteralFor = (field: ISalesforceField): string | null => {
-  switch (field.type) {
-    case 'string':
-    case 'textarea':
-    case 'encryptedstring':
-    case 'combobox':
-      return apexStringLiteral(
-        field.length && field.length > 0 ? TEST_TEXT_VALUE.slice(0, field.length) : TEST_TEXT_VALUE
-      );
-    case 'picklist':
-    case 'multipicklist': {
-      const entry = field.picklistValues?.find((value) => value.active);
-      return entry ? apexStringLiteral(entry.value) : null;
-    }
-    case 'email': return apexStringLiteral('datavault.test@example.invalid');
-    case 'phone': return apexStringLiteral('5555555555');
-    case 'url': return apexStringLiteral('https://example.invalid');
-    case 'int': return '1';
-    case 'double': case 'currency': case 'percent': return '1.0';
-    case 'date': return 'Date.today()';
-    case 'datetime': return 'System.now()';
-    case 'time': return 'Time.newInstance(0, 0, 0, 0)';
-    case 'boolean': return 'false';
-    default: return null;
-  }
-};
-
-const formatConstructorArgs = (assignments: string[]): string =>
-  assignments.length === 0 ? '' : `\n            ${assignments.join(',\n            ')}\n        `;
-
-// Returns the constructor assignments for one record, appending any parent
-// declarations it needs to `parentLines` first — deepest parent emitted first,
-// so the generated statements are already in insertable order.
-const buildRecordAssignments = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  objectApiName: string,
-  depth: number,
-  seq: { next: number },
-  parentLines: string[],
-  rootFields?: ISalesforceField[]
-): Promise<string[]> => {
-  const fields = rootFields ?? (await describeObject(instanceUrl, tokens, objectApiName)).fields ?? [];
-  const assignments: string[] = [];
-
-  for (const field of fields.filter(isRequiredOnCreate)) {
-    if (field.type !== 'reference') {
-      const literal = apexLiteralFor(field);
-      if (literal) { assignments.push(`${field.name} = ${literal}`); }
-      continue;
-    }
-
-    const parentObject = field.referenceTo?.[0];
-    if (!parentObject || depth >= MAX_PARENT_DEPTH) { continue; }
-
-    const parentVar = `parent${seq.next++}`;
-    const parentAssignments = await buildRecordAssignments(
-      instanceUrl, tokens, parentObject, depth + 1, seq, parentLines
-    );
-    const parentType = apexSObjectType(parentObject);
-    parentLines.push(
-      `        ${parentType} ${parentVar} = new ${parentType}(${formatConstructorArgs(parentAssignments)});`,
-      `        insert ${parentVar};`,
-      ''
-    );
-    assignments.push(`${field.name} = ${parentVar}.Id`);
-  }
-
-  return assignments;
-};
-
-// One insert is enough: the trigger body is a single statement shared by all
-// four DML events, so `after insert` alone covers 100% of it.
-const buildTriggerTestBody = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  objectApiName: string,
-  testClassName: string,
-  triggerName: string,
-  rootFields: ISalesforceField[]
-): Promise<string> => {
-  const parentLines: string[] = [];
-  const assignments = await buildRecordAssignments(
-    instanceUrl, tokens, objectApiName, 0, { next: 1 }, parentLines, rootFields
-  );
-  const recordType = apexSObjectType(objectApiName);
-
-  return (
-    `@isTest\n` +
-    `private class ${testClassName} {\n` +
-    `\n` +
-    `    @isTest\n` +
-    `    static void syncTriggerFiresOnInsert() {\n` +
-    parentLines.join('\n') + (parentLines.length ? '\n' : '') +
-    `        ${recordType} record = new ${recordType}(${formatConstructorArgs(assignments)});\n` +
-    `\n` +
-    `        Test.startTest();\n` +
-    `        insert record;\n` +
-    `        Test.stopTest();\n` +
-    `\n` +
-    `        Assert.isNotNull(\n` +
-    `            record.Id,\n` +
-    `            'Insert of ${objectApiName} should succeed and fire ${triggerName}.'\n` +
-    `        );\n` +
-    `    }\n` +
-    `}`
-  );
-};
-
-// ---------------------------------------------------------------------------
-// PATCH a single trigger's Status field — shared by activate and inactivate.
-// ---------------------------------------------------------------------------
-const patchTriggerStatus = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  triggerId: string,
-  status: 'Active' | 'Inactive'
-): Promise<void> => {
-  await salesforceRequest(
-    {
-      url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${triggerId}`,
-      method: 'PATCH',
-      body: JSON.stringify({ Status: status }),
-    },
-    tokens
-  );
-};
-
 // ---------------------------------------------------------------------------
 // Shared Metadata API deploy — multipart upload of a zip, then poll to done.
 //
-// Used by every deploy in this file (trigger create, permission set grant,
-// permission set delete); only the deployOptions differ.
+// Used by every deploy in this file (flow create, permission set grant,
+// destructive deletes); only the deployOptions differ.
 // ---------------------------------------------------------------------------
 interface IDeployResult {
   done: boolean;
@@ -383,79 +337,104 @@ const deployMetadata = async (
 };
 
 // ---------------------------------------------------------------------------
-// Creates a single trigger via Metadata API deploy — shared by createTriggers
-// and activateTriggers.
+// Destructive Metadata API deploy — the only way to remove components from a
+// production org. Tooling API DELETE is rejected there for both Apex
+// (DEPENDENCY_EXISTS "Cannot delete classes/triggers in production") and Flows.
 //
-// Salesforce blocks direct Tooling API POST /sobjects/ApexTrigger in active
-// (production) orgs — "Can not create Apex Trigger on an active organization"
-// (ENTITY_IS_LOCKED). Apex code creation must instead go through a Metadata
-// API deploy of a triggers/*.trigger + *.trigger-meta.xml pair, the same
-// container-deploy workflow already used below for the permission set.
-// Production deploys containing Apex also require a testLevel other than
-// NoTestRun, so RunLocalTests is specified explicitly.
+// Salesforce destructive deploy rules:
+//   - destructiveChanges.xml → lists what to delete, one <types> per type
+//   - package.xml            → must be EMPTY (version only)
 // ---------------------------------------------------------------------------
-const createSingleTrigger = async (
+const destructiveDeploy = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  objectApiName: string
+  members: { type: string; name: string }[],
+  label: string,
+  extraOptions: Record<string, unknown> = {}
 ): Promise<void> => {
-  const triggerName = triggerNameFor(objectApiName);
-  const testClassName = testClassNameFor(triggerName);
+  const byType = new Map<string, string[]>();
+  for (const { type, name } of members) {
+    byType.set(type, [...(byType.get(type) ?? []), name]);
+  }
 
-  // Salesforce rejects triggers on some standard objects (Partner, and most
-  // Chatter internals). Ask first — the describe is needed for the test class
-  // anyway, and failing here beats burning a full deploy round-trip to be told.
+  const destructiveXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    Array.from(byType.entries())
+      .map(([type, names]) =>
+        `    <types>\n` +
+        names.map((name) => `        <members>${name}</members>\n`).join('') +
+        `        <name>${type}</name>\n` +
+        `    </types>\n`
+      )
+      .join('') +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
+
+  const emptyPackageXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
+
+  const zip = new JSZip();
+  zip.file('destructiveChanges.xml', destructiveXml);
+  zip.file('package.xml', emptyPackageXml);
+
+  await deployMetadata(
+    instanceUrl,
+    tokens,
+    zip,
+    {
+      allowMissingFiles: true,
+      checkOnly: false,
+      ignoreWarnings: true,
+      rollbackOnError: true,
+      runAllTests: false,
+      singlePackage: true,
+      ...extraOptions,
+    },
+    label
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Deploy this object's three Flows, active, in one shot. Also the activate
+// path: redeploying is how a deactivated flow comes back on, since the
+// FlowDefinition deploy can only turn versions off.
+// ---------------------------------------------------------------------------
+const createFlowsForObject = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiName: string,
+  flowNames: string[]
+): Promise<void> => {
+  // Salesforce refuses record-triggered automation on some standard objects
+  // (Partner, most Chatter internals). Ask first — failing here beats burning a
+  // full deploy round-trip to be told.
   const describe = await describeObject(instanceUrl, tokens, objectApiName);
   if (describe.triggerable === false) {
-    throw new Error(`SObject type does not allow triggers: ${objectApiName}`);
+    throw new Error(`SObject type does not allow record-triggered flows: ${objectApiName}`);
   }
 
   const packageXml =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
     `    <types>\n` +
-    `        <members>${triggerName}</members>\n` +
-    `        <name>ApexTrigger</name>\n` +
-    `    </types>\n` +
-    `    <types>\n` +
-    `        <members>${testClassName}</members>\n` +
-    `        <name>ApexClass</name>\n` +
+    flowNames.map((name) => `        <members>${name}</members>\n`).join('') +
+    `        <name>Flow</name>\n` +
     `    </types>\n` +
     `    <version>${API_VERSION}</version>\n` +
     `</Package>`;
 
-  const triggerMetaXml =
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<ApexTrigger xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
-    `    <apiVersion>${API_VERSION}</apiVersion>\n` +
-    `    <status>Active</status>\n` +
-    `</ApexTrigger>`;
-
-  const classMetaXml =
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
-    `    <apiVersion>${API_VERSION}</apiVersion>\n` +
-    `    <status>Active</status>\n` +
-    `</ApexClass>`;
-
   const zip = new JSZip();
-  zip.file(`triggers/${triggerName}.trigger`, buildTriggerBody(objectApiName));
-  zip.file(`triggers/${triggerName}.trigger-meta.xml`, triggerMetaXml);
-  zip.file(
-    `classes/${testClassName}.cls`,
-    await buildTriggerTestBody(
-      instanceUrl, tokens, objectApiName, testClassName, triggerName, describe.fields ?? []
-    )
-  );
-  zip.file(`classes/${testClassName}.cls-meta.xml`, classMetaXml);
+  flowNames.forEach((flowName, index) => {
+    zip.file(`flows/${flowName}.flow-meta.xml`, buildRecordTriggeredFlow(objectApiName, flowName, FLOW_EVENTS[index]));
+  });
   zip.file('package.xml', packageXml);
 
-  // RunSpecifiedTests, not RunLocalTests: RunLocalTests enforces the org-wide
-  // 75% average across ALL local Apex, which a subscriber org with its own
-  // uncovered code can never satisfy no matter what we ship. RunSpecifiedTests
-  // applies the 75% bar per deployed component instead, so only this trigger
-  // has to be covered — and running just our own test also stops unrelated
-  // failing tests in the subscriber org from blocking the deploy.
+  // No testLevel: the deploy contains no Apex, which is the entire point of
+  // moving off triggers — nothing to cover, nothing to run.
   await deployMetadata(
     instanceUrl,
     tokens,
@@ -467,18 +446,116 @@ const createSingleTrigger = async (
       ignoreWarnings: true,
       rollbackOnError: true,
       singlePackage: true,
-      testLevel: 'RunSpecifiedTests',
-      runTests: [testClassName],
     },
-    `Trigger ${triggerName}`
+    `Flows for ${objectApiName}`
+  );
+
+  // A deploy can succeed and still leave the flows switched off: an org with
+  // "Deploy processes and flows as active" disabled downgrades them to Draft.
+  // Silently inactive flows mean real-time backup quietly stops capturing
+  // records, so this is checked rather than assumed.
+  const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
+  const inactive = flowNames.filter((name) => !states.get(name));
+  if (inactive.length) {
+    throw new Error(
+      `flows_deployed_inactive:${inactive.join(',')} — the org deployed them as Draft. ` +
+      `Enable "Deploy processes and flows as active" in Setup > Process Automation Settings.`
+    );
+  }
+
+  // Best-effort: a surviving Apex trigger only causes duplicate syncs, which is
+  // not worth failing an otherwise successful flow deploy over.
+  try {
+    await removeLegacyApexTrigger(instanceUrl, tokens, triggerNameFor(objectApiName));
+  } catch (err) {
+    console.log(`Error removing legacy Apex trigger for ${objectApiName}:`, err);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Legacy cleanup — orgs provisioned before the move to Flows still carry an
+// Apex trigger (and its generated test class) under the same DataVault_*_Trigger
+// name. Left in place it enqueues a second sync alongside the new Flow, so it is
+// removed both when flows are created and when they are deleted.
+//
+// ponytail: delete this block, its two helpers and the createHash import once no
+// org has an Apex-trigger-era config left.
+// ---------------------------------------------------------------------------
+const APEX_IDENTIFIER_MAX_LENGTH = 40;
+
+const legacyTestClassNameFor = (triggerName: string): string => {
+  const preferred = `${triggerName}Test`;
+  if (preferred.length <= APEX_IDENTIFIER_MAX_LENGTH) { return preferred; }
+
+  const digest = createHash('sha1').update(triggerName).digest('hex').slice(0, 6);
+  const stem = triggerName.slice(0, APEX_IDENTIFIER_MAX_LENGTH - digest.length - '_Test'.length);
+  return `${stem}${digest}_Test`;
+};
+
+// Returns true when a legacy trigger was found and removed.
+const removeLegacyApexTrigger = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  triggerName: string
+): Promise<boolean> => {
+  const { data } = await salesforceRequest<{ totalSize: number }>(
+    {
+      url: soqlUrl(instanceUrl, `SELECT Id FROM ApexTrigger WHERE Name = '${triggerName}' LIMIT 1`),
+      method: 'GET',
+    },
+    tokens
+  );
+  if (data.totalSize === 0) { return false; }
+
+  const testClassName = legacyTestClassNameFor(triggerName);
+  const testClassId = await fetchApexClassId(instanceUrl, tokens, testClassName);
+
+  // testLevel RunLocalTests: production deploys touching Apex must run tests.
+  // Nothing is being added here, so the per-component 75% coverage bar that
+  // ruled RunLocalTests out for the old trigger deploys does not apply.
+  await destructiveDeploy(
+    instanceUrl,
+    tokens,
+    [
+      { type: 'ApexTrigger', name: triggerName },
+      ...(testClassId ? [{ type: 'ApexClass', name: testClassName }] : []),
+    ],
+    `Legacy trigger ${triggerName} delete`,
+    { testLevel: 'RunLocalTests' }
+  );
+  return true;
+};
+
+// ---------------------------------------------------------------------------
+// Delete an object's Flows. A flow must be inactive before it can be deleted,
+// and listing a member without a version suffix removes every version.
+// ---------------------------------------------------------------------------
+const deleteFlows = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  flowNames: string[]
+): Promise<void> => {
+  const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
+  const present = flowNames.filter((name) => states.has(name));
+  if (!present.length) { return; }
+
+  const active = present.filter((name) => states.get(name));
+  if (active.length) {
+    await deactivateFlows(instanceUrl, tokens, active);
+  }
+
+  await destructiveDeploy(
+    instanceUrl,
+    tokens,
+    present.map((name) => ({ type: 'Flow', name })),
+    `Flow delete: ${present.join(', ')}`
   );
 };
 
 // ---------------------------------------------------------------------------
-// Grants permission set access after trigger creation/activation:
-//   1. Handler class access
+// Grants permission set access after flow creation/activation:
+//   1. Handler class access — the Flow's Apex action
 //   2. External Credential Principal access
-//   3. Per-trigger class access (for newly created triggers only)
 // Mutates the passed results array to set permissionSetStatus on each entry.
 // ---------------------------------------------------------------------------
 const setupPermissionSet = async (
@@ -503,32 +580,30 @@ const setupPermissionSet = async (
     );
 
     for (const trigger of triggerResults) {
-      if (trigger.status !== 'CREATED') { continue; }
-      try {
-        const classId = await fetchApexClassId(instanceUrl, tokens, trigger.triggerName);
-        if (classId) {
-          await grantApexClassAccess(instanceUrl, tokens, permissionSetId, classId);
-        }
-        trigger.permissionSetStatus = 'CREATED';
-      } catch (error) {
+      if (trigger.status === 'CREATED') { trigger.permissionSetStatus = 'CREATED'; }
+    }
+  } catch (error) {
+    console.log('Error during permission set setup:', error);
+    for (const trigger of triggerResults) {
+      if (trigger.status === 'CREATED') {
         trigger.permissionSetStatus = 'FAILED';
         trigger.permissionSetError = error instanceof Error ? error.message : String(error);
       }
     }
-  } catch (error) {
-    console.log('Error during permission set setup:', error);
   }
 };
 
 // ---------------------------------------------------------------------------
 // Ensure the shared handler ApexClass exists — throws if not installed.
-// The class ships with the DataVault managed package (namespace: SYX_DVV).
-// Install the package in the org before creating real-time triggers.
+// The class ships with the DataVault managed package (namespace: SYX_DVV) and
+// is what the generated Flows invoke, so a missing package means dead flows.
 // ---------------------------------------------------------------------------
 const ensureHandlerClass = async (instanceUrl: string, tokens: SalesforceTokens): Promise<string> => {
-  const soql = `SELECT Id FROM ApexClass WHERE Name = '${HANDLER_CLASS_NAME}' LIMIT 1`;
   const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
-    { url: `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
+    {
+      url: soqlUrl(instanceUrl, `SELECT Id FROM ApexClass WHERE Name = '${HANDLER_CLASS_NAME}' LIMIT 1`),
+      method: 'GET',
+    },
     tokens
   );
 
@@ -550,9 +625,11 @@ const fetchApexClassId = async (
   tokens: SalesforceTokens,
   className: string
 ): Promise<string | null> => {
-  const soql = `SELECT Id FROM ApexClass WHERE Name = '${className}' LIMIT 1`;
   const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
-    { url: `${TOOLING_BASE(instanceUrl)}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
+    {
+      url: soqlUrl(instanceUrl, `SELECT Id FROM ApexClass WHERE Name = '${className}' LIMIT 1`),
+      method: 'GET',
+    },
     tokens
   );
   return data.totalSize > 0 ? data.records[0].Id : null;
@@ -591,7 +668,7 @@ const upsertPermissionSet = async (
         Name: PERMISSION_SET_NAME,
         Label: 'DataVault Real-Time Trigger Access',
         Description:
-          'Grants access to the DataVault handler class and all real-time backup triggers created by DataVault.',
+          'Grants access to the DataVault handler class and all real-time backup flows created by DataVault.',
       }),
     },
     tokens
@@ -600,10 +677,6 @@ const upsertPermissionSet = async (
   return data.id;
 };
 
-// ---------------------------------------------------------------------------
-// Fetch the Id of an ExternalCredentialPrincipal by its qualified name.
-// Used to grant Named Credential / External Credential access on the permission set.
-// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Grants ExternalCredentialPrincipal access on the permission set via
 // Metadata API deploy. This is the only supported approach — ExternalCredential
@@ -688,46 +761,9 @@ const grantApexClassAccess = async (
 };
 
 // ---------------------------------------------------------------------------
-// Create the DataVaultRealTimeTriggerAccess permission set and wire up:
-//   1. ApexClassAccess  → the handler class
-//   2. ApexClassAccess  → each newly-created trigger's backing class (if any)
-// Note: ApexTrigger records themselves are not directly added to permission sets;
-// access is controlled via the handler class and the org's profile/permission model.
-// ---------------------------------------------------------------------------
-const createPermissionSet = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  triggerNames: string[]
-): Promise<{ permissionSetId: string; permissionSetName: string }> => {
-  try {
-    const permissionSetId = await upsertPermissionSet(instanceUrl, tokens);
-
-    // Grant access to the handler class
-    const handlerClassId = await fetchApexClassId(instanceUrl, tokens, HANDLER_CLASS_NAME);
-    if (handlerClassId) {
-      await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
-    }
-
-    // Grant access to any trigger-backing Apex classes that share the trigger name
-    for (let i = 0; i < triggerNames.length; i++) {
-      const triggerName = triggerNames[i];
-      const classId = await fetchApexClassId(instanceUrl, tokens, triggerName);
-      if (classId) {
-        await grantApexClassAccess(instanceUrl, tokens, permissionSetId, classId);
-      }
-    }
-
-    return { permissionSetId, permissionSetName: PERMISSION_SET_NAME };
-  } catch (error) {
-    console.log('Error creating/upserting permission set:', error);
-    throw error;
-  }
-};
-
-// ---------------------------------------------------------------------------
-// Expand the configured objects with their Master-Detail children so a trigger
+// Expand the configured objects with their Master-Detail children so a flow
 // is created on each child too. Deduped (case-insensitive) — a child reachable
-// from two parents gets a single trigger. Best-effort: a failed children lookup
+// from two parents gets a single flow. Best-effort: a failed children lookup
 // for one object leaves the rest of the list intact.
 // ---------------------------------------------------------------------------
 const expandWithMasterChildren = async (
@@ -740,7 +776,7 @@ const expandWithMasterChildren = async (
   await Promise.all(
     objectApiNames.map(async (name) => {
       try {
-        const childNames = await getMasterChildApiNames(user, name, SCHEDULE_MODE.realtime);
+        const childNames = await getMasterChildApiNames(user, name, 'realtime');
         for (const child of childNames) {
           const key = child.toLowerCase();
           if (!byName.has(key)) byName.set(key, child);
@@ -755,9 +791,8 @@ const expandWithMasterChildren = async (
 };
 
 // ---------------------------------------------------------------------------
-// Create triggers for one or more objects sequentially.
-// Handler class is ensured once before all trigger creations.
-// Permission set is set up after using only the successfully created triggers.
+// Create real-time flows for one or more objects sequentially.
+// Handler class is ensured once before all flow creations.
 // ---------------------------------------------------------------------------
 const createTriggers = async (
   instanceUrl: string,
@@ -771,17 +806,18 @@ const createTriggers = async (
   for (let i = 0; i < objectApiNames.length; i++) {
     const objectApiName = objectApiNames[i];
     const triggerName = triggerNameFor(objectApiName);
+    const flowNames = flowNamesFor(triggerName);
     try {
-      const existing = await fetchTrigger(instanceUrl, tokens, triggerName);
-      if (existing?.Status === 'Active') {
+      const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
+      if (flowNames.every((name) => states.get(name))) {
         results.push({ triggerName, status: 'EXIST' });
         continue;
       }
-      await createSingleTrigger(instanceUrl, tokens, objectApiName);
+      await createFlowsForObject(instanceUrl, tokens, objectApiName, flowNames);
       results.push({ triggerName, status: 'CREATED' });
       await timer(500);
     } catch (err) {
-      console.log(`Error creating trigger ${triggerName}:`, err);
+      console.log(`Error creating flows for ${triggerName}:`, err);
       results.push({ triggerName, status: 'FAILED', error: err instanceof Error ? err.message : String(err) });
     }
   }
@@ -794,11 +830,18 @@ const createTriggers = async (
   return results;
 };
 
+// The config's triggerName is a lossy label (`DataVault_MyObject_Trigger` for
+// `MyObject__c`), but a flow's metadata needs the exact SObject API name — so it
+// is resolved from the config's own objectNames, with the historical string
+// surgery only as a fallback for configs that predate objectNames.
+const objectApiNameFor = (config: IBackupConfig, triggerName: string): string =>
+  (config.objectNames ?? []).find((name) => triggerNameFor(name) === triggerName) ??
+  triggerName.replace('DataVault_', '').replace('_Trigger', '');
+
 // ---------------------------------------------------------------------------
-// Shared toggle — sets every trigger to the requested Salesforce status.
-// ACTIVE  : creates the trigger if absent, patches Inactive → Active,
-//           then runs permission set setup for any newly created triggers.
-// INACTIVE: skips (NOT_FOUND) if the trigger never existed, patches Active → Inactive.
+// Shared toggle — sets every object's flows to the requested state.
+// ACTIVE  : creates the flows if absent, otherwise activates the latest version.
+// INACTIVE: skips (NOT_FOUND) if the flows never existed, otherwise deactivates.
 // ---------------------------------------------------------------------------
 const toggleTriggerStatus = async (
   instanceUrl: string,
@@ -810,10 +853,8 @@ const toggleTriggerStatus = async (
     await ensureHandlerClass(instanceUrl, tokens);
   }
 
-  const results: ITriggerResult[] = [];
   if (!config.triggerResults?.length) {
-    results.push({ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' });
-    return results;
+    return [{ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
   const triggerResults = config.triggerResults;
@@ -821,34 +862,34 @@ const toggleTriggerStatus = async (
   for (let i = 0; i < triggerResults.length; i++) {
     const triggerResult = triggerResults[i];
     const triggerName = triggerResult.triggerName;
-    const objectApiName = triggerName.replace('DataVault_', '').replace('_Trigger', '');
+    const flowNames = flowNamesFor(triggerName);
     try {
-      const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
+      const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
 
       if (targetStatus === 'Active') {
-        if (!trigger) {
-          await createSingleTrigger(instanceUrl, tokens, objectApiName);
-          triggerResult.status = 'CREATED';
-          await timer(500);
-        } else if (trigger.Status === 'Active') {
+        // Redeploy covers both "never existed" and "exists but switched off" —
+        // deploying the flow active is the only Metadata API way back on.
+        if (flowNames.every((name) => states.get(name))) {
           triggerResult.status = 'EXIST';
         } else {
-          await patchTriggerStatus(instanceUrl, tokens, trigger.Id, 'Active');
+          await createFlowsForObject(instanceUrl, tokens, objectApiNameFor(config, triggerName), flowNames);
           triggerResult.status = 'CREATED';
+          await timer(500);
         }
       } else {
-        if (!trigger) {
+        const active = flowNames.filter((name) => states.get(name));
+        if (!states.size) {
           triggerResult.status = 'NOT_FOUND';
-        } else if (trigger.Status === 'Inactive') {
-          triggerResult.status = 'INACTIVE';
         } else {
-          await patchTriggerStatus(instanceUrl, tokens, trigger.Id, 'Inactive');
+          if (active.length) {
+            await deactivateFlows(instanceUrl, tokens, active);
+          }
           triggerResult.status = 'INACTIVE';
         }
       }
     } catch (err) {
       const label = targetStatus === 'Active' ? 'activating' : 'inactivating';
-      console.log(`Error ${label} trigger ${triggerName}:`, err);
+      console.log(`Error ${label} flows for ${triggerName}:`, err);
       triggerResult.status = targetStatus === 'Active' ? 'FAILED' : 'INACTIVATE_FAILED';
       triggerResult.error = err instanceof Error ? err.message : String(err);
     }
@@ -863,7 +904,7 @@ const toggleTriggerStatus = async (
 
 // ---------------------------------------------------------------------------
 // Delete the DataVaultRealTimeTriggerAccess permission set via Metadata API deploy.
-// Called after all triggers are deleted so the permission set is cleaned up too.
+// Called after all flows are deleted so the permission set is cleaned up too.
 // No-op if the permission set doesn't exist.
 // ---------------------------------------------------------------------------
 const deletePermissionSet = async (
@@ -873,49 +914,18 @@ const deletePermissionSet = async (
   const existing = await fetchPermissionSetId(instanceUrl, tokens);
   if (!existing) { return; }
 
-  // Salesforce destructive deploy rules:
-  //   - destructiveChanges.xml  → lists what to delete
-  //   - package.xml             → must be EMPTY (only version), no types/members
-  const emptyPackageXml =
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
-    `    <version>${API_VERSION}</version>\n` +
-    `</Package>`;
-
-  const destructiveXml =
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
-    `    <types>\n` +
-    `        <members>${PERMISSION_SET_NAME}</members>\n` +
-    `        <name>PermissionSet</name>\n` +
-    `    </types>\n` +
-    `    <version>${API_VERSION}</version>\n` +
-    `</Package>`;
-
-  const zip = new JSZip();
-  zip.file('destructiveChanges.xml', destructiveXml);
-  zip.file('package.xml', emptyPackageXml);
-
-  await deployMetadata(
+  await destructiveDeploy(
     instanceUrl,
     tokens,
-    zip,
-    {
-      allowMissingFiles: true,
-      checkOnly: false,
-      ignoreWarnings: true,
-      rollbackOnError: true,
-      runAllTests: false,
-      singlePackage: true,
-    },
+    [{ type: 'PermissionSet', name: PERMISSION_SET_NAME }],
     'Permission set delete'
   );
 };
 
 // ---------------------------------------------------------------------------
-// Delete triggers — permanently removes the trigger from the org.
-// After all triggers are deleted, the permission set is also deleted.
-// No-op for objects whose trigger doesn't exist.
+// Delete flows — permanently removes an object's real-time automation.
+// After all flows are deleted, the permission set is also deleted.
+// No-op for objects whose flows don't exist.
 // ---------------------------------------------------------------------------
 const deleteTriggers = async (
   instanceUrl: string,
@@ -934,16 +944,16 @@ const deleteTriggers = async (
 
     if (!['CREATED', 'INACTIVE', 'EXIST'].includes(status)) continue;
     try {
-      const trigger = await fetchTrigger(instanceUrl, tokens, triggerName);
-      if (!trigger) {
-        triggerResult.status = 'NOT_FOUND';
+      const flowNames = flowNamesFor(triggerName);
+      const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
+      const legacyRemoved = await removeLegacyApexTrigger(instanceUrl, tokens, triggerName);
+
+      if (states.size === 0) {
+        triggerResult.status = legacyRemoved ? 'DELETED' : 'NOT_FOUND';
         continue;
       }
 
-      await salesforceRequest(
-        { url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${trigger.Id}`, method: 'DELETE' },
-        tokens
-      );
+      await deleteFlows(instanceUrl, tokens, flowNames);
 
       triggerResult.status = 'DELETED';
     } catch (err) {
@@ -952,7 +962,7 @@ const deleteTriggers = async (
     }
   }
 
-  // Delete the permission set after all triggers are removed.
+  // Delete the permission set after all flows are removed.
   try {
     await deletePermissionSet(instanceUrl, tokens);
   } catch (err) {
@@ -999,7 +1009,7 @@ const realTimeTriggerManagement = async (
     if (operation === 'create') {
 
       //const expandedNames = await expandWithMasterChildren(user, objectApiNames);
-      // Children get a trigger, so they get backed up — record them on the config
+      // Children get a flow, so they get backed up — record them on the config
       // too, otherwise every config-driven reader (Glue, restore listing, UI) stays
       // blind to data that is already landing in S3 under the child's own name.
       await appendObjectsToBackupConfig(config.backupConfigId, objectApiNames);
@@ -1020,11 +1030,11 @@ const realTimeTriggerManagement = async (
 };
 
 export {
-  fetchTrigger,
   createTriggers,
   toggleTriggerStatus,
   deleteTriggers,
   deletePermissionSet,
   realTimeTriggerManagement,
-  createPermissionSet,
+  triggerNameFor,
+  flowNamesFor,
 };

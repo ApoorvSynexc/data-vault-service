@@ -202,6 +202,8 @@ const filtereObjects = (objects: IObject[]) => {
   }
 }
 
+// Pre-versioning schema locations. Nothing writes here any more — these three are
+// read-only fallbacks for configs whose last backup job predates the main/changes layout.
 const buildSchemaS3Key = ({
   crmId,
   crmName,
@@ -211,16 +213,63 @@ const buildSchemaS3Key = ({
 }: ISchemaS3KeyParams): string => `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields/fields.json`;
 
 // Picklist values live beside the field schema:
-// .../schema/{objectName}/picklist/{fieldApiName}/values.json — mirrors backup-service.
+// .../schema/{objectName}/picklist/{fieldApiName}/values.json
 const buildPicklistS3Key = (params: ISchemaS3KeyParams & { fieldApiName: string }): string =>
   buildSchemaS3Key(params).replace(
     '/fields/fields.json',
     `/picklist/${params.fieldApiName}/values.json`
   );
 
-// Record-type metadata, single unversioned file: .../schema/{objectName}/record-types.json.
+// Record-type metadata, single unversioned file: .../schema/{objectName}/record-types.json
 const buildRecordTypeS3Key = (params: ISchemaS3KeyParams): string =>
   buildSchemaS3Key(params).replace('/fields/fields.json', '/record-types.json');
+
+// ---------------------------------------------------------------------------
+// Versioned schema layout — mirrors backup-service/src/utils/helper.ts.
+//
+//   schema/main/<kind>/<object>/...                    — always the latest version
+//   schema/changes/<backupJobId>/<kind>/<object>/...   — what that job wrote
+//
+// Readers use main/ and fall back to the legacy builders above for configs whose
+// last backup predates this layout.
+// ---------------------------------------------------------------------------
+type SchemaKind = 'fields' | 'childs' | 'picklist' | 'recordTypes';
+
+const SCHEMA_KIND_FILE: Record<SchemaKind, string> = {
+  fields: 'fields.json',
+  childs: 'childs.json',
+  picklist: 'values.json',
+  recordTypes: 'record-types.json',
+};
+
+interface ISchemaKeyParams extends ISchemaS3KeyParams {
+  kind: SchemaKind;
+  fieldApiName?: string; // picklist only
+  backupJobId?: string; // set → changes/<backupJobId>; omitted → main
+}
+
+const buildSchemaKey = ({
+  crmId,
+  crmName,
+  backupConfigId,
+  objectName,
+  type,
+  kind,
+  fieldApiName,
+  backupJobId,
+}: ISchemaKeyParams): string => {
+  const scope = backupJobId ? `changes/${backupJobId}` : 'main';
+  const leaf = kind === 'picklist' ? `${objectName}/${fieldApiName}` : objectName;
+  return `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${scope}/${kind}/${leaf}/${SCHEMA_KIND_FILE[kind]}`;
+};
+
+// The legacy layout kept every version as fields_<ts>.json beside the original
+// fields.json. Timestamps are fixed-width, so the last alphabetically sorted
+// versioned key is also the newest; fall back to the base key when none exist.
+const pickLegacyFieldsKey = (keys: string[], baseKey: string): string => {
+  const versioned = keys.filter((k) => /fields_\d+\.json$/.test(k));
+  return versioned.length ? versioned[versioned.length - 1] : baseKey;
+};
 
 // Order-independent schema equality by field identifier + dataType only — mirrors
 // backup-service so the /payload drift check matches the backup's own comparison.
@@ -253,5 +302,11 @@ export {
   buildSchemaS3Key,
   buildPicklistS3Key,
   buildRecordTypeS3Key,
-  schemasAreEqual
+  buildSchemaKey,
+  pickLegacyFieldsKey,
+  schemasAreEqual,
+  type ISchemaS3KeyParams,
+  type ISchemaKeyParams,
+  type SchemaKind,
+  type S3KeyType
 };

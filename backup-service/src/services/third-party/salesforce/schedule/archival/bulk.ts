@@ -25,8 +25,9 @@ import {
   createBulkQueryJob,
 } from '../../api-request';
 import { uploadPicklistValues } from '../../picklist';
-import { uploadToS3, downloadFromS3, listS3Objects } from '../../../../destination';
-import { buildS3KeyPrefix, buildSchemaS3Key, schemasAreEqual } from '../../../../../utils/helper';
+import { uploadToS3 } from '../../../../destination';
+import { readLatestSchema, writeSchemaFile } from '../../../../schema';
+import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
 import {
   createCsvGlueTable,
   registerBackupJobPartition,
@@ -337,6 +338,7 @@ async function uploadSingleObject(
     backupConfigId: ctx.backupConfigId,
     objectName: object.name,
     type: 'archival',
+    backupJobId,
   });
   // Exclude soft-deleted records from every level of the archival query — see
   // the matching comment in archival/index.ts for the rationale.
@@ -397,20 +399,32 @@ async function uploadSingleObject(
 
       // Even with zero records we still persist the object schema (and create its
       // Glue table) so restore-retrieve's fetch-object-fields works for archived-
-      // but-empty objects. Mirrors the first-time branch of the schema block below;
-      // guarded on existing keys so retries don't rewrite fields.json.
+      // but-empty objects. The schema write is unconditional; the read only decides
+      // whether this is the object's first schema and therefore needs a Glue table.
       try {
-        const schemaKey = buildSchemaS3Key({
+        const stored = await readLatestSchema(ctx.destConfig, {
           crmId: ctx.crmId,
           crmName: ctx.crmName,
           backupConfigId: ctx.backupConfigId,
           objectName: object.name,
           type: 'archival',
         });
-        const schemaFolder = schemaKey.replace('/fields.json', '/');
-        const existingSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
-        if (!existingSchemaKeys.length) {
-          await uploadToS3(ctx.destConfig, schemaKey, Buffer.from(JSON.stringify(schema, null, 2)));
+
+        await writeSchemaFile(
+          ctx.destConfig,
+          {
+            crmId: ctx.crmId,
+            crmName: ctx.crmName,
+            backupConfigId: ctx.backupConfigId,
+            objectName: object.name,
+            type: 'archival',
+            kind: 'fields',
+            backupJobId,
+          },
+          schema
+        );
+
+        if (!stored) {
           await createCsvGlueTable({
             crmId: ctx.crmId,
             crmName: ctx.crmName,
@@ -425,7 +439,7 @@ async function uploadSingleObject(
             )
           );
           logger.info(
-            `[archival:child] schema persisted for empty object | backupJobId:${backupJobId} objectName:${object.name} key:${schemaKey}`
+            `[archival:child] schema persisted for empty object | backupJobId:${backupJobId} objectName:${object.name}`
           );
         }
       } catch (err: any) {
@@ -546,26 +560,37 @@ async function uploadSingleObject(
       completedRecordCount,
     });
 
-    // Schema comparison — versioned upload when schema changes.
+    // The schema write is unconditional; the read decides which Glue call follows and
+    // whether the object is flagged as schema-changed for the EMR payload.
     logger.info(
       `[archival:child] checking schema | backupJobId:${backupJobId} objectName:${object.name}`
     );
     try {
-      const schemaKey = buildSchemaS3Key({
+      const stored = await readLatestSchema(ctx.destConfig, {
         crmId: ctx.crmId,
         crmName: ctx.crmName,
         backupConfigId: ctx.backupConfigId,
         objectName: object.name,
         type: 'archival',
       });
-      const schemaFolder = schemaKey.replace('/fields.json', '/');
-      const allSchemaKeys = await listS3Objects(ctx.destConfig, schemaFolder);
-      const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
 
-      if (!allSchemaKeys.length) {
-        await uploadToS3(ctx.destConfig, schemaKey, Buffer.from(JSON.stringify(schema, null, 2)));
+      await writeSchemaFile(
+        ctx.destConfig,
+        {
+          crmId: ctx.crmId,
+          crmName: ctx.crmName,
+          backupConfigId: ctx.backupConfigId,
+          objectName: object.name,
+          type: 'archival',
+          kind: 'fields',
+          backupJobId,
+        },
+        schema
+      );
+
+      if (!stored) {
         logger.info(
-          `[archival:child] schema uploaded (first time) | backupJobId:${backupJobId} objectName:${object.name} key:${schemaKey}`
+          `[archival:child] schema uploaded (first time) | backupJobId:${backupJobId} objectName:${object.name}`
         );
         await createCsvGlueTable({
           crmId: ctx.crmId,
@@ -580,46 +605,28 @@ async function uploadSingleObject(
             `[glue] failed to create table | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
           )
         );
+      } else if (!schemasAreEqual(stored, schema)) {
+        logger.info(
+          `[archival:child] schema change detected | backupJobId:${backupJobId} objectName:${object.name}`
+        );
+        await updateArchivalObject({
+          backupJobId,
+          object: { id: object.id, schemaChange: true },
+        });
+        await updateGlueTableSchema({
+          crmId: ctx.crmId,
+          backupConfigId: ctx.backupConfigId,
+          objectName: object.name,
+          columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
+        }).catch((err) =>
+          logger.error(
+            `[glue] failed to update table schema | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
+          )
+        );
       } else {
-        const currentKey = versionedKeys.length
-          ? versionedKeys[versionedKeys.length - 1]
-          : schemaKey;
-        let changed = false;
-        try {
-          const existing = await downloadFromS3(ctx.destConfig, currentKey);
-          changed = !existing || !schemasAreEqual(JSON.parse(existing.toString()), schema);
-        } catch {
-          changed = true;
-        }
-        if (changed) {
-          const versionedKey = schemaKey.replace('/fields.json', `/fields_${Date.now()}.json`);
-          await uploadToS3(
-            ctx.destConfig,
-            versionedKey,
-            Buffer.from(JSON.stringify(schema, null, 2))
-          );
-          logger.info(
-            `[archival:child] schema change detected — versioned upload | backupJobId:${backupJobId} objectName:${object.name} key:${versionedKey}`
-          );
-          await updateArchivalObject({
-            backupJobId,
-            object: { id: object.id, schemaChange: true },
-          });
-          await updateGlueTableSchema({
-            crmId: ctx.crmId,
-            backupConfigId: ctx.backupConfigId,
-            objectName: object.name,
-            columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
-          }).catch((err) =>
-            logger.error(
-              `[glue] failed to update table schema | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
-            )
-          );
-        } else {
-          logger.info(
-            `[archival:child] schema unchanged | backupJobId:${backupJobId} objectName:${object.name}`
-          );
-        }
+        logger.info(
+          `[archival:child] schema unchanged | backupJobId:${backupJobId} objectName:${object.name}`
+        );
       }
     } catch (err: any) {
       logger.error(
