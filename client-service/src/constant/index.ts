@@ -1,4 +1,5 @@
-﻿const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
+﻿const NODE_ENV =  String(process.env.NODE_ENV);
+const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
 // AWS / DynamoDB Config
@@ -39,9 +40,8 @@ const AWS_ATHENA_OUTPUT_LOCATION = String(process.env.AWS_ATHENA_OUTPUT_LOCATION
 const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
 const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
 
-// JWT Config
-const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET || 'access-secret');
-const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || 'refresh-secret');
+const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET);
+const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET);
 const JWT_ACCESS_EXPIRY = String(process.env.JWT_ACCESS_EXPIRY || '15m');
 const JWT_REFRESH_EXPIRY = String(process.env.JWT_REFRESH_EXPIRY || '7d');
 
@@ -71,6 +71,10 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
 const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
 const SPACE_TABLE = String(process.env.SPACE_TABLE || 'data-vault-spaces');
+
+// S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
+// archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
+const AWS_S3_LOGS_BUCKET = String(process.env.AWS_S3_LOGS_BUCKET);
 
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
@@ -220,6 +224,7 @@ const SESSION_STATUS = {
 };
 
 export {
+  NODE_ENV,
   HOST,
   PORT,
 
@@ -284,6 +289,7 @@ export {
   BACKUP_SERVICE,
   BACKUP_JOB_TABLE,
   SPACE_TABLE,
+  AWS_S3_LOGS_BUCKET,
 
   // Enums
   STATUS,

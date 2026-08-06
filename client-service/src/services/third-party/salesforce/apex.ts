@@ -1,5 +1,5 @@
 import { IUser } from '../../../models';
-import { decrypt } from '../../../utils/encryption';
+import { getDecryptedCrmCredential } from '../../user';
 import { getCrmById } from '../../crm';
 import { salesforceRequest, SalesforceTokens } from '../salesforce';
 
@@ -81,7 +81,7 @@ const getApexObjects = async ({ user, mode, type }: { user?: IUser; mode?: ApexM
     throw new Error('CRM not found');
   }
 
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
@@ -104,7 +104,7 @@ const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: objec
     throw new Error('CRM not found');
   }
 
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
@@ -127,7 +127,7 @@ const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?
     throw new Error('CRM not found');
   }
 
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
@@ -149,7 +149,7 @@ const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipT
     throw new Error('CRM not found');
   }
 
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
@@ -187,7 +187,7 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   if (!crm) {
     throw new Error('CRM not found');
   }
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
   const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-fields-metadata?${apexQuery({ apiName: objectName, mode })}`;
@@ -205,7 +205,7 @@ const getApexPicklistValues = async ({ user, objectApiName, fieldApiName }: { us
   if (!crm) {
     throw new Error('CRM not found');
   }
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
@@ -225,7 +225,7 @@ const getRecordTypeMetadata = async ({ user, objectApiName }: { user?: IUser; ob
   if (!crm) {
     throw new Error('CRM not found');
   }
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
@@ -252,7 +252,7 @@ const apexValidateSoql = async (
   if (!crm) {
     throw new Error('CRM not found');
   }
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
   const raw = unwrapApex<{ isValid?: boolean; errorMessage?: string }>(
@@ -301,7 +301,7 @@ export const apexCountOne = async (
   if (!crm) {
     throw new Error('CRM not found');
   }
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
   try {

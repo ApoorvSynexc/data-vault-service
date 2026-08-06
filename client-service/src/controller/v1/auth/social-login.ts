@@ -23,6 +23,8 @@ import {
   getCrmByOrgId,
   getUserByCrmProfileUserId,
   createRole,
+  getUsersByContactEmail,
+  getDecryptedCrmCredential,
 } from '../../../services';
 import { IRolePermissions, IUser } from '../../../models';
 import { encrypt } from '../../../utils/encryption';
@@ -42,7 +44,7 @@ const parseSalesforceError = (error: any): string | null => {
 };
 
 const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { authProvider, environment, customUrl, userId } = req.query as { authProvider: string, environment: SalesforceEnvironment, customUrl: string, userId : string };
+  const { authProvider, environment, customUrl, userId } = req.query as { authProvider: string, environment: SalesforceEnvironment, customUrl: string, userId: string };
 
   if (!authProvider) {
     makeResponse(req, res, 400, false, 'auth_provider_required');
@@ -174,7 +176,7 @@ const socialLoginCallbackHandler = async (
       environment: oauthState.environment === 'custom' ? undefined : oauthState.environment,
       organizationId,
       crmName: 'salesforce',
-      status : STATUS.active
+      status: STATUS.active
     });
     // createUser returns void and the GSI read is eventually consistent —
     // use the record we just wrote for the rest of the login flow.
@@ -213,6 +215,33 @@ const socialLoginCallbackHandler = async (
       ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
     });
   console.log('[social-login-callback] persisted crmProfile.instanceUrl:', token.instance_url ?? '(none returned by Salesforce — kept prior value)', 'prior value was:', user.crmProfile?.instanceUrl);
+
+  if (user.contactEmail) {
+    const userAllCrm = await getUsersByContactEmail({ contactEmail: user.contactEmail });
+    const userAnotherCrmList = userAllCrm.filter(user => user.userId != user.userId);
+
+    for (let index = 0; index < userAnotherCrmList.length; index++) {
+      const userAnotherCrm = userAnotherCrmList[index];
+
+      if (userAnotherCrm.isCrmConnected && userAnotherCrm.crmCredential) {
+        const userAnotherCrmToken = await getDecryptedCrmCredential(userAnotherCrm);
+        try {
+          await getSalesforceProfile(
+            {
+              accessToken: userAnotherCrmToken.access_token,
+              refreshToken: userAnotherCrmToken.refresh_token,
+              userId: '',
+            },
+            oauthState.environment,
+            oauthState.customUrl,
+          );
+        } catch {
+          await updateUser({ userId: user.userId }, { isCrmConnected: false });
+        }
+      }
+
+    }
+  }
 
   // Create session and generate tokens
   const deviceInfo = {

@@ -113,7 +113,7 @@ export const runRealtimeBackupJob = async (
     await updateBackupConfig(job.backupConfigId, { backupStatus: BACKUP_STATUS.success });
   } catch (err: any) {
     const errorMsg = err?.message ?? 'Unknown error';
-    logger.error(`Realtime job failed`, { backupJobId, errorMessage: errorMsg });
+    logger.error(`Realtime job failed, backupJobId=${backupJobId}, errorMessage=${errorMsg}`);
 
     /**
      * WHY the failure update itself uses .catch(() => {}):

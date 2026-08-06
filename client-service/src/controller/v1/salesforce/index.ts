@@ -2,7 +2,7 @@ import { defaultPermissions } from '../../../assets';
 import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { wrapController } from '../../../utils/helper';
-import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
+import { createUser, deleteUser, getDecryptedCrmCredential, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrm, ICrmProfile, IRole, IRolePermissions } from '../../../models';
 import { decrypt, readEnvelope } from '../../../utils/encryption';
@@ -168,7 +168,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             crmId = crmExist.crmId
           }
           await createRole({ roleId, name: roleName, permissions: role.permissions });
-          await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, userId, crmId });
+          await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, userId, crmId, isCrmConnected: false });
           await upsertCrm({
             userId,
             crmId,
@@ -376,7 +376,7 @@ const createEcaPermissionSetAndAssignHandler = async (req: IRequest, res: IRespo
   // other caller (apex.ts, metadata.ts, trigger.ts) remaps it; this handler
   // was passing the raw object straight through, so tokens.accessToken was
   // undefined and every call here sent "Authorization: Bearer undefined".
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const tokens: SalesforceTokens = {
     accessToken: access_token,
     refreshToken: refresh_token,

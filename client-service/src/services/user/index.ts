@@ -13,6 +13,7 @@ import { docClient } from '../../config';
 import { STATUS, USER_TABLE } from '../../constant';
 import { IUser } from '../../models';
 import { incrementTableCounter } from '../counter';
+import { decrypt } from '../../utils/encryption';
 
 // ---------------------------------------------------------------------------
 // DynamoDB table layout
@@ -23,6 +24,16 @@ import { incrementTableCounter } from '../counter';
 
 const buildMobileKey = (mobile: { dialCode?: string; number?: string }): string =>
   `${mobile.dialCode ?? ''}${mobile.number ?? ''}`;
+
+// ---------------------------------------------------------------------------
+// crmCredential is stored encrypted (utils/encryption.ts). Every caller that
+// needs the underlying Salesforce { access_token, refresh_token } shape was
+// decrypting it inline with the same guard — centralized here so there's one
+// place to change if the credential shape or the decrypt call ever moves.
+// ---------------------------------------------------------------------------
+
+const getDecryptedCrmCredential = (user?: Pick<IUser, 'crmCredential'> | null): { access_token: string, refresh_token: string } =>
+  user?.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : { access_token: "", refresh_token: "" };
 
 // ---------------------------------------------------------------------------
 
@@ -478,4 +489,4 @@ const deleteUser = async (userId: string): Promise<boolean> => {
   return true;
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUserForCrm, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser };
+export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUserForCrm, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser, getDecryptedCrmCredential };

@@ -22,20 +22,24 @@ import {
   SESSION_TABLE,
   USER_TABLE,
   SPACE_TABLE,
-  DYNAMODB_ENDPOINT,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
+  NODE_ENV,
 } from '../../constant';
+import { IAwsCredentials } from '../../models';
 
-const client = new DynamoDBClient({
-  region: AWS_REGION,
-  credentials:{
+const awsCredentials: IAwsCredentials = {
+  region: AWS_REGION
+}
+
+if (NODE_ENV === 'dev' && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+  awsCredentials.credentials = {
     accessKeyId: AWS_ACCESS_KEY_ID,
     secretAccessKey: AWS_SECRET_ACCESS_KEY,
-  },
-  ...(DYNAMODB_ENDPOINT ? { endpoint: DYNAMODB_ENDPOINT } : {}),
-});
+  }
+}
 
+const client = new DynamoDBClient(awsCredentials);
 export const docClient = DynamoDBDocumentClient.from(client);
 
 // ---------------------------------------------------------------------------
