@@ -10,6 +10,7 @@ export * from './oauth-state';
 export * from './otp';
 export * from './payload';
 export * from './role';
+export * from './schema';
 export * from './session';
 export * from './space';
 export * from './third-party';

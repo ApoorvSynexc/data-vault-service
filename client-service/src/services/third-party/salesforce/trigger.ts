@@ -8,7 +8,6 @@ import { getUser } from '../../user';
 import { timer } from '../../../utils/helper';
 import { decrypt } from '../../../utils/encryption';
 import { getMasterChildApiNames } from './apex';
-import { SCHEDULE_MODE } from '../../../constant';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
 const NAMESPACE_PREFIX = 'SYX_DVV';
@@ -384,6 +383,69 @@ const deployMetadata = async (
 };
 
 // ---------------------------------------------------------------------------
+// Destructive Metadata API deploy — the only way to remove components from a
+// production org. Tooling API DELETE on ApexTrigger/ApexClass is rejected there
+// with DEPENDENCY_EXISTS "Cannot delete classes/triggers in production", the
+// mirror of the ENTITY_IS_LOCKED that already forces creation through a deploy.
+//
+// Salesforce destructive deploy rules:
+//   - destructiveChanges.xml → lists what to delete, one <types> per type
+//   - package.xml            → must be EMPTY (version only)
+// ---------------------------------------------------------------------------
+const destructiveDeploy = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  members: { type: string; name: string }[],
+  label: string,
+  extraOptions: Record<string, unknown> = {}
+): Promise<void> => {
+  const byType = new Map<string, string[]>();
+  for (const { type, name } of members) {
+    byType.set(type, [...(byType.get(type) ?? []), name]);
+  }
+
+  const destructiveXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    Array.from(byType.entries())
+      .map(([type, names]) =>
+        `    <types>\n` +
+        names.map((name) => `        <members>${name}</members>\n`).join('') +
+        `        <name>${type}</name>\n` +
+        `    </types>\n`
+      )
+      .join('') +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
+
+  const emptyPackageXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    `    <version>${API_VERSION}</version>\n` +
+    `</Package>`;
+
+  const zip = new JSZip();
+  zip.file('destructiveChanges.xml', destructiveXml);
+  zip.file('package.xml', emptyPackageXml);
+
+  await deployMetadata(
+    instanceUrl,
+    tokens,
+    zip,
+    {
+      allowMissingFiles: true,
+      checkOnly: false,
+      ignoreWarnings: true,
+      rollbackOnError: true,
+      runAllTests: false,
+      singlePackage: true,
+      ...extraOptions,
+    },
+    label
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Creates a single trigger via Metadata API deploy — shared by createTriggers
 // and activateTriggers.
 //
@@ -741,7 +803,7 @@ const expandWithMasterChildren = async (
   await Promise.all(
     objectApiNames.map(async (name) => {
       try {
-        const childNames = await getMasterChildApiNames(user, name, SCHEDULE_MODE.realtime);
+        const childNames = await getMasterChildApiNames(user, name, 'realtime');
         for (const child of childNames) {
           const key = child.toLowerCase();
           if (!byName.has(key)) byName.set(key, child);
@@ -874,42 +936,41 @@ const deletePermissionSet = async (
   const existing = await fetchPermissionSetId(instanceUrl, tokens);
   if (!existing) { return; }
 
-  // Salesforce destructive deploy rules:
-  //   - destructiveChanges.xml  → lists what to delete
-  //   - package.xml             → must be EMPTY (only version), no types/members
-  const emptyPackageXml =
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
-    `    <version>${API_VERSION}</version>\n` +
-    `</Package>`;
-
-  const destructiveXml =
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
-    `    <types>\n` +
-    `        <members>${PERMISSION_SET_NAME}</members>\n` +
-    `        <name>PermissionSet</name>\n` +
-    `    </types>\n` +
-    `    <version>${API_VERSION}</version>\n` +
-    `</Package>`;
-
-  const zip = new JSZip();
-  zip.file('destructiveChanges.xml', destructiveXml);
-  zip.file('package.xml', emptyPackageXml);
-
-  await deployMetadata(
+  await destructiveDeploy(
     instanceUrl,
     tokens,
-    zip,
-    {
-      allowMissingFiles: true,
-      checkOnly: false,
-      ignoreWarnings: true,
-      rollbackOnError: true,
-      runAllTests: false,
-      singlePackage: true,
-    },
+    [{ type: 'PermissionSet', name: PERMISSION_SET_NAME }],
     'Permission set delete'
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Delete one trigger and its generated test class in a single destructive
+// deploy. The test class only exists to cover the trigger, so leaving it behind
+// would orphan an uncoverable class in the org — and it is included only when
+// actually present, since destructiveChanges on a missing member errors.
+//
+// testLevel RunLocalTests: production deploys touching Apex must run tests.
+// Unlike createSingleTrigger there is no component to cover here, so the
+// per-component 75% bar that ruled RunLocalTests out for create does not apply.
+// ---------------------------------------------------------------------------
+const deleteSingleTrigger = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  triggerName: string
+): Promise<void> => {
+  const testClassName = testClassNameFor(triggerName);
+  const testClassId = await fetchApexClassId(instanceUrl, tokens, testClassName);
+
+  await destructiveDeploy(
+    instanceUrl,
+    tokens,
+    [
+      { type: 'ApexTrigger', name: triggerName },
+      ...(testClassId ? [{ type: 'ApexClass', name: testClassName }] : []),
+    ],
+    `Trigger ${triggerName} delete`,
+    { testLevel: 'RunLocalTests' }
   );
 };
 
@@ -941,10 +1002,7 @@ const deleteTriggers = async (
         continue;
       }
 
-      await salesforceRequest(
-        { url: `${TOOLING_BASE(instanceUrl)}/sobjects/ApexTrigger/${trigger.Id}`, method: 'DELETE' },
-        tokens
-      );
+      await deleteSingleTrigger(instanceUrl, tokens, triggerName);
 
       triggerResult.status = 'DELETED';
     } catch (err) {

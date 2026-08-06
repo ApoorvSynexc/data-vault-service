@@ -1,7 +1,7 @@
 import { IDestinationConfig, IRealtimePayload, ISchemaField } from '../../../../models';
 import { logger } from '../../../../middlewares/logger';
-import { buildSchemaS3Key } from '../../../../utils/helper';
-import { downloadFromS3, uploadToS3, listS3Objects } from '../../../destination/s3';
+import { uploadToS3 } from '../../../destination/s3';
+import { readLatestSchema } from '../../../schema';
 import { ICrmRealtimeHandler } from '../../types';
 import { createCsvGlueTable, registerBackupJobPartition } from '../../glue';
 
@@ -64,29 +64,16 @@ const loadStoredSchema = async (
   objectApiName: string,
   destConfig: IDestinationConfig
 ): Promise<ISchemaField[] | null> => {
-  // Prefer the latest versioned file (fields_<timestamp>.json with the highest
-  // timestamp); fall back to the original fields.json when none exist yet.
-  const schemaKey = buildSchemaS3Key({
-    crmId,
-    crmName,
-    backupConfigId,
-    objectName: objectApiName,
-    type: 'backup',
-  });
-  const schemaFolder = schemaKey.replace('/fields.json', '/');
-  const allSchemaKeys = await listS3Objects(destConfig, schemaFolder);
-  const versionedKeys = allSchemaKeys.filter((k) => /fields_\d+\.json$/.test(k));
-  // Keys are sorted alphabetically; since timestamps are fixed-width numbers the
-  // last entry is also the most recent.
-  const currentSchemaKey =
-    versionedKeys.length > 0 ? versionedKeys[versionedKeys.length - 1] : schemaKey;
-
   try {
-    const buffer = await downloadFromS3(destConfig, currentSchemaKey);
-    if (!buffer) {
-      return null;
-    }
-    return JSON.parse(buffer.toString()) as ISchemaField[];
+    // schema/main/fields/, falling back to the legacy folder for configs whose last
+    // scheduled backup predates the main/delta layout.
+    return (await readLatestSchema(destConfig, {
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName: objectApiName,
+      type: 'backup',
+    })) as ISchemaField[] | null;
   } catch {
     logger.debug(`No stored schema found for ${objectApiName}, falling back to record keys`);
     return null;

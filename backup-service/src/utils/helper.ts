@@ -86,6 +86,8 @@ interface ISchemaS3KeyParams {
   type: S3KeyType;
 }
 
+// Pre-versioning field schema location. Nothing writes here any more — it is the
+// read fallback for configs whose last job predates the main/delta layout.
 const buildSchemaS3Key = ({
   crmId,
   crmName,
@@ -95,30 +97,54 @@ const buildSchemaS3Key = ({
 }: ISchemaS3KeyParams): string =>
   `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${objectName}/fields/fields.json`;
 
-// Master-Detail children of an object, stored under a dedicated childs folder:
-// .../schema/childs/{objectName}/childs.json — one unversioned file per object,
-// overwritten each run so the latest relationship tree wins.
-const buildChildsS3Key = ({
+// ---------------------------------------------------------------------------
+// Versioned schema layout (scheduled backup + archival jobs)
+//
+//   schema/main/<kind>/<object>/...                  — always the latest version
+//   schema/delta/<backupJobId>/<kind>/<object>/...   — only what that job changed
+//
+// Picklists carry an extra {fieldApiName} level, one file per picklist field.
+// This is the only layout written now. The Java Spark middleware must read
+// schema/main/fields/{object}/fields.json — it previously read the legacy folder
+// (docs/architecture-graph/java/JAVA_SCHEMA_EVOLUTION.md).
+// ---------------------------------------------------------------------------
+type SchemaKind = 'fields' | 'childs' | 'picklist' | 'recordTypes';
+
+const SCHEMA_KIND_FILE: Record<SchemaKind, string> = {
+  fields: 'fields.json',
+  childs: 'childs.json',
+  picklist: 'values.json',
+  recordTypes: 'record-types.json',
+};
+
+interface ISchemaKeyParams extends ISchemaS3KeyParams {
+  kind: SchemaKind;
+  fieldApiName?: string; // picklist only
+  backupJobId?: string; // set → delta/<backupJobId>; omitted → main
+}
+
+const buildSchemaKey = ({
   crmId,
   crmName,
   backupConfigId,
   objectName,
   type,
-}: ISchemaS3KeyParams): string =>
-  `${crmName}/${crmId}/${type}/${backupConfigId}/schema/childs/${objectName}/childs.json`;
+  kind,
+  fieldApiName,
+  backupJobId,
+}: ISchemaKeyParams): string => {
+  const scope = backupJobId ? `delta/${backupJobId}` : 'main';
+  const leaf = kind === 'picklist' ? `${objectName}/${fieldApiName}` : objectName;
+  return `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${scope}/${kind}/${leaf}/${SCHEMA_KIND_FILE[kind]}`;
+};
 
-// Picklist values live beside the field schema:
-// .../schema/{objectName}/picklist/{fieldApiName}/values.json
-const buildPicklistS3Key = (params: ISchemaS3KeyParams & { fieldApiName: string }): string =>
-  buildSchemaS3Key(params).replace(
-    '/fields/fields.json',
-    `/picklist/${params.fieldApiName}/values.json`
-  );
-
-// Record-type metadata lives beside the field schema, single unversioned file:
-// .../schema/{objectName}/record-types.json — latest values win, same as picklists.
-const buildRecordTypeS3Key = (params: ISchemaS3KeyParams): string =>
-  buildSchemaS3Key(params).replace('/fields/fields.json', '/record-types.json');
+// The legacy layout kept every version as fields_<ts>.json beside the original
+// fields.json. Timestamps are fixed-width, so the last alphabetically sorted
+// versioned key is also the newest; fall back to the base key when none exist.
+const pickLegacyFieldsKey = (keys: string[], baseKey: string): string => {
+  const versioned = keys.filter((k) => /fields_\d+\.json$/.test(k));
+  return versioned.length ? versioned[versioned.length - 1] : baseKey;
+};
 
 interface IErrorLogsS3PrefixParams {
   crmId: string;
@@ -317,9 +343,8 @@ export {
   wrapController,
   buildS3KeyPrefix,
   buildSchemaS3Key,
-  buildChildsS3Key,
-  buildPicklistS3Key,
-  buildRecordTypeS3Key,
+  buildSchemaKey,
+  pickLegacyFieldsKey,
   buildErrorLogsS3Prefix,
   schemasAreEqual,
   splitCSVRows,
@@ -328,5 +353,7 @@ export {
   formatValueByDataType,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
+  type ISchemaKeyParams,
+  type SchemaKind,
   type S3KeyType,
 };
