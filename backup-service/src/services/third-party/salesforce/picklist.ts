@@ -17,8 +17,8 @@ interface IUploadPicklistValuesParams {
 
 // Persists current picklist values for every picklist field in the schema at
 // .../schema/main/picklist/{objectName}/{fieldApiName}/values.json, plus a copy
-// under .../schema/delta/{backupJobId}/ for the fields whose values actually
-// changed during this job.
+// under .../schema/changes/{backupJobId}/. Straight from the Apex response —
+// no read-back, no change detection, latest values win.
 // Never throws: picklist metadata must not fail a backup/archival job.
 const uploadPicklistValues = async ({
   schema,

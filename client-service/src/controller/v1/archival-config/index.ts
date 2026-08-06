@@ -146,7 +146,7 @@ const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<voi
     }
 
     const [apexResult] = await Promise.all([
-        getApexObjectChilds({ user, objectName: String(objectName), mode: 'archival', type: toApexType(type ?? mode), relationshipDepth: relationshipDepth ? Number(relationshipDepth) : undefined }),
+        getApexObjectChilds({ user, objectName: String(objectName), mode: 'archival', type: toApexType(type ?? mode), relationshipType: 'ALL', relationshipDepth: relationshipDepth ? Number(relationshipDepth) : undefined }),
     ]);
 
     makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));

@@ -3,11 +3,11 @@
  * and the legacy-key picker are pure. Run: npx ts-node src/utils/helper.check.ts
  *
  * Covers the two things that silently corrupt the layout in production:
- *   1. main/ vs delta/<backupJobId>/ scoping, per schema kind.
+ *   1. main/ vs changes/<backupJobId>/ scoping, per schema kind.
  *   2. pickLegacyFieldsKey — the fallback that keeps pre-migration configs readable.
  */
 import assert from 'assert';
-import { buildSchemaKey, pickLegacyFieldsKey, buildSchemaS3Key } from './helper';
+import { buildSchemaKey, pickLegacyFieldsKey, buildSchemaS3Key, isBackupChild } from './helper';
 
 const base = {
   crmId: 'crm-1',
@@ -37,21 +37,22 @@ assert.strictEqual(
   `${root}/main/picklist/Account/Industry/values.json`
 );
 
-// ─── 2. a backupJobId switches the whole tree into that job's delta folder ─────
+// ─── 2. a backupJobId switches the whole tree into that job's changes folder ───
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'fields', backupJobId: 'job-9' }),
-  `${root}/delta/job-9/fields/Account/fields.json`
+  `${root}/changes/job-9/fields/Account/fields.json`
 );
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'picklist', fieldApiName: 'Industry', backupJobId: 'job-9' }),
-  `${root}/delta/job-9/picklist/Account/Industry/values.json`
+  `${root}/changes/job-9/picklist/Account/Industry/values.json`
 );
 // Archival writes into its own type root, never the backup one.
 assert.strictEqual(
   buildSchemaKey({ ...base, type: 'archival', kind: 'fields', backupJobId: 'job-9' }),
-  'salesforce/crm-1/archival/cfg-1/schema/delta/job-9/fields/Account/fields.json'
+  'salesforce/crm-1/archival/cfg-1/schema/changes/job-9/fields/Account/fields.json'
 );
-// main/ and delta/ must never collide — that would make a delta overwrite the latest.
+// main/ and changes/ must never collide — a job copy overwriting main would lose the
+// latest version.
 assert.notStrictEqual(
   buildSchemaKey({ ...base, kind: 'fields' }),
   buildSchemaKey({ ...base, kind: 'fields', backupJobId: 'job-9' })
@@ -81,5 +82,16 @@ assert.strictEqual(
   pickLegacyFieldsKey([`${root}/Account/fields/notes.json`, legacyBase], legacyBase),
   legacyBase
 );
+
+// ─── 4. which children of an object get backed up (and so get a bulk job) ─────
+// Master-Detail always, required lookups always, optional lookups never.
+assert.strictEqual(isBackupChild({ relationshipType: 'MASTER', isRequired: false }), true);
+assert.strictEqual(isBackupChild({ relationshipType: 'master' }), true);
+assert.strictEqual(isBackupChild({ relationshipType: 'LOOKUP', isRequired: true }), true);
+assert.strictEqual(isBackupChild({ relationshipType: 'REQUIRED_LOOKUP', isRequired: true }), true);
+assert.strictEqual(isBackupChild({ relationshipType: 'LOOKUP', isRequired: false }), false);
+// A reply missing the fields must not silently pull the whole org into the job.
+assert.strictEqual(isBackupChild({}), false);
+assert.strictEqual(isBackupChild({ isRequired: undefined }), false);
 
 console.log('helper.check: OK');

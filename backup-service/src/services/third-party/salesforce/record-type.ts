@@ -16,7 +16,7 @@ interface IUploadRecordTypeMetadataParams {
 
 // Persists current Record Type metadata for an object at
 // .../schema/main/recordTypes/{objectName}/record-types.json, plus a copy under
-// .../schema/delta/{backupJobId}/ when this job actually changed it.
+// .../schema/changes/{backupJobId}/. Unconditional overwrite, latest values win.
 // Never throws: record-type metadata must not fail a backup/archival job.
 const uploadRecordTypeMetadata = async ({
   destConfig,

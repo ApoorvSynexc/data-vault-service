@@ -1615,8 +1615,8 @@ export type FetchObjectFieldsResult =
  *   2. Read the latest schema file from S3 and return its parsed contents.
  *
  * Schema S3 layout: backup and archival jobs keep the current version at
- * schema/main/fields/{object}/fields.json and copy each job's changes into
- * schema/delta/{backupJobId}/. readSchemaFile handles the legacy
+ * schema/main/fields/{object}/fields.json and copy what each job wrote into
+ * schema/changes/{backupJobId}/. readSchemaFile handles the legacy
  * schema/{object}/fields/ fallback for configs that have not run since.
  */
 // Resolves a caller-owned config down to its decrypted S3 destination and the

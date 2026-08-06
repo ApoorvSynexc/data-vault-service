@@ -174,9 +174,9 @@ Additional helpers for the backup-service:
 ### buildSchemaKey(params)
 Constructs the S3 key for any schema artifact in the versioned layout. `kind` is
 `fields | childs | picklist | recordTypes`; passing `backupJobId` scopes the key to
-that job's delta folder instead of `main/`:
+that job's changes folder instead of `main/`:
 `{crmName}/{crmId}/{type}/{backupConfigId}/schema/main/{kind}/{objectName}/...`
-`{crmName}/{crmId}/{type}/{backupConfigId}/schema/delta/{backupJobId}/{kind}/{objectName}/...`
+`{crmName}/{crmId}/{type}/{backupConfigId}/schema/changes/{backupJobId}/{kind}/{objectName}/...`
 Picklists carry an extra `{fieldApiName}` level. Mirrored in client-service/src/utils/helper.ts.
 
 ### buildSchemaS3Key(params) — legacy, read-only
