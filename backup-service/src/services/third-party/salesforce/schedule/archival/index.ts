@@ -29,11 +29,11 @@ import { IBackupField, IBackupObject, IDestinationConfig } from '../../../../../
 import { updateArchivalObject } from '../../../../backup-job';
 import {
   buildS3KeyPrefix,
-  buildSchemaS3Key,
   formatFieldValuesForSOQL,
   formatValueByDataType,
 } from '../../../../../utils/helper';
-import { listS3Objects, uploadToS3 } from '../../../../destination/s3';
+import { listS3Objects } from '../../../../destination/s3';
+import { writeSchemaFile } from '../../../../schema';
 import { uploadSingleObject, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { uploadPicklistValues } from '../../picklist';
@@ -620,6 +620,7 @@ export const archiveAndHardDelete = async (
       backupConfigId,
       objectName,
       type: 'archival',
+      backupJobId,
     });
 
     let jobId: string;
@@ -914,10 +915,10 @@ export const archiveAndHardDelete = async (
       `[archival:orchestrator] phase 3 complete | backupJobId:${backupJobId} objectName:${objectName}`
     );
 
-    await uploadToS3(
+    await writeSchemaFile(
       destConfig,
-      buildSchemaS3Key({ crmId, crmName, backupConfigId, objectName, type: 'archival' }),
-      Buffer.from(JSON.stringify(schema, null, 2))
+      { crmId, crmName, backupConfigId, objectName, type: 'archival', kind: 'fields', backupJobId },
+      schema
     );
     logger.info(
       `[archival:orchestrator] schema uploaded | backupJobId:${backupJobId} objectName:${objectName}`

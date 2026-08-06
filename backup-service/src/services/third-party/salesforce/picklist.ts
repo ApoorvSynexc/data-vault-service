@@ -1,7 +1,7 @@
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
-import { buildPicklistS3Key, type S3KeyType } from '../../../utils/helper';
-import { uploadToS3 } from '../../destination/s3';
+import { type S3KeyType } from '../../../utils/helper';
+import { writeSchemaFile } from '../../schema';
 import { getPicklistValues } from './api-request';
 
 interface IUploadPicklistValuesParams {
@@ -12,11 +12,13 @@ interface IUploadPicklistValuesParams {
   backupConfigId: string;
   objectName: string;
   type: S3KeyType;
+  backupJobId?: string;
 }
 
 // Persists current picklist values for every picklist field in the schema at
-// .../schema/{objectName}/picklist/{fieldApiName}/values.json.
-// Unconditional overwrite by design — no change detection, latest values win.
+// .../schema/main/picklist/{objectName}/{fieldApiName}/values.json, plus a copy
+// under .../schema/changes/{backupJobId}/. Straight from the Apex response —
+// no read-back, no change detection, latest values win.
 // Never throws: picklist metadata must not fail a backup/archival job.
 const uploadPicklistValues = async ({
   schema,
@@ -26,6 +28,7 @@ const uploadPicklistValues = async ({
   backupConfigId,
   objectName,
   type,
+  backupJobId,
 }: IUploadPicklistValuesParams): Promise<void> => {
   const picklistFields = schema.filter((f) => f.dataType?.toLowerCase() === 'picklist');
   if (!picklistFields.length) {
@@ -36,15 +39,20 @@ const uploadPicklistValues = async ({
     picklistFields.map(async (field) => {
       try {
         const values = await getPicklistValues(backupConfigId, objectName, field.apiName);
-        const key = buildPicklistS3Key({
-          crmId,
-          crmName,
-          backupConfigId,
-          objectName,
-          fieldApiName: field.apiName,
-          type,
-        });
-        await uploadToS3(destConfig, key, Buffer.from(JSON.stringify(values, null, 2)));
+        await writeSchemaFile(
+          destConfig,
+          {
+            crmId,
+            crmName,
+            backupConfigId,
+            objectName,
+            type,
+            kind: 'picklist',
+            fieldApiName: field.apiName,
+            backupJobId,
+          },
+          values
+        );
       } catch (err: any) {
         logger.error(
           `[picklist] failed to persist values | backupConfigId:${backupConfigId} objectName:${objectName} field:${field.apiName} err:${err?.message ?? err}`

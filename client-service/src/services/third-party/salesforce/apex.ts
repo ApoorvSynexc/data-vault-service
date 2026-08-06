@@ -40,7 +40,38 @@ const unwrapApex = <T = any>(result: any): T =>
     ? (result.data as T)
     : (result as T);
 
-const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = {}) => {
+/**
+ * Apex query contract for the metadata endpoints:
+ *   mode             — what the objects are being listed for (accessible-objects,
+ *                      object-children, object-fields-metadata)
+ *   type             — how the backup runs (accessible-objects, object-children only;
+ *                      field metadata is the same either way)
+ *   relationshipType — which child relationships to return (object-children only)
+ */
+type ApexMode = 'backup' | 'archival' | 'restore';
+type ApexType = 'schedule' | 'realtime';
+type ApexRelationshipType = 'MASTER' | 'LOOKUP' | 'REQUIRED_LOOKUP' | 'ALL';
+
+// req.query values are untrusted strings, and backup configs store the schedule
+// upper-cased (SCHEDULE/REALTIME) — normalise, and drop anything outside the Apex
+// contract instead of forwarding it.
+const toApexMode = (value: unknown): ApexMode | undefined => {
+  const mode = String(value ?? '').toLowerCase();
+  return mode === 'backup' || mode === 'archival' || mode === 'restore' ? mode : undefined;
+};
+
+const toApexType = (value: unknown): ApexType | undefined => {
+  const type = String(value ?? '').toLowerCase();
+  return type === 'schedule' || type === 'realtime' ? type : undefined;
+};
+
+const apexQuery = (params: Record<string, string | number | undefined>) =>
+  Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== '')
+    .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
+    .join('&');
+
+const getApexObjects = async ({ user, mode, type }: { user?: IUser; mode?: ApexMode; type?: ApexType } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -56,10 +87,7 @@ const getApexObjects = async ({ user, mode }: { user?: IUser; mode?: string } = 
     throw new Error('Instance URL not found');
   }
 
-  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/accessible-objects`;
-  if (mode) {
-    url += `?mode=${mode}`;
-  }
+  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/accessible-objects?${apexQuery({ mode, type })}`;
 
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
@@ -112,7 +140,7 @@ const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?
   );
 };
 
-const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipDepth }: { user?: IUser; objectName?: string; mode?: string; type?: string; relationshipDepth?: number } = {}) => {
+const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipType, relationshipDepth }: { user?: IUser; objectName?: string; mode?: ApexMode; type?: ApexType; relationshipType?: ApexRelationshipType; relationshipDepth?: number } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -126,16 +154,7 @@ const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipD
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-children?apiName=${objectName}`;
-  if (mode) {
-    url += `&mode=${mode}`;
-  }
-  if (type) {
-    url += `&type=${type}`;
-  }
-  if (relationshipDepth !== undefined) {
-    url += `&relationshipDepth=${relationshipDepth}`;
-  }
+  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-children?${apexQuery({ apiName: objectName, mode, type, relationshipType, relationshipDepth })}`;
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
@@ -143,22 +162,24 @@ const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipD
 };
 
 // Fetch the api names of an object's Master-Detail children via object-children
-// (type=MASTER). SCHEDULE and REALTIME modes share the same eligibility, so either
-// backup mode returns the same set. Throws on transport/parse failure — callers
+// (relationshipType=MASTER). SCHEDULE and REALTIME share the same eligibility, so
+// either type returns the same set. Throws on transport/parse failure — callers
 // decide whether a missing children lookup is fatal (it isn't, for backup/trigger).
 const getMasterChildApiNames = async (
   user: IUser,
   objectName: string,
-  mode: string
+  type: ApexType,
+  mode: ApexMode = 'backup'
 ): Promise<string[]> => {
-  const reply = await getApexObjectChilds({ user, objectName, mode, type: 'MASTER' });
+  const reply = await getApexObjectChilds({ user, objectName, mode, type, relationshipType: 'MASTER' });
   const data = unwrapApex<{ childs?: Array<{ apiName?: string }> }>(reply);
   return (data?.childs ?? [])
     .map((child) => child?.apiName)
     .filter((name): name is string => !!name);
 };
 
-const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: string } = {}) => {
+// Field metadata takes `mode` only — schedule vs realtime does not change the fields.
+const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: ApexMode } = {}) => {
   if (!user || !user.crmId) {
     return [];
   }
@@ -169,10 +190,7 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  let url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-fields-metadata?apiName=${objectName}`;
-  if (mode) {
-    url += `&mode=${mode}`;
-  }
+  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-fields-metadata?${apexQuery({ apiName: objectName, mode })}`;
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
@@ -308,4 +326,5 @@ export const apexCountOne = async (
   }
 };
 
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getMasterChildApiNames, getApexObjectRecords, getApexFields, getApexPicklistValues, getRecordTypeMetadata, apexValidateSoql, callApex, unwrapApex, APEX_BASE };
+export type { ApexMode, ApexType, ApexRelationshipType };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getMasterChildApiNames, getApexObjectRecords, getApexFields, getApexPicklistValues, getRecordTypeMetadata, apexValidateSoql, callApex, unwrapApex, toApexMode, toApexType, apexQuery, APEX_BASE };

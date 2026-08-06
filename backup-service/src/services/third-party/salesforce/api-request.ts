@@ -163,25 +163,29 @@ const getRecordTypeValues = async (backupConfigId: string, objectApiName: string
 // Managed-package namespace for the DataVault apex REST endpoints.
 const SALESFORCE_NAMESPACE = 'SYX_DVV';
 
-interface ISalesforceChild {
+export interface ISalesforceChild {
   apiName?: string;
+  relationshipType?: string; // MASTER | LOOKUP | REQUIRED_LOOKUP
+  isRequired?: boolean;
   [key: string]: any;
 }
 
-// Master-Detail children of one object, via the object-children apex endpoint
-// (type=MASTER). The reply is { success, data: { childs: [{ apiName, ... }] } }.
-// Returns the raw child entries — the caller uses `apiName` to expand the backup
-// list and persists the full payload to S3. Throws on transport failure so the
-// caller decides whether a missing children lookup is fatal (for backup, it isn't).
-const getMasterChilds = async (
+// Every child of one object, via the object-children apex endpoint
+// (relationshipType=ALL). `mode` is what the objects are listed for, `type` the
+// schedule/realtime split. The reply is { success, data: { childs: [{ apiName, ... }] } }.
+// Returns the raw child entries — the whole list is persisted to S3, while only the
+// backup-eligible subset (see isBackupChild) is expanded into the job. Throws on
+// transport failure so the caller decides whether a missing children lookup is fatal
+// (for backup, it isn't).
+const getObjectChilds = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectName: string,
-  mode: 'SCHEDULE' | 'REALTIME' = 'SCHEDULE'
+  type: 'schedule' | 'realtime' = 'schedule'
 ): Promise<ISalesforceChild[]> => {
   const url =
     `${instanceUrl}/services/apexrest/${SALESFORCE_NAMESPACE}/v1/data-vault/object-children` +
-    `?apiName=${encodeURIComponent(objectName)}&mode=${mode}&type=MASTER`;
+    `?apiName=${encodeURIComponent(objectName)}&mode=backup&type=${type}&relationshipType=ALL`;
   const res = await salesforceRequest<{ data?: { childs?: ISalesforceChild[] } }>(
     { url, method: 'GET' },
     tokens
@@ -217,7 +221,7 @@ export {
   salesforceRequest,
   makePageFetcher,
   getObjectMetadata,
-  getMasterChilds,
+  getObjectChilds,
   getPicklistValues,
   getRecordTypeValues,
   createBulkQueryJob,

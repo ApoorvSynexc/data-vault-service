@@ -11,37 +11,13 @@ import {
   getRecordTypeMetadata,
   unwrapApex,
 } from '../third-party/salesforce/apex';
-import { downloadFromS3, listS3Objects } from '../third-party/s3-bucket';
-import {
-  buildSchemaS3Key,
-  buildPicklistS3Key,
-  buildRecordTypeS3Key,
-  schemasAreEqual,
-} from '../../utils/helper';
+import { readSchemaFile } from '../schema';
+import { schemasAreEqual } from '../../utils/helper';
 
 // ponytail: raw JSON compare — both sides come from the same Apex source (current
 // call vs the file a prior backup wrote from that same call), so key order is
 // stable. Swap for a normalized deep-equal if a shape ever reorders keys.
 const jsonEqual = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
-
-// Latest stored schema for an object: newest fields_<ts>.json, else fields.json.
-// Mirrors backup-service loadStoredSchema so the comparison sees the same file the
-// backup writes. Returns null when nothing is stored yet.
-const loadLatestStoredSchema = async (
-  s3cfg: IS3Config,
-  crmId: string,
-  crmName: string,
-  backupConfigId: string,
-  objectName: string
-): Promise<any[] | null> => {
-  const baseKey = buildSchemaS3Key({ crmId, crmName, backupConfigId, objectName, type: 'backup' });
-  const folder = baseKey.replace('/fields.json', '/');
-  const keys = await listS3Objects(s3cfg, folder);
-  const versioned = keys.filter((k) => /fields_\d+\.json$/.test(k));
-  const currentKey = versioned.length ? versioned[versioned.length - 1] : baseKey;
-  const buffer = await downloadFromS3(s3cfg, currentKey);
-  return buffer ? (JSON.parse(buffer.toString()) as any[]) : null;
-};
 
 // True if the object's schema, any picklist values, or record-type metadata differ
 // from what's stored in S3. A missing stored file counts as drift (first-time seed).
@@ -56,7 +32,7 @@ const objectHasDrift = async (
 ): Promise<boolean> => {
   // ── Schema ──────────────────────────────────────────────────────────────────
   const fieldsReply = unwrapApex<{ fields?: any[] }>(
-    await getApexFields({ user, objectName, mode: 'schedule' })
+    await getApexFields({ user, objectName, mode: 'backup' })
   );
   const currentFields: any[] = fieldsReply?.fields ?? (Array.isArray(fieldsReply) ? fieldsReply : []);
 
@@ -66,18 +42,19 @@ const objectHasDrift = async (
     return false;
   }
 
-  const storedSchema = await loadLatestStoredSchema(s3cfg, crmId, crmName, backupConfigId, objectName);
+  // Stored metadata comes from schema/main/ (the latest version a scheduled backup
+  // wrote), with readSchemaFile falling back to the legacy layout.
+  const keyParams = { crmId, crmName, backupConfigId, objectName, type: 'backup' as const };
+
+  const storedSchema = await readSchemaFile(s3cfg, { ...keyParams, kind: 'fields' });
   if (!storedSchema || !schemasAreEqual(storedSchema, currentFields)) {
     return true;
   }
 
   // ── Record types ──────────────────────────────────────────────────────────────
   const currentRecordTypes = unwrapApex(await getRecordTypeMetadata({ user, objectApiName: objectName }));
-  const storedRt = await downloadFromS3(
-    s3cfg,
-    buildRecordTypeS3Key({ crmId, crmName, backupConfigId, objectName, type: 'backup' })
-  );
-  if (!storedRt || !jsonEqual(JSON.parse(storedRt.toString()), currentRecordTypes)) {
+  const storedRt = await readSchemaFile(s3cfg, { ...keyParams, kind: 'recordTypes' });
+  if (!storedRt || !jsonEqual(storedRt, currentRecordTypes)) {
     return true;
   }
 
@@ -87,11 +64,12 @@ const objectHasDrift = async (
     const currentValues = unwrapApex(
       await getApexPicklistValues({ user, objectApiName: objectName, fieldApiName: field.apiName })
     );
-    const storedValues = await downloadFromS3(
-      s3cfg,
-      buildPicklistS3Key({ crmId, crmName, backupConfigId, objectName, fieldApiName: field.apiName, type: 'backup' })
-    );
-    if (!storedValues || !jsonEqual(JSON.parse(storedValues.toString()), currentValues)) {
+    const storedValues = await readSchemaFile(s3cfg, {
+      ...keyParams,
+      kind: 'picklist',
+      fieldApiName: field.apiName,
+    });
+    if (!storedValues || !jsonEqual(storedValues, currentValues)) {
       return true;
     }
   }

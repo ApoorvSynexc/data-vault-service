@@ -2,7 +2,7 @@ import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getCrmById } from '../../crm';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { logger } from '../../../middlewares';
-import { getApexObjects, createTriggers } from './index';
+import { getApexObjects, createTriggers, toApexType } from './index';
 import { IObject } from '../../../models/backup-config';
 
 // ─── Compare Salesforce objects with backup-config objects ────────────────────
@@ -102,7 +102,7 @@ async function syncMetadataAndTriggers(
     }
 
     // Fetch Salesforce objects using existing apex service
-    const salesforceObjects = await getApexObjects({ user, mode: backupConfig.schedule });
+    const salesforceObjects = await getApexObjects({ user, mode: 'backup', type: toApexType(backupConfig.schedule) });
 
 
     // Compare and find extra objects

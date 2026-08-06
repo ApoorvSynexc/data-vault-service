@@ -1,7 +1,7 @@
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
-import { buildRecordTypeS3Key, type S3KeyType } from '../../../utils/helper';
-import { uploadToS3 } from '../../destination/s3';
+import { type S3KeyType } from '../../../utils/helper';
+import { writeSchemaFile } from '../../schema';
 import { getRecordTypeValues } from './api-request';
 
 interface IUploadRecordTypeMetadataParams {
@@ -11,12 +11,12 @@ interface IUploadRecordTypeMetadataParams {
   backupConfigId: string;
   objectName: string;
   type: S3KeyType;
+  backupJobId?: string;
 }
 
 // Persists current Record Type metadata for an object at
-// .../schema/{objectName}/record-types.json.
-// Single unversioned file, unconditional overwrite — same contract as picklists:
-// latest values win, and the /payload realtime pre-check compares against this file.
+// .../schema/main/recordTypes/{objectName}/record-types.json, plus a copy under
+// .../schema/changes/{backupJobId}/. Unconditional overwrite, latest values win.
 // Never throws: record-type metadata must not fail a backup/archival job.
 const uploadRecordTypeMetadata = async ({
   destConfig,
@@ -25,11 +25,15 @@ const uploadRecordTypeMetadata = async ({
   backupConfigId,
   objectName,
   type,
+  backupJobId,
 }: IUploadRecordTypeMetadataParams): Promise<void> => {
   try {
     const values = await getRecordTypeValues(backupConfigId, objectName);
-    const key = buildRecordTypeS3Key({ crmId, crmName, backupConfigId, objectName, type });
-    await uploadToS3(destConfig, key, Buffer.from(JSON.stringify(values, null, 2)));
+    await writeSchemaFile(
+      destConfig,
+      { crmId, crmName, backupConfigId, objectName, type, kind: 'recordTypes', backupJobId },
+      values
+    );
   } catch (err: any) {
     logger.error(
       `[record-type] failed to persist values | backupConfigId:${backupConfigId} objectName:${objectName} err:${err?.message ?? err}`

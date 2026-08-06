@@ -8,6 +8,7 @@ import {
   getBackupConfigById,
   getUser,
   unwrapApex,
+  toApexMode,
   initalizePayloadTransform,
   getDecryptedCrmCredential,
 } from '../../../services';
@@ -39,7 +40,7 @@ const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> =>
     return;
   }
 
-  const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
+  const result = await getApexFields({ user, objectName: String(objectName), mode: toApexMode(mode) ?? 'backup' });
   makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 

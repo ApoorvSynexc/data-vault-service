@@ -8,6 +8,7 @@ import {
     getApexPicklistValues,
     getUserForCrm,
     getApexObjectChilds,
+    toApexType,
     getDestinationById,
     getBackupConfigsWithPagination,
     getCrmById,
@@ -138,13 +139,14 @@ const buildWhereClauseFromParentChain = (parent: ParentNode, childReferenceName?
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
-    const { crmId, objectName, mode, relationshipDepth } = req.query;
+    // `type` is the schedule/realtime split; older clients sent it as `mode`.
+    const { crmId, objectName, type, mode, relationshipDepth } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
 
     const [apexResult] = await Promise.all([
-        getApexObjectChilds({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined, relationshipDepth: relationshipDepth ? Number(relationshipDepth) : undefined }),
+        getApexObjectChilds({ user, objectName: String(objectName), mode: 'archival', type: toApexType(type ?? mode), relationshipType: 'ALL', relationshipDepth: relationshipDepth ? Number(relationshipDepth) : undefined }),
     ]);
 
     makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
@@ -152,14 +154,14 @@ const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<voi
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
-    const { crmId, objectName, mode } = req.query;
+    const { crmId, objectName } = req.query;
     if (!crmId) {
         return makeResponse(req, res, 400, false, 'crm_id_required');
     }
     if (!objectName) {
         return makeResponse(req, res, 400, false, 'object_name_required');
     }
-    const result = await getApexFields({ user, objectName: String(objectName), mode: mode ? String(mode) : undefined });
+    const result = await getApexFields({ user, objectName: String(objectName), mode: 'archival' });
     makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
