@@ -176,12 +176,7 @@ const salesforceHandler: ICrmBackupHandler = {
     };
 
     logger.info(
-      `Backup job for ${lastUpdatedAt ? 'incremental' : 'first-time'} of has been initialize`,
-      {
-        backupJobId,
-        objectCount: object.length,
-        insatnce: source.instanceUrl,
-      }
+      `Backup job for ${lastUpdatedAt ? 'incremental' : 'first-time'} of has been initialize, backupJobId=${backupJobId}, objectCount=${object.length}, insatnce=${source.instanceUrl}`
     );
 
     for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
@@ -205,7 +200,7 @@ const salesforceHandler: ICrmBackupHandler = {
     }
 
     await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
-    logger.info(`Backup job completed`, { backupJobId });
+    logger.info(`Backup job completed, backupJobId=${backupJobId}`);
   },
   runArchival: async (
     backupConfigId: string,
@@ -339,14 +334,14 @@ const salesforceHandler: ICrmBackupHandler = {
       }
 
       const finalStatus = hasAnyFailure ? 'FAILED' : 'SUCCESS';
-      logger.info(`Restore job completed`, { restoreId, restoreJobId, result: finalStatus });
+      logger.info(
+        `Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, result=${finalStatus}`
+      );
       return finalStatus;
     } catch (err: any) {
-      logger.error(`Restore job failed`, {
-        restoreId,
-        restoreJobId,
-        error: err?.message ?? err,
-      });
+      logger.error(
+        `Restore job failed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, error=${err?.message ?? err}`
+      );
       throw err;
     }
   },

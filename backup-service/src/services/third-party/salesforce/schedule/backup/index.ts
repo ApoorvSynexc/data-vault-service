@@ -183,12 +183,9 @@ export const exportFirstTime = async (
       });
     }
 
-    logger.info(`Object found records`, {
-      backupConfigId,
-      backupJobId,
-      objectName,
-      Changes: totalRecordCount,
-    });
+    logger.info(
+      `Object found records, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, Changes=${totalRecordCount}`
+    );
 
     const insertPrefix = buildS3KeyPrefix({
       crmId,
@@ -264,11 +261,9 @@ export const exportFirstTime = async (
       )
     );
 
-    logger.info(`Object first-time backup complete`, {
-      backupConfigId,
-      backupJobId,
-      objectName,
-    });
+    logger.info(
+      `Object first-time backup complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+    );
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
     await updateBackupObject({
@@ -277,12 +272,9 @@ export const exportFirstTime = async (
       status: OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
-    logger.error(`Object first-time backup failed`, {
-      backupConfigId,
-      backupJobId,
-      objectName,
-      errorMsg,
-    });
+    logger.error(
+      `Object first-time backup failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, errorMsg=${errorMsg}`
+    );
     throw err;
   }
 };
@@ -393,12 +385,9 @@ export const exportIncremental = async (
       object.status !== OBJECT_STATUS.transferInProgress &&
       object.status !== OBJECT_STATUS.completed
     ) {
-      logger.info(`Object found changes`, {
-        backupConfigId,
-        backupJobId,
-        objectName,
-        Changes: totalRecordCount,
-      });
+      logger.info(
+        `Object found changes, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, Changes=${totalRecordCount}`
+      );
       const insertPrefix = buildS3KeyPrefix({
         crmId,
         crmName,
@@ -452,18 +441,13 @@ export const exportIncremental = async (
       }
       await updateBackupConfig(backupConfigId, updateParams);
 
-      logger.info(`Object changes transfered`, {
-        backupConfigId,
-        backupJobId,
-        objectName,
-        sizeInBytes,
-      });
+      logger.info(
+        `Object changes transfered, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, sizeInBytes=${sizeInBytes}`
+      );
     } else if (totalRecordCount === 0) {
-      logger.info(`Object changes not found`, {
-        backupConfigId,
-        backupJobId,
-        objectName,
-      });
+      logger.info(
+        `Object changes not found, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+      );
     }
 
     // ── Phase 3: schema comparison ─────────────────────────────────────────────
@@ -498,11 +482,9 @@ export const exportIncremental = async (
         )
       );
 
-      logger.info(`Object schema change detected`, {
-        backupConfigId,
-        backupJobId,
-        objectName,
-      });
+      logger.info(
+        `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+      );
     }
 
     registerBackupJobPartition({
@@ -519,11 +501,9 @@ export const exportIncremental = async (
       )
     );
 
-    logger.info(`Object incremental backup complete`, {
-      backupConfigId,
-      backupJobId,
-      objectName,
-    });
+    logger.info(
+      `Object incremental backup complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+    );
   } catch (err: any) {
     const errorMsg = err?.message ?? String(err);
     await updateBackupObject({
@@ -532,12 +512,9 @@ export const exportIncremental = async (
       status: OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
-    logger.error(`Object incremental backup failed`, {
-      backupConfigId,
-      backupJobId,
-      objectName,
-      errorMsg,
-    });
+    logger.error(
+      `Object incremental backup failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, errorMsg=${errorMsg}`
+    );
     throw err;
   }
 };

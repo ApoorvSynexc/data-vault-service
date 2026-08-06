@@ -14,7 +14,12 @@ export const runCreateAdmin = async (): Promise<void> => {
     return;
   }
 
-  const hashed = await bcrypt.hash(defaultAdmin.password, SALT_ROUNDS);
+  const { password } = defaultAdmin;
+  if (!password) {
+    throw new Error('DEFAULT_ADMIN_PASSWORD is required to run the CREATE_ADMIN migration');
+  }
+
+  const hashed = await bcrypt.hash(password, SALT_ROUNDS);
 
   await createUser({ ...defaultAdmin, userId: defaultAdmin.userId, password: hashed });
 

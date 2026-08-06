@@ -5,8 +5,7 @@ import { createServer, Server } from 'http';
 import { router } from '../../routes';
 import { morganMiddleware } from '../../middlewares';
 import { makeResponse } from '../../lib';
-import { startBackupConfigCron } from '../../jobs/backup-config-cron';
-import { startNightlyCron } from '../../jobs/nightly-cron';
+import { startCron } from '../../jobs';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST: string = String(process.env.HOST || '0.0.0.0');
@@ -22,7 +21,7 @@ app.set('trust proxy', 1);
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(cookieParser());
-app.use(express.json({limit: "10mb"}));
+app.use(express.json({ limit: "10mb" }));
 app.use(morganMiddleware);
 
 app.use('/api', router);
@@ -34,8 +33,7 @@ app.use((req, res) => {
 export const initializeApp = () => {
   const server: Server = createServer(app);
   server.listen(PORT, HOST, async () => {
-    startBackupConfigCron();
-    startNightlyCron();
+    startCron();
     console.log(`* App is running at PORT: ${PORT} *`);
   });
 };

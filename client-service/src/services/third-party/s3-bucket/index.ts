@@ -4,7 +4,8 @@ import {
     PutObjectCommand,
     S3Client,
 } from '@aws-sdk/client-s3';
-import { IS3Config } from '../../../models';
+import { IAwsCredentials, IS3Config } from '../../../models';
+import { NODE_ENV } from '../../../constant';
 
 // ---------------------------------------------------------------------------
 // One S3Client per unique destination (region + credentials + bucket).
@@ -16,13 +17,18 @@ const getS3Client = (config: IS3Config): S3Client => {
     const cacheKey = `${config.region}:${config.accessKeyId}:${config.bucketName}`;
     let client = clientCache.get(cacheKey);
     if (!client) {
-        client = new S3Client({
-            region: config.region,
-            credentials: {
+        const awsConfig: IAwsCredentials = {
+            region: config.region
+        }
+
+        if (NODE_ENV === 'dev' && config.accessKeyId && config.secretAccessKey) {
+            awsConfig.credentials = {
                 accessKeyId: config.accessKeyId,
                 secretAccessKey: config.secretAccessKey,
-            },
-        });
+            }
+        }
+
+        client = new S3Client(awsConfig);
         clientCache.set(cacheKey, client);
     }
     return client;
