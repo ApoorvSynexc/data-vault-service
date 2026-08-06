@@ -83,3 +83,44 @@ export const listMetadataSoap = async (
   }
   return entries;
 };
+
+
+export const readMetadataSoap = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  metadataType: string,
+  fullNames: string[],
+  apiVersion: string
+): Promise<string> => {
+  const envelope =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:met="http://soap.sforce.com/2006/04/metadata">\n` +
+    `  <soapenv:Header>\n` +
+    `    <met:SessionHeader><met:sessionId>${tokens.accessToken}</met:sessionId></met:SessionHeader>\n` +
+    `  </soapenv:Header>\n` +
+    `  <soapenv:Body>\n` +
+    `    <met:readMetadata>\n` +
+    `      <met:type>${metadataType}</met:type>\n` +
+    fullNames.map(name => `      <met:fullNames>${name}</met:fullNames>\n`).join('') +
+    `    </met:readMetadata>\n` +
+    `  </soapenv:Body>\n` +
+    `</soapenv:Envelope>`;
+
+  const response = await fetch(`${instanceUrl}/services/Soap/m/${apiVersion}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/xml; charset=UTF-8',
+      SOAPAction: '""',
+    },
+    body: envelope,
+  });
+
+  const bodyText = await response.text();
+
+  if (!response.ok || bodyText.includes('soapenv:Fault')) {
+    const faultMessage = bodyText.match(/<faultstring>([^<]*)<\/faultstring>/)?.[1];
+    throw new Error(`metadata_read_failed: ${faultMessage ?? `HTTP ${response.status}`}`);
+  }
+
+  return bodyText;
+};
