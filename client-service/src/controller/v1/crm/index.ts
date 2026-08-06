@@ -36,6 +36,8 @@ const parseSalesforceError = (error: any): string | null => {
 
 const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crmName, userId, environment, name } = req.query;
+  let baseUrlEnv: SalesforceEnvironment = 'production';
+  let customUrl;
 
   if (!crmName && !userId) {
     makeResponse(req, res, 400, false, 'id_required');
@@ -43,6 +45,7 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
   }
 
   const env = (environment as SalesforceEnvironment) ?? 'production';
+  baseUrlEnv = env;
   let resolvedCrmName = String(crmName ?? '');
   let oauthStateKey: string | undefined;
 
@@ -54,6 +57,10 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
     }
 
     oauthStateKey = `user-${user.userId}`;
+    if (user.crmProfile?.instanceUrl && user.crmProfile?.instanceUrl?.length) {
+      baseUrlEnv = 'custom';
+      customUrl = user.crmProfile.instanceUrl;
+    }
   }
 
   let redirectUrl;
@@ -64,7 +71,8 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
       const { url, codeVerifier, state } = getSalesforceLoginUrl(
         oauthStateKey,
         undefined,
-        env
+        baseUrlEnv,
+        customUrl
       );
       await createOAuthState(
         state,
