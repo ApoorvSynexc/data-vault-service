@@ -153,7 +153,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   }
   const encrptedCrm = encrypt(JSON.stringify(crmCredential));
   await updateUser(
-    { userId: user?.userId },
+    { userId: userDetail?.userId },
     {
       isCrmConnected: true,
       crmCredential: encrptedCrm,
