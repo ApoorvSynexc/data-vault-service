@@ -4,6 +4,36 @@ export interface ISchemaField {
   label: string;
   dataType: string;
   apiName: string;
+  isCustom?: boolean;
+  isRequired?: boolean;
+}
+
+/** One active entry of a PICKLIST / MULTIPICKLIST field. */
+export interface IPicklistValue {
+  label: string;
+  value: string;
+}
+
+/** A record type available to the user the sync ran as. */
+export interface IRecordTypeInfo {
+  recordTypeId: string;
+  name: string;
+  developerName: string;
+  isActive: boolean;
+  isDefault: boolean;
+  isMaster: boolean;
+}
+
+/** One child relationship, same DTO the object-children action returns. */
+export interface IChildRelationship {
+  apiName?: string;
+  relationshipType?: string; // 'MasterDetail' | 'Lookup'
+  relationshipName?: string;
+  fieldApiName?: string;
+  isRequired?: boolean;
+  isJunctionObject?: boolean;
+  junctionObjectApiNames?: string[];
+  [key: string]: any;
 }
 
 /**
@@ -29,7 +59,23 @@ export interface ISchemaField {
  */
 export interface IRealtimePayload {
   records: Record<string, any>[];
-  schema: ISchemaField[];
+  /**
+   * The object descriptor Salesforce ships with every hit (DataVaultObjectMetadataService).
+   * `fields` is the successor to the old `schema` key — widened from the batch's
+   * populated fields to every field the object exposes — and it now arrives
+   * alongside the picklist values, record types and children that describe it.
+   *
+   * All four blocks are permission-scoped to the user whose DML fired the trigger,
+   * so a hit from a restricted user describes strictly LESS than one from an admin.
+   * Treat them as a floor, never as a definition: a narrower descriptor does not
+   * mean fields or children were removed from the object. This is why the realtime
+   * path only seeds schema/main/ when nothing is stored there yet, and otherwise
+   * writes to schema/changes/<backupJobId>/ (see persistRealtimeSchema).
+   */
+  fields?: ISchemaField[];
+  picklistValues?: Record<string, IPicklistValue[]>;
+  recordTypes?: IRecordTypeInfo[];
+  children?: IChildRelationship[];
   orgId: string;
   operation: 'INSERT' | 'UPDATE' | 'DELETE' | 'UNDELETE';
   objectApiName: string;

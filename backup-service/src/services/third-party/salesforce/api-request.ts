@@ -101,11 +101,11 @@ const makePageFetcher =
 // schema comparison / upload). Replaces the former getObjectFields +
 // getObjectSchema pair that hit the same endpoint twice per object per job.
 //
-// `mode` is required — the Apex layer defaults missing mode to "archival"
-// and then rejects non-deletable objects. Callers must declare their flow
-// explicitly: schedule (bulk backup), realtime (event-driven backup), or
-// archival (backup + hard-delete).
-type ApexMode = 'schedule' | 'realtime' | 'archival';
+// `mode` is what the job does with the records — it decides which CRUD the
+// object and its fields must grant. It is NOT the schedule/realtime split
+// (that is `type`, and it does not change the field list). Values must be
+// the Apex vocabulary: anything else is coerced to 'backup' upstream.
+type ApexMode = 'backup' | 'archival';
 
 const getObjectMetadata = async (
   backupConfigId: string,

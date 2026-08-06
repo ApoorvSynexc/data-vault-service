@@ -119,7 +119,7 @@ export const exportFirstTime = async (
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(
       backupConfigId,
       objectName,
-      'schedule'
+      'backup'
     );
     await uploadPicklistValues({
       schema,
@@ -305,7 +305,7 @@ export const exportIncremental = async (
     const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
       backupConfigId,
       objectName,
-      'schedule'
+      'backup'
     );
     await uploadPicklistValues({
       schema: latestSchema,

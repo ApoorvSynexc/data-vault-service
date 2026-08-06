@@ -4,6 +4,8 @@ import { type S3KeyType } from '../../../utils/helper';
 import { writeSchemaFile } from '../../schema';
 import { getPicklistValues } from './api-request';
 
+const PICKLIST_TYPES = new Set(['picklist', 'multipicklist']);
+
 interface IUploadPicklistValuesParams {
   schema: { apiName: string; dataType?: string }[];
   destConfig: IDestinationConfig;
@@ -30,7 +32,11 @@ const uploadPicklistValues = async ({
   type,
   backupJobId,
 }: IUploadPicklistValuesParams): Promise<void> => {
-  const picklistFields = schema.filter((f) => f.dataType?.toLowerCase() === 'picklist');
+  // dataType is the Apex DisplayType name — PICKLIST and MULTIPICKLIST are
+  // separate types and get-picklist-values serves both.
+  const picklistFields = schema.filter((f) =>
+    PICKLIST_TYPES.has(String(f.dataType ?? '').toLowerCase())
+  );
   if (!picklistFields.length) {
     return;
   }
