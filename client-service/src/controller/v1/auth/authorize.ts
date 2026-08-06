@@ -141,8 +141,8 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
     environment,
     instanceUrl,
     firstName + ' ' + lastName,
-    existingUser ? undefined : true,
-    existingUser ? undefined : { username, email: userEmail, instanceUrl, organizationId: orgId, firstName, lastName, crmUserId }
+    true,
+    { username, email: userEmail, instanceUrl, organizationId: orgId, firstName, lastName, crmUserId }
   );
 
   return { authorizationUrl: url };

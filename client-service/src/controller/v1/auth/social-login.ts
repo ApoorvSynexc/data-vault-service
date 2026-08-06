@@ -181,8 +181,8 @@ const socialLoginCallbackHandler = async (
     // createUser returns void and the GSI read is eventually consistent —
     // use the record we just wrote for the rest of the login flow.
     user = { userId, crmId, crmProfile, status: STATUS.active } as IUser;
-    makeResponse(req, res, 200, true, 'login');
-    return;
+    // makeResponse(req, res, 200, true, 'login');
+    // return;
   }
   if (!user) {
     makeResponse(req, res, 401, false, 'unauthorized');
