@@ -13,6 +13,7 @@ import {
   updateUser,
   getUsersByContactEmail,
   getUser,
+  getDecryptedCrmCredential,
 } from '../../../services';
 import {
   refreashSalesforceToken,
@@ -20,7 +21,7 @@ import {
   SalesforceEnvironment,
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
-import { decrypt, encrypt } from '../../../utils/encryption';
+import { encrypt } from '../../../utils/encryption';
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
 // e.g. "HTTP Error 400: {"error":"invalid_grant",...}" → "invalid_grant"
@@ -35,6 +36,8 @@ const parseSalesforceError = (error: any): string | null => {
 
 const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crmName, userId, environment, name } = req.query;
+  let baseUrlEnv: SalesforceEnvironment = 'production';
+  let customUrl;
 
   if (!crmName && !userId) {
     makeResponse(req, res, 400, false, 'id_required');
@@ -42,6 +45,7 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
   }
 
   const env = (environment as SalesforceEnvironment) ?? 'production';
+  baseUrlEnv = env;
   let resolvedCrmName = String(crmName ?? '');
   let oauthStateKey: string | undefined;
 
@@ -53,6 +57,10 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
     }
 
     oauthStateKey = `user-${user.userId}`;
+    if (user.crmProfile?.instanceUrl && user.crmProfile?.instanceUrl?.length) {
+      baseUrlEnv = 'custom';
+      customUrl = user.crmProfile.instanceUrl;
+    }
   }
 
   let redirectUrl;
@@ -63,7 +71,8 @@ const crmLoginHanlder = async (req: IRequest, res: IResponse): Promise<void> => 
       const { url, codeVerifier, state } = getSalesforceLoginUrl(
         oauthStateKey,
         undefined,
-        env
+        baseUrlEnv,
+        customUrl
       );
       await createOAuthState(
         state,
@@ -144,7 +153,7 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   }
   const encrptedCrm = encrypt(JSON.stringify(crmCredential));
   await updateUser(
-    { userId: user?.userId },
+    { userId: userDetail?.userId },
     {
       isCrmConnected: true,
       crmCredential: encrptedCrm,
@@ -207,7 +216,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
 
-  const tokens = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const tokens = getDecryptedCrmCredential(user) ?? {};
   let refreshed: any;
   try {
     refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);

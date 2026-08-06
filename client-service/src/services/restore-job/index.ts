@@ -1,7 +1,7 @@
 import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, RESTORE_JOB_TABLE } from '../../constant';
+import { BACKUP_SERVICE, INTERNAL_SECRET, RESTORE_JOB_TABLE } from '../../constant';
 import { IRestore, IRestoreConflict, IRestoreJob } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
@@ -335,6 +335,7 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
     result = await httpRequest({
       url: `${BACKUP_SERVICE}/v1/restore`,
       method: 'POST',
+      headers: { 'x-internal-secret': INTERNAL_SECRET },
       body: JSON.stringify(payload),
     });
   } catch (error) {

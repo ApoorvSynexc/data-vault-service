@@ -1,10 +1,9 @@
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getCrmById } from '../../crm';
-import { getUser } from '../../user';
+import { getUser, getDecryptedCrmCredential } from '../../user';
 import { logger } from '../../../middlewares';
 import { getApexObjects, createTriggers, toApexType } from './index';
 import { IObject } from '../../../models/backup-config';
-import { decrypt } from '../../../utils/encryption';
 
 // ─── Compare Salesforce objects with backup-config objects ────────────────────
 
@@ -119,7 +118,7 @@ async function syncMetadataAndTriggers(
 
     // Create triggers for extra objects using existing trigger service
     const extraObjectNames = extraObjects.map((obj) => obj.apiName);
-    const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+    const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
     const triggerCreate = await createTriggers(
       user.crmProfile?.instanceUrl || '',
       {

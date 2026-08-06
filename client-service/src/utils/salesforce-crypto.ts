@@ -1,4 +1,4 @@
-import { decrypt, decryptWithKey, encryptWithKey, readEnvelope, EncryptedPayload } from './encryption';
+import { decrypt, encrypt, readEnvelope, EncryptedPayload } from './encryption';
 import { getCrmByOrgId } from '../services';
 import { ICrm } from '../models';
 
@@ -42,7 +42,7 @@ const decryptSalesforceRequest = async (raw: any): Promise<DecryptedSalesforceRe
   }
 
   const innerEnvelope = JSON.parse(innerEnvelopeRaw);
-  const plaintext = decryptWithKey(readEnvelope(innerEnvelope), crm.encryptionKey);
+  const plaintext = decrypt(readEnvelope(innerEnvelope), crm.encryptionKey);
 
   return { orgId: outer.orgId, crm, plaintext };
 };
@@ -76,7 +76,7 @@ const encryptSalesforceResponse = (crm: ICrm, responsePayload: unknown): { ciphe
   if (!crm.encryptionKey) {
     throw new Error('org_not_registered');
   }
-  const { ciphertext, iv } = encryptWithKey(JSON.stringify(responsePayload), crm.encryptionKey);
+  const { ciphertext, iv } = encrypt(JSON.stringify(responsePayload), crm.encryptionKey);
   return { cipherText: ciphertext, iv, authTag: '' };
 };
 
@@ -85,9 +85,9 @@ const encryptSalesforceResponse = (crm: ICrm, responsePayload: unknown): { ciphe
  * know which org they're talking to, so these encrypt/decrypt directly with
  * the org's own key — no Bootstrap wrapping involved.
  */
-const encryptOrgDirect = (plaintext: string, keyBase64: string): EncryptedPayload => encryptWithKey(plaintext, keyBase64);
+const encryptOrgDirect = (plaintext: string, keyBase64: string): EncryptedPayload => encrypt(plaintext, keyBase64);
 
-const decryptOrgDirect = (raw: any, keyBase64: string): string => decryptWithKey(readEnvelope(raw), keyBase64);
+const decryptOrgDirect = (raw: any, keyBase64: string): string => decrypt(readEnvelope(raw), keyBase64);
 
 export { decryptSalesforceRequest, decryptSalesforceQueryRequest, encryptSalesforceResponse, encryptOrgDirect, decryptOrgDirect };
 export type { DecryptedSalesforceRequest };

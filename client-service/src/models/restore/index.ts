@@ -28,7 +28,7 @@ export interface IRestoreChangeSince {
 }
 
 export interface IRestoreScope {
-  type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | CHANGE_SINCE | BULK_CSV
+  type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | INSERTS_ONLY | CHANGE_SINCE | BULK_CSV
   objects?: string[];
   records?: IRestoreScopeRecord[];
   fields?: IRestoreScopeField[];
@@ -52,8 +52,62 @@ export interface IRestoreDestination {
   tagRestoredRecord?: string;
 }
 
+export interface IRestoreEdgeCaseFieldMapping {
+  sourceObject: string;
+  sourceFields: string;
+  destinationObject: string;
+  destinationFields: string;
+}
+
+export interface IRestoreMissingFieldInDestination {
+  type: string;
+  sourceDestinationMapping: IRestoreEdgeCaseFieldMapping[];
+}
+
+export interface IRestoreOwnerInactive {
+  type: string;
+  fallbackValue: string;
+}
+
+export interface IRestoreRecordTypeMapping {
+  object: string;
+  field: string;
+  type: string;
+}
+
+export interface IRestoreRecordTypeMissing {
+  type: string;
+  mapping: IRestoreRecordTypeMapping[];
+}
+
+export interface IRestoreMissingRequiredField {
+  name: string;
+  type: string;
+  value: string;
+}
+
+export interface IRestoreMissingRequiredFieldMapping {
+  object: string;
+  fields: IRestoreMissingRequiredField[];
+}
+
+export interface IRestoreMissingRequiredFieldValue {
+  type: string;
+  mapping: IRestoreMissingRequiredFieldMapping[];
+}
+
+export interface IRestoreEdgeCases {
+  onDuplicateRecord?: string; // SKIP | OVERWRITE
+  missingFieldInDestination?: IRestoreMissingFieldInDestination;
+  ownerInactive?: IRestoreOwnerInactive;
+  parentMissing?: string;
+  recordTypeMissing?: IRestoreRecordTypeMissing;
+  missingRequiredFieldValue?: IRestoreMissingRequiredFieldValue;
+}
+
 export interface IRestoreConflict {
   restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
+  edgeCases?: IRestoreEdgeCases;
 }
 
 export interface IRestoreJobDetail {

@@ -14,6 +14,7 @@ import { httpRequest } from '../../../utils/http-request';
 import {
   BACKUP_SERVICE,
   BACKUP_STATUS,
+  INTERNAL_SECRET,
   SCHEDULE_MODE,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -105,6 +106,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
     await httpRequest({
       url: `${BACKUP_SERVICE}/v1/realtime-backup`,
       method: 'POST',
+      headers: { 'x-internal-secret': INTERNAL_SECRET },
       body: JSON.stringify({
         userId: config.userId,
         backupConfigId: config.backupConfigId,

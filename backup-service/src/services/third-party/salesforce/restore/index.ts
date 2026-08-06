@@ -233,20 +233,14 @@ export const runSalesforceRestore = async (
     conflict,
   } = payload;
 
-  logger.info(`[restore] execution requested`, {
-    restoreId,
-    restoreJobId,
-    objectId: object.id,
-    objectName: object.name,
-    restoreMode: conflict.restoreMode,
-  });
+  logger.info(
+    `[restore] execution requested, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}, restoreMode=${conflict.restoreMode}`
+  );
 
   if (conflict.restoreMode === 'SKIP') {
-    logger.info(`[restore] skipping object per restoreMode=SKIP`, {
-      restoreId,
-      restoreJobId,
-      objectName: object.name,
-    });
+    logger.info(
+      `[restore] skipping object per restoreMode=SKIP, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectName=${object.name}`
+    );
     return 'SUCCESS';
   }
 

@@ -2,7 +2,64 @@ import crypto from 'crypto';
 import { ENCRYPTION_KEY } from '../constant';
 
 const ALGORITHM = 'aes-256-cbc';
-const TENANT_KEY_PREFIX = 'v2:';
+// Legacy marker written by the old, now-removed encryptForTenant() onto every
+// destination record's ciphertext. decrypt() strips it if present so rows
+// encrypted before encrypt()/decrypt() took an explicit key argument still
+// decrypt correctly. Nothing writes this prefix anymore.
+const LEGACY_TENANT_KEY_PREFIX = 'v2:';
+
+interface EncryptedPayload {
+  ciphertext: string;
+  iv: string;
+}
+
+// ---------------------------------------------------------------------------
+// Core encrypt/decrypt.
+// Defaults to the shared master ENCRYPTION_KEY. Callers holding their own key
+// — a per-tenant key from deriveKey(), a Salesforce org's key, the EMR key —
+// pass it explicitly instead of going through a separate wrapper function.
+// ---------------------------------------------------------------------------
+
+const encrypt = (plaintext: string, keyBase64: string = ENCRYPTION_KEY): EncryptedPayload => {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(keyBase64, 'base64'), iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  return {
+    ciphertext: encrypted.toString('base64'),
+    iv: iv.toString('base64'),
+  };
+};
+
+const decrypt = ({ ciphertext, iv }: EncryptedPayload, keyBase64: string = ENCRYPTION_KEY): string => {
+  const rawCiphertext = ciphertext.startsWith(LEGACY_TENANT_KEY_PREFIX)
+    ? ciphertext.slice(LEGACY_TENANT_KEY_PREFIX.length)
+    : ciphertext;
+
+  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(keyBase64, 'base64'), Buffer.from(iv, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(rawCiphertext, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
+};
+
+// ---------------------------------------------------------------------------
+// Per-tenant key derivation (HKDF)
+// Derives a unique 32-byte AES key per userId from the master key, for use
+// with encrypt()/decrypt() above — e.g. encrypt(plaintext, deriveKey(userId)).
+// A compromised master key can be rotated without exposing individual tenants,
+// and a leaked DynamoDB row only exposes that one tenant's credentials.
+// ---------------------------------------------------------------------------
+
+const deriveKey = (userId: string): string =>
+  Buffer.from(
+    crypto.hkdfSync(
+      'sha256',
+      Buffer.from(ENCRYPTION_KEY, 'base64'), // input key material
+      Buffer.from(userId), // salt  — unique per tenant
+      Buffer.from('data-vault-tenant-v1'), // info  — domain separation
+      32
+    )
+  ).toString('base64');
 
 // ---------------------------------------------------------------------------
 // Per-org key generation (Salesforce authorize-org flow)
@@ -13,112 +70,6 @@ const TENANT_KEY_PREFIX = 'v2:';
 // ---------------------------------------------------------------------------
 
 const generateOrgEncryptionKey = (): string => crypto.randomBytes(32).toString('base64');
-
-interface EncryptedPayload {
-  ciphertext: string;
-  iv: string;
-}
-
-// ---------------------------------------------------------------------------
-// Master-key encrypt/decrypt
-// Used for data whose encryption key is shared with an external system
-// (e.g. Salesforce Apex class responses, incoming webhook bodies).
-// Do NOT use these for data we own — use encryptForTenant / decrypt instead.
-// ---------------------------------------------------------------------------
-
-const encrypt = (plaintext: string): EncryptedPayload => {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'base64'), iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return {
-    ciphertext: encrypted.toString('base64'),
-    iv: iv.toString('base64'),
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Per-tenant key derivation (HKDF)
-// Derives a unique 32-byte AES key per userId from the master key.
-// A compromised master key can be rotated without exposing individual tenants,
-// and a leaked DynamoDB row only exposes that one tenant's credentials.
-// ---------------------------------------------------------------------------
-
-const deriveKey = (userId: string): Buffer =>
-  Buffer.from(
-    crypto.hkdfSync(
-      'sha256',
-      Buffer.from(ENCRYPTION_KEY, 'base64'), // input key material
-      Buffer.from(userId), // salt  — unique per tenant
-      Buffer.from('data-vault-tenant-v1'), // info  — domain separation
-      32
-    )
-  );
-
-// Encrypts with a userId-derived key. Ciphertext is prefixed with 'v2:' so
-// decrypt() can distinguish new records from legacy master-key records.
-const encryptForTenant = (plaintext: string, userId: string): EncryptedPayload => {
-  const key = deriveKey(userId);
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return {
-    ciphertext: TENANT_KEY_PREFIX + encrypted.toString('base64'),
-    iv: iv.toString('base64'),
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Unified decrypt
-//   - ciphertext prefixed with 'v2:' → per-tenant key (userId required)
-//   - no prefix → master key (legacy records and Salesforce-sent payloads)
-// ---------------------------------------------------------------------------
-
-const decrypt = ({ ciphertext, iv }: EncryptedPayload, userId?: string): string => {
-  const isTenantKey = ciphertext.startsWith(TENANT_KEY_PREFIX);
-
-  if (isTenantKey && !userId) {
-    throw new Error('userId is required to decrypt tenant-encrypted data');
-  }
-
-  const key = isTenantKey ? deriveKey(userId!) : Buffer.from(ENCRYPTION_KEY, 'base64');
-
-  const rawCiphertext = isTenantKey ? ciphertext.slice(TENANT_KEY_PREFIX.length) : ciphertext;
-
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(iv, 'base64'));
-  return Buffer.concat([
-    decipher.update(Buffer.from(rawCiphertext, 'base64')),
-    decipher.final(),
-  ]).toString('utf8');
-};
-
-// ---------------------------------------------------------------------------
-// Explicit-key decrypt (two-layer Salesforce scheme)
-// Decrypts with a caller-supplied base64 key rather than ENCRYPTION_KEY or a
-// derived tenant key — used for the org-specific key stored on a CRM record
-// (the inner layer of the Bootstrap-Key-wraps-org-key-encrypted-payload
-// scheme; see utils/salesforce-crypto.ts).
-// ---------------------------------------------------------------------------
-
-const decryptWithKey = ({ ciphertext, iv }: EncryptedPayload, keyBase64: string): string => {
-  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(keyBase64, 'base64'), Buffer.from(iv, 'base64'));
-  return Buffer.concat([
-    decipher.update(Buffer.from(ciphertext, 'base64')),
-    decipher.final(),
-  ]).toString('utf8');
-};
-
-// Encrypt counterpart to decryptWithKey — used to encrypt directly with an
-// org's own key (Org-Key-encrypted responses, and the reverse-direction calls
-// into Salesforce's own REST API; see utils/salesforce-crypto.ts).
-const encryptWithKey = (plaintext: string, keyBase64: string): EncryptedPayload => {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(keyBase64, 'base64'), iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return {
-    ciphertext: encrypted.toString('base64'),
-    iv: iv.toString('base64'),
-  };
-};
 
 // Salesforce's DataVaultCryptoService.encryptPayload() emits `cipherText` (capital T);
 // its own decryptEnvelope() is lenient about casing, so we mirror that leniency here.
@@ -133,16 +84,14 @@ const readEnvelope = (raw: any): EncryptedPayload => {
 
 // ---------------------------------------------------------------------------
 // Single-string transport for the master-key envelope.
-// Packs the { ciphertext, iv } master-key envelope into one opaque base64 string
-// so endpoints can exchange a single `payload` field. Same aes-256-cbc scheme as
-// encrypt/decrypt — this only frames it, it is not a new algorithm.
+// Decodes the opaque base64 string produced by base64(JSON({ ciphertext, iv })) —
+// the framing used to pass a master-key envelope as a single `payload` field.
+// Same aes-256-cbc scheme as encrypt/decrypt — this only unframes it, it is not
+// a new algorithm.
 // ---------------------------------------------------------------------------
-
-const encryptToTransport = (plaintext: string): string =>
-  Buffer.from(JSON.stringify(encrypt(plaintext))).toString('base64');
 
 const decryptFromTransport = (payload: string): string =>
   decrypt(JSON.parse(Buffer.from(payload, 'base64').toString('utf8')));
 
-export { encrypt, encryptForTenant, decrypt, decryptWithKey, encryptWithKey, readEnvelope, generateOrgEncryptionKey, encryptToTransport, decryptFromTransport };
+export { encrypt, decrypt, deriveKey, readEnvelope, generateOrgEncryptionKey, decryptFromTransport };
 export type { EncryptedPayload };

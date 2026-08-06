@@ -4,9 +4,8 @@ import { salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
 import { appendObjectsToBackupConfig } from '../../backup-config';
-import { getUser } from '../../user';
+import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
-import { decrypt } from '../../../utils/encryption';
 import { getMasterChildApiNames } from './apex';
 
 const TOOLING_BASE = (instanceUrl: string) => `${instanceUrl}/services/data/v66.0/tooling`;
@@ -1044,7 +1043,7 @@ const realTimeTriggerManagement = async (
     const instanceUrl = user.crmProfile?.instanceUrl;
     if (!instanceUrl) { throw new Error(`instance_url_missing:${config.crmId}`); }
 
-  const { access_token, refresh_token } = user.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : {};
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
     const tokens: SalesforceTokens = {
       accessToken: access_token,
       refreshToken: refresh_token,
