@@ -3,69 +3,32 @@ import {
   buildSchemaKey,
   buildSchemaS3Key,
   pickLegacyFieldsKey,
-  schemasAreEqual,
   type ISchemaKeyParams,
   type ISchemaS3KeyParams,
-  type SchemaKind,
 } from '../../utils/helper';
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../destination/s3';
 
-// Same serialisation every writer used before, so a byte compare against the
-// stored main/ file is a valid change check.
-const serialize = (content: unknown): string => JSON.stringify(content, null, 2);
-
-// Fields use the order-independent comparison the backup flow already relies on;
-// everything else (picklists, record types, childs) is compared as stored bytes.
-const isUnchanged = (
-  kind: SchemaKind,
-  storedRaw: string,
-  body: string,
-  content: unknown
-): boolean => {
-  if (kind !== 'fields') {
-    return storedRaw === body;
-  }
-  try {
-    return schemasAreEqual(JSON.parse(storedRaw), content as any[]);
-  } catch {
-    return false;
-  }
-};
-
-// 'created'   — nothing was stored for this artifact before (first backup of the object)
-// 'changed'   — content differs from the stored version
-// 'unchanged' — main/ already held it; nothing was uploaded
-type SchemaWriteResult = 'created' | 'changed' | 'unchanged';
-
 /**
- * Writes one schema artifact into the versioned layout:
- *   - main/  is overwritten whenever the content differs, so it always holds the latest.
- *   - delta/<backupJobId>/ is written ONLY when the content changed, which is what
- *     keeps a job's delta folder a real change set instead of a full snapshot.
+ * Writes one schema artifact straight from the Apex response — no read, no compare:
+ *   - main/                 overwritten, so it always holds the latest version.
+ *   - changes/<backupJobId>/ this job's copy of what it wrote.
  *
- * Callers use the result to drive Glue: 'created' needs a new table, 'changed' an
- * updated one.
+ * Both PUTs every time. Callers that need to know whether the schema actually moved
+ * (Glue table create/update, the schemaChange flag) read the stored schema themselves
+ * with readLatestSchema before calling this.
  */
 const writeSchemaFile = async (
   destConfig: IDestinationConfig,
   params: ISchemaKeyParams,
   content: unknown
-): Promise<SchemaWriteResult> => {
+): Promise<void> => {
   const { backupJobId, ...mainParams } = params;
-  const mainKey = buildSchemaKey(mainParams);
-  const body = serialize(content);
+  const buffer = Buffer.from(JSON.stringify(content, null, 2));
 
-  const stored = await downloadFromS3(destConfig, mainKey);
-  if (stored && isUnchanged(params.kind, stored.toString(), body, content)) {
-    return 'unchanged';
-  }
-
-  const buffer = Buffer.from(body);
-  await uploadToS3(destConfig, mainKey, buffer);
+  await uploadToS3(destConfig, buildSchemaKey(mainParams), buffer);
   if (backupJobId) {
     await uploadToS3(destConfig, buildSchemaKey(params), buffer);
   }
-  return stored ? 'changed' : 'created';
 };
 
 /**
@@ -89,4 +52,4 @@ const readLatestSchema = async (
   return legacy ? JSON.parse(legacy.toString()) : null;
 };
 
-export { writeSchemaFile, readLatestSchema, type SchemaWriteResult };
+export { writeSchemaFile, readLatestSchema };

@@ -88,15 +88,15 @@ Every third-party system the platform integrates with.
 {crmName}/{crmId}/backup/{backupConfigId}/schema/main/childs/{objectName}/childs.json
 {crmName}/{crmId}/backup/{backupConfigId}/schema/main/picklist/{objectName}/{fieldApiName}/values.json
 {crmName}/{crmId}/backup/{backupConfigId}/schema/main/recordTypes/{objectName}/record-types.json
-{crmName}/{crmId}/backup/{backupConfigId}/schema/delta/{backupJobId}/<same four kinds>
+{crmName}/{crmId}/backup/{backupConfigId}/schema/changes/{backupJobId}/<same four kinds>
 {crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields.json             (legacy, read-only)
 {crmName}/{crmId}/backup/{backupConfigId}/schema/{objectName}/fields/fields_{timestamp}.json (legacy, read-only)
 {crmName}/{crmId}/archive/{backupConfigId}/{objectName}/inserts/{locator}.csv
 ```
 
-`main/` always holds the latest version of each schema kind; `delta/{backupJobId}/`
-holds only what that scheduled backup or archival job changed. Realtime jobs read
-schema but never write it.
+`main/` always holds the latest version of each schema kind; `changes/{backupJobId}/`
+holds what that scheduled backup or archival job wrote. Both are written on every job,
+unconditionally. Realtime jobs read schema but never write it.
 
 The legacy keys are **no longer written** — they survive only as a read fallback for
 configs that have not run a job since the migration. The Java Spark middleware read

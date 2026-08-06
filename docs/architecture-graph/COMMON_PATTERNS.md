@@ -155,23 +155,25 @@ Archival processes the object tree in two passes:
 
 This mirrors Salesforce referential integrity: you can't delete a parent with child records (foreign key constraints). Upload from root ensures all data is backed up before deletion starts.
 
-## 13. Schema Versioning via main/ + delta/
+## 13. Schema Versioning via main/ + changes/
 
 Every scheduled backup and archival job writes each schema artifact (fields, childs,
 picklist, recordTypes) through `writeSchemaFile`:
 ```
-schema/main/fields/Account/fields.json              (always the latest version)
-schema/delta/{backupJobId}/fields/Account/fields.json  (only if that job changed it)
+schema/main/fields/Account/fields.json                   (always the latest version)
+schema/changes/{backupJobId}/fields/Account/fields.json  (what that job wrote)
 ```
-`main/` is overwritten only when content differs, and the delta copy is written in the
-same step — so a delta folder is a real change set, never a full snapshot. Readers
+Both PUTs happen on every job, straight from the Apex response — `writeSchemaFile`
+never reads first. So `changes/{backupJobId}/` is that job's snapshot of the schema it
+used, and diffing two job folders reconstructs what moved between them. Readers
 (`readSchemaFile` in client-service, `readLatestSchema` in backup-service) go to
 `main/` first.
 
-`writeSchemaFile` returns `'created' | 'changed' | 'unchanged'`, which is also what
-drives Glue: `created` → `createCsvGlueTable`, `changed` → `updateGlueTableSchema` plus
-`schemaChange: true` on the object (the flag the EMR payload turns into a
-`schema-change` operation).
+Change *detection* is a separate concern and lives in the callers that need it: the
+backup incremental flow and archival read `readLatestSchema` before writing and compare
+with `schemasAreEqual`. Missing → `createCsvGlueTable`; different → `updateGlueTableSchema`
+plus `schemaChange: true` on the object (the flag the EMR payload turns into a
+`schema-change` operation, which triggers a Hudi rewrite — hence the read).
 
 Legacy layout — `fields_{timestamp}.json` beside `fields.json` under
 `schema/{object}/fields/`, latest = last entry sorted alphabetically. **No longer
