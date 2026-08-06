@@ -32,8 +32,8 @@ const buildMobileKey = (mobile: { dialCode?: string; number?: string }): string 
 // place to change if the credential shape or the decrypt call ever moves.
 // ---------------------------------------------------------------------------
 
-const getDecryptedCrmCredential = (user?: Pick<IUser, 'crmCredential'> | null): any =>
-  user?.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : undefined;
+const getDecryptedCrmCredential = (user?: Pick<IUser, 'crmCredential'> | null): { access_token: string, refresh_token: string } =>
+  user?.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : { access_token: "", refresh_token: "" };
 
 // ---------------------------------------------------------------------------
 

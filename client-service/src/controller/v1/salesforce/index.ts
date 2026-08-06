@@ -168,7 +168,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             crmId = crmExist.crmId
           }
           await createRole({ roleId, name: roleName, permissions: role.permissions });
-          await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, userId, crmId });
+          await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, userId, crmId, isCrmConnected: false });
           await upsertCrm({
             userId,
             crmId,
