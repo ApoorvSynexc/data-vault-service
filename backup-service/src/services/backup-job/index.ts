@@ -60,7 +60,7 @@ const persistChildrenToConfig = async (
 // through here.
 //
 // For every object in the job: fetch *all* its children, store the whole raw child
-// payload at schema/main/childs/{objectName}/childs.json (with a copy in this job's
+// payload at schema/main/{objectName}/childs/childs.json (with a copy in this job's
 // changes/ folder, so a tree that gained or lost a child is visible per job), and
 // append the backup-eligible
 // ones missing from the list so they get backed up in full (field: []) — each one

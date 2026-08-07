@@ -21,35 +21,35 @@ const root = 'salesforce/crm-1/backup/cfg-1/schema';
 // ─── 1. main/ holds the latest version of every kind ──────────────────────────
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'fields' }),
-  `${root}/main/fields/Account/fields.json`
+  `${root}/main/Account/fields/fields.json`
 );
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'childs' }),
-  `${root}/main/childs/Account/childs.json`
+  `${root}/main/Account/childs/childs.json`
 );
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'recordTypes' }),
-  `${root}/main/recordTypes/Account/record-types.json`
+  `${root}/main/Account/recordTypes/record-types.json`
 );
 // Picklists carry the extra field level — one file per picklist field.
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'picklist', fieldApiName: 'Industry' }),
-  `${root}/main/picklist/Account/Industry/values.json`
+  `${root}/main/Account/picklist/Industry/values.json`
 );
 
 // ─── 2. a backupJobId switches the whole tree into that job's changes folder ───
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'fields', backupJobId: 'job-9' }),
-  `${root}/changes/job-9/fields/Account/fields.json`
+  `${root}/changes/job-9/Account/fields/fields.json`
 );
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'picklist', fieldApiName: 'Industry', backupJobId: 'job-9' }),
-  `${root}/changes/job-9/picklist/Account/Industry/values.json`
+  `${root}/changes/job-9/Account/picklist/Industry/values.json`
 );
 // Archival writes into its own type root, never the backup one.
 assert.strictEqual(
   buildSchemaKey({ ...base, type: 'archival', kind: 'fields', backupJobId: 'job-9' }),
-  'salesforce/crm-1/archival/cfg-1/schema/changes/job-9/fields/Account/fields.json'
+  'salesforce/crm-1/archival/cfg-1/schema/changes/job-9/Account/fields/fields.json'
 );
 // main/ and changes/ must never collide — a job copy overwriting main would lose the
 // latest version.

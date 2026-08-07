@@ -68,7 +68,7 @@ const loadStoredSchema = async (
   destConfig: IDestinationConfig
 ): Promise<ISchemaField[] | null> => {
   try {
-    // schema/main/fields/, falling back to the legacy folder for configs whose last
+    // schema/main/{object}/fields/, falling back to the legacy folder for configs whose last
     // scheduled backup predates the main/changes layout.
     return (await readLatestSchema(destConfig, {
       crmId,
