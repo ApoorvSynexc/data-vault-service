@@ -20,9 +20,7 @@ const profileSchema = Joi.object({
 // map shape (hasAnyGrant, updateRole({permissions: role.permissions})) but this
 // nested rule was missed; a flat string[] here now blocks every real request.
 const roleSchema = Joi.object({
-  permissions: Joi.object()
-    .pattern(Joi.string(), Joi.array().items(Joi.string()))
-    .required(),
+  permissions: Joi.array().items(Joi.string())
 });
 
 const userSchema = Joi.object({
@@ -100,7 +98,7 @@ export const updateRoleValidation = (req: IRequest, res: Response, next: NextFun
 
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
-    console.log({error});
+    console.log({ error });
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
     return;
   }
