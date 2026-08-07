@@ -8,10 +8,10 @@ import { type S3KeyType } from '../../../../utils/helper';
  * (fields, picklistValues, recordTypes, children) into the same S3 layout the
  * scheduled backup writes, so a realtime-only config is not left without schema:
  *
- *   schema/main/fields/{object}/fields.json
- *   schema/main/childs/{object}/childs.json
- *   schema/main/picklist/{object}/{field}/values.json
- *   schema/main/recordTypes/{object}/record-types.json
+ *   schema/main/{object}/fields/fields.json
+ *   schema/main/{object}/childs/childs.json
+ *   schema/main/{object}/picklist/{field}/values.json
+ *   schema/main/{object}/recordTypes/record-types.json
  *   schema/changes/{backupJobId}/…  (same four, this hit's copy)
  *
  * SCOPE — why main/ is normally skipped:

@@ -227,8 +227,8 @@ const buildRecordTypeS3Key = (params: ISchemaS3KeyParams): string =>
 // ---------------------------------------------------------------------------
 // Versioned schema layout — mirrors backup-service/src/utils/helper.ts.
 //
-//   schema/main/<kind>/<object>/...                    — always the latest version
-//   schema/changes/<backupJobId>/<kind>/<object>/...   — what that job wrote
+//   schema/main/<object>/<kind>/...                    — always the latest version
+//   schema/changes/<backupJobId>/<object>/<kind>/...   — what that job wrote
 //
 // Readers use main/ and fall back to the legacy builders above for configs whose
 // last backup predates this layout.
@@ -259,8 +259,8 @@ const buildSchemaKey = ({
   backupJobId,
 }: ISchemaKeyParams): string => {
   const scope = backupJobId ? `changes/${backupJobId}` : 'main';
-  const leaf = kind === 'picklist' ? `${objectName}/${fieldApiName}` : objectName;
-  return `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${scope}/${kind}/${leaf}/${SCHEMA_KIND_FILE[kind]}`;
+  const tail = kind === 'picklist' ? `picklist/${fieldApiName}` : kind;
+  return `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${SCHEMA_KIND_FILE[kind]}`;
 };
 
 // The legacy layout kept every version as fields_<ts>.json beside the original
