@@ -2,13 +2,13 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
-import { buildS3KeyPrefix } from '../../../../../utils/helper';
+import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { uploadPicklistValues } from '../../picklist';
 import { uploadRecordTypeMetadata } from '../../record-type';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
-import { writeSchemaFile } from '../../../../schema';
+import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import {
   createCsvGlueTable,
   registerBackupJobPartition,
@@ -119,7 +119,7 @@ export const exportFirstTime = async (
     const { fieldNames: allFieldNames, schema } = await getObjectMetadata(
       backupConfigId,
       objectName,
-      'schedule'
+      'backup'
     );
     await uploadPicklistValues({
       schema,
@@ -305,7 +305,7 @@ export const exportIncremental = async (
     const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
       backupConfigId,
       objectName,
-      'schedule'
+      'backup'
     );
     await uploadPicklistValues({
       schema: latestSchema,
@@ -451,14 +451,24 @@ export const exportIncremental = async (
     }
 
     // ── Phase 3: schema comparison ─────────────────────────────────────────────
-    // main/ is refreshed to the latest schema and a copy lands in this job's
-    // delta/ folder only when the schema actually moved.
-    const schemaChanged =
-      (await writeSchemaFile(
-        destConfig,
-        { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
-        latestSchema
-      )) !== 'unchanged';
+    // The write below is unconditional (main/ + this job's changes/ folder). The read
+    // is only here to answer "did the schema move?" — Glue and the EMR schema-change
+    // operation key off that, and claiming a change every run would force a Hudi
+    // rewrite on every job.
+    const storedSchema = await readLatestSchema(destConfig, {
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'backup',
+    });
+    const schemaChanged = !storedSchema || !schemasAreEqual(storedSchema, latestSchema);
+
+    await writeSchemaFile(
+      destConfig,
+      { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
+      latestSchema
+    );
 
     if (schemaChanged) {
       if (backupConfig?.objects) {

@@ -26,8 +26,8 @@ import {
 } from '../../api-request';
 import { uploadPicklistValues } from '../../picklist';
 import { uploadToS3 } from '../../../../destination';
-import { writeSchemaFile } from '../../../../schema';
-import { buildS3KeyPrefix } from '../../../../../utils/helper';
+import { readLatestSchema, writeSchemaFile } from '../../../../schema';
+import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
 import {
   createCsvGlueTable,
   registerBackupJobPartition,
@@ -399,10 +399,18 @@ async function uploadSingleObject(
 
       // Even with zero records we still persist the object schema (and create its
       // Glue table) so restore-retrieve's fetch-object-fields works for archived-
-      // but-empty objects. The Glue table is created only on the first write, so
-      // retries are no-ops.
+      // but-empty objects. The schema write is unconditional; the read only decides
+      // whether this is the object's first schema and therefore needs a Glue table.
       try {
-        const written = await writeSchemaFile(
+        const stored = await readLatestSchema(ctx.destConfig, {
+          crmId: ctx.crmId,
+          crmName: ctx.crmName,
+          backupConfigId: ctx.backupConfigId,
+          objectName: object.name,
+          type: 'archival',
+        });
+
+        await writeSchemaFile(
           ctx.destConfig,
           {
             crmId: ctx.crmId,
@@ -416,7 +424,7 @@ async function uploadSingleObject(
           schema
         );
 
-        if (written === 'created') {
+        if (!stored) {
           await createCsvGlueTable({
             crmId: ctx.crmId,
             crmName: ctx.crmName,
@@ -552,12 +560,21 @@ async function uploadSingleObject(
       completedRecordCount,
     });
 
-    // Schema comparison — versioned upload when schema changes.
+    // The schema write is unconditional; the read decides which Glue call follows and
+    // whether the object is flagged as schema-changed for the EMR payload.
     logger.info(
       `[archival:child] checking schema | backupJobId:${backupJobId} objectName:${object.name}`
     );
     try {
-      const written = await writeSchemaFile(
+      const stored = await readLatestSchema(ctx.destConfig, {
+        crmId: ctx.crmId,
+        crmName: ctx.crmName,
+        backupConfigId: ctx.backupConfigId,
+        objectName: object.name,
+        type: 'archival',
+      });
+
+      await writeSchemaFile(
         ctx.destConfig,
         {
           crmId: ctx.crmId,
@@ -571,7 +588,7 @@ async function uploadSingleObject(
         schema
       );
 
-      if (written === 'created') {
+      if (!stored) {
         logger.info(
           `[archival:child] schema uploaded (first time) | backupJobId:${backupJobId} objectName:${object.name}`
         );
@@ -588,7 +605,7 @@ async function uploadSingleObject(
             `[glue] failed to create table | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
           )
         );
-      } else if (written === 'changed') {
+      } else if (!schemasAreEqual(stored, schema)) {
         logger.info(
           `[archival:child] schema change detected | backupJobId:${backupJobId} objectName:${object.name}`
         );

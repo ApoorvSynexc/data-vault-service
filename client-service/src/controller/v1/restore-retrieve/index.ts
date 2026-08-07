@@ -9,7 +9,6 @@ import {
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
   fetchRecordsByBackupJobs,
   showRecordsPreview,
-  prepareRestoreCsvFiles,
   fetchObjectFields,
   repairGlueTables,
   getTableCounter,
@@ -47,7 +46,7 @@ import { wrapController, isOwner } from '../../../utils/helper';
 // /fetch-change-between-backup-jobs window, which is unaffected.
 // import { IsoBound, IsoDateString, toIsoDateString } from '../../../utils/iso-date';
 import { toIsoDateString } from '../../../utils/iso-date';
-import { IBackupJob, IRestore } from '../../../models';
+import { IBackupJob } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { removeCsvColumnsInFolder } from '../../../utils/restore-csv-format';
@@ -874,17 +873,18 @@ const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<v
  *
  * Creates the restore request and, unless it was saved as a DRAFT, runs it:
  *
- *   1. createRestoreJob    — the job row, which fixes the destination
- *                            `csvFilePath` the ingest will read.
- *   2. prepareRestoreCsvFiles — writes that path's CSVs from the SAME
- *                            restore-to records /retrieve/show-preview returns.
- *   3. tiggerRestoreJob    — hands the job to backup-service's Bulk API ingest.
+ *   1. createRestoreJob          — the job row, which fixes the destination
+ *                                  `csvFilePath` the transform writes to.
+ *   2. initalizeRestoreTransform — submits the EMR/Spark job. Spark calls back
+ *                                  into /build-payload (buildRestorePayload)
+ *                                  for the full payload, writes the ingest
+ *                                  CSVs, then reports to
+ *                                  /update-spark-job-status, which is where
+ *                                  tiggerRestoreJob hands the job to
+ *                                  backup-service's Bulk API ingest.
  *
- * Step 2 is what replaced the EMR/Spark transform (`initalizeRestoreTransform`,
- * commented out below): show-preview already answers "which records, at which
- * version", so the restore input is just those rows serialised. No cluster, no
- * second implementation of the version picking, and what the user approved on
- * screen is byte-for-byte what gets written.
+ * Same path activateRestoreHandler uses, so a DRAFT and a non-DRAFT restore
+ * run identically.
  *
  * Everything after the 201 is deliberately fire-and-forget with its own
  * try/catch — the response has already been sent, so a failure here is logged
@@ -905,79 +905,7 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   if (body.status !== 'DRAFT') {
     try {
       const restoreJob = await createRestoreJob(payload);
-
-      // ── The EMR/Spark restore transform this replaced ────────────────────
-      // Spark called back into /build-payload (buildRestorePayload) and wrote
-      // the ingest CSVs itself, duplicating the version-picking rules that
-      // athena-fetch already implements. Kept for reference while the
-      // show-preview path is proven.
-      //
-      // await initalizeRestoreTransform(restoreJob.restoreJobId);
-
-      // ── The raw-CSV copy this replaced ───────────────────────────────────
-      // Copied each backup job's inserts/ folder verbatim, stripping Id and
-      // LastModifiedDate. Two problems the preview path fixes: it restored the
-      // version the job WROTE rather than the version to restore TO (no
-      // second-newest picking), and dropping Id made every row an insert, so a
-      // record that still exists in Salesforce was duplicated instead of
-      // updated.
-      //
-      // const s3Keys = JSON.parse(decrypt(restoreJob.source.encryptedKeys as any));
-      // const s3Config = {
-      //   bucketName: restoreJob.source.bucketName,
-      //   region: restoreJob.source.region,
-      //   accessKeyId: s3Keys.accessKeyId,
-      //   secretAccessKey: s3Keys.secretAccessKey,
-      // };
-      //
-      // let jobIds = payload.source?.backupJobIds;
-      // if (!jobIds?.length) {
-      //   const backupJobs = await getBackupJobsByConfig(restoreJob.source.backupConfigId);
-      //   jobIds = backupJobs.items.map(job => job.backupJobId);
-      // }
-      //
-      // for await (const backupJobId of jobIds) {
-      //   const destinationPath = restoreJob.source.csvFilePath || "";
-      //   const sourcePaths = [];
-      //   for (const object of restoreJob.destination.objects) {
-      //     const sourcePath = `${restoreJob.source.crmName}/${restoreJob.source.crmId}/${'backup'}/${restoreJob.source.backupConfigId}/raw_data/${backupJobId}/${object.name}/inserts`;
-      //     sourcePaths.push(sourcePath);
-      //      await removeCsvColumnsInFolder({
-      //     s3Config,
-      //     sourceFolderKey: sourcePath,
-      //     destinationFolderKey: `${destinationPath}/${object.name}`,
-      //     columnsToRemove: ["Id", "LastModifiedDate"],
-      //   })
-      //   }
-      // }
-
-      // `created` is the canonical stored restore — same data as `payload`, but
-      // with the service's own defaults (status, restoreType) already applied.
-      const csv = await prepareRestoreCsvFiles({
-        restore: created as IRestore,
-        restoreJob,
-        userId: user!.userId,
-      });
-
-      console.log(
-        `[restore] CSVs written | restoreJobId:${restoreJob.restoreJobId} ` +
-          `operation:${csv.operation} ` +
-          csv.objects
-            .map((o) => `${o.objectApiName}:${o.rows}${o.skipped ? `(${o.skipped})` : ''}`)
-            .join(' ')
-      );
-
-      // Nothing written means nothing to ingest — backup-service throws "No data
-      // rows found" on an object whose folder is empty, so a run that produced
-      // no CSVs is stopped here instead.
-      if (!csv.objects.some((o) => o.rows > 0)) {
-        console.warn(
-          `[restore] no records in scope, ingest not triggered | restoreJobId:${restoreJob.restoreJobId}`
-        );
-        return;
-      }
-
-      await tiggerRestoreJob(restoreJob);
+      await initalizeRestoreTransform(restoreJob.restoreJobId);
     } catch (error) {
       console.error('Error creating restore job:', error);
     }

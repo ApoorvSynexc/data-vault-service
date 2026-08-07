@@ -59,7 +59,10 @@ const objectHasDrift = async (
   }
 
   // ── Picklists (one file per picklist field) ───────────────────────────────────
-  const picklistFields = currentFields.filter((f) => f.dataType?.toLowerCase() === 'picklist');
+  // PICKLIST and MULTIPICKLIST are distinct Apex DisplayTypes; both carry values.
+  const picklistFields = currentFields.filter((f) =>
+    ['picklist', 'multipicklist'].includes(String(f.dataType ?? '').toLowerCase())
+  );
   for (const field of picklistFields) {
     const currentValues = unwrapApex(
       await getApexPicklistValues({ user, objectApiName: objectName, fieldApiName: field.apiName })

@@ -101,11 +101,11 @@ const makePageFetcher =
 // schema comparison / upload). Replaces the former getObjectFields +
 // getObjectSchema pair that hit the same endpoint twice per object per job.
 //
-// `mode` is required — the Apex layer defaults missing mode to "archival"
-// and then rejects non-deletable objects. Callers must declare their flow
-// explicitly: schedule (bulk backup), realtime (event-driven backup), or
-// archival (backup + hard-delete).
-type ApexMode = 'schedule' | 'realtime' | 'archival';
+// `mode` is what the job does with the records — it decides which CRUD the
+// object and its fields must grant. It is NOT the schedule/realtime split
+// (that is `type`, and it does not change the field list). Values must be
+// the Apex vocabulary: anything else is coerced to 'backup' upstream.
+type ApexMode = 'backup' | 'archival';
 
 const getObjectMetadata = async (
   backupConfigId: string,
@@ -163,18 +163,21 @@ const getRecordTypeValues = async (backupConfigId: string, objectApiName: string
 // Managed-package namespace for the DataVault apex REST endpoints.
 const SALESFORCE_NAMESPACE = 'SYX_DVV';
 
-interface ISalesforceChild {
+export interface ISalesforceChild {
   apiName?: string;
+  relationshipType?: string; // MASTER | LOOKUP | REQUIRED_LOOKUP
+  isRequired?: boolean;
   [key: string]: any;
 }
 
-// Master-Detail children of one object, via the object-children apex endpoint
-// (relationshipType=MASTER). `mode` is what the objects are listed for, `type` the
+// Every child of one object, via the object-children apex endpoint
+// (relationshipType=ALL). `mode` is what the objects are listed for, `type` the
 // schedule/realtime split. The reply is { success, data: { childs: [{ apiName, ... }] } }.
-// Returns the raw child entries — the caller uses `apiName` to expand the backup
-// list and persists the full payload to S3. Throws on transport failure so the
-// caller decides whether a missing children lookup is fatal (for backup, it isn't).
-const getMasterChilds = async (
+// Returns the raw child entries — the whole list is persisted to S3, while only the
+// backup-eligible subset (see isBackupChild) is expanded into the job. Throws on
+// transport failure so the caller decides whether a missing children lookup is fatal
+// (for backup, it isn't).
+const getObjectChilds = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectName: string,
@@ -182,7 +185,7 @@ const getMasterChilds = async (
 ): Promise<ISalesforceChild[]> => {
   const url =
     `${instanceUrl}/services/apexrest/${SALESFORCE_NAMESPACE}/v1/data-vault/object-children` +
-    `?apiName=${encodeURIComponent(objectName)}&mode=backup&type=${type}&relationshipType=MASTER`;
+    `?apiName=${encodeURIComponent(objectName)}&mode=backup&type=${type}&relationshipType=ALL`;
   const res = await salesforceRequest<{ data?: { childs?: ISalesforceChild[] } }>(
     { url, method: 'GET' },
     tokens
@@ -218,7 +221,7 @@ export {
   salesforceRequest,
   makePageFetcher,
   getObjectMetadata,
-  getMasterChilds,
+  getObjectChilds,
   getPicklistValues,
   getRecordTypeValues,
   createBulkQueryJob,

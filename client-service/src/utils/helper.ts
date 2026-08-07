@@ -203,7 +203,7 @@ const filtereObjects = (objects: IObject[]) => {
 }
 
 // Pre-versioning schema locations. Nothing writes here any more — these three are
-// read-only fallbacks for configs whose last backup job predates the main/delta layout.
+// read-only fallbacks for configs whose last backup job predates the main/changes layout.
 const buildSchemaS3Key = ({
   crmId,
   crmName,
@@ -227,8 +227,8 @@ const buildRecordTypeS3Key = (params: ISchemaS3KeyParams): string =>
 // ---------------------------------------------------------------------------
 // Versioned schema layout — mirrors backup-service/src/utils/helper.ts.
 //
-//   schema/main/<kind>/<object>/...                  — always the latest version
-//   schema/delta/<backupJobId>/<kind>/<object>/...   — only what that job changed
+//   schema/main/<kind>/<object>/...                    — always the latest version
+//   schema/changes/<backupJobId>/<kind>/<object>/...   — what that job wrote
 //
 // Readers use main/ and fall back to the legacy builders above for configs whose
 // last backup predates this layout.
@@ -245,7 +245,7 @@ const SCHEMA_KIND_FILE: Record<SchemaKind, string> = {
 interface ISchemaKeyParams extends ISchemaS3KeyParams {
   kind: SchemaKind;
   fieldApiName?: string; // picklist only
-  backupJobId?: string; // set → delta/<backupJobId>; omitted → main
+  backupJobId?: string; // set → changes/<backupJobId>; omitted → main
 }
 
 const buildSchemaKey = ({
@@ -258,7 +258,7 @@ const buildSchemaKey = ({
   fieldApiName,
   backupJobId,
 }: ISchemaKeyParams): string => {
-  const scope = backupJobId ? `delta/${backupJobId}` : 'main';
+  const scope = backupJobId ? `changes/${backupJobId}` : 'main';
   const leaf = kind === 'picklist' ? `${objectName}/${fieldApiName}` : objectName;
   return `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${scope}/${kind}/${leaf}/${SCHEMA_KIND_FILE[kind]}`;
 };

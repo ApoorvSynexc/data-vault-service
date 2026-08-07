@@ -2,7 +2,7 @@ import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getCrmById } from '../../crm';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { logger } from '../../../middlewares';
-import { getApexObjects, createTriggers, toApexType } from './index';
+import { getApexObjects, createTriggers, toApexType, unwrapApex } from './index';
 import { IObject } from '../../../models/backup-config';
 
 // ─── Compare Salesforce objects with backup-config objects ────────────────────
@@ -45,7 +45,8 @@ async function addExtraObjectsToBackupConfig(
     const newObjectNames: string[] = [];
     extraObjects.forEach((obj) => {
       newObjects.push({
-        id: obj.id,
+        // accessible-objects carries no id — the api name is the identity.
+        id: obj.apiName,
         name: obj.apiName,
         type: obj.isCustom ? 'CUSTOM' : 'STANDARD',
         field: [],
@@ -101,13 +102,15 @@ async function syncMetadataAndTriggers(
       throw new Error('User not found');
     }
 
-    // Fetch Salesforce objects using existing apex service
-    const salesforceObjects = await getApexObjects({ user, mode: 'backup', type: toApexType(backupConfig.schedule) });
-
+    // Fetch Salesforce objects using existing apex service. accessible-objects
+    // replies { success, data: [...] } — unwrap it, there is no `objects` key.
+    const salesforceObjects = unwrapApex<any[]>(
+      await getApexObjects({ user, mode: 'backup', type: toApexType(backupConfig.schedule) })
+    );
 
     // Compare and find extra objects
     const extraObjects = compareObjects(
-      salesforceObjects.objects,
+      salesforceObjects ?? [],
       backupConfig.objects || []
     );
 

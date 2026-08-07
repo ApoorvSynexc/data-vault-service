@@ -1,7 +1,7 @@
 import { ICrm } from '../../../models';
 import { salesforceRequest, SalesforceTokens, SalesforceAuthExpiredError } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
-import { listMetadataSoap } from './metadata-listing';
+import { listMetadataSoap, readMetadataSoap } from './metadata-listing';
 import { callApex, APEX_BASE } from './apex';
 
 // Packaged API/developer name of the ECA shipped with the managed package
@@ -155,26 +155,32 @@ const fetchExistingPermittedPermissionSets = async (
   tokens: SalesforceTokens,
   ecaDeveloperName: string
 ): Promise<string[]> => {
-  const soql =
-    `SELECT Metadata FROM ExtlClntAppOauthConfigurablePolicies ` +
-    `WHERE ExternalClientApplication.DeveloperName = '${ecaDeveloperName}' LIMIT 1`;
   try {
-    const { data } = await salesforceRequest<{
-      totalSize: number;
-      records: { Metadata?: { commaSeparatedPermissionSet?: string } }[];
-    }>(
-      {
-        url: `${instanceUrl}/services/data/v${METADATA_API_VERSION}/tooling/query?q=${encodeURIComponent(soql)}`,
-        method: 'GET',
-      },
-      tokens
+    const policyName = await resolveEcaOauthPolicyName(
+      instanceUrl,
+      tokens,
+      ecaDeveloperName
     );
-    if (data.totalSize === 0) {
+
+    if (!policyName) {
       return [];
     }
-    const csv = data.records[0].Metadata?.commaSeparatedPermissionSet;
-    return csv ? csv.split(',').map((s) => s.trim()).filter(Boolean) : [];
-  } catch {
+
+    const xml = await readMetadataSoap(
+      instanceUrl,
+      tokens,
+      'ExtlClntAppOauthConfigurablePolicies',
+      [policyName],
+      METADATA_API_VERSION
+    );
+
+    const csv = xml.match(/<(?:\w+:)?commaSeparatedPermissionSet>([^<]*)<\/(?:\w+:)?commaSeparatedPermissionSet>/)?.[1];
+
+    return csv
+      ? csv.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+  } catch (err: any) {
+    console.log('[eca-permission-set] Failed to fetch existing permittedPermissionSets:', err?.message ?? err);
     return [];
   }
 };
