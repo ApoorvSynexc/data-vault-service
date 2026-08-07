@@ -16,10 +16,6 @@ import {
 
 const client = new DynamoDBClient({
   region: AWS_REGION,
-  credentials: {
-    accessKeyId: "AKIA5FTZC6UPIOET4F4Z",
-    secretAccessKey: "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"
-  },
   ...(DYNAMODB_ENDPOINT ? { endpoint: DYNAMODB_ENDPOINT } : {}),
 });
 
