@@ -6,7 +6,7 @@ export const deleteUserTrigger = async () => {
         const backupConfig: any = {
             triggerResults: [
                 {
-                    triggerName: "DataVault_Account_Trigger",
+                    objectApiName: "Account",
                     status: 'CREATED'
                 }
             ]

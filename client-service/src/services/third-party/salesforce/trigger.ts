@@ -1,7 +1,7 @@
 import JSZip from 'jszip';
 import { createHash } from 'crypto';
 import { salesforceRequest, SalesforceTokens } from './index';
-import { IBackupConfig, IUser } from '../../../models';
+import { IBackupConfig, ITriggerResult, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
 import { appendObjectsToBackupConfig } from '../../backup-config';
 import { getUser, getDecryptedCrmCredential } from '../../user';
@@ -12,17 +12,9 @@ const NAMESPACE_PREFIX = 'SYX_DVV';
 const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
 const API_VERSION = '66.0';
 
-interface ITriggerResult {
-  triggerName: string;
-  status: "INITIALIZE" | "CREATED" | "EXIST" | "FAILED" | "DELETED" | "DELETE_FAILED" | "NOT_FOUND" | "INACTIVE" | "INACTIVATE_FAILED";
-  permissionSetStatus?: "CREATED" | "EXIST" | "FAILED";
-  permissionSetError?: string;
-  error?: string
-}
-
 // Full qualified name of the External Credential Principal inside the managed package.
 // Format: {Namespace}__{ExternalCredentialDeveloperName}-{PrincipalDeveloperName}
-const EXTERNAL_CREDENTIAL_PRINCIPAL_NAME = `${NAMESPACE_PREFIX}__Middleware_Endpoint-DataVaultParam`;
+const EXTERNAL_CREDENTIAL_PRINCIPAL_NAME = `Middleware_Endpoint-DataVaultParam`;
 
 // ---------------------------------------------------------------------------
 // Real-time sync is delivered as record-triggered Flows, not Apex triggers.
@@ -35,28 +27,59 @@ const EXTERNAL_CREDENTIAL_PRINCIPAL_NAME = `${NAMESPACE_PREFIX}__Middleware_Endp
 // (DataVaultRecordSyncTriggerHandler.enqueueSyncFromFlow), which funnels into
 // the same enqueueSync the Apex trigger used to call.
 //
-// One Flow per DML event, because a record-triggered Flow has exactly one
-// trigger type and the handler needs to be told which operation fired. Delete
-// is before-save — Salesforce offers no after-delete record-triggered Flow —
-// which is harmless here: the handler enqueues a Queueable holding the records
-// in memory, so it still has the data after the row is gone.
+// Two Flows per object: one after-save Flow covering create+update, one for
+// delete. The handler still needs to know which operation fired, so the
+// create-or-update Flow decides it at runtime from $Record__Prior (blank on
+// create) instead of costing a third Flow.
+//
+// Delete is before-delete: Salesforce offers no after-delete record-triggered
+// Flow. Harmless here — the handler enqueues a Queueable holding the records in
+// memory, so it still has the data after the row is gone.
 // ---------------------------------------------------------------------------
+const OPERATION_FORMULA_NAME = 'Sync_Operation';
+
 const FLOW_EVENTS = [
-  { suffix: 'Insert', operation: 'AFTER_INSERT', recordTriggerType: 'Create', triggerType: 'RecordAfterSave' },
-  { suffix: 'Update', operation: 'AFTER_UPDATE', recordTriggerType: 'Update', triggerType: 'RecordAfterSave' },
-  { suffix: 'Delete', operation: 'AFTER_DELETE', recordTriggerType: 'Delete', triggerType: 'RecordBeforeDelete' },
+  {
+    suffix: 'Upsert',
+    recordTriggerType: 'CreateAndUpdate',
+    triggerType: 'RecordAfterSave',
+    operationFormula: `IF(ISBLANK({!$Record__Prior.Id}), "AFTER_INSERT", "AFTER_UPDATE")`,
+  },
+  {
+    suffix: 'Delete',
+    recordTriggerType: 'Delete',
+    triggerType: 'RecordBeforeDelete',
+    operationFormula: null,
+  },
 ] as const;
 
-// The per-object identifier stored on the backup config. Kept in the historical
-// `DataVault_<Object>_Trigger` shape so existing configs keep resolving after
-// the move off Apex triggers; the Flow names are derived from it.
+// Flows from the three-per-object era. Left in place they fire alongside the new
+// ones and double every sync, so they are removed wherever the new ones are
+// deployed or deleted.
+// ponytail: drop this and its two call sites once no org has a pre-Upsert config.
+const LEGACY_FLOW_SUFFIXES = ['Insert', 'Update'] as const;
+
+// The Apex trigger name this object's automation used to ship under. Only the
+// legacy cleanup paths need it now — nothing is stored under this name.
 const triggerNameFor = (objectApiName: string): string =>
   `DataVault_${objectApiName.replace('__c', '')}_Trigger`;
 
-const flowNamesFor = (triggerName: string): string[] => {
-  const stem = triggerName.replace(/_Trigger$/, '');
-  return FLOW_EVENTS.map((event) => `${stem}_${event.suffix}_Flow`);
-};
+const flowStemFor = (objectApiName: string): string =>
+  `DataVault_${objectApiName.replace('__c', '')}`;
+
+const flowNamesFor = (objectApiName: string): string[] =>
+  FLOW_EVENTS.map((event) => `${flowStemFor(objectApiName)}_${event.suffix}_Flow`);
+
+const legacyFlowNamesFor = (objectApiName: string): string[] =>
+  LEGACY_FLOW_SUFFIXES.map((suffix) => `${flowStemFor(objectApiName)}_${suffix}_Flow`);
+
+// Configs written before flows replaced Apex triggers stored only a lossy
+// `DataVault_<Object>_Trigger` label. Recover the exact SObject API name from
+// the config's own objectNames, falling back to undoing the string surgery.
+const objectApiNameOf = (config: IBackupConfig, result: ITriggerResult): string =>
+  result.objectApiName ??
+  (config.objectNames ?? []).find((name) => triggerNameFor(name) === result.triggerName) ??
+  String(result.triggerName).replace('DataVault_', '').replace('_Trigger', '');
 
 // ---------------------------------------------------------------------------
 // Production orgs only expose the Metadata API for changing metadata, so every
@@ -146,7 +169,7 @@ const buildRecordTriggeredFlow = (
   flowName: string,
   event: (typeof FLOW_EVENTS)[number]
 ): string => {
-  const actionName = `${NAMESPACE_PREFIX}__${HANDLER_CLASS_NAME}`;
+  const actionName = `${HANDLER_CLASS_NAME}`;
   const label = flowName.replace(/_/g, ' ');
 
   return (
@@ -160,6 +183,20 @@ const buildRecordTriggeredFlow = (
     `        <locationY>287</locationY>\n` +
     `        <actionName>${actionName}</actionName>\n` +
     `        <actionType>apex</actionType>\n` +
+    // Both List<SObject> fields on the invocable's input class are generic, and
+    // Flow refuses to deploy an action call that leaves a generic parameter
+    // unmapped — that is the `Specify the data type mapping for input parameter
+    // T__records` deploy error. The element is <dataTypeMappings>;
+    // <genericTypeMappings> is not part of the Flow schema and was ignored, so
+    // the mappings never registered.
+    `        <dataTypeMappings>\n` +
+    `            <typeName>T__records</typeName>\n` +
+    `            <typeValue>${objectApiName}</typeValue>\n` +
+    `        </dataTypeMappings>\n` +
+    `        <dataTypeMappings>\n` +
+    `            <typeName>T__recordsPrior</typeName>\n` +
+    `            <typeValue>${objectApiName}</typeValue>\n` +
+    `        </dataTypeMappings>\n` +
     `        <inputParameters>\n` +
     `            <name>records</name>\n` +
     `            <value>\n` +
@@ -169,7 +206,9 @@ const buildRecordTriggeredFlow = (
     `        <inputParameters>\n` +
     `            <name>operation</name>\n` +
     `            <value>\n` +
-    `                <stringValue>${event.operation}</stringValue>\n` +
+    (event.operationFormula
+      ? `                <elementReference>${OPERATION_FORMULA_NAME}</elementReference>\n`
+      : `                <stringValue>AFTER_DELETE</stringValue>\n`) +
     `            </value>\n` +
     `        </inputParameters>\n` +
     `        <nameSegment>${actionName}</nameSegment>\n` +
@@ -191,6 +230,13 @@ const buildRecordTriggeredFlow = (
     `        </connector>\n` +
     `    </assignments>\n` +
     `    <environments>Default</environments>\n` +
+    (event.operationFormula
+      ? `    <formulas>\n` +
+        `        <name>${OPERATION_FORMULA_NAME}</name>\n` +
+        `        <dataType>String</dataType>\n` +
+        `        <expression>${event.operationFormula}</expression>\n` +
+        `    </formulas>\n`
+      : '') +
     `    <interviewLabel>${label} {!$Flow.CurrentDateTime}</interviewLabel>\n` +
     `    <label>${label}</label>\n` +
     `    <processType>AutoLaunchedFlow</processType>\n` +
@@ -399,7 +445,7 @@ const destructiveDeploy = async (
 };
 
 // ---------------------------------------------------------------------------
-// Deploy this object's three Flows, active, in one shot. Also the activate
+// Deploy this object's two Flows, active, in one shot. Also the activate
 // path: redeploying is how a deactivated flow comes back on, since the
 // FlowDefinition deploy can only turn versions off.
 // ---------------------------------------------------------------------------
@@ -463,12 +509,18 @@ const createFlowsForObject = async (
     );
   }
 
-  // Best-effort: a surviving Apex trigger only causes duplicate syncs, which is
-  // not worth failing an otherwise successful flow deploy over.
+  // Best-effort: surviving legacy automation only causes duplicate syncs, which
+  // is not worth failing an otherwise successful flow deploy over.
   try {
     await removeLegacyApexTrigger(instanceUrl, tokens, triggerNameFor(objectApiName));
   } catch (err) {
     console.log(`Error removing legacy Apex trigger for ${objectApiName}:`, err);
+  }
+
+  try {
+    await deleteFlows(instanceUrl, tokens, legacyFlowNamesFor(objectApiName));
+  } catch (err) {
+    console.log(`Error removing legacy per-event flows for ${objectApiName}:`, err);
   }
 };
 
@@ -805,20 +857,19 @@ const createTriggers = async (
 
   for (let i = 0; i < objectApiNames.length; i++) {
     const objectApiName = objectApiNames[i];
-    const triggerName = triggerNameFor(objectApiName);
-    const flowNames = flowNamesFor(triggerName);
+    const flowNames = flowNamesFor(objectApiName);
     try {
       const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
       if (flowNames.every((name) => states.get(name))) {
-        results.push({ triggerName, status: 'EXIST' });
+        results.push({ objectApiName, flowNames, status: 'EXIST' });
         continue;
       }
       await createFlowsForObject(instanceUrl, tokens, objectApiName, flowNames);
-      results.push({ triggerName, status: 'CREATED' });
+      results.push({ objectApiName, flowNames, status: 'CREATED' });
       await timer(500);
     } catch (err) {
-      console.log(`Error creating flows for ${triggerName}:`, err);
-      results.push({ triggerName, status: 'FAILED', error: err instanceof Error ? err.message : String(err) });
+      console.log(`Error creating flows for ${objectApiName}:`, err);
+      results.push({ objectApiName, flowNames, status: 'FAILED', error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -829,14 +880,6 @@ const createTriggers = async (
   }
   return results;
 };
-
-// The config's triggerName is a lossy label (`DataVault_MyObject_Trigger` for
-// `MyObject__c`), but a flow's metadata needs the exact SObject API name — so it
-// is resolved from the config's own objectNames, with the historical string
-// surgery only as a fallback for configs that predate objectNames.
-const objectApiNameFor = (config: IBackupConfig, triggerName: string): string =>
-  (config.objectNames ?? []).find((name) => triggerNameFor(name) === triggerName) ??
-  triggerName.replace('DataVault_', '').replace('_Trigger', '');
 
 // ---------------------------------------------------------------------------
 // Shared toggle — sets every object's flows to the requested state.
@@ -854,15 +897,19 @@ const toggleTriggerStatus = async (
   }
 
   if (!config.triggerResults?.length) {
-    return [{ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
+    return [{ objectApiName: 'N/A', flowNames: [], status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
   const triggerResults = config.triggerResults;
 
   for (let i = 0; i < triggerResults.length; i++) {
     const triggerResult = triggerResults[i];
-    const triggerName = triggerResult.triggerName;
-    const flowNames = flowNamesFor(triggerName);
+    const objectApiName = objectApiNameOf(config, triggerResult);
+    const flowNames = flowNamesFor(objectApiName);
+    // Migrates configs written in the Apex-trigger shape onto the current one.
+    triggerResult.objectApiName = objectApiName;
+    triggerResult.flowNames = flowNames;
+    delete triggerResult.triggerName;
     try {
       const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
 
@@ -872,7 +919,7 @@ const toggleTriggerStatus = async (
         if (flowNames.every((name) => states.get(name))) {
           triggerResult.status = 'EXIST';
         } else {
-          await createFlowsForObject(instanceUrl, tokens, objectApiNameFor(config, triggerName), flowNames);
+          await createFlowsForObject(instanceUrl, tokens, objectApiName, flowNames);
           triggerResult.status = 'CREATED';
           await timer(500);
         }
@@ -889,7 +936,7 @@ const toggleTriggerStatus = async (
       }
     } catch (err) {
       const label = targetStatus === 'Active' ? 'activating' : 'inactivating';
-      console.log(`Error ${label} flows for ${triggerName}:`, err);
+      console.log(`Error ${label} flows for ${objectApiName}:`, err);
       triggerResult.status = targetStatus === 'Active' ? 'FAILED' : 'INACTIVATE_FAILED';
       triggerResult.error = err instanceof Error ? err.message : String(err);
     }
@@ -933,20 +980,32 @@ const deleteTriggers = async (
   config: IBackupConfig
 ): Promise<ITriggerResult[]> => {
   if (!config.triggerResults?.length) {
-    return [{ triggerName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
+    return [{ objectApiName: 'N/A', flowNames: [], status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
   const triggerResults = config.triggerResults;
   for (let i = 0; i < triggerResults.length; i++) {
     const triggerResult = triggerResults[i];
-    const triggerName = triggerResult.triggerName;
+    const objectApiName = objectApiNameOf(config, triggerResult);
     const status = triggerResult.status;
+
+    triggerResult.objectApiName = objectApiName;
+    delete triggerResult.triggerName;
 
     if (!['CREATED', 'INACTIVE', 'EXIST'].includes(status)) continue;
     try {
-      const flowNames = flowNamesFor(triggerName);
+      // Union of what this config recorded, what the current naming produces and
+      // the retired three-flow names — deleteFlows filters to what the org
+      // actually has, so an over-wide list costs nothing and an under-wide one
+      // strands an active flow that keeps syncing a deleted config.
+      const flowNames = Array.from(new Set([
+        ...(triggerResult.flowNames ?? []),
+        ...flowNamesFor(objectApiName),
+        ...legacyFlowNamesFor(objectApiName),
+      ]));
+      triggerResult.flowNames = flowNames;
       const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
-      const legacyRemoved = await removeLegacyApexTrigger(instanceUrl, tokens, triggerName);
+      const legacyRemoved = await removeLegacyApexTrigger(instanceUrl, tokens, triggerNameFor(objectApiName));
 
       if (states.size === 0) {
         triggerResult.status = legacyRemoved ? 'DELETED' : 'NOT_FOUND';
@@ -1022,7 +1081,8 @@ const realTimeTriggerManagement = async (
   } catch (error) {
     console.log(`Error during trigger ${operation}:`, error);
     return [{
-      triggerName: 'N/A',
+      objectApiName: 'N/A',
+      flowNames: [],
       status: 'FAILED',
       error: error instanceof Error ? error.message : String(error),
     }];
