@@ -37,6 +37,8 @@ import { writeSchemaFile } from '../../../../schema';
 import { uploadSingleObject, pollBulkJobArchival, uploadBulkResultsByPageArchival } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { uploadPicklistValues } from '../../picklist';
+import { uploadRecordTypeMetadata } from '../../record-type';
+import { uploadObjectChilds } from '../../child';
 import { buildFailedRecordsIdCsv, bulkDeleteRecords } from './delete-bulk';
 import {
   // getBackupConfigById,
@@ -615,6 +617,29 @@ export const archiveAndHardDelete = async (
     await uploadPicklistValues({
       schema,
       destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'archival',
+      backupJobId,
+    });
+    await uploadRecordTypeMetadata({
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      objectName,
+      type: 'archival',
+      backupJobId,
+    });
+    // Schema artifact only — archival children are user-configured with their own
+    // filters and stay a nested tree, so the stored tree never expands the job the
+    // way it does for backup (see expandWithBackupChildren).
+    await uploadObjectChilds({
+      destConfig,
+      instanceUrl,
+      tokens,
       crmId,
       crmName,
       backupConfigId,

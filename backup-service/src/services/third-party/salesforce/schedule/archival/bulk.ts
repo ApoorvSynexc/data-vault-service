@@ -25,6 +25,8 @@ import {
   createBulkQueryJob,
 } from '../../api-request';
 import { uploadPicklistValues } from '../../picklist';
+import { uploadRecordTypeMetadata } from '../../record-type';
+import { uploadObjectChilds } from '../../child';
 import { uploadToS3 } from '../../../../destination';
 import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
@@ -333,6 +335,28 @@ async function uploadSingleObject(
   await uploadPicklistValues({
     schema,
     destConfig: ctx.destConfig,
+    crmId: ctx.crmId,
+    crmName: ctx.crmName,
+    backupConfigId: ctx.backupConfigId,
+    objectName: object.name,
+    type: 'archival',
+    backupJobId,
+  });
+  await uploadRecordTypeMetadata({
+    destConfig: ctx.destConfig,
+    crmId: ctx.crmId,
+    crmName: ctx.crmName,
+    backupConfigId: ctx.backupConfigId,
+    objectName: object.name,
+    type: 'archival',
+    backupJobId,
+  });
+  // Schema artifact only — this node's own children are already in the configured
+  // archival tree; the stored list never expands the job.
+  await uploadObjectChilds({
+    destConfig: ctx.destConfig,
+    instanceUrl: ctx.instanceUrl,
+    tokens: ctx.tokens,
     crmId: ctx.crmId,
     crmName: ctx.crmName,
     backupConfigId: ctx.backupConfigId,

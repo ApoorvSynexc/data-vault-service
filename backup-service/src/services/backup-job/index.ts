@@ -6,9 +6,9 @@ import { IBackupJob, IBackupObject, ISource, IDestinationConfig } from '../../mo
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
-import { writeSchemaFile } from '../schema';
 import { isBackupChild } from '../../utils/helper';
-import { getObjectChilds, SalesforceTokens } from '../third-party/salesforce/api-request';
+import { SalesforceTokens } from '../third-party/salesforce/api-request';
+import { uploadObjectChilds } from '../third-party/salesforce/child';
 
 // Appends children discovered during this run to the backup config, so every
 // config-driven reader (compression Glue tables, Glue repair, restore listing, UI)
@@ -97,22 +97,19 @@ const expandWithBackupChildren = async (
   await Promise.all(
     objects.map(async (obj) => {
       try {
-        const childs = await getObjectChilds(source.instanceUrl, tokens, obj.name);
-
-        // The whole relationship tree is stored, not just what gets backed up.
-        await writeSchemaFile(
+        // Stores the whole relationship tree, not just what gets backed up; returns []
+        // when the lookup or upload fails, so this object simply expands nothing.
+        const childs = await uploadObjectChilds({
           destConfig,
-          {
-            crmId: source.crmId,
-            crmName: source.crmName,
-            backupConfigId,
-            objectName: obj.name,
-            type: 'backup',
-            kind: 'childs',
-            backupJobId,
-          },
-          childs
-        );
+          instanceUrl: source.instanceUrl!,
+          tokens,
+          crmId: source.crmId,
+          crmName: source.crmName,
+          backupConfigId,
+          objectName: obj.name,
+          type: 'backup',
+          backupJobId,
+        });
 
         for (const child of childs.filter(isBackupChild)) {
           const name = child?.apiName;
