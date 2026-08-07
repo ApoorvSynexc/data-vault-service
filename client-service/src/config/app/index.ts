@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import path from 'path';
 import { createServer, Server } from 'http';
 import { router } from '../../routes';
 import { morganMiddleware } from '../../middlewares';
@@ -12,6 +13,7 @@ const HOST: string = String(process.env.HOST || '0.0.0.0');
 const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || 'http://localhost:5173')
   .split(',')
   .map((o) => o.trim());
+const CLIENT_DIST_DIR = path.join(__dirname, '../../../client/dist');
 
 const app = express();
 
@@ -26,8 +28,14 @@ app.use(morganMiddleware);
 
 app.use('/api', router);
 
+app.use(express.static(CLIENT_DIST_DIR));
+
 app.use((req, res) => {
-  makeResponse(req, res, 404, false, 'route_not_found');
+  if (req.path.startsWith('/api')) {
+    makeResponse(req, res, 404, false, 'route_not_found');
+    return;
+  }
+  res.sendFile(path.join(CLIENT_DIST_DIR, 'index.html'));
 });
 
 export const initializeApp = () => {
