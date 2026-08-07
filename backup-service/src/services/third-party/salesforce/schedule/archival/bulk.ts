@@ -328,7 +328,7 @@ async function uploadSingleObject(
   const { fieldNames, schema } = await getObjectMetadata(
     ctx.tokens.backupConfigId,
     object.name,
-    'archival'
+    'backup'
   );
   await uploadPicklistValues({
     schema,
