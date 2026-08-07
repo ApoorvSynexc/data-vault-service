@@ -73,7 +73,9 @@ const apexQuery = (params: Record<string, string | number | undefined>) =>
 
 const getApexObjects = async ({ user, mode, type }: { user?: IUser; mode?: ApexMode; type?: ApexType } = {}) => {
   if (!user || !user.crmId) {
-    return [];
+    // Not an empty result — an empty array is indistinguishable from "the org
+    // has no objects" and made every caller report a plausible-looking lie.
+    throw new Error('CRM not connected');
   }
 
   const crm = await getCrmById(user.crmId);
@@ -97,7 +99,9 @@ const getApexObjects = async ({ user, mode, type }: { user?: IUser; mode?: ApexM
 
 const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: object } = {}) => {
   if (!user || !user.crmId) {
-    return [];
+    // Not an empty result — an empty array is indistinguishable from "the org
+    // has no objects" and made every caller report a plausible-looking lie.
+    throw new Error('CRM not connected');
   }
   const crm = await getCrmById(user.crmId);
   if (!crm) {
@@ -120,7 +124,9 @@ const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: objec
 // returns unfiltered counts keyed by object name: { success, data: { Account: 12 } }.
 const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?: string[] } = {}) => {
   if (!user || !user.crmId) {
-    return [];
+    // Not an empty result — an empty array is indistinguishable from "the org
+    // has no objects" and made every caller report a plausible-looking lie.
+    throw new Error('CRM not connected');
   }
   const crm = await getCrmById(user.crmId);
   if (!crm) {
@@ -142,7 +148,9 @@ const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?
 
 const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipType, relationshipDepth }: { user?: IUser; objectName?: string; mode?: ApexMode; type?: ApexType; relationshipType?: ApexRelationshipType; relationshipDepth?: number } = {}) => {
   if (!user || !user.crmId) {
-    return [];
+    // Not an empty result — an empty array is indistinguishable from "the org
+    // has no objects" and made every caller report a plausible-looking lie.
+    throw new Error('CRM not connected');
   }
   const crm = await getCrmById(user.crmId);
   if (!crm) {
@@ -181,7 +189,9 @@ const getMasterChildApiNames = async (
 // Field metadata takes `mode` only — schedule vs realtime does not change the fields.
 const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: ApexMode } = {}) => {
   if (!user || !user.crmId) {
-    return [];
+    // Not an empty result — an empty array is indistinguishable from "the org
+    // has no objects" and made every caller report a plausible-looking lie.
+    throw new Error('CRM not connected');
   }
   const crm = await getCrmById(user.crmId);
   if (!crm) {
@@ -199,7 +209,9 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
 
 const getApexPicklistValues = async ({ user, objectApiName, fieldApiName }: { user?: IUser; objectApiName?: string; fieldApiName?: string } = {}) => {
   if (!user || !user.crmId) {
-    return [];
+    // Not an empty result — an empty array is indistinguishable from "the org
+    // has no objects" and made every caller report a plausible-looking lie.
+    throw new Error('CRM not connected');
   }
   const crm = await getCrmById(user.crmId);
   if (!crm) {
@@ -219,7 +231,9 @@ const getApexPicklistValues = async ({ user, objectApiName, fieldApiName }: { us
 
 const getRecordTypeMetadata = async ({ user, objectApiName }: { user?: IUser; objectApiName?: string } = {}) => {
   if (!user || !user.crmId) {
-    return [];
+    // Not an empty result — an empty array is indistinguishable from "the org
+    // has no objects" and made every caller report a plausible-looking lie.
+    throw new Error('CRM not connected');
   }
   const crm = await getCrmById(user.crmId);
   if (!crm) {

@@ -89,7 +89,7 @@ interface ISchemaS3KeyParams {
 }
 
 // Pre-versioning field schema location. Nothing writes here any more — it is the
-// read fallback for configs whose last job predates the main/delta layout.
+// read fallback for configs whose last job predates the main/changes layout.
 const buildSchemaS3Key = ({
   crmId,
   crmName,
@@ -102,8 +102,8 @@ const buildSchemaS3Key = ({
 // ---------------------------------------------------------------------------
 // Versioned schema layout (scheduled backup + archival jobs)
 //
-//   schema/main/<kind>/<object>/...                  — always the latest version
-//   schema/delta/<backupJobId>/<kind>/<object>/...   — only what that job changed
+//   schema/main/<kind>/<object>/...                    — always the latest version
+//   schema/changes/<backupJobId>/<kind>/<object>/...   — what that job wrote
 //
 // Picklists carry an extra {fieldApiName} level, one file per picklist field.
 // This is the only layout written now. The Java Spark middleware must read
@@ -122,7 +122,7 @@ const SCHEMA_KIND_FILE: Record<SchemaKind, string> = {
 interface ISchemaKeyParams extends ISchemaS3KeyParams {
   kind: SchemaKind;
   fieldApiName?: string; // picklist only
-  backupJobId?: string; // set → delta/<backupJobId>; omitted → main
+  backupJobId?: string; // set → changes/<backupJobId>; omitted → main
 }
 
 const buildSchemaKey = ({
@@ -135,7 +135,7 @@ const buildSchemaKey = ({
   fieldApiName,
   backupJobId,
 }: ISchemaKeyParams): string => {
-  const scope = backupJobId ? `delta/${backupJobId}` : 'main';
+  const scope = backupJobId ? `changes/${backupJobId}` : 'main';
   const leaf = kind === 'picklist' ? `${objectName}/${fieldApiName}` : objectName;
   return `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${scope}/${kind}/${leaf}/${SCHEMA_KIND_FILE[kind]}`;
 };
@@ -171,6 +171,22 @@ const buildErrorLogsS3Prefix = ({
   type = 'archival',
 }: IErrorLogsS3PrefixParams): string =>
   `${crmName}/${crmId}/${type}/${backupConfigId}/error_logs/${backupJobId}/${objectName}/${objectId}`;
+
+// ---------------------------------------------------------------------------
+// object-children returns every relationship (relationshipType=ALL). A child is
+// backed up alongside its parent only when the parent's records own it
+// (Master-Detail) or the relationship is required — those records are unreachable
+// or meaningless without the parent, so each one gets its own bulk query job.
+// Optional lookups are still stored in the schema file; the user adds them to the
+// config themselves if they want them backed up.
+// ---------------------------------------------------------------------------
+// NOTE: the request vocabulary and the response vocabulary differ. `relationshipType`
+// as a *filter* is master|lookup|required_lookup, but the child DTO *reports*
+// 'MasterDetail'|'Lookup' — so both spellings are accepted here.
+const isBackupChild = (child: { relationshipType?: string; isRequired?: boolean }): boolean => {
+  const type = String(child?.relationshipType ?? '').toUpperCase();
+  return type === 'MASTER' || type === 'MASTERDETAIL' || child?.isRequired === true;
+};
 
 // ---------------------------------------------------------------------------
 // Order-independent schema equality check.
@@ -348,6 +364,7 @@ export {
   buildSchemaKey,
   pickLegacyFieldsKey,
   buildErrorLogsS3Prefix,
+  isBackupChild,
   schemasAreEqual,
   splitCSVRows,
   parseCSVLine,

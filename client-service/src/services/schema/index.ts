@@ -9,7 +9,7 @@ import {
 } from '../../utils/helper';
 import { downloadFromS3, listS3Objects } from '../third-party/s3-bucket';
 
-// Where a given artifact lived before the main/delta layout. Fields are a folder
+// Where a given artifact lived before the main/changes layout. Fields are a folder
 // (fields.json plus fields_<ts>.json history) and are resolved by the caller below.
 const legacyKeyFor = (params: ISchemaKeyParams): string => {
   switch (params.kind) {
@@ -25,11 +25,11 @@ const legacyKeyFor = (params: ISchemaKeyParams): string => {
 /**
  * Reads one schema artifact written by backup-service. Always resolves the latest
  * version — schema/main/ — and falls back to the legacy schema/{object}/ paths for
- * configs whose last backup job predates the main/delta layout, so restore and the
+ * configs whose last backup job predates the main/changes layout, so restore and the
  * metadata APIs keep working until those configs run again.
  *
- * Pass backupJobId to read a specific job's delta instead (no legacy fallback there:
- * deltas only exist in the new layout).
+ * Pass backupJobId to read what one specific job wrote instead (no legacy fallback
+ * there: per-job copies only exist in the new layout).
  *
  * Returns null when neither layout holds the artifact.
  */

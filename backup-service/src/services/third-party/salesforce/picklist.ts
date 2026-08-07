@@ -4,6 +4,8 @@ import { type S3KeyType } from '../../../utils/helper';
 import { writeSchemaFile } from '../../schema';
 import { getPicklistValues } from './api-request';
 
+const PICKLIST_TYPES = new Set(['picklist', 'multipicklist']);
+
 interface IUploadPicklistValuesParams {
   schema: { apiName: string; dataType?: string }[];
   destConfig: IDestinationConfig;
@@ -17,8 +19,8 @@ interface IUploadPicklistValuesParams {
 
 // Persists current picklist values for every picklist field in the schema at
 // .../schema/main/picklist/{objectName}/{fieldApiName}/values.json, plus a copy
-// under .../schema/delta/{backupJobId}/ for the fields whose values actually
-// changed during this job.
+// under .../schema/changes/{backupJobId}/. Straight from the Apex response —
+// no read-back, no change detection, latest values win.
 // Never throws: picklist metadata must not fail a backup/archival job.
 const uploadPicklistValues = async ({
   schema,
@@ -30,7 +32,11 @@ const uploadPicklistValues = async ({
   type,
   backupJobId,
 }: IUploadPicklistValuesParams): Promise<void> => {
-  const picklistFields = schema.filter((f) => f.dataType?.toLowerCase() === 'picklist');
+  // dataType is the Apex DisplayType name — PICKLIST and MULTIPICKLIST are
+  // separate types and get-picklist-values serves both.
+  const picklistFields = schema.filter((f) =>
+    PICKLIST_TYPES.has(String(f.dataType ?? '').toLowerCase())
+  );
   if (!picklistFields.length) {
     return;
   }

@@ -4,6 +4,7 @@ import { uploadToS3 } from '../../../destination/s3';
 import { readLatestSchema } from '../../../schema';
 import { ICrmRealtimeHandler } from '../../types';
 import { createCsvGlueTable, registerBackupJobPartition } from '../../glue';
+import { persistRealtimeSchema } from './schema';
 
 // ---------------------------------------------------------------------------
 // Map Salesforce CDC operation to the S3 folder convention used by bulk jobs
@@ -52,10 +53,12 @@ const recordsToCsv = (records: Record<string, any>[], columns: string[]): Buffer
 
 // ---------------------------------------------------------------------------
 // Load the schema already stored in S3 for this object — written by the initial /
-// scheduled backup. This is the authoritative schema for realtime CSVs; the schema
-// Salesforce ships on each webhook hit is ignored. Returns null when no stored schema
-// exists yet (e.g. a webhook arriving before the first backup finished), letting the
-// caller fall back to the record's own keys so a hit is never dropped.
+// scheduled backup. This stays the authoritative schema for realtime CSVs: it is
+// org-wide, whereas the descriptor on the webhook is scoped to whoever triggered
+// the DML, so preferring the payload here would make a restricted user's save
+// silently drop columns from the CSV. Returns null when no stored schema exists yet
+// (e.g. a webhook arriving before the first backup finished), letting the caller
+// fall back so a hit is never dropped.
 // ---------------------------------------------------------------------------
 const loadStoredSchema = async (
   crmId: string,
@@ -66,7 +69,7 @@ const loadStoredSchema = async (
 ): Promise<ISchemaField[] | null> => {
   try {
     // schema/main/fields/, falling back to the legacy folder for configs whose last
-    // scheduled backup predates the main/delta layout.
+    // scheduled backup predates the main/changes layout.
     return (await readLatestSchema(destConfig, {
       crmId,
       crmName,
@@ -95,9 +98,11 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
   ) {
     const { records, operation, objectApiName } = payload;
 
-    // Columns come from the schema already stored in S3 — never from the schema
-    // Salesforce ships on the webhook. Fall back to the record's own keys only when
-    // no stored schema exists yet, so an early hit is never dropped for lack of columns.
+    // Column source, in order of authority:
+    //   1. the schema stored in S3 (org-wide, written by the scheduled backup)
+    //   2. the descriptor on this hit (permission-scoped, but every field of the
+    //      object — still far better than 3, which varies hit to hit)
+    //   3. the record's own keys, so an early hit is never dropped for lack of columns
     const storedSchema = await loadStoredSchema(
       crmId,
       crmName,
@@ -107,7 +112,9 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     );
     const columns = storedSchema?.length
       ? storedSchema.map((f) => f.apiName)
-      : Object.keys(records[0] ?? {}).filter((k) => k !== 'attributes');
+      : payload.fields?.length
+        ? payload.fields.map((f) => f.apiName)
+        : Object.keys(records[0] ?? {}).filter((k) => k !== 'attributes');
 
     // ── Upload CSV ──────────────────────────────────────────────────────────
     // All hits for the same job share the same backupJobId folder.
@@ -121,6 +128,21 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     logger.info(
       `Realtime job ${realtimeJobId}: uploaded ${records.length} ${operation} record(s) for ${objectApiName} → ${s3Path}`
     );
+
+    // Persist the descriptor that came with this hit — fields, picklist values,
+    // record types and children — into the same layout the scheduled backup uses.
+    // Runs after the records: if anything dies mid-hit, the data is the part worth
+    // having. main/ is seeded only when nothing is stored there yet; every later
+    // hit writes changes/<backupJobId>/ only. See persistRealtimeSchema.
+    await persistRealtimeSchema({
+      payload,
+      destConfig,
+      crmId,
+      crmName,
+      backupConfigId,
+      backupJobId: realtimeJobId,
+      seedMain: !storedSchema?.length,
+    });
 
     // Ensure the Glue table exists, THEN register this job's partition. The order
     // matters: BatchCreatePartition against a table that does not exist yet fails
