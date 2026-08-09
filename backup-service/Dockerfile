@@ -21,7 +21,7 @@ RUN mkdir -p /app/logs \
   && chown -R node:node /app
 
 # Expose the port the app will run on
-EXPOSE 3005
+EXPOSE 3000
 
 # Run as non-root; /app is owned by node so logs and runtime writes succeed
 USER node
