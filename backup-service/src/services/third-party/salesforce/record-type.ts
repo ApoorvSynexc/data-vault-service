@@ -11,12 +11,12 @@ interface IUploadRecordTypeMetadataParams {
   backupConfigId: string;
   objectName: string;
   type: S3KeyType;
-  backupJobId?: string;
+  backupJobId: string;
 }
 
 // Persists current Record Type metadata for an object at
-// .../schema/main/{objectName}/recordTypes/record-types.json, plus a copy under
-// .../schema/changes/{backupJobId}/. Unconditional overwrite, latest values win.
+// .../schema/changes/{backupJobId}/{objectName}/recordTypes/record-types.json.
+// Unconditional write, no read-back.
 // Never throws: record-type metadata must not fail a backup/archival job.
 const uploadRecordTypeMetadata = async ({
   destConfig,

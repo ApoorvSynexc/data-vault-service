@@ -102,13 +102,16 @@ const buildSchemaS3Key = ({
 // ---------------------------------------------------------------------------
 // Versioned schema layout (scheduled backup + archival jobs)
 //
-//   schema/main/<object>/<kind>/...                    — always the latest version
-//   schema/changes/<backupJobId>/<object>/<kind>/...   — what that job wrote
+//   schema/main/<object>/<kind>/...                    — the latest version, READ-ONLY
+//                                                        for this service (owned by
+//                                                        Schema-Sync, which promotes
+//                                                        a changes/ copy into it)
+//   schema/changes/<backupJobId>/<object>/<kind>/...   — what that job wrote; the only
+//                                                        thing this service writes
 //
 // Picklists carry an extra {fieldApiName} level, one file per picklist field.
-// This is the only layout written now. The Java Spark middleware must read
-// schema/main/{object}/fields/fields.json — it previously read the legacy folder
-// (docs/architecture-graph/java/JAVA_SCHEMA_EVOLUTION.md).
+// The Java Spark middleware must read schema/main/{object}/fields/fields.json — it
+// previously read the legacy folder (docs/architecture-graph/java/JAVA_SCHEMA_EVOLUTION.md).
 // ---------------------------------------------------------------------------
 type SchemaKind = 'fields' | 'childs' | 'picklist' | 'recordTypes';
 

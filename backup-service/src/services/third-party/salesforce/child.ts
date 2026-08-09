@@ -13,13 +13,13 @@ interface IUploadObjectChildsParams {
   backupConfigId: string;
   objectName: string;
   type: S3KeyType;
-  backupJobId?: string;
+  backupJobId: string;
 }
 
 // Persists an object's whole relationship tree (relationshipType=ALL, not just the
-// backup-eligible subset) at .../schema/main/{objectName}/childs/childs.json, plus a
-// copy under .../schema/changes/{backupJobId}/ so a tree that gained or lost a child
-// is visible per job.
+// backup-eligible subset) at
+// .../schema/changes/{backupJobId}/{objectName}/childs/childs.json, so a tree that
+// gained or lost a child is visible per job.
 // Never throws: a failed children lookup must not fail a backup/archival job — it
 // returns [] so callers that expand the job from this list simply expand nothing.
 const uploadObjectChilds = async ({

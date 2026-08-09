@@ -18,7 +18,7 @@ const base = {
 };
 const root = 'salesforce/crm-1/backup/cfg-1/schema';
 
-// ─── 1. main/ holds the latest version of every kind ──────────────────────────
+// ─── 1. main/ — the read-only latest version of every kind (Schema-Sync writes it) ──
 assert.strictEqual(
   buildSchemaKey({ ...base, kind: 'fields' }),
   `${root}/main/Account/fields/fields.json`
