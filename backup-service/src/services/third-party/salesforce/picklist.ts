@@ -14,13 +14,12 @@ interface IUploadPicklistValuesParams {
   backupConfigId: string;
   objectName: string;
   type: S3KeyType;
-  backupJobId?: string;
+  backupJobId: string;
 }
 
 // Persists current picklist values for every picklist field in the schema at
-// .../schema/main/{objectName}/picklist/{fieldApiName}/values.json, plus a copy
-// under .../schema/changes/{backupJobId}/. Straight from the Apex response —
-// no read-back, no change detection, latest values win.
+// .../schema/changes/{backupJobId}/{objectName}/picklist/{fieldApiName}/values.json.
+// Straight from the Apex response — no read-back, no change detection.
 // Never throws: picklist metadata must not fail a backup/archival job.
 const uploadPicklistValues = async ({
   schema,

@@ -9,41 +9,34 @@ import {
 import { downloadFromS3, listS3Objects, uploadToS3 } from '../destination/s3';
 
 /**
- * Writes one schema artifact straight from the Apex response — no read, no compare:
- *   - main/                 overwritten, so it always holds the latest version.
- *   - changes/<backupJobId>/ this job's copy of what it wrote.
+ * Writes one schema artifact straight from the Apex response — no read, no compare —
+ * into changes/<backupJobId>/ only. This service never writes main/: that folder is
+ * the authoritative latest version and is owned by the Schema-Sync side, which
+ * promotes a changes/ copy once it has decided the schema really moved.
  *
- * Both PUTs every time. Callers that need to know whether the schema actually moved
- * (Glue table create/update, the schemaChange flag) read the stored schema themselves
- * with readLatestSchema before calling this.
+ * A backupJobId is therefore required — without one there is no folder to write to.
  *
- * `changesOnly` skips the main/ write. It exists for the realtime webhook, whose
- * descriptor is scoped to the permissions of whoever triggered the DML: letting a
- * restricted user's narrower view overwrite main/ would shrink the authoritative
- * schema (and with it the Glue columns) for every reader.
+ * Callers that need to know whether the schema actually moved (Glue table
+ * create/update, the schemaChange flag) read the stored schema themselves with
+ * readLatestSchema before calling this.
  */
 const writeSchemaFile = async (
   destConfig: IDestinationConfig,
-  params: ISchemaKeyParams,
-  content: unknown,
-  { changesOnly = false }: { changesOnly?: boolean } = {}
+  params: ISchemaKeyParams & { backupJobId: string },
+  content: unknown
 ): Promise<void> => {
-  const { backupJobId, ...mainParams } = params;
   const buffer = Buffer.from(JSON.stringify(content, null, 2));
-
-  if (!changesOnly) {
-    await uploadToS3(destConfig, buildSchemaKey(mainParams), buffer);
-  }
-  if (backupJobId) {
-    await uploadToS3(destConfig, buildSchemaKey(params), buffer);
-  }
+  await uploadToS3(destConfig, buildSchemaKey(params), buffer);
 };
 
 /**
  * Latest stored field schema for an object: main/ first, falling back to the legacy
  * schema/<object>/fields/ folder (newest fields_<ts>.json, else fields.json) so configs
- * backed up before this layout keep resolving until their next job writes main/.
- * Returns null when neither layout has a schema yet.
+ * backed up before this layout keep resolving.
+ *
+ * Read-only on main/ — writeSchemaFile no longer populates it, so this returns null
+ * until Schema-Sync promotes a changes/ copy. Callers must treat null as "no baseline
+ * yet" (schemaChanged=true, fall back to another column source), never as an error.
  */
 const readLatestSchema = async (
   destConfig: IDestinationConfig,
