@@ -102,13 +102,16 @@ const buildSchemaS3Key = ({
 // ---------------------------------------------------------------------------
 // Versioned schema layout (scheduled backup + archival jobs)
 //
-//   schema/main/<kind>/<object>/...                    — always the latest version
-//   schema/changes/<backupJobId>/<kind>/<object>/...   — what that job wrote
+//   schema/main/<object>/<kind>/...                    — the latest version, READ-ONLY
+//                                                        for this service (owned by
+//                                                        Schema-Sync, which promotes
+//                                                        a changes/ copy into it)
+//   schema/changes/<backupJobId>/<object>/<kind>/...   — what that job wrote; the only
+//                                                        thing this service writes
 //
 // Picklists carry an extra {fieldApiName} level, one file per picklist field.
-// This is the only layout written now. The Java Spark middleware must read
-// schema/main/fields/{object}/fields.json — it previously read the legacy folder
-// (docs/architecture-graph/java/JAVA_SCHEMA_EVOLUTION.md).
+// The Java Spark middleware must read schema/main/{object}/fields/fields.json — it
+// previously read the legacy folder (docs/architecture-graph/java/JAVA_SCHEMA_EVOLUTION.md).
 // ---------------------------------------------------------------------------
 type SchemaKind = 'fields' | 'childs' | 'picklist' | 'recordTypes';
 
@@ -136,8 +139,8 @@ const buildSchemaKey = ({
   backupJobId,
 }: ISchemaKeyParams): string => {
   const scope = backupJobId ? `changes/${backupJobId}` : 'main';
-  const leaf = kind === 'picklist' ? `${objectName}/${fieldApiName}` : objectName;
-  return `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${scope}/${kind}/${leaf}/${SCHEMA_KIND_FILE[kind]}`;
+  const tail = kind === 'picklist' ? `picklist/${fieldApiName}` : kind;
+  return `${crmName}/${crmId}/${type}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${SCHEMA_KIND_FILE[kind]}`;
 };
 
 // The legacy layout kept every version as fields_<ts>.json beside the original

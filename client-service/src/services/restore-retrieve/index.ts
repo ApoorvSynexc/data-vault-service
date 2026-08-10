@@ -1615,7 +1615,7 @@ export type FetchObjectFieldsResult =
  *   2. Read the latest schema file from S3 and return its parsed contents.
  *
  * Schema S3 layout: backup and archival jobs keep the current version at
- * schema/main/fields/{object}/fields.json and copy what each job wrote into
+ * schema/main/{object}/fields/fields.json and copy what each job wrote into
  * schema/changes/{backupJobId}/. readSchemaFile handles the legacy
  * schema/{object}/fields/ fallback for configs that have not run since.
  */
@@ -1675,7 +1675,7 @@ const fetchObjectFields = async (
 
 /**
  * Returns the picklist values persisted on S3 by backup-service at
- * .../schema/main/picklist/{objectApiName}/{fieldApiName}/values.json — exactly
+ * .../schema/main/{objectApiName}/picklist/{fieldApiName}/values.json — exactly
  * as stored. { ok:false } when the config isn't resolvable/owned or no values
  * file exists for the field.
  */
