@@ -68,7 +68,7 @@ const loadStoredSchema = async (
   destConfig: IDestinationConfig
 ): Promise<ISchemaField[] | null> => {
   try {
-    // schema/main/fields/, falling back to the legacy folder for configs whose last
+    // schema/main/{object}/fields/, falling back to the legacy folder for configs whose last
     // scheduled backup predates the main/changes layout.
     return (await readLatestSchema(destConfig, {
       crmId,
@@ -132,8 +132,8 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     // Persist the descriptor that came with this hit — fields, picklist values,
     // record types and children — into the same layout the scheduled backup uses.
     // Runs after the records: if anything dies mid-hit, the data is the part worth
-    // having. main/ is seeded only when nothing is stored there yet; every later
-    // hit writes changes/<backupJobId>/ only. See persistRealtimeSchema.
+    // having. Writes changes/<realtimeJobId>/ only — main/ is never written from a
+    // permission-scoped webhook descriptor. See persistRealtimeSchema.
     await persistRealtimeSchema({
       payload,
       destConfig,
@@ -141,7 +141,6 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
       crmName,
       backupConfigId,
       backupJobId: realtimeJobId,
-      seedMain: !storedSchema?.length,
     });
 
     // Ensure the Glue table exists, THEN register this job's partition. The order

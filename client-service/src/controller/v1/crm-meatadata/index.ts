@@ -30,7 +30,7 @@ const getSalesforceObjectSchema = async (req: IRequest, res: IResponse) => {
     secretAccessKey: destConfig.secretAccessKey,
   };
 
-  // Latest version from schema/main/fields/, legacy folder as fallback.
+  // Latest version from schema/main/{object}/fields/, legacy folder as fallback.
   const schemaJson = await readSchemaFile(s3Config, {
     crmId: user.crmId!,
     objectName: String(objetName),
