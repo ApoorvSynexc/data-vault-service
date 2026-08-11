@@ -3,14 +3,12 @@ import { IDestinationConfig, ISchemaField } from "../../../../models";
 import { decrypt } from "../../../../utils/encryption";
 import { SCHEMA_KIND_FILE } from "../../../../utils/helper";
 import { getBackupJob } from "../../../backup-job";
-import { uploadToS3 } from "../../../destination";
-import { readLatestSchema } from "../../../schema";
+import { downloadFromS3, uploadToS3 } from "../../../destination";
 import { getObjectMetadata } from "../api-request";
 
 interface ISalesforceMetadataHandler {
     metadataType: "fields" | "childs" | "picklist" | "recordTypes";
     policyConfigType: "backup" | "archival";
-    isInitialBackup: boolean;
     crmName: string;
     crmId: string;
     backupConfigId: string;
@@ -36,8 +34,15 @@ interface ISchemaDiff {
     modifiedFields: ISchemaFieldChange[];
 }
 
+interface IStoredSchemaEntry {
+    date: string;
+    backupJobId: string;
+    context: ISchemaField[];
+}
+
 interface ISchemaComparisonResult extends ISchemaDiff {
     latestSchema: ISchemaField[];
+    storedEntries: IStoredSchemaEntry[];
 }
 
 interface IBuildKeyParams extends ISalesforceMetadataHandler {
@@ -86,10 +91,9 @@ const getChangedKeys = (before: ISchemaField, after: ISchemaField): string[] => 
 };
 
 const buildS3Key = (params: IBuildKeyParams) => {
-    const { metadataType, crmId, crmName, backupConfigId, objectName, policyConfigType, isInitialBackup, fieldApiName } = params;
-    const scope = !isInitialBackup ? `changes` : 'main';
+    const { metadataType, crmId, crmName, backupConfigId, objectName, policyConfigType, fieldApiName } = params;
     const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;
-    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${SCHEMA_KIND_FILE[metadataType]}.json`;
+    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${objectName}/${tail}/${SCHEMA_KIND_FILE[metadataType]}.json`;
 }
 
 const fieldKey = (field: ISchemaField): string => field.apiName ?? (field as any).name ?? "";
@@ -124,8 +128,6 @@ const diffSchemas = (existing: ISchemaField[], latest: ISchemaField[]): ISchemaD
     };
 };
 
-// The handler is only given ids, not credentials — resolve the destination
-// bucket from the job's encrypted destination, same as runBackupJob does.
 const getDestConfigForJob = async (backupJobId: string): Promise<IDestinationConfig> => {
     const job = await getBackupJob(backupJobId);
     if (!job?.destination) {
@@ -136,17 +138,32 @@ const getDestConfigForJob = async (backupJobId: string): Promise<IDestinationCon
     ) as IDestinationConfig;
 };
 
-const schemaComparison = async (params: ISchemaComparison): Promise<ISchemaComparisonResult> => {
-    const { crmId, crmName, backupConfigId, objectName, destConfig, policyConfigType } = params;
 
-    const [storedSchema, { schema: latestSchema }] = await Promise.all([
-        readLatestSchema(destConfig, { crmId, crmName, backupConfigId, objectName, type: policyConfigType }),
+const getStoredSchemaEntries = async (
+    params: ISalesforceMetadataHandler,
+    destConfig: IDestinationConfig
+): Promise<IStoredSchemaEntry[]> => {
+    const key = buildS3Key({ ...params, metadataType: "fields" });
+    const file = await downloadFromS3(destConfig, key);
+    if (!file) {
+        return [];
+    }
+    const stored = JSON.parse(file.toString());
+    return Array.isArray(stored) ? stored : [];
+};
+
+const schemaComparison = async (params: ISchemaComparison): Promise<ISchemaComparisonResult> => {
+    const { backupConfigId, objectName, destConfig, policyConfigType } = params;
+
+    const [storedEntries, { schema: latestSchema }] = await Promise.all([
+        getStoredSchemaEntries(params, destConfig),
         getObjectMetadata(backupConfigId, objectName, policyConfigType),
     ]);
 
-    const diff = diffSchemas((storedSchema ?? []) as ISchemaField[], latestSchema);
+    const storedSchema = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
+    const diff = diffSchemas(storedSchema, latestSchema);
 
-    return { ...diff, latestSchema };
+    return { ...diff, latestSchema, storedEntries };
 }
 
 const metadataTypeComparison = async () => {
@@ -162,8 +179,13 @@ const schemaHandler = async (params: ISalesforceMetadataHandler) => {
         const destConfig = await getDestConfigForJob(params.backupJobId);
         const diff = await schemaComparison({ ...params, destConfig });
         if (diff.schemaChanged) {
-            const schemaPayload = { date: new Date().toISOString(), backupJobId: params.backupJobId, context: diff.latestSchema };
-            const buffer = Buffer.from(JSON.stringify(schemaPayload, null, 2));
+            const newEntry: IStoredSchemaEntry = {
+                date: new Date().toISOString(),
+                backupJobId: params.backupJobId,
+                context: diff.latestSchema,
+            };
+            const updatedEntries = [...diff.storedEntries, newEntry];
+            const buffer = Buffer.from(JSON.stringify(updatedEntries, null, 2));
             const s3Key = buildS3Key({
                 ...params,
                 metadataType: 'fields',
