@@ -12,6 +12,14 @@ import {
     IStoredEntry,
 } from "../common";
 
+// get-record-types replies with an envelope around the record-type list, not a
+// bare array — count/objectApiName travel alongside recordTypes.
+export interface IRecordTypesResponse {
+    count: number;
+    recordTypes: IRecordTypeInfo[];
+    objectApiName: string;
+}
+
 export interface IRecordTypeChange {
     recordTypeId: string;
     changedKeys: string[];
@@ -26,10 +34,12 @@ export interface IRecordTypeDiff {
     modifiedRecordTypes: IRecordTypeChange[];
 }
 
-export type IStoredRecordTypeEntry = IStoredEntry<IRecordTypeInfo[]>;
+// The full envelope is stored, not just the record-type list, so count/
+// objectApiName survive in the history too.
+export type IStoredRecordTypeEntry = IStoredEntry<IRecordTypesResponse>;
 
 export interface IRecordTypeComparisonResult extends IRecordTypeDiff {
-    latestRecordTypes: IRecordTypeInfo[];
+    latestRecordTypes: IRecordTypesResponse;
     storedEntries: IStoredRecordTypeEntry[];
 }
 
@@ -56,21 +66,30 @@ export const diffRecordTypes = (
     };
 };
 
+// The diff itself only looks at .recordTypes — count/objectApiName are carried
+// along in the stored envelope but aren't part of the comparison.
 export const recordTypeComparison = async (
     params: ISchemaComparison
 ): Promise<IRecordTypeComparisonResult> => {
     const { backupConfigId, objectName, destConfig } = params;
     const key = buildS3Key({ ...params, metadataType: "recordTypes" });
 
-    const [storedEntries, latestRecordTypes] = await Promise.all([
-        getStoredEntries<IRecordTypeInfo[]>(destConfig, key),
-        getRecordTypeValues(backupConfigId, objectName) as Promise<IRecordTypeInfo[]>,
+    const [storedEntries, latestRecordTypesRaw] = await Promise.all([
+        getStoredEntries<IRecordTypesResponse>(destConfig, key),
+        getRecordTypeValues(backupConfigId, objectName) as Promise<IRecordTypesResponse | undefined>,
     ]);
 
-    const storedRecordTypes = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
-    const diff = diffRecordTypes(storedRecordTypes, latestRecordTypes ?? []);
+    const latestRecordTypes: IRecordTypesResponse = latestRecordTypesRaw ?? {
+        count: 0,
+        recordTypes: [],
+        objectApiName: objectName,
+    };
+    const storedRecordTypes = storedEntries.length
+        ? (storedEntries[storedEntries.length - 1].context.recordTypes ?? [])
+        : [];
+    const diff = diffRecordTypes(storedRecordTypes, latestRecordTypes.recordTypes ?? []);
 
-    return { ...diff, latestRecordTypes: latestRecordTypes ?? [], storedEntries };
+    return { ...diff, latestRecordTypes, storedEntries };
 };
 
 export const recordTypeHandler = async (params: ISalesforceMetadataHandler) => {
