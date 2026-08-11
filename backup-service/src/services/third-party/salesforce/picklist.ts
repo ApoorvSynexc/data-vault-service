@@ -4,7 +4,7 @@ import { type S3KeyType } from '../../../utils/helper';
 import { writeSchemaFile } from '../../schema';
 import { getPicklistValues } from './api-request';
 
-const PICKLIST_TYPES = new Set(['picklist', 'multipicklist']);
+export const PICKLIST_TYPES = new Set(['picklist', 'multipicklist']);
 
 interface IUploadPicklistValuesParams {
   schema: { apiName: string; dataType?: string }[];
