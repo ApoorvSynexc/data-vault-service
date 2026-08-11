@@ -14,6 +14,7 @@ import {
   registerBackupJobPartition,
   updateGlueTableSchema,
 } from '../../../glue';
+import { salesforceMetadataHandler } from '../../metadata';
 
 // SOQL injection guards.
 // Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")
@@ -227,11 +228,22 @@ export const exportFirstTime = async (
     }
     await updateBackupConfig(backupConfigId, updateParams);
 
-    await writeSchemaFile(
-      destConfig,
-      { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
-      schema
-    );
+    await salesforceMetadataHandler({
+      metadataType: 'fields',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectName,
+      isInitialBackup: true,
+    });
+
+    // await writeSchemaFile(
+    //   destConfig,
+    //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
+    //   schema
+    // );
 
     await createCsvGlueTable({
       crmId,
@@ -455,22 +467,35 @@ export const exportIncremental = async (
     // is only here to answer "did the schema move?" — Glue and the EMR schema-change
     // operation key off that, and claiming a change every run would force a Hudi
     // rewrite on every job.
-    const storedSchema = await readLatestSchema(destConfig, {
+
+
+    const schemaChanged =  await salesforceMetadataHandler({
+      metadataType: 'fields',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
       crmId,
       crmName,
-      backupConfigId,
       objectName,
-      type: 'backup',
+      isInitialBackup: true,
     });
-    const schemaChanged = !storedSchema || !schemasAreEqual(storedSchema, latestSchema);
 
-    await writeSchemaFile(
-      destConfig,
-      { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
-      latestSchema
-    );
+    // const storedSchema = await readLatestSchema(destConfig, {
+    //   crmId,
+    //   crmName,
+    //   backupConfigId,
+    //   objectName,
+    //   type: 'backup',
+    // });
+    // const schemaChanged = !storedSchema || !schemasAreEqual(storedSchema, latestSchema);
 
-    if (schemaChanged) {
+    // await writeSchemaFile(
+    //   destConfig,
+    //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
+    //   latestSchema
+    // );
+
+    if (schemaChanged?.metadataType === 'fields' && schemaChanged?.diff.schemaChanged) {
       if (backupConfig?.objects) {
         const updatedObjects = backupConfig.objects.map((obj) =>
           obj.name === objectName ? { ...obj, schemaChange: true } : obj

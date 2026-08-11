@@ -12,6 +12,7 @@ export interface ISalesforceMetadataHandler {
     backupConfigId: string;
     objectName: string;
     backupJobId: string;
+    isInitialBackup: boolean;
 }
 
 export interface ISchemaComparison extends ISalesforceMetadataHandler {
