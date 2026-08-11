@@ -1,6 +1,7 @@
 import { logger } from "../../../../middlewares"
 import { IDestinationConfig, ISchemaField } from "../../../../models";
 import { decrypt } from "../../../../utils/encryption";
+import { SCHEMA_KIND_FILE } from "../../../../utils/helper";
 import { getBackupJob } from "../../../backup-job";
 import { uploadToS3 } from "../../../destination";
 import { readLatestSchema } from "../../../schema";
@@ -88,7 +89,7 @@ const buildS3Key = (params: IBuildKeyParams) => {
     const { metadataType, crmId, crmName, backupConfigId, backupJobId, objectName, policyConfigType, isInitialBackup, fieldApiName } = params;
     const scope = !isInitialBackup ? `changes/${backupJobId}` : 'main';
     const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;
-    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${metadataType}.json`;
+    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${SCHEMA_KIND_FILE[metadataType]}.json`;
 }
 
 const fieldKey = (field: ISchemaField): string => field.apiName ?? (field as any).name ?? "";
