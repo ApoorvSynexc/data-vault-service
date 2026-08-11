@@ -2,19 +2,23 @@ import { logger } from "../../../../middlewares"
 import { IDestinationConfig, ISchemaField } from "../../../../models";
 import { decrypt } from "../../../../utils/encryption";
 import { getBackupJob } from "../../../backup-job";
-import { getBackupConfigById, updateBackupConfig } from "../../../backup-config";
-import { readLatestSchema, writeSchemaFile } from "../../../schema";
+import { uploadToS3 } from "../../../destination";
+import { readLatestSchema } from "../../../schema";
 import { getObjectMetadata } from "../api-request";
-import { updateGlueTableSchema } from "../../glue";
 
 interface ISalesforceMetadataHandler {
-    metadataType: "fields" | "childs" | "metadataType" | "recordTypes";
+    metadataType: "fields" | "childs" | "picklist" | "recordTypes";
     policyConfigType: "backup" | "archival";
+    isInitialBackup: boolean;
     crmName: string;
     crmId: string;
     backupConfigId: string;
     objectName: string;
     backupJobId: string;
+}
+
+interface ISchemaComparison extends ISalesforceMetadataHandler {
+    destConfig: IDestinationConfig;
 }
 
 interface ISchemaFieldChange {
@@ -33,6 +37,10 @@ interface ISchemaDiff {
 
 interface ISchemaComparisonResult extends ISchemaDiff {
     latestSchema: ISchemaField[];
+}
+
+interface IBuildKeyParams extends ISalesforceMetadataHandler {
+    fieldApiName?: string;
 }
 
 // Recursive, order-independent equality — two objects with the same keys in a
@@ -120,10 +128,15 @@ const getDestConfigForJob = async (backupJobId: string): Promise<IDestinationCon
     ) as IDestinationConfig;
 };
 
-const schemaComparison = async (params: ISalesforceMetadataHandler): Promise<ISchemaComparisonResult> => {
-    const { crmId, crmName, backupConfigId, objectName, backupJobId, policyConfigType } = params;
+const buildS3Key = (params: IBuildKeyParams) => {
+    const { metadataType, crmId, crmName, backupConfigId, backupJobId, objectName, policyConfigType, isInitialBackup, fieldApiName } = params;
+    let scope = isInitialBackup ? `changes/${backupJobId}` : 'main';
+    const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;
+    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${metadataType}.json`;
+}
 
-    const destConfig = await getDestConfigForJob(backupJobId);
+const schemaComparison = async (params: ISchemaComparison): Promise<ISchemaComparisonResult> => {
+    const { crmId, crmName, backupConfigId, objectName, destConfig, policyConfigType } = params;
 
     const [storedSchema, { schema: latestSchema }] = await Promise.all([
         readLatestSchema(destConfig, { crmId, crmName, backupConfigId, objectName, type: policyConfigType }),
@@ -131,37 +144,6 @@ const schemaComparison = async (params: ISalesforceMetadataHandler): Promise<ISc
     ]);
 
     const diff = diffSchemas((storedSchema ?? []) as ISchemaField[], latestSchema);
-
-    await writeSchemaFile(
-        destConfig,
-        { crmId, crmName, backupConfigId, objectName, type: policyConfigType, kind: "fields", backupJobId },
-        latestSchema
-    );
-
-    if (diff.schemaChanged) {
-        const backupConfig = await getBackupConfigById(backupConfigId);
-        if (backupConfig?.objects) {
-            const updatedObjects = backupConfig.objects.map((obj) =>
-                obj.name === objectName ? { ...obj, schemaChange: true } : obj
-            );
-            await updateBackupConfig(backupConfigId, { objects: updatedObjects });
-        }
-
-        updateGlueTableSchema({
-            crmId,
-            backupConfigId,
-            objectName,
-            columns: latestSchema.map((f: ISchemaField) => ({ name: f.apiName, type: "string" })),
-        }).catch((err: any) =>
-            logger.error(
-                `[metadata:schema] failed to update glue table schema | backupConfigId:${backupConfigId} objectName:${objectName} err:${err?.message ?? err}`
-            )
-        );
-
-        logger.info(
-            `[metadata:schema] schema change detected | backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${objectName} added:${diff.addedFields.length} removed:${diff.removedFields.length} modified:${diff.modifiedFields.length}`
-        );
-    }
 
     return { ...diff, latestSchema };
 }
@@ -174,11 +156,19 @@ const recordTypeComparison = async () => {
 
 }
 
-
-
 const schemaHandler = async (params: ISalesforceMetadataHandler) => {
     try {
-        await schemaComparison(params);
+        const destConfig = await getDestConfigForJob(params.backupJobId);
+        const diff = await schemaComparison({ ...params, destConfig });
+        if (diff.schemaChanged) {
+            const buffer = Buffer.from(JSON.stringify(diff.latestSchema, null, 2));
+            const s3Key = buildS3Key({
+                ...params,
+                metadataType: 'fields',
+            });
+
+            await uploadToS3(destConfig, s3Key, buffer);
+        }
     } catch (error) {
         throw error;
     }
@@ -217,7 +207,7 @@ const salesforceMetadataHandler = async (params: ISalesforceMetadataHandler) => 
             case "childs":
                 await childHandler();
                 break;
-            case "metadataType":
+            case "picklist":
                 await metadataTypeHandler();
                 break;
             case "recordTypes":
