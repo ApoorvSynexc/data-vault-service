@@ -477,7 +477,7 @@ export const exportIncremental = async (
       crmId,
       crmName,
       objectName,
-      isInitialBackup: true,
+      isInitialBackup: false,
     });
 
     // const storedSchema = await readLatestSchema(destConfig, {
