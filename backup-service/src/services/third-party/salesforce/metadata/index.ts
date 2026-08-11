@@ -170,6 +170,8 @@ const schemaHandler = async (params: ISalesforceMetadataHandler) => {
 
             await uploadToS3(destConfig, s3Key, buffer);
         }
+
+        return diff;
     } catch (error) {
         throw error;
     }
@@ -199,7 +201,6 @@ const recordTypeHandler = async () => {
 
 const salesforceMetadataHandler = async (params: ISalesforceMetadataHandler) => {
     const { metadataType } = params;
-
     try {
         switch (metadataType) {
             case "fields":
