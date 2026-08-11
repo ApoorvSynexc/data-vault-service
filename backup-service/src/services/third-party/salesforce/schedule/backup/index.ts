@@ -122,16 +122,26 @@ export const exportFirstTime = async (
       objectName,
       'backup'
     );
-    await uploadPicklistValues({
-      schema,
-      destConfig,
+    await salesforceMetadataHandler({
+      metadataType: 'picklist',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
       crmId,
       crmName,
-      backupConfigId,
       objectName,
-      type: 'backup',
-      backupJobId,
+      isInitialBackup: true,
     });
+    // await uploadPicklistValues({
+    //   schema,
+    //   destConfig,
+    //   crmId,
+    //   crmName,
+    //   backupConfigId,
+    //   objectName,
+    //   type: 'backup',
+    //   backupJobId,
+    // });
     await uploadRecordTypeMetadata({
       destConfig,
       crmId,
@@ -216,10 +226,10 @@ export const exportFirstTime = async (
       const updatedObjects = backupConfig.objects.map((obj) =>
         obj.name === objectName
           ? {
-              ...obj,
-              sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes,
-              completedRecordCount: (obj.completedRecordCount ?? 0) + completedRecordCount,
-            }
+            ...obj,
+            sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes,
+            completedRecordCount: (obj.completedRecordCount ?? 0) + completedRecordCount,
+          }
           : obj
       );
       updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
@@ -319,16 +329,16 @@ export const exportIncremental = async (
       objectName,
       'backup'
     );
-    await uploadPicklistValues({
-      schema: latestSchema,
-      destConfig,
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      type: 'backup',
-      backupJobId,
-    });
+    // await uploadPicklistValues({
+    //   schema: latestSchema,
+    //   destConfig,
+    //   crmId,
+    //   crmName,
+    //   backupConfigId,
+    //   objectName,
+    //   type: 'backup',
+    //   backupJobId,
+    // });
     await uploadRecordTypeMetadata({
       destConfig,
       crmId,
@@ -469,7 +479,17 @@ export const exportIncremental = async (
     // rewrite on every job.
 
 
-    const schemaChanged =  await salesforceMetadataHandler({
+    await salesforceMetadataHandler({
+      metadataType: 'picklist',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectName,
+      isInitialBackup: false,
+    });
+    const schemaChanged = await salesforceMetadataHandler({
       metadataType: 'fields',
       policyConfigType: 'backup',
       backupConfigId,
