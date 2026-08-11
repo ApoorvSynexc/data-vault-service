@@ -86,8 +86,8 @@ const getChangedKeys = (before: ISchemaField, after: ISchemaField): string[] => 
 };
 
 const buildS3Key = (params: IBuildKeyParams) => {
-    const { metadataType, crmId, crmName, backupConfigId, backupJobId, objectName, policyConfigType, isInitialBackup, fieldApiName } = params;
-    const scope = !isInitialBackup ? `changes/${backupJobId}` : 'main';
+    const { metadataType, crmId, crmName, backupConfigId, objectName, policyConfigType, isInitialBackup, fieldApiName } = params;
+    const scope = !isInitialBackup ? `changes` : 'main';
     const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;
     return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${SCHEMA_KIND_FILE[metadataType]}.json`;
 }
@@ -162,7 +162,7 @@ const schemaHandler = async (params: ISalesforceMetadataHandler) => {
         const destConfig = await getDestConfigForJob(params.backupJobId);
         const diff = await schemaComparison({ ...params, destConfig });
         if (diff.schemaChanged) {
-            const schemaPayload = { date: new Date().toISOString(), context: diff.latestSchema };
+            const schemaPayload = { date: new Date().toISOString(), backupJobId: params.backupJobId, context: diff.latestSchema };
             const buffer = Buffer.from(JSON.stringify(schemaPayload, null, 2));
             const s3Key = buildS3Key({
                 ...params,
