@@ -97,9 +97,21 @@ export const picklistHandler = async (params: ISalesforceMetadataHandler) => {
             results
                 .filter((result) => result.valuesChanged)
                 .map((result) => {
+                    const operations: Array<"inserts" | "updates" | "deletes"> = [];
+                    if (result.addedValues.length) {
+                        operations.push("inserts");
+                    }
+                    if (result.modifiedValues.length) {
+                        operations.push("updates");
+                    }
+                    if (result.removedValues.length) {
+                        operations.push("deletes");
+                    }
                     const newEntry: IStoredPicklistEntry = {
                         date: new Date().toISOString(),
                         backupJobId: params.backupJobId,
+                        operations,
+                        sourceType: params.isInitialBackup ? "main" : "changes",
                         context: result.latestValues,
                     };
                     const updatedEntries = [...result.storedEntries, newEntry];

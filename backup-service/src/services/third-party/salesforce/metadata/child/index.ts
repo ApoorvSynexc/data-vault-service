@@ -84,9 +84,21 @@ export const childHandler = async (
         const destConfig = await getDestConfigForJob(params.backupJobId);
         const diff = await childComparison({ ...params, destConfig, instanceUrl, tokens });
         if (diff.childsChanged) {
+            const operations: Array<"inserts" | "updates" | "deletes"> = [];
+            if (diff.addedChilds.length) {
+                operations.push("inserts");
+            }
+            if (diff.modifiedChilds.length) {
+                operations.push("updates");
+            }
+            if (diff.removedChilds.length) {
+                operations.push("deletes");
+            }
             const newEntry: IStoredChildEntry = {
                 date: new Date().toISOString(),
                 backupJobId: params.backupJobId,
+                operations,
+                sourceType: params.isInitialBackup ? "main" : "changes",
                 context: diff.latestChilds,
             };
             const updatedEntries = [...diff.storedEntries, newEntry];

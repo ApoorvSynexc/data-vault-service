@@ -77,9 +77,21 @@ export const recordTypeHandler = async (params: ISalesforceMetadataHandler) => {
         const destConfig = await getDestConfigForJob(params.backupJobId);
         const diff = await recordTypeComparison({ ...params, destConfig });
         if (diff.recordTypesChanged) {
+            const operations: Array<"inserts" | "updates" | "deletes"> = [];
+            if (diff.addedRecordTypes.length) {
+                operations.push("inserts");
+            }
+            if (diff.modifiedRecordTypes.length) {
+                operations.push("updates");
+            }
+            if (diff.removedRecordTypes.length) {
+                operations.push("deletes");
+            }
             const newEntry: IStoredRecordTypeEntry = {
                 date: new Date().toISOString(),
                 backupJobId: params.backupJobId,
+                operations,
+                sourceType: params.isInitialBackup ? "main" : "changes",
                 context: diff.latestRecordTypes,
             };
             const updatedEntries = [...diff.storedEntries, newEntry];
