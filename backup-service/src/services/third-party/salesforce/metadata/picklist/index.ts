@@ -12,6 +12,15 @@ import {
     IStoredEntry,
 } from "../common";
 
+// get-picklist-values replies with an envelope around the value list, not a
+// bare array — count/fieldApiName/objectApiName travel alongside the values.
+export interface IPicklistValuesResponse {
+    count: number;
+    values: IPicklistValue[];
+    fieldApiName: string;
+    objectApiName: string;
+}
+
 export interface IPicklistValueChange {
     value: string;
     changedKeys: string[];
@@ -26,11 +35,13 @@ export interface IPicklistDiff {
     modifiedValues: IPicklistValueChange[];
 }
 
-export type IStoredPicklistEntry = IStoredEntry<IPicklistValue[]>;
+// The full envelope is stored, not just the value list, so count/fieldApiName/
+// objectApiName survive in the history too.
+export type IStoredPicklistEntry = IStoredEntry<IPicklistValuesResponse>;
 
 export interface IPicklistFieldResult extends IPicklistDiff {
     fieldApiName: string;
-    latestValues: IPicklistValue[];
+    latestValues: IPicklistValuesResponse;
     storedEntries: IStoredPicklistEntry[];
 }
 
@@ -55,6 +66,8 @@ export const diffPicklistValues = (existing: IPicklistValue[], latest: IPicklist
 
 // One picklist/multipicklist field's value-history, diffed the same way schema
 // fields are: read the last stored snapshot, fetch the live values, compare.
+// The diff itself only looks at .values — count/fieldApiName/objectApiName are
+// carried along in the stored envelope but aren't part of the comparison.
 const picklistFieldComparison = async (
     params: ISchemaComparison,
     fieldApiName: string
@@ -62,15 +75,25 @@ const picklistFieldComparison = async (
     const { backupConfigId, objectName, destConfig } = params;
     const key = buildS3Key({ ...params, metadataType: "picklist", fieldApiName });
 
-    const [storedEntries, latestValues] = await Promise.all([
-        getStoredEntries<IPicklistValue[]>(destConfig, key),
-        getPicklistValues(backupConfigId, objectName, fieldApiName) as Promise<IPicklistValue[]>,
+    const [storedEntries, latestValuesRaw] = await Promise.all([
+        getStoredEntries<IPicklistValuesResponse>(destConfig, key),
+        getPicklistValues(backupConfigId, objectName, fieldApiName) as Promise<
+            IPicklistValuesResponse | undefined
+        >,
     ]);
 
-    const storedValues = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
-    const diff = diffPicklistValues(storedValues, latestValues ?? []);
+    const latestValues: IPicklistValuesResponse = latestValuesRaw ?? {
+        count: 0,
+        values: [],
+        fieldApiName,
+        objectApiName: objectName,
+    };
+    const storedValues = storedEntries.length
+        ? (storedEntries[storedEntries.length - 1].context.values ?? [])
+        : [];
+    const diff = diffPicklistValues(storedValues, latestValues.values ?? []);
 
-    return { ...diff, fieldApiName, latestValues: latestValues ?? [], storedEntries };
+    return { ...diff, fieldApiName, latestValues, storedEntries };
 };
 
 // Every picklist/multipicklist field on the object, compared in parallel — same
