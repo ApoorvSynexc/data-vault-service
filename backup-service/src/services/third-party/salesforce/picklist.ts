@@ -33,15 +33,15 @@ const uploadPicklistValues = async ({
 }: IUploadPicklistValuesParams): Promise<void> => {
   // dataType is the Apex DisplayType name — PICKLIST and MULTIPICKLIST are
   // separate types and get-picklist-values serves both.
-  console.log('PICKLIST UPLOAD START');
+  console.log('PICKLIST UPLOAD START ', objectName);
   const picklistFields = schema.filter((f) =>
     PICKLIST_TYPES.has(String(f.dataType ?? '').toLowerCase())
   );
   if (!picklistFields.length) {
-    console.log('picklist upload skipped');
+    console.log('picklist upload skipped ', objectName);
     return;
   }
-  console.log('Picklist FOUND', picklistFields.length);
+  console.log('Picklist FOUND ', objectName, ' picklistFields.length:', picklistFields.length);
   await Promise.all(
     picklistFields.map(async (field) => {
       try {
