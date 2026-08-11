@@ -162,7 +162,8 @@ const schemaHandler = async (params: ISalesforceMetadataHandler) => {
         const destConfig = await getDestConfigForJob(params.backupJobId);
         const diff = await schemaComparison({ ...params, destConfig });
         if (diff.schemaChanged) {
-            const buffer = Buffer.from(JSON.stringify(diff.latestSchema, null, 2));
+            const schemaPayload = { date: new Date().toISOString(), context: diff.latestSchema };
+            const buffer = Buffer.from(JSON.stringify(schemaPayload, null, 2));
             const s3Key = buildS3Key({
                 ...params,
                 metadataType: 'fields',
