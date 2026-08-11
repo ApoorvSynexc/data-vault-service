@@ -84,6 +84,13 @@ const getChangedKeys = (before: ISchemaField, after: ISchemaField): string[] => 
     return changed;
 };
 
+const buildS3Key = (params: IBuildKeyParams) => {
+    const { metadataType, crmId, crmName, backupConfigId, backupJobId, objectName, policyConfigType, isInitialBackup, fieldApiName } = params;
+    const scope = !isInitialBackup ? `changes/${backupJobId}` : 'main';
+    const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;
+    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${metadataType}.json`;
+}
+
 const fieldKey = (field: ISchemaField): string => field.apiName ?? (field as any).name ?? "";
 
 // Field-by-field, object-level diff of two schema snapshots. Order independent
@@ -127,13 +134,6 @@ const getDestConfigForJob = async (backupJobId: string): Promise<IDestinationCon
         decrypt({ ciphertext: job.destination.ciphertext, iv: job.destination.iv })
     ) as IDestinationConfig;
 };
-
-const buildS3Key = (params: IBuildKeyParams) => {
-    const { metadataType, crmId, crmName, backupConfigId, backupJobId, objectName, policyConfigType, isInitialBackup, fieldApiName } = params;
-    let scope = isInitialBackup ? `changes/${backupJobId}` : 'main';
-    const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;
-    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${scope}/${objectName}/${tail}/${metadataType}.json`;
-}
 
 const schemaComparison = async (params: ISchemaComparison): Promise<ISchemaComparisonResult> => {
     const { crmId, crmName, backupConfigId, objectName, destConfig, policyConfigType } = params;
