@@ -1,3 +1,4 @@
+import { logger } from "../../../../../middlewares";
 import { IRecordTypeInfo } from "../../../../../models";
 import { uploadToS3 } from "../../../../destination";
 import { getRecordTypeValues } from "../../api-request";
@@ -73,10 +74,14 @@ export const recordTypeComparison = async (
 };
 
 export const recordTypeHandler = async (params: ISalesforceMetadataHandler) => {
+    const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const destConfig = await getDestConfigForJob(params.backupJobId);
+        const destConfig = await getDestConfigForJob(backupJobId);
         const diff = await recordTypeComparison({ ...params, destConfig });
         if (diff.recordTypesChanged) {
+            logger.info(
+                `Object record type change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedRecordTypes.length}, removed=${diff.removedRecordTypes.length}, modified=${diff.modifiedRecordTypes.length}`
+            );
             const operations: Array<"inserts" | "updates" | "deletes"> = [];
             if (diff.addedRecordTypes.length) {
                 operations.push("inserts");
@@ -89,7 +94,7 @@ export const recordTypeHandler = async (params: ISalesforceMetadataHandler) => {
             }
             const newEntry: IStoredRecordTypeEntry = {
                 date: new Date().toISOString(),
-                backupJobId: params.backupJobId,
+                backupJobId,
                 operations,
                 sourceType: params.isInitialBackup ? "main" : "changes",
                 context: diff.latestRecordTypes,
@@ -104,8 +109,15 @@ export const recordTypeHandler = async (params: ISalesforceMetadataHandler) => {
             await uploadToS3(destConfig, s3Key, buffer);
         }
 
+        logger.info(
+            `Object record type comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, recordTypesChanged=${diff.recordTypesChanged}`
+        );
+
         return diff;
-    } catch (error) {
+    } catch (error: any) {
+        logger.error(
+            `Object record type comparison failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, errorMsg=${error?.message ?? error}`
+        );
         throw error;
     }
 }
