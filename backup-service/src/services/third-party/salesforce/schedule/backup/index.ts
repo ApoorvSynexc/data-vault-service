@@ -132,6 +132,16 @@ export const exportFirstTime = async (
       objectName,
       isInitialBackup: true,
     });
+    await salesforceMetadataHandler({
+      metadataType: 'recordTypes',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectName,
+      isInitialBackup: true,
+    });
     // await uploadPicklistValues({
     //   schema,
     //   destConfig,
@@ -142,15 +152,15 @@ export const exportFirstTime = async (
     //   type: 'backup',
     //   backupJobId,
     // });
-    await uploadRecordTypeMetadata({
-      destConfig,
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      type: 'backup',
-      backupJobId,
-    });
+    // await uploadRecordTypeMetadata({
+    //   destConfig,
+    //   crmId,
+    //   crmName,
+    //   backupConfigId,
+    //   objectName,
+    //   type: 'backup',
+    //   backupJobId,
+    // });
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
@@ -481,6 +491,16 @@ export const exportIncremental = async (
 
     await salesforceMetadataHandler({
       metadataType: 'picklist',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectName,
+      isInitialBackup: false,
+    });
+    await salesforceMetadataHandler({
+      metadataType: 'recordTypes',
       policyConfigType: 'backup',
       backupConfigId,
       backupJobId,
