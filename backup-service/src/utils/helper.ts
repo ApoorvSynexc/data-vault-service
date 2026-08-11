@@ -115,7 +115,7 @@ const buildSchemaS3Key = ({
 // ---------------------------------------------------------------------------
 type SchemaKind = 'fields' | 'childs' | 'picklist' | 'recordTypes';
 
-const SCHEMA_KIND_FILE: Record<SchemaKind, string> = {
+export const SCHEMA_KIND_FILE: Record<SchemaKind, string> = {
   fields: 'fields.json',
   childs: 'childs.json',
   picklist: 'values.json',
