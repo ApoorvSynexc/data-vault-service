@@ -71,9 +71,15 @@ export const schemaHandler = async (params: ISalesforceMetadataHandler) => {
         const destConfig = await getDestConfigForJob(params.backupJobId);
         const diff = await schemaComparison({ ...params, destConfig });
         if (diff.schemaChanged) {
+            const operations: Array<"inserts" | "updates" | "deletes"> = [];
+            if (diff.addedFields.length) operations.push("inserts");
+            if (diff.modifiedFields.length) operations.push("updates");
+            if (diff.removedFields.length) operations.push("deletes");
             const newEntry: IStoredSchemaEntry = {
                 date: new Date().toISOString(),
                 backupJobId: params.backupJobId,
+                operations,
+                sourceType: params.isInitialBackup ? "main" : "changes",
                 context: diff.latestSchema,
             };
             const updatedEntries = [...diff.storedEntries, newEntry];

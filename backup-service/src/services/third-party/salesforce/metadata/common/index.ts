@@ -142,6 +142,8 @@ export const getDestConfigForJob = async (backupJobId: string): Promise<IDestina
 export interface IStoredEntry<T> {
     date: string;
     backupJobId: string;
+    operations: Array<"inserts" | "updates" | "deletes">;
+    sourceType: "main" | "changes";
     context: T;
 }
 
