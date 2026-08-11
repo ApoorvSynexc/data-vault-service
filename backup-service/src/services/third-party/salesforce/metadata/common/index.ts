@@ -71,7 +71,7 @@ export const getChangedKeys = <T extends object>(before: T, after: T): string[] 
 export const buildS3Key = (params: IBuildKeyParams) => {
     const { metadataType, crmId, crmName, backupConfigId, objectName, policyConfigType, fieldApiName } = params;
     const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;
-    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${objectName}/${tail}/${SCHEMA_KIND_FILE[metadataType]}.json`;
+    return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${objectName}/${tail}/${SCHEMA_KIND_FILE[metadataType]}`;
 }
 
 export interface IEntityChange<T> {
