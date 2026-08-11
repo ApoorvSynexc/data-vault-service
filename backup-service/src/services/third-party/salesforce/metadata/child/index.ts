@@ -1,3 +1,4 @@
+import { logger } from "../../../../../middlewares";
 import { uploadToS3 } from "../../../../destination";
 import { getObjectChilds, ISalesforceChild, SalesforceTokens } from "../../api-request";
 import {
@@ -80,10 +81,14 @@ export const childHandler = async (
     instanceUrl: string,
     tokens: SalesforceTokens
 ) => {
+    const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const destConfig = await getDestConfigForJob(params.backupJobId);
+        const destConfig = await getDestConfigForJob(backupJobId);
         const diff = await childComparison({ ...params, destConfig, instanceUrl, tokens });
         if (diff.childsChanged) {
+              logger.info(
+                `Object child relationship change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedChilds.length}, removed=${diff.removedChilds.length}, modified=${diff.modifiedChilds.length}`
+            );
             const operations: Array<"inserts" | "updates" | "deletes"> = [];
             if (diff.addedChilds.length) {
                 operations.push("inserts");
@@ -96,7 +101,7 @@ export const childHandler = async (
             }
             const newEntry: IStoredChildEntry = {
                 date: new Date().toISOString(),
-                backupJobId: params.backupJobId,
+                backupJobId,
                 operations,
                 sourceType: params.isInitialBackup ? "main" : "changes",
                 context: diff.latestChilds,
@@ -111,8 +116,15 @@ export const childHandler = async (
             await uploadToS3(destConfig, s3Key, buffer);
         }
 
+        logger.info(
+            `Object child comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, childsChanged=${diff.childsChanged}`
+        );
+
         return diff;
-    } catch (error) {
+    } catch (error: any) {
+        logger.error(
+            `Object child comparison failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, errorMsg=${error?.message ?? error}`
+        );
         throw error;
     }
 }

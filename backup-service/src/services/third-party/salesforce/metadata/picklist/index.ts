@@ -1,3 +1,4 @@
+import { logger } from "../../../../../middlewares";
 import { IPicklistValue, ISchemaField } from "../../../../../models";
 import { uploadToS3 } from "../../../../destination";
 import { getObjectMetadata, getPicklistValues } from "../../api-request";
@@ -112,45 +113,56 @@ export const picklistComparison = async (params: ISchemaComparison): Promise<IPi
 };
 
 export const picklistHandler = async (params: ISalesforceMetadataHandler) => {
+    const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const destConfig = await getDestConfigForJob(params.backupJobId);
+        const destConfig = await getDestConfigForJob(backupJobId);
         const results = await picklistComparison({ ...params, destConfig });
+        const changedResults = results.filter((result) => result.valuesChanged);
 
         await Promise.all(
-            results
-                .filter((result) => result.valuesChanged)
-                .map((result) => {
-                    const operations: Array<"inserts" | "updates" | "deletes"> = [];
-                    if (result.addedValues.length) {
-                        operations.push("inserts");
-                    }
-                    if (result.modifiedValues.length) {
-                        operations.push("updates");
-                    }
-                    if (result.removedValues.length) {
-                        operations.push("deletes");
-                    }
-                    const newEntry: IStoredPicklistEntry = {
-                        date: new Date().toISOString(),
-                        backupJobId: params.backupJobId,
-                        operations,
-                        sourceType: params.isInitialBackup ? "main" : "changes",
-                        context: result.latestValues,
-                    };
-                    const updatedEntries = [...result.storedEntries, newEntry];
-                    const buffer = Buffer.from(JSON.stringify(updatedEntries, null, 2));
-                    const s3Key = buildS3Key({
-                        ...params,
-                        metadataType: 'picklist',
-                        fieldApiName: result.fieldApiName,
-                    });
+            changedResults.map((result) => {
+                const operations: Array<"inserts" | "updates" | "deletes"> = [];
+                if (result.addedValues.length) {
+                    operations.push("inserts");
+                }
+                if (result.modifiedValues.length) {
+                    operations.push("updates");
+                }
+                if (result.removedValues.length) {
+                    operations.push("deletes");
+                }
+                const newEntry: IStoredPicklistEntry = {
+                    date: new Date().toISOString(),
+                    backupJobId,
+                    operations,
+                    sourceType: params.isInitialBackup ? "main" : "changes",
+                    context: result.latestValues,
+                };
+                const updatedEntries = [...result.storedEntries, newEntry];
+                const buffer = Buffer.from(JSON.stringify(updatedEntries, null, 2));
+                const s3Key = buildS3Key({
+                    ...params,
+                    metadataType: 'picklist',
+                    fieldApiName: result.fieldApiName,
+                });
 
-                    return uploadToS3(destConfig, s3Key, buffer);
-                })
+                logger.info(
+                    `Picklist values change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, fieldApiName=${result.fieldApiName}, added=${result.addedValues.length}, removed=${result.removedValues.length}, modified=${result.modifiedValues.length}`
+                );
+
+                return uploadToS3(destConfig, s3Key, buffer);
+            })
+        );
+
+        logger.info(
+            `Object picklist comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, fieldsCompared=${results.length}, fieldsChanged=${changedResults.length}`
         );
 
         return results;
-    } catch (error) {
+    } catch (error: any) {
+        logger.error(
+            `Object picklist comparison failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, errorMsg=${error?.message ?? error}`
+        );
         throw error;
     }
 }

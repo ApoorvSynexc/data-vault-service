@@ -1,3 +1,4 @@
+import { logger } from "../../../../../middlewares";
 import { ISchemaField } from "../../../../../models";
 import { uploadToS3 } from "../../../../destination";
 import { getObjectMetadata } from "../../api-request";
@@ -67,10 +68,15 @@ export const schemaComparison = async (params: ISchemaComparison): Promise<ISche
 }
 
 export const schemaHandler = async (params: ISalesforceMetadataHandler) => {
+    const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const destConfig = await getDestConfigForJob(params.backupJobId);
+        const destConfig = await getDestConfigForJob(backupJobId);
         const diff = await schemaComparison({ ...params, destConfig });
         if (diff.schemaChanged) {
+            logger.info(
+                `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedFields.length}, removed=${diff.removedFields.length}, modified=${diff.modifiedFields.length}`
+            );
+            
             const operations: Array<"inserts" | "updates" | "deletes"> = [];
             if (diff.addedFields.length) {
                 operations.push("inserts");
@@ -83,7 +89,7 @@ export const schemaHandler = async (params: ISalesforceMetadataHandler) => {
             }
             const newEntry: IStoredSchemaEntry = {
                 date: new Date().toISOString(),
-                backupJobId: params.backupJobId,
+                backupJobId,
                 operations,
                 sourceType: params.isInitialBackup ? "main" : "changes",
                 context: diff.latestSchema,
@@ -98,8 +104,15 @@ export const schemaHandler = async (params: ISalesforceMetadataHandler) => {
             await uploadToS3(destConfig, s3Key, buffer);
         }
 
+        logger.info(
+            `Object schema comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, schemaChanged=${diff.schemaChanged}`
+        );
+
         return diff;
-    } catch (error) {
+    } catch (error: any) {
+        logger.error(
+            `Object schema comparison failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, errorMsg=${error?.message ?? error}`
+        );
         throw error;
     }
 }

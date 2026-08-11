@@ -18,19 +18,20 @@ export const salesforceMetadataHandler = async (
     params: ISalesforceMetadataHandler,
     salesforceContext?: ISalesforceContext
 ) => {
-    const { metadataType } = params;
+    const { metadataType, backupConfigId, backupJobId, objectName } = params;
     try {
+        logger.info(
+            `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
+        );
+
         switch (metadataType) {
             case "fields": {
                 const diff = await schemaHandler(params);
                 return { diff, metadataType };
             }
             case "childs": {
-
                 if (!salesforceContext) {
-                    throw new Error(
-                        `[salesforce:metadata] childs comparison requires instanceUrl + tokens | backupConfigId:${params.backupConfigId} objectName:${params.objectName}`
-                    );
+                    throw new Error(`childs comparison requires instanceUrl + tokens`);
                 }
                 const diff = await childHandler(params, salesforceContext.instanceUrl, salesforceContext.tokens);
                 return { diff, metadataType };
@@ -44,7 +45,9 @@ export const salesforceMetadataHandler = async (
                 return { diff, metadataType };
             }
         }
-    } catch (error) {
-        logger.error(`[salesforce:metadata] handleSalesforceMetadata failed | err: ${error}`);
+    } catch (error: any) {
+        logger.error(
+            `Object metadata comparison failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}, errorMsg=${error?.message ?? error}`
+        );
     }
 }
