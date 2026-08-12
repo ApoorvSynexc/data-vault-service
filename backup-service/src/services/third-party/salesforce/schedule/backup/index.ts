@@ -142,6 +142,16 @@ export const exportFirstTime = async (
       objectName,
       isInitialBackup: true,
     });
+    await salesforceMetadataHandler({
+      metadataType: 'childs',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectName,
+      isInitialBackup: true,
+    });
     // await uploadPicklistValues({
     //   schema,
     //   destConfig,
@@ -501,6 +511,16 @@ export const exportIncremental = async (
     });
     await salesforceMetadataHandler({
       metadataType: 'recordTypes',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectName,
+      isInitialBackup: false,
+    });
+    await salesforceMetadataHandler({
+      metadataType: 'childs',
       policyConfigType: 'backup',
       backupConfigId,
       backupJobId,

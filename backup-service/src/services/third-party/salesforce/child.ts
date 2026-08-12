@@ -35,11 +35,11 @@ const uploadObjectChilds = async ({
 }: IUploadObjectChildsParams): Promise<any[]> => {
   try {
     const childs = await getObjectChilds(instanceUrl, tokens, objectName);
-    await writeSchemaFile(
-      destConfig,
-      { crmId, crmName, backupConfigId, objectName, type, kind: 'childs', backupJobId },
-      childs
-    );
+    // await writeSchemaFile(
+    //   destConfig,
+    //   { crmId, crmName, backupConfigId, objectName, type, kind: 'childs', backupJobId },
+    //   childs
+    // );
     return childs;
   } catch (err: any) {
     logger.error(
