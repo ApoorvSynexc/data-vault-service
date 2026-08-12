@@ -1,4 +1,5 @@
 import { logger } from "../../../../../middlewares";
+import { IUser } from "../../../../../models";
 import { uploadToS3 } from "../../../s3-bucket";
 import { getApexFields, getApexPicklistValues, unwrapApex } from "../../apex";
 import {
@@ -119,10 +120,10 @@ export const picklistComparison = async (params: ISchemaComparison): Promise<IPi
     );
 };
 
-export const picklistHandler = async (params: ISalesforceMetadataHandler) => {
+export const picklistHandler = async (params: ISalesforceMetadataHandler, knownUser?: IUser) => {
     const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const { user, destConfig } = await getComparisonContext(backupConfigId);
+        const { user, destConfig } = await getComparisonContext(backupConfigId, knownUser);
         const results = await picklistComparison({ ...params, destConfig, user });
         const changedResults = results.filter((result) => result.valuesChanged);
 
