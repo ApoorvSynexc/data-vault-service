@@ -109,9 +109,25 @@ export interface IRestoreEdgeCases {
   missingRequiredFieldValue?: IRestoreMissingRequiredFieldValue;
 }
 
+export interface IRestoreMergeRuleField {
+  name: string;
+  value: string; // USE_DEFAULT | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
+}
+
+export interface IRestoreMergeRuleObject {
+  name: string;
+  fields: IRestoreMergeRuleField[];
+}
+
+export interface IRestoreMergeRule {
+  default: string; // NEWEST_LAST_MODIFIED_DATE_WINS | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
+  objects: IRestoreMergeRuleObject[];
+}
+
 export interface IRestoreConflict {
   restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
   edgeCases?: IRestoreEdgeCases;
+  mergeRule?: IRestoreMergeRule;
 }
 
 export interface IRestoreJobDetail {
