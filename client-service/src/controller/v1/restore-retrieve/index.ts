@@ -817,7 +817,7 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
     return;
   }
 
-  const result = await fetchObjectFields({
+  const result: any = await fetchObjectFields({
     objectApiName: String(objectApiName),
     backupConfigId,
     userId,
@@ -828,7 +828,12 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
     return;
   }
 
-  makeResponse(req, res, 200, true, 'fetch', result.schema);
+  let fields = result.schema.find((field: any) => field.sourceType === 'main');
+  if(!fields){
+    fields = result.schema[result.schema.length - 1].context
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', fields);
 };
 
 /**
