@@ -1356,7 +1356,12 @@ const toFetchParams = (
     ...(scope ? { selection: { restoreScope: scope as IRestoreScope } } : {}),
     userId,
     fullRestore: true,
-    ...(scope?.filters ? { filterWhere: buildAthenaFilterWhere(scope.filters as IFetchRecordsFilters) } : {}),
+    // models/restore's IRestoreScope.filters is now per-object ({objectName, filter}[]),
+    // no longer the single IFetchRecordsFilters this file's own IRestoreScope still
+    // expects (see the widening-cast comment above) — cast through unknown to keep
+    // today's runtime behavior (whatever is stored keeps flowing through unchanged)
+    // until this retrieval path is ported to the new per-object shape.
+    ...(scope?.filters ? { filterWhere: buildAthenaFilterWhere(scope.filters as unknown as IFetchRecordsFilters) } : {}),
   };
 };
 

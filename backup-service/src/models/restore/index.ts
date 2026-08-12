@@ -27,14 +27,24 @@ export interface IRestoreChangeSince {
   date: string;
 }
 
+export interface IRestoreBulkCsvIds {
+  objectName: string;
+  ids: string[];
+}
+
+export interface IRestoreScopeFilter {
+  objectName: string;
+  filter: IRestoreFilters;
+}
+
 export interface IRestoreScope {
   type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | INSERTS_ONLY | CHANGE_SINCE | BULK_CSV
   objects?: string[];
   records?: IRestoreScopeRecord[];
   fields?: IRestoreScopeField[];
-  filters?: IRestoreFilters;
+  filters?: IRestoreScopeFilter[];
   changeSince?: IRestoreChangeSince;
-  bulkCsvIds?: string[];
+  bulkCsvIds?: IRestoreBulkCsvIds[];
   deletedOnly?: boolean;
 }
 

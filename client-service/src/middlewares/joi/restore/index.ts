@@ -49,6 +49,16 @@ const changeSinceSchema = Joi.object({
   date: Joi.string().isoDate().required(),
 });
 
+const bulkCsvIdsSchema = Joi.object({
+  objectName: Joi.string().required(),
+  ids: Joi.array().items(Joi.string()).min(1).required(),
+});
+
+const scopeFilterSchema = Joi.object({
+  objectName: Joi.string().required(),
+  filter: filtersSchema.required(),
+});
+
 const restoreScopeSchema = Joi.object({
   type: Joi.string()
     .valid(...RESTORE_SCOPE_TYPE)
@@ -70,7 +80,7 @@ const restoreScopeSchema = Joi.object({
   }),
   filters: Joi.when('type', {
     is: 'FILTER',
-    then: filtersSchema.required(),
+    then: Joi.array().items(scopeFilterSchema).min(1).required(),
     otherwise: Joi.forbidden(),
   }),
   changeSince: Joi.when('type', {
@@ -80,7 +90,7 @@ const restoreScopeSchema = Joi.object({
   }),
   bulkCsvIds: Joi.when('type', {
     is: 'BULK_CSV',
-    then: Joi.array().items(Joi.string()).min(1).required(),
+    then: Joi.array().items(bulkCsvIdsSchema).min(1).required(),
     otherwise: Joi.forbidden(),
   }),
   deletedOnly: Joi.when('type', {
