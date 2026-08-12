@@ -61,15 +61,19 @@ export interface IRestoreOwnerInactive {
   fallbackValue: string;
 }
 
-export interface IRestoreRecordTypeMapping {
-  object: string;
-  field: string;
-  type: string;
+export interface IRestoreRecordTypeIdMapping {
+  sourceRecordTypeId: string;
+  destinationRecordTypeId: string;
+}
+
+export interface IRestoreRecordTypeObjectMapping {
+  name: string;
+  mapping: IRestoreRecordTypeIdMapping[];
 }
 
 export interface IRestoreRecordTypeMissing {
   type: string;
-  mapping: IRestoreRecordTypeMapping[];
+  objects: IRestoreRecordTypeObjectMapping[];
 }
 
 export interface IRestoreMissingRequiredField {
