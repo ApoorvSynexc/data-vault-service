@@ -829,10 +829,11 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
   }
 
   let fields = result.schema.find((field: any) => field.sourceType === 'main');
-  if(!fields){
-    fields = result.schema[result.schema.length - 1].context
+  if (!fields) {
+    fields = result.schema[result.schema.length - 1].context;
+  } else {
+    fields = fields.context;
   }
-
   makeResponse(req, res, 200, true, 'fetch', fields);
 };
 
