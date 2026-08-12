@@ -80,8 +80,6 @@ export const schemaComparison = async (params: ISchemaComparison): Promise<ISche
     const storedSchema = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
     const diff = diffSchemas(storedSchema, latestSchema);
 
-    console.log(JSON.stringify({objectName, storedSchema, latestSchema, diff}));
-    
     return { ...diff, latestSchema, storedEntries };
 }
 
