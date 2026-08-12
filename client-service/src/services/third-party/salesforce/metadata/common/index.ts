@@ -132,8 +132,13 @@ export const diffEntities = <T extends object>(
 // job record — it resolves both the S3 destination and the Salesforce user
 // straight off the backup config instead, same as runRealtimeSchemaSync
 // (services/payload/schema-sync.ts) already does.
+//
+// `knownUser` lets a caller that already fetched the user (e.g. a job walking
+// many objects/metadataTypes for the same config) pass it straight through
+// instead of paying for a redundant getUser() on every single call.
 export const getComparisonContext = async (
-    backupConfigId: string
+    backupConfigId: string,
+    knownUser?: IUser
 ): Promise<{ user: IUser; destConfig: IS3Config }> => {
     const config = await getBackupConfigById(backupConfigId);
     if (!config) {
@@ -141,7 +146,7 @@ export const getComparisonContext = async (
     }
 
     const [user, destination] = await Promise.all([
-        getUser({ userId: config.userId }),
+        knownUser ? Promise.resolve(knownUser) : getUser({ userId: config.userId }),
         getDestinationById(config.destinationId),
     ]);
 

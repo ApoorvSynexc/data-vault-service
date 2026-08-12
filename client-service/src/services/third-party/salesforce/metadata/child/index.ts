@@ -1,4 +1,5 @@
 import { logger } from "../../../../../middlewares";
+import { IUser } from "../../../../../models";
 import { uploadToS3 } from "../../../s3-bucket";
 import { getApexObjectChilds, unwrapApex } from "../../apex";
 import {
@@ -85,10 +86,10 @@ export const childComparison = async (params: ISchemaComparison): Promise<IChild
     return { ...diff, latestChilds, storedEntries };
 };
 
-export const childHandler = async (params: ISalesforceMetadataHandler) => {
+export const childHandler = async (params: ISalesforceMetadataHandler, knownUser?: IUser) => {
     const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const { user, destConfig } = await getComparisonContext(backupConfigId);
+        const { user, destConfig } = await getComparisonContext(backupConfigId, knownUser);
         const diff = await childComparison({ ...params, destConfig, user });
         if (diff.childsChanged) {
             const operations: Array<"inserts" | "updates" | "deletes"> = [];
