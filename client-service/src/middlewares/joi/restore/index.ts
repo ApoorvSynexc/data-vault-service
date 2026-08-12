@@ -164,11 +164,27 @@ const edgeCasesSchema = Joi.object({
   missingRequiredFieldValue: missingRequiredFieldValueSchema.optional(),
 });
 
+const mergeRuleFieldSchema = Joi.object({
+  name: Joi.string().required(),
+  value: Joi.string().required(), // USE_DEFAULT | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
+});
+
+const mergeRuleObjectSchema = Joi.object({
+  name: Joi.string().required(),
+  fields: Joi.array().items(mergeRuleFieldSchema).min(1).required(),
+});
+
+const mergeRuleSchema = Joi.object({
+  default: Joi.string().required(), // NEWEST_LAST_MODIFIED_DATE_WINS | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
+  objects: Joi.array().items(mergeRuleObjectSchema).min(1).required(),
+});
+
 const conflictSchema = Joi.object({
   restoreMode: Joi.string()
     .valid(...RESTORE_CONFLICT_MODE)
     .required(),
   edgeCases: edgeCasesSchema.optional(),
+  mergeRule: mergeRuleSchema.optional(),
 });
 
 const jobDetailSchema = Joi.object({
