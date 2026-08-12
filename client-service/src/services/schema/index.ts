@@ -73,7 +73,7 @@ const readSchemaFile = async (
     if (latest) {
       const entries = JSON.parse(latest.toString());
       if (Array.isArray(entries) && entries.length) {
-        return entries[entries.length - 1].context;
+        return entries
       }
     }
   }
