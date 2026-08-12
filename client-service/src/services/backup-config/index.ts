@@ -612,6 +612,57 @@ const getBackupConfigBySlug = async (params: {
   return (result.Items?.[0] as IBackupConfig) ?? null;
 };
 
+// Unscoped scan (no userId/crmId — every config in the table, unlike
+// getBackupConfigsWithPagination which requires one of those two as the query
+// key) for the metadata-comparison job, which needs to walk every backup config
+// matching a filter rather than one user's or one CRM's. Feeds onPage a batch of
+// up to `limit` configs at a time and keeps paging with ExclusiveStartKey until
+// the table is exhausted, so the whole table is never held in memory at once.
+const getBackupConfigsInBatches = async (
+  onPage: (configs: IBackupConfig[]) => Promise<void>,
+  filters?: { type?: 'NORMAL' | 'ARCHIVAL'; schedule?: string },
+  limit: number = 100
+): Promise<void> => {
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  const filterExpressions: string[] = [];
+  const expressionAttributeNames: Record<string, string> = {};
+  const expressionAttributeValues: Record<string, any> = {};
+
+  if (filters?.type) {
+    filterExpressions.push('#type = :type');
+    expressionAttributeNames['#type'] = 'type';
+    expressionAttributeValues[':type'] = filters.type;
+  }
+  if (filters?.schedule) {
+    filterExpressions.push('#schedule = :schedule');
+    expressionAttributeNames['#schedule'] = 'schedule';
+    expressionAttributeValues[':schedule'] = filters.schedule;
+  }
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        Limit: limit,
+        ...(filterExpressions.length && {
+          FilterExpression: filterExpressions.join(' AND '),
+          ExpressionAttributeNames: expressionAttributeNames,
+          ExpressionAttributeValues: expressionAttributeValues,
+        }),
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const configs = (result.Items as IBackupConfig[] | undefined) ?? [];
+    if (configs.length) {
+      await onPage(configs);
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+};
+
 export {
   createBackupConfig,
   getBackupConfigById,
@@ -619,6 +670,7 @@ export {
   getBackupConfigsByUser,
   getBackupConfigsByUserAndCrm,
   getBackupConfigsByCrm,
+  getBackupConfigsInBatches,
   getLastNBackupConfigByCrm,
   getBackupConfigSizeRecordByCrmId,
   getScheduledIncrementalBackupConfigs,
