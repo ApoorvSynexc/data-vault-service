@@ -151,7 +151,7 @@ export const exportFirstTime = async (
       crmName,
       objectName,
       isInitialBackup: true,
-    });
+    }, { instanceUrl, tokens });
     // await uploadPicklistValues({
     //   schema,
     //   destConfig,
@@ -538,7 +538,7 @@ export const exportIncremental = async (
       crmName,
       objectName,
       isInitialBackup: false,
-    });
+    }, { instanceUrl, tokens });
 
     // const storedSchema = await readLatestSchema(destConfig, {
     //   crmId,
