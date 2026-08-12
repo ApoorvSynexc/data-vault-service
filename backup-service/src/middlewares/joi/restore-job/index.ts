@@ -54,15 +54,19 @@ const ownerInactiveSchema = Joi.object({
   fallbackValue: Joi.string().allow('').required(),
 });
 
-const recordTypeMappingSchema = Joi.object({
-  object: Joi.string().required(),
-  field: Joi.string().required(),
-  type: Joi.string().required(),
+const recordTypeIdMappingSchema = Joi.object({
+  sourceRecordTypeId: Joi.string().required(),
+  destinationRecordTypeId: Joi.string().required(),
+});
+
+const recordTypeObjectMappingSchema = Joi.object({
+  name: Joi.string().required(),
+  mapping: Joi.array().items(recordTypeIdMappingSchema).min(1).required(),
 });
 
 const recordTypeMissingSchema = Joi.object({
   type: Joi.string().required(),
-  mapping: Joi.array().items(recordTypeMappingSchema).min(1).required(),
+  objects: Joi.array().items(recordTypeObjectMappingSchema).min(1).required(),
 });
 
 const missingRequiredFieldSchema = Joi.object({
