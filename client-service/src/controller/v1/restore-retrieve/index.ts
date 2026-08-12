@@ -129,7 +129,7 @@ const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Pro
     fields = fields.context;
   }
 
-  makeResponse(req, res, 200, true, 'fetch', result.values);
+  makeResponse(req, res, 200, true, 'fetch', fields);
 };
 
 /**
