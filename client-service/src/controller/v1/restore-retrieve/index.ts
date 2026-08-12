@@ -112,7 +112,7 @@ const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Pro
   if (!objectApiName || !fieldApiName) {
     return makeResponse(req, res, 400, false, 'params_required');
   }
-  const result = await fetchPicklistValues({
+  const result: any = await fetchPicklistValues({
     objectApiName: String(objectApiName),
     fieldApiName: String(fieldApiName),
     backupConfigId: String(backupConfigId),
@@ -121,6 +121,14 @@ const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Pro
   if (!result.ok) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
+
+  let fields = result.values.find((field: any) => field.sourceType === 'main');
+  if (!fields) {
+    fields = result.values[result.values.length - 1].context;
+  } else {
+    fields = fields.context;
+  }
+
   makeResponse(req, res, 200, true, 'fetch', result.values);
 };
 
