@@ -1,3 +1,5 @@
+
+import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   getApexFields,
@@ -31,6 +33,14 @@ import {
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from '../../../constant';
 import { IBackupConfig, IScheduleConfig } from '../../../models';
+import { salesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/index';
+
+const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
+  'fields',
+  'childs',
+  'picklist',
+  'recordTypes',
+];
 
 const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   const s = scheduleConfig.scheduling;
@@ -55,6 +65,7 @@ const buildEventScheduleInput = (config: IBackupConfig) => ({
 });
 import { wrapController, isOwner } from '../../../utils/helper';
 import { logger } from '../../../middlewares';
+import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 
 const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -398,7 +409,7 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   });
 };
 
-const syncMeatadataHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { slug } = req.query;
 
   const config = await getBackupConfigBySlug({
@@ -441,6 +452,59 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
+const syncMetadataHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { slug } = req.query;
+
+  const config = await getBackupConfigBySlug({
+    userId: req.user!.userId,
+    slug: String(slug),
+  });
+  if (!config) {
+    makeResponse(req, res, 400, false, 'backup_config_not_found');
+    return;
+  }
+
+  const user = await getUser({ userId: config.userId });
+  if(!user) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  const crm = await getCrmById(config.crmId);
+  if (!crm) {
+    makeResponse(req, res, 400, false, 'crm_not_found');
+    return;
+  }
+
+  const objects = config.objects ?? [];
+  if (!objects.length) {
+    return;
+  }
+
+  const backupJobId = uuidv4();
+  await Promise.all(
+    objects.flatMap((object) =>
+      METADATA_TYPES.map((metadataType) =>
+        salesforceMetadataHandler(
+          {
+            metadataType,
+            policyConfigType: 'backup',
+            crmName: crm.crmName,
+            crmId: config.crmId,
+            backupConfigId: config.backupConfigId,
+            objectName: object.name,
+            backupJobId,
+            isInitialBackup: false,
+          },
+          user
+        )
+      )
+    )
+  );
+
+  return makeResponse(req, res, 200, true, 'update');
+}
+
 export const backupConfigController = wrapController({
   getObjectsHanlder,
   getObjectsCountHanlder,
@@ -451,6 +515,7 @@ export const backupConfigController = wrapController({
   updateBackupConfigHandler,
   deleteBackupConfigHandler,
   initalizePayloadTransformHandler,
-  syncMeatadataHandler,
+  syncMetadataTriggerHandler,
   getBackupJobStatsHandler,
+  syncMetadataHandler
 });
