@@ -29,6 +29,7 @@ import {
   unwrapApex,
   getUser,
   getDecryptedCrmCredential,
+  getApexObjectChilds,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from '../../../constant';
@@ -98,6 +99,21 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
   // Only the enriched list — spreading apexResult here also leaked its raw `data`
   // and `success` into the response envelope.
   makeResponse(req, res, 200, true, 'fetch', { objects });
+};
+
+const getObjectChildHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
+    // `type` is the schedule/realtime split; older clients sent it as `mode`.
+    const { crmId, objectName, type, mode, relationshipDepth } = req.query;
+    if (!crmId) {
+        return makeResponse(req, res, 400, false, 'crm_id_required');
+    }
+
+    const [apexResult] = await Promise.all([
+        getApexObjectChilds({ user, objectName: String(objectName), mode: 'backup', type: toApexType(type ?? mode), relationshipType: 'MASTER', relationshipDepth: 0 }),
+    ]);
+
+    makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
 };
 
 const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -517,5 +533,6 @@ export const backupConfigController = wrapController({
   initalizePayloadTransformHandler,
   syncMetadataTriggerHandler,
   getBackupJobStatsHandler,
-  syncMetadataHandler
+  syncMetadataHandler,
+  getObjectChildHandler
 });
