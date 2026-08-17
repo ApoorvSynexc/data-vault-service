@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, readSchemaFile } from "../../../services";
-import { salesforceObjectList } from "../../../services/third-party/salesforce/metadata/index";
+import { salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 
 
@@ -76,6 +76,7 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
   // return makeResponse(req, res, 200, true, 'fetch', result);
 
   const objectsList = await salesforceObjectList({ user });
+  const objectsCount = await salesforceObjectsCount({ user });
   let filteredObjects = objectsList.filter((obj) =>
     obj.deprecatedAndHidden === false &&
     obj.customSetting === false &&
@@ -90,6 +91,16 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
   } else if (apexMode === 'restore') {
     filteredObjects = filteredObjects.filter((obj) => obj.createable === true && obj.updateable === true);
   }
+
+  filteredObjects = filteredObjects
+  .map((obj) => {
+    const countObj = objectsCount.find((count) => count.name === obj.name);
+    return {
+      ...obj,
+      count: countObj?.count || 0
+    };
+  })
+  .sort((a, b) => b.count - a.count);
 
   return makeResponse(req, res, 200, true, 'fetch', filteredObjects);
 }
