@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, readSchemaFile } from "../../../services";
-import { salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
+import { salesforceObjectDescribe, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 
 
@@ -44,9 +44,7 @@ const getSalesforceObjectSchema = async (req: IRequest, res: IResponse) => {
 };
 
 const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
-  const user = req.user!;
-  // Generic listing endpoint: `mode` says what the objects are for (default backup),
-  // `type` the schedule/realtime split — which older clients sent as `mode`.
+  let user = req.user!;
   const { crmId, mode, type } = req.query;
   const apexMode = toApexMode(mode) ?? 'backup';
   const apexType = toApexType(type ?? mode);
@@ -66,14 +64,8 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    const objects = await getApexObjects({ user: crmUser, mode: apexMode, type: apexType })
-    const result = objects?.data ? objects.data : [];
-    return makeResponse(req, res, 200, true, 'fetch', result);
+    user = crmUser;
   }
-
-  // const objects = await getApexObjects({ user, mode: apexMode, type: apexType })
-  // const result = objects?.data ? objects.data : [];
-  // return makeResponse(req, res, 200, true, 'fetch', result);
 
   const objectsList = await salesforceObjectList({ user });
   const objectsCount = await salesforceObjectsCount({ user });
@@ -93,16 +85,30 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
   }
 
   filteredObjects = filteredObjects
-  .map((obj) => {
-    const countObj = objectsCount.find((count) => count.name === obj.name);
-    return {
-      ...obj,
-      count: countObj?.count || 0
-    };
-  })
-  .sort((a, b) => b.count - a.count);
+    .map((obj) => {
+      const countObj = objectsCount.find((count) => count.name === obj.name);
+      return {
+        ...obj,
+        count: countObj?.count || 0
+      };
+    })
+    .sort((a, b) => b.count - a.count);
 
   return makeResponse(req, res, 200, true, 'fetch', filteredObjects);
+}
+
+const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
+  let user = req.user!;
+  const { objectNames } = req.body;
+
+  const objectDescription: any = [];
+  for (let index = 0; index < objectNames.length; index++) {
+    const objectName = objectNames[index];
+    const objectDescription = await salesforceObjectDescribe({ user, objectName });
+
+  }
+
+  return makeResponse(req, res, 200, true, 'fetch', objectDescription);
 }
 
 const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
@@ -139,5 +145,6 @@ const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
 export const crmMetadataController = wrapController({
   getSalesforceObjectSchema,
   getsalesfroceObjects,
-  getsalesfrocefields
+  getsalesfrocefields,
+  getSalesforceMasterObjects
 });
