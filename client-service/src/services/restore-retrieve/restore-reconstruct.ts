@@ -1,6 +1,11 @@
+// Referenced explicitly so the self-check at the bottom (`require`, `module`)
+// type-checks under `ts-node src/services/restore-retrieve/restore-reconstruct.ts`.
+/// <reference types="node" />
+
 /**
  * In-memory reconstruction of a historical record version by undoing deltas on
- * top of the latest Main-Backup Hudi record.
+ * top of the latest Main-Backup Hudi record, plus the block-level helpers that
+ * turn a set of query results into one page.
  *
  * The caller has already identified the deltas for the target version and read the
  * latest full record once. This module does no I/O: it mutates the passed record
@@ -49,7 +54,8 @@ const toTime = (value: string): number => {
  *     Hudi schema, so it is added to `allow` — a restore scoped to a column
  *     list must still surface a field that only exists in history.
  *   DELETE            — full record snapshot, not a field diff. It is a *base*
- *     (see assembleEntireRecords), never something to undo, so it is a no-op.
+ *     (the only version left of a record Hudi no longer has), never something to
+ *     undo, so it is a no-op.
  *
  * When `allow` is set, fields outside it are skipped, so a restore scoped to a
  * column list never reintroduces an unrequested field via an UPDATE delta.
@@ -234,92 +240,80 @@ export const toPage = (
   };
 };
 
-// A DELETE delta's change_data is the record's full last state as a flat
-// { Field: value } JSON — the only base left once the record is gone from Hudi.
-// Null when the payload is unusable, so the caller can skip the record rather
-// than emit a row of empty strings.
-const fromDeleteSnapshot = (
-  changeData: string,
-  columns: string[]
-): Record<string, string> | null => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(changeData);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const snapshot = parsed as Record<string, unknown>;
-  const record: Record<string, string> = {};
-  for (const c of columns) record[c] = str(snapshot[c]);
-  return record;
+/**
+ * The inverse-operation column every /retrieve/fetch-records row carries: what a
+ * RESTORE would have to do to put that version back. INSERT re-creates a deleted
+ * record, DELETE removes one created inside the window, UPDATE writes the
+ * version returned. Named as the API returns it; the SQL emits it under a `dv_`
+ * alias — see athena-fetch's OPERATION_COLUMN.
+ */
+export const OPERATION_FIELD = 'OPERATION';
+
+/**
+ * Keeps the first row seen for each Id. Callers pass their sources in
+ * precedence order — live Hudi rows first, DELETE snapshots after — so a record
+ * that was deleted and later re-created is not shadowed by its own tombstone.
+ *
+ * Only ever applied WITHIN one block. Two rows for the same Id landing in
+ * different blocks both survive, which needs both sources to return a short
+ * block — i.e. the stream is nearly exhausted anyway.
+ */
+export const dedupeById = (rows: IRankedRecord[]): IRankedRecord[] => {
+  const seen = new Set<string>();
+  return rows.filter(({ record }) => {
+    const id = record['Id'];
+    if (!id) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 };
 
 /**
- * Assembles RESTORE_ENTIRE_RECORD rows. All grouping happens here in memory,
- * no per-record I/O.
+ * Undoes a window's deltas, in place, on the block's UPDATE-tagged records.
  *
- *   baseRows  — one row per record: the Hudi current state (query 1, which also
- *               defined the block and its order), plus DELETE snapshots for
- *               records Hudi no longer has. Hudi wins on collision — a live
- *               record is not a deleted one.
- *   deltaRows — record_id, change_time, change_type, change_data for the
- *               block's records, ALREADY filtered to the requested backup jobs
- *               by the SQL. Every row here is one the caller asked to revert.
+ * Only those: a record tagged DELETE was created inside the window and has no
+ * earlier version to roll back to, and one tagged INSERT is a DELETE snapshot
+ * rather than a live record — replaying diffs onto either would be wrong.
  *
- * Per record: start from its base, undo every delta it was handed. That is the
- * whole rule — a restore reverts exactly what the requested jobs recorded, and
- * leaves every other job's changes applied. No anchor, no point-in-time replay,
- * no checkpoints.
+ * `deltaRows` are the raw Athena rows (record_id, change_time, change_type,
+ * change_data), already filtered to the window by the SQL, so every one of them
+ * is a change to revert. reconstructRecord applies each record's set
+ * newest→oldest, so a field the window changed more than once lands on the
+ * OLDEST of those values — the state before the window touched it.
  *
- * `reconstructRecord` applies them newest→oldest, so a field the requested jobs
- * changed more than once reverts to the OLDEST of those values — the state
- * before those jobs touched it. DELETE deltas are no-ops during replay (they
- * are a base, not a diff); SCHEMA_* deltas can reintroduce a field that exists
- * in neither Hudi nor `columns` — see applyDelta.
- *
- * Sort key is the base row's LastModifiedDate, which is exactly what query 1
- * ordered and seeked by, so the in-memory order matches the SQL order and page
- * boundaries stay stable.
+ * OPERATION joins the allowed column list because reconstructRecord prunes
+ * anything outside it, and the response is built around that field.
  */
-export const assembleEntireRecords = (
-  columns: string[],
-  baseRows: Record<string, string>[],
-  deltaRows: Record<string, string>[]
-): IRankedRecord[] => {
-  const deltasById = new Map<string, IDeltaRecord[]>();
+export const undoWindowDeltas = (
+  rows: IRankedRecord[],
+  deltaRows: Record<string, string>[],
+  columns: string[]
+): void => {
+  const byRecord = new Map<string, IDeltaRecord[]>();
   for (const row of deltaRows) {
     const id = row['record_id'];
     if (!id) continue;
-    if (!deltasById.has(id)) deltasById.set(id, []);
-    deltasById.get(id)!.push({
+    const delta: IDeltaRecord = {
       changeTime: row['change_time'] ?? '',
       changeData: row['change_data'] ?? '',
       changeType: row['change_type'] ?? '',
-    });
+    };
+    const existing = byRecord.get(id);
+    if (existing) existing.push(delta);
+    else byRecord.set(id, [delta]);
   }
 
-  const out: IRankedRecord[] = [];
-  const seen = new Set<string>();
-  for (const base of baseRows) {
-    const id = base['Id'];
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-
-    const record: Record<string, string> = {};
-    for (const c of columns) record[c] = base[c] ?? '';
-    record['Id'] = id;
-
-    const deltas = deltasById.get(id) ?? [];
-    if (deltas.length) reconstructRecord(record, deltas, 'RESTORE_ENTIRE_RECORD', columns);
-
-    out.push({ record, key: { lmd: base['LastModifiedDate'] ?? '', id } });
+  const allow = [...columns, OPERATION_FIELD];
+  for (const { record } of rows) {
+    if (record[OPERATION_FIELD] !== 'UPDATE') continue;
+    const deltas = byRecord.get(record['Id'] ?? '');
+    if (deltas?.length) reconstructRecord(record, deltas, 'RESTORE_ENTIRE_RECORD', allow);
   }
-  return out;
 };
 
 // ── Self-check ────────────────────────────────────────────────────────────────
-// Run: npm run build && node dist/services/restore-retrieve/restore-reconstruct.js
+// Run: npx ts-node src/services/restore-retrieve/restore-reconstruct.ts
 if (require.main === module) {
   const assert: typeof import('assert') = require('assert');
   const upd = (o: Record<string, [string, string]>): string =>
@@ -454,22 +448,50 @@ if (require.main === module) {
     { Name: 'John', Status: 'Inactive' }
   );
 
-  // ── assembleEntireRecords — revert exactly the requested jobs' deltas ──────
-  // The SQL has already filtered deltaRows to the requested backup jobs, so
-  // every row handed in is one to undo. Bases are the block's Hudi rows plus
-  // DELETE snapshots for records Hudi no longer has.
-  const cols = ['Id', 'Name', 'Phone', 'Amount', 'LastModifiedDate'];
+  // ── dedupeById: precedence is source order ─────────────────────────────────
+  const ranked = (record: Record<string, string>): IRankedRecord => ({
+    record,
+    key: { lmd: record['LastModifiedDate'] ?? '', id: record['Id'] ?? '' },
+  });
 
-  // The worked example: 001A, requested jobs {JOB_2, JOB_3}. JOB_4's Name/Phone
-  // change and JOB_5's Phone change are NOT in deltaRows — not requested — so
-  // Name keeps its current value and only Amount/Phone revert.
-  const worked = assembleEntireRecords(
-    cols,
-    [{ Id: '001A', Name: 'Acme Corp', Phone: '444', Amount: '2000', LastModifiedDate: 'T5' }],
+  // Hudi rows are merged first, so a live record is never shadowed by the
+  // tombstone of the version it was re-created from.
+  const collide = dedupeById([
+    ranked({ Id: 'r3', Name: 'Live', OPERATION: 'UPDATE' }),
+    ranked({ Id: 'r3', Name: 'Snapshot', OPERATION: 'INSERT' }),
+  ]);
+  assert.strictEqual(collide.length, 1);
+  assert.strictEqual(collide[0].record.Name, 'Live');
+  // Distinct ids all survive; a row with no Id is kept rather than silently lost.
+  assert.strictEqual(
+    dedupeById([ranked({ Id: 'a' }), ranked({ Id: 'b' }), ranked({}), ranked({})]).length,
+    4
+  );
+
+  // ── undoWindowDeltas — revert exactly the window's deltas ──────────────────
+  // The SQL has already filtered deltaRows to the window, so every row handed in
+  // is one to undo.
+  const cols = ['Id', 'Name', 'Phone', 'Amount', 'LastModifiedDate'];
+  const deltaRow = (id: string, time: string, data: string, type = 'UPDATE') => ({
+    record_id: id,
+    change_time: time,
+    change_type: type,
+    change_data: data,
+  });
+
+  // The worked example: 001A, with Amount and Phone changed inside the window.
+  // Name was changed by a LATER job, outside the window, so it is not in
+  // deltaRows and keeps its current value.
+  const worked = [
+    ranked({ Id: '001A', Name: 'Acme Corp', Phone: '444', Amount: '2000', LastModifiedDate: 'T5', OPERATION: 'UPDATE' }),
+  ];
+  undoWindowDeltas(
+    worked,
     [
-      { record_id: '001A', change_time: 'T3', change_type: 'UPDATE', change_data: upd({ Amount: ['1000', '2000'] }) },
-      { record_id: '001A', change_time: 'T2', change_type: 'UPDATE', change_data: upd({ Phone: ['111', '222'] }) },
-    ]
+      deltaRow('001A', 'T3', upd({ Amount: ['1000', '2000'] })),
+      deltaRow('001A', 'T2', upd({ Phone: ['111', '222'] })),
+    ],
+    cols
   );
   assert.deepStrictEqual(worked[0].record, {
     Id: '001A',
@@ -477,67 +499,65 @@ if (require.main === module) {
     Phone: '111',
     Amount: '1000',
     LastModifiedDate: 'T5',
+    OPERATION: 'UPDATE',
   });
-  assert.deepStrictEqual(worked[0].key, { lmd: 'T5', id: '001A' }, 'paged on the base row LMD');
+  assert.deepStrictEqual(worked[0].key, { lmd: 'T5', id: '001A' }, 'the page key is taken before the undo');
 
-  // A field the requested jobs changed twice reverts to the OLDEST of those
-  // values — the state before those jobs touched it.
-  assert.strictEqual(
-    assembleEntireRecords(
-      ['Id', 'Name'],
-      [{ Id: 'r1', Name: 'Bob' }],
-      [
-        { record_id: 'r1', change_time: '7', change_type: 'UPDATE', change_data: upd({ Name: ['Johnny', 'Bob'] }) },
-        { record_id: 'r1', change_time: '6', change_type: 'UPDATE', change_data: upd({ Name: ['John', 'Johnny'] }) },
-      ]
-    )[0].record.Name,
-    'John'
-  );
-
-  // A record the jobs stamped in Hudi but never wrote a delta for (inserted,
-  // never changed) comes back untouched — this is the case the old delta-only
-  // block query missed entirely.
-  const insertOnly = assembleEntireRecords(['Id', 'Name'], [{ Id: 'r2', Name: 'Ann' }], []);
-  assert.deepStrictEqual(insertOnly[0].record, { Id: 'r2', Name: 'Ann' });
-
-  // Deltas for a record with no base row are ignored (nothing to build on).
-  assert.strictEqual(
-    assembleEntireRecords(['Id', 'Name'], [], [{ record_id: 'r9', change_time: '1', change_type: 'UPDATE', change_data: upd({ Name: ['a', 'b'] }) }]).length,
-    0
-  );
-
-  // Hudi wins over a DELETE snapshot for the same Id — a live record is not a
-  // deleted one. The service passes Hudi rows first.
-  const collide = assembleEntireRecords(
-    ['Id', 'Name'],
-    [{ Id: 'r3', Name: 'Live' }, { Id: 'r3', Name: 'Snapshot' }],
-    []
-  );
-  assert.strictEqual(collide.length, 1);
-  assert.strictEqual(collide[0].record.Name, 'Live');
-
-  // DELETE deltas are no-ops during replay: the snapshot is the base, and the
-  // requested jobs' UPDATE deltas still revert on top of it.
-  const deleted = assembleEntireRecords(
-    ['Id', 'Name'],
-    [{ Id: 'd1', Name: 'Gone' }],
+  // A field the window changed twice reverts to the OLDEST of those values.
+  const twiceInWindow = [ranked({ Id: 'r1', Name: 'Bob', OPERATION: 'UPDATE' })];
+  undoWindowDeltas(
+    twiceInWindow,
     [
-      { record_id: 'd1', change_time: '7', change_type: 'DELETE', change_data: JSON.stringify({ Id: 'd1', Name: 'Gone' }) },
-      { record_id: 'd1', change_time: '5', change_type: 'UPDATE', change_data: upd({ Name: ['Earlier', 'Gone'] }) },
-    ]
+      deltaRow('r1', '7', upd({ Name: ['Johnny', 'Bob'] })),
+      deltaRow('r1', '6', upd({ Name: ['John', 'Johnny'] })),
+    ],
+    ['Id', 'Name']
   );
-  assert.strictEqual(deleted[0].record.Name, 'Earlier');
+  assert.strictEqual(twiceInWindow[0].record.Name, 'John');
 
-  // SCHEMA delta reintroduces a field absent from Hudi and from the columns.
-  const schema = assembleEntireRecords(
-    ['Id', 'Name'],
-    [{ Id: 's1', Name: 'Now' }],
-    [
-      { record_id: 's1', change_time: '6', change_type: 'SCHEMA_FIELD_DELETED', change_data: JSON.stringify({ fieldName: 'LegacyCode', value: 'X-1' }) },
-      { record_id: 's1', change_time: '4', change_type: 'UPDATE', change_data: upd({ Name: ['Then', 'Now'] }) },
-    ]
+  // Only UPDATE rows are touched. A record created inside the window (DELETE)
+  // has no earlier version, and a DELETE snapshot (INSERT) is not a live record
+  // — replaying diffs onto either would be wrong.
+  const untouched = [
+    ranked({ Id: 'c1', Name: 'New', OPERATION: 'DELETE' }),
+    ranked({ Id: 'd1', Name: 'Gone', OPERATION: 'INSERT' }),
+  ];
+  undoWindowDeltas(
+    untouched,
+    [deltaRow('c1', '5', upd({ Name: ['x', 'New'] })), deltaRow('d1', '5', upd({ Name: ['y', 'Gone'] }))],
+    ['Id', 'Name']
   );
-  assert.deepStrictEqual(schema[0].record, { Id: 's1', Name: 'Then', LegacyCode: 'X-1' });
+  assert.strictEqual(untouched[0].record.Name, 'New');
+  assert.strictEqual(untouched[1].record.Name, 'Gone');
+
+  // OPERATION survives the column prune — the response is built around it.
+  const kept = [ranked({ Id: 'k1', Name: 'Now', Extra: 'drop me', OPERATION: 'UPDATE' })];
+  undoWindowDeltas(kept, [deltaRow('k1', '4', upd({ Name: ['Then', 'Now'] }))], ['Id', 'Name']);
+  assert.deepStrictEqual(kept[0].record, { Id: 'k1', Name: 'Then', OPERATION: 'UPDATE' });
+
+  // A record with no deltas in the window comes back untouched (inserted before
+  // the window, changed only by a job outside it).
+  const noDeltas = [ranked({ Id: 'r2', Name: 'Ann', OPERATION: 'UPDATE' })];
+  undoWindowDeltas(noDeltas, [deltaRow('other', '1', upd({ Name: ['a', 'b'] }))], ['Id', 'Name']);
+  assert.deepStrictEqual(noDeltas[0].record, { Id: 'r2', Name: 'Ann', OPERATION: 'UPDATE' });
+
+  // Deltas whose record is not in the block are ignored, and a row with no
+  // record_id is skipped rather than grouped under ''.
+  const orphan = [ranked({ Id: 'o1', Name: 'Same', OPERATION: 'UPDATE' })];
+  undoWindowDeltas(orphan, [deltaRow('', '1', upd({ Name: ['a', 'Same'] }))], ['Id', 'Name']);
+  assert.strictEqual(orphan[0].record.Name, 'Same');
+
+  // A SCHEMA delta reintroduces a field absent from Hudi AND from the columns.
+  const schema = [ranked({ Id: 's1', Name: 'Now', OPERATION: 'UPDATE' })];
+  undoWindowDeltas(
+    schema,
+    [
+      deltaRow('s1', '6', JSON.stringify({ fieldName: 'LegacyCode', value: 'X-1' }), 'SCHEMA_FIELD_DELETED'),
+      deltaRow('s1', '4', upd({ Name: ['Then', 'Now'] })),
+    ],
+    ['Id', 'Name']
+  );
+  assert.deepStrictEqual(schema[0].record, { Id: 's1', Name: 'Then', OPERATION: 'UPDATE', LegacyCode: 'X-1' });
 
   // ── toPage: projection + cursor transitions ────────────────────────────────
   const { decodeCursor } = require('../../utils/cursor') as typeof import('../../utils/cursor');

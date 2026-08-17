@@ -6,8 +6,10 @@ import { IGlueColumnDef } from './index';
 // Reads a Hudi table's schema straight from the `.hoodie/` metadata that Spark
 // committed on S3 — never guesses. This is the authoritative source: the Glue
 // table we build from it always matches what Spark actually wrote (data columns,
-// the _hoodie_* meta columns, partition fields, and complex types like the
-// delta table's change_data MAP<STRING,STRUCT<old,new>>).
+// the _hoodie_* meta columns, partition fields, and any complex type). This is
+// what makes schema evolution free on the Node side: the delta table's
+// change_data went from MAP<STRING,STRUCT<old,new>> to a JSON string, and it
+// gained delta_id / is_schema_change / schema_change_type, with no change here.
 //
 // Source of truth, in order:
 //   1. The latest completed commit's Avro schema (`.hoodie/<instant>.commit`,

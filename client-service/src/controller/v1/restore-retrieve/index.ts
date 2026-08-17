@@ -7,7 +7,7 @@ import {
   getBackupJobIdsChangedBetween,
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
-  fetchRecordsByBackupJobs,
+  retrieveRecords,
   showRecordsPreview,
   fetchObjectFields,
   repairGlueTables,
@@ -19,7 +19,9 @@ import {
   IFetchRecordsFilters,
   IFetchRecordsFilterField,
   IFetchRecordsParams,
+  IRetrieveRecordsParams,
   FetchSourceType,
+  RetrieveType,
   RestoreScopeType,
   IRestoreScope,
   buildAthenaFilterWhere,
@@ -41,10 +43,6 @@ import {
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
-// IsoBound / IsoDateString went with parseOptionalIsoDate — see the disabled
-// block below. toIsoDateString still canonicalises the
-// /fetch-change-between-backup-jobs window, which is unaffected.
-// import { IsoBound, IsoDateString, toIsoDateString } from '../../../utils/iso-date';
 import { toIsoDateString } from '../../../utils/iso-date';
 import { IBackupJob } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
@@ -290,36 +288,6 @@ const toStringList = (v: unknown): string[] | null => {
   return [...new Set(v.map((x) => String(x).trim()).filter(Boolean))];
 };
 
-// DISABLED 2026-07-30 with the LastModifiedDate window — its only callers were
-// source.startDate / source.endDate / restoreScope.changeSince.date, all of
-// which are now commented out in parseFetchRecordsParams. The
-// /fetch-change-between-backup-jobs handler does its own canonicalising with
-// toIsoDateString directly, so it is unaffected.
-//
-// /**
-//  * Parses an optional ISO 8601 date field into a canonical UTC instant.
-//  *
-//  * Three outcomes, kept distinct so "not supplied" can never be mistaken for
-//  * "malformed": absent → `{ ok: true }` with no value, valid → the canonical
-//  * instant, anything else → `{ ok: false }` for the caller to map to its own 400.
-//  *
-//  * A blank string counts as absent rather than malformed — a UI that clears its
-//  * date picker sends `""`, and that means "no bound", not "bad request".
-//  *
-//  * `bound` decides what a date-only input means; see IsoBound.
-//  */
-// const parseOptionalIsoDate = (
-//   value: unknown,
-//   bound: IsoBound
-// ): { ok: true; value?: IsoDateString } | { ok: false } => {
-//   if (value === undefined || value === null) return { ok: true };
-//   if (typeof value !== 'string') return { ok: false };
-//   if (!value.trim()) return { ok: true };
-//
-//   const iso = toIsoDateString(value, bound);
-//   return iso ? { ok: true, value: iso } : { ok: false };
-// };
-
 // Parses the `filters` block (shared by the top-level and restoreScope shapes).
 const parseFilters = (
   f: unknown
@@ -404,39 +372,6 @@ const parseFetchRecordsParams = (
   }
   const sourceType = source.type as FetchSourceType;
 
-  // ── DISABLED 2026-07-30: source.startDate / source.endDate ────────────────
-  //
-  // Records are selected by `backupJobIds` ALONE. Both fields are still
-  // ACCEPTED — an existing client sending them gets a 200, not a 400 — but
-  // nothing reads them, so no date predicate reaches Athena and no date enters
-  // the cursor fingerprint. `invalid_source_date` and `invalid_time_range` can
-  // no longer be returned by this endpoint.
-  //
-  // To re-enable: uncomment this block, `windowApplies` below, the two spread
-  // lines in `value.source`, the changeSince block further down, and the
-  // matching lines in services/restore-retrieve (fetchCsvRecords, resolveScope,
-  // fingerprintRequest, toFetchParams) and athena-fetch (buildCsvRecordsSql).
-  //
-  // The window is canonicalised to ISO UTC HERE, once, because everything
-  // downstream compares these values as strings: the Athena predicate on a
-  // varchar LastModifiedDate, the "later bound wins" merge with
-  // changeSince.date, and the cursor fingerprint. Each bound resolves a
-  // date-only input to its own end of the day, so `2026-06-30` as an endDate
-  // still covers that whole day.
-  //
-  // const start = parseOptionalIsoDate(source.startDate, 'start');
-  // const end = parseOptionalIsoDate(source.endDate, 'end');
-  // if (!start.ok || !end.ok) return { ok: false, error: 'invalid_source_date' };
-  // const { value: startDate } = start;
-  // const { value: endDate } = end;
-  //
-  // // A backwards window selects nothing. Rejecting it beats billing an Athena
-  // // scan that cannot return a row, and it is almost always a swapped pair of
-  // // date-picker values rather than a deliberate request for zero records.
-  // if (startDate && endDate && startDate > endDate) {
-  //   return { ok: false, error: 'invalid_time_range' };
-  // }
-
   let backupJobIds: string[] = [];
   if (source.backupJobIds !== undefined && source.backupJobIds !== null) {
     const ids = toStringList(source.backupJobIds);
@@ -446,27 +381,13 @@ const parseFetchRecordsParams = (
 
   // PARTIAL and CHANGED_BETWEEN exist to apply a specific narrowing; a request
   // that omits it would silently behave as ENTIRE and return the whole config.
-  // With the window disabled, job ids are the only narrowing either can carry,
-  // so both now demand them.
+  // Job ids are the only narrowing either can carry, so both demand them.
   if (
     (sourceType === 'PARTIAL' || sourceType === 'CHANGED_BETWEEN') &&
     backupJobIds.length === 0
   ) {
     return { ok: false, error: 'backup_job_ids_required' };
   }
-  // // CHANGED_BETWEEN names a change to roll back. Job ids and a date window are
-  // // two ways of naming it, so either will do.
-  // if (sourceType === 'CHANGED_BETWEEN' && backupJobIds.length === 0 && !startDate && !endDate) {
-  //   return { ok: false, error: 'date_range_required' };
-  // }
-
-  // // Job ids are the more specific of the two, so they win: a caller who listed
-  // // the jobs has said exactly which change they mean, and a window around it
-  // // could only widen or contradict that. Dropped here rather than ignored
-  // // downstream so they stay out of the SQL AND out of the cursor fingerprint —
-  // // otherwise two requests that behave identically would hash differently and
-  // // reject each other's cursors.
-  // const windowApplies = !(sourceType === 'CHANGED_BETWEEN' && backupJobIds.length > 0);
 
   if (!objectApiName || typeof objectApiName !== 'string') {
     return { ok: false, error: 'object_api_name_required' };
@@ -482,9 +403,6 @@ const parseFetchRecordsParams = (
     source: {
       backupConfigId: source.backupConfigId.trim(),
       type: sourceType,
-      // DISABLED 2026-07-30 — see the block above.
-      // ...(windowApplies && startDate && { startDate }),
-      // ...(windowApplies && endDate && { endDate }),
       ...(backupJobIds.length && { backupJobIds }),
     },
     objectApiName,
@@ -548,22 +466,6 @@ const parseFetchRecordsParams = (
       scope.filters = parsed.value;
     }
 
-    // DISABLED 2026-07-30 — restoreScope.changeSince is another LastModifiedDate
-    // lower bound, i.e. the same window under a different name, so it is
-    // switched off with source.startDate rather than left as a way around it.
-    // Still accepted, still ignored.
-    //
-    // if (rawScope.changeSince !== undefined && rawScope.changeSince !== null) {
-    //   const c = rawScope.changeSince;
-    //   if (!isRecord(c)) return { ok: false, error: 'invalid_changed_since' };
-    //   // Another LastModifiedDate lower bound, merged with source.startDate by
-    //   // string comparison — so it is canonicalised the same way, or the merge
-    //   // would order two different shapes against each other.
-    //   const date = parseOptionalIsoDate(c.date, 'start');
-    //   if (!date.ok) return { ok: false, error: 'invalid_changed_since' };
-    //   if (date.value) scope.changeSince = { date: date.value };
-    // }
-
     if (rawScope.bulkCsvIds !== undefined && rawScope.bulkCsvIds !== null) {
       const ids = toStringList(rawScope.bulkCsvIds);
       if (ids === null) return { ok: false, error: 'invalid_bulk_csv_ids' };
@@ -613,79 +515,137 @@ const parseFetchRecordsParams = (
   return { ok: true, value };
 };
 
+const VALID_RETRIEVE_TYPES: RetrieveType[] = ['ENTIRE', 'CHANGED_BETWEEN'];
+
+/**
+ * Parses the /retrieve/fetch-records body — a flat shape of its own, unrelated
+ * to the nested source/selection one /retrieve/show-preview still takes.
+ */
+const parseRetrieveParams = (
+  body: Record<string, unknown>,
+  userId: string
+):
+  | { ok: true; value: IRetrieveRecordsParams }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const { backupConfigId, objectApiName, type, columnNames, searchText, cursor } = body;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
+  }
+  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
+    return { ok: false, error: 'object_api_name_required' };
+  }
+  if (!VALID_RETRIEVE_TYPES.includes(type as RetrieveType)) {
+    return { ok: false, error: 'invalid_retrieve_type' };
+  }
+
+  const columns = toStringList(columnNames);
+  if (!columns?.length) return { ok: false, error: 'column_names_required' };
+  // Field API names land in quoted identifiers and JSON paths, so a bad one is a
+  // 400 here rather than an Athena failure mid-query.
+  try {
+    validateColumns(columns);
+  } catch (e) {
+    if (e instanceof FilterError) {
+      return { ok: false, error: e.code as Parameters<typeof makeResponse>[4] };
+    }
+    throw e;
+  }
+
+  const value: IRetrieveRecordsParams = {
+    backupConfigId: backupConfigId.trim(),
+    objectApiName: objectApiName.trim(),
+    type: type as RetrieveType,
+    columnNames: columns,
+    userId,
+  };
+
+  // The window is the only thing CHANGED_BETWEEN selects on, so both bounds are
+  // required there — and never read under ENTIRE, which means the whole object.
+  //
+  // Canonicalised to ISO UTC HERE, once: downstream it is parsed by Athena and
+  // hashed into the cursor fingerprint. Each bound resolves a date-only input to
+  // its own end of the day, so `2026-06-30` as an endDate covers that whole day.
+  if (value.type === 'CHANGED_BETWEEN') {
+    const { startDate, endDate } = body;
+    if (
+      typeof startDate !== 'string' ||
+      !startDate.trim() ||
+      typeof endDate !== 'string' ||
+      !endDate.trim()
+    ) {
+      return { ok: false, error: 'date_range_required' };
+    }
+    const start = toIsoDateString(startDate, 'start');
+    const end = toIsoDateString(endDate, 'end');
+    if (!start || !end) return { ok: false, error: 'invalid_source_date' };
+    // A backwards window selects nothing. Rejecting it beats billing an Athena
+    // scan that cannot return a row, and it is almost always a swapped pair of
+    // date-picker values rather than a deliberate request for zero records.
+    if (start > end) return { ok: false, error: 'invalid_time_range' };
+    value.startDate = start;
+    value.endDate = end;
+  }
+
+  if (searchText !== undefined && searchText !== null && searchText !== '') {
+    if (typeof searchText !== 'string') return { ok: false, error: 'invalid_search_text' };
+    // Whitespace-only is "no search", not "match empty".
+    if (searchText.trim()) value.searchText = searchText.trim();
+  }
+
+  // Opaque nextCursor echoed back from a previous response. Its contents are
+  // validated in the service (fingerprint match), not here.
+  if (cursor !== undefined && cursor !== null && cursor !== '') {
+    if (typeof cursor !== 'string') return { ok: false, error: 'invalid_cursor' };
+    value.cursor = cursor;
+  }
+
+  return { ok: true, value };
+};
+
 /**
  * POST /retrieve/fetch-records
  *
  * Body: {
- *   source: {
- *     backupConfigId: string                        (required — owns the CRM,
- *                                                    destination and Glue table)
- *     type:           'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN'
- *     startDate?:     ISO 8601                      (DISABLED — accepted, ignored)
- *     endDate?:       ISO 8601                      (DISABLED — accepted, ignored)
- *     backupJobIds?:  string[]                      (absent → every job)
- *   }
- *   objectApiName: string
- *   columns:       string[]
- *   recordIds?:    string[]                        (run on these records only)
- *   isDeleteOnly?: boolean                         (deleted records only)
- *   selection:     null | {
- *     restoreScope: {
- *       type:        'ALL' | 'OBJECT' | 'RECORD' | 'FIELD' | 'FILTER' |
- *                    'DELETED_ONLY' | 'CHANGE_SINCE' | 'BULK_CSV'
- *       objects?:    string[]                       (allow-list; excludes → empty page)
- *       records?:    { objectName, recordIds[] }[]  (only the matching object applies)
- *       fields?:     { objectName, fieldNames[] }[] (matching object REPLACES columns)
- *       filters?:    { type: 'AND'|'OR'|'SOQL', soqlQuery?, fields?[] }
- *       changeSince?:{ date: ISO 8601 }             (DISABLED — accepted, ignored)
- *       bulkCsvIds?: string[]                       (record scope, unioned with records)
- *       deletedOnly?: boolean
- *     }
- *   }
- *   fullRestore?: boolean                           (default false)
- *   cursor?: string                                 (opaque nextCursor echo)
+ *   backupConfigId: string     (required — owns the CRM, destination and tables)
+ *   objectApiName:  string     (required)
+ *   type:           'ENTIRE' | 'CHANGED_BETWEEN'
+ *   startDate:      ISO 8601   (required for CHANGED_BETWEEN, ignored otherwise)
+ *   endDate:        ISO 8601   (required for CHANGED_BETWEEN, ignored otherwise)
+ *   columnNames:    string[]   (field API names, non-empty)
+ *   searchText?:    string     (case-insensitive substring, any of columnNames)
+ *   cursor?:        string     (opaque nextCursor echo)
  * }
  *
- * Queries the raw CSV table for one object under one backup config. Source
- * filters always apply; `selection` narrows them further when present. Each
- * record comes back once, tagged with a derived `type` of INSERT / UPDATE /
- * DELETE — its latest operation.
+ * Reads compressed state only — main_backup_files (`_hudi`) and the CDC history
+ * (`_delta`). No CSV is queried.
  *
- * Which version of the record is returned:
- *   default        — the current state (newest LastModifiedDate in scan scope).
- *   fullRestore    — the version to restore TO. An UPDATE returns the version
- *                    beneath it (the original inserts/ row when the record was
- *                    updated once); a DELETE returns the DELETE row, having no
- *                    earlier version to roll back to; an INSERT is already the
- *                    restore target.
+ * Every row carries an `OPERATION` naming what a RESTORE would have to do to put
+ * that version back — the inverse of what the backup recorded:
  *
- * `recordIds` and `isDeleteOnly` are the flat spellings of
- * restoreScope.bulkCsvIds and restoreScope.deletedOnly. Record scopes union and
- * the delete flags OR, so the two shapes can be mixed and neither can cancel
- * the other. `isDeleteOnly` keeps only records whose selected change is a
- * DELETE; `recordIds` restricts the whole query to those ids, whatever happened
- * to them.
+ *   INSERT — the record is gone; re-create it from its DELETE delta snapshot.
+ *   DELETE — it was created inside the window, so rolling back removes it.
+ *   UPDATE — it survives; write the version returned here.
  *
- * PARTIAL and CHANGED_BETWEEN both require backupJobIds — without them the
- * request would silently behave as ENTIRE and return the whole config.
+ * ENTIRE returns every record the vault holds at its stored state — UPDATE
+ * deltas are never read, because the Hudi row already IS that state — plus every
+ * deleted record, rebuilt from its DELETE delta.
  *
- * ── The date window is DISABLED (2026-07-30) ──────────────────────────────
- * Records are selected by `backupJobIds` alone. `source.startDate`,
- * `source.endDate` and `restoreScope.changeSince` are still ACCEPTED — an
- * existing client sending them gets a 200, not a 400 — but nothing reads them:
- * no date predicate reaches Athena and no date enters the cursor fingerprint,
- * so a cursor taken with dates stays valid for the same request without them.
- * `invalid_source_date`, `invalid_time_range` and `date_range_required` can no
- * longer be returned here.
+ * CHANGED_BETWEEN returns only what moved inside the window: records created in
+ * it (as DELETE), records updated in it with the window's deltas undone back to
+ * their pre-window values (as UPDATE), and records deleted in it (as INSERT). A
+ * record created AND deleted inside the same window nets out to nothing and is
+ * not returned.
  *
- * To pick records by time, resolve the window to job ids first with
- * GET /fetch-change-between-backup-jobs (which still takes startTime/endTime,
- * queries DynamoDB rather than Athena, and is unaffected) and send those ids.
+ * 50 rows a page; follow `meta.nextCursor` while `meta.hasMore`. A cursor is
+ * bound to the request that produced it — change the type, window, columns or
+ * search text and it is rejected with cursor_mismatch rather than silently
+ * paging a different question.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
 const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const parsed = parseFetchRecordsParams(req.body as Record<string, unknown>, req.user!.userId);
+  const parsed = parseRetrieveParams(req.body as Record<string, unknown>, req.user!.userId);
   if (!parsed.ok) {
     makeResponse(req, res, 400, false, parsed.error);
     return;
@@ -693,7 +653,7 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 
   let result;
   try {
-    result = await fetchRecordsByBackupJobs(parsed.value);
+    result = await retrieveRecords(parsed.value);
   } catch (e) {
     // A cursor that no longer matches the request, or whose Athena results have
     // aged out. Surfaced rather than silently restarting, so the UI knows to go
@@ -721,10 +681,11 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 /**
  * POST /retrieve/show-preview
  *
- * Body: identical to /retrieve/fetch-records (source, objectApiName, recordIds,
- * isDeleteOnly, selection, cursor), except that `columns` is not required — see
- * below. The date window is disabled here too: records are selected by
- * `source.backupJobIds` alone.
+ * Body: the nested source/selection shape — source (backupConfigId, type,
+ * backupJobIds), objectApiName, recordIds, isDeleteOnly, selection, cursor —
+ * except that `columns` is not required, see below. Unlike
+ * /retrieve/fetch-records this still reads the raw CSV table, and selects
+ * records by `source.backupJobIds` rather than by a date window.
  *
  * Shows what a restore would do to each record, one page of 50 at a time:
  *
