@@ -168,12 +168,12 @@ export const salesforceObjectsCount = async (params: ISalesforceObjectCountParam
     const url = `${instanceUrl}/services/data/v66.0/limits/recordCount`;
     const method = 'GET';
     try {
-        const result = await salesforceRequest<{ sobjects: ISalesforceObjectCountResponse[] }>(
+        const result = await salesforceRequest<{ sObjects: ISalesforceObjectCountResponse[] }>(
             { url, method },
             tokens
         );
 
-        return result.data?.sobjects ?? [];
+        return result.data?.sObjects ?? [];
     } catch (error) {
         throw error;
     }
