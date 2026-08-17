@@ -52,7 +52,7 @@ export const salesforceMetadataHandler = async (
     }
 }
 
-interface IObjectListParams {
+interface ISalesforceObjectListParams {
     user: IUser;
 }
 
@@ -91,8 +91,8 @@ export interface ISalesforceObjectResponse {
     };
 }
 
-export const salesforceObjectList = async (params: IObjectListParams): Promise<ISalesforceObjectResponse[]> => {
-    const { user, ...body } = params;
+export const salesforceObjectList = async (params: ISalesforceObjectListParams): Promise<ISalesforceObjectResponse[]> => {
+    const { user } = params;
     const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
 
     if (!user || !user.crmId) {
@@ -116,15 +116,62 @@ export const salesforceObjectList = async (params: IObjectListParams): Promise<I
         environment: crm.environment,
         customUrl: user.customUrl
     }
-    const url = `${instanceUrl}/services/data/v66.0/sobjects/`;
+    const url = `${instanceUrl}/services/data/v66.0/sobjects`;
     const method = 'GET';
     try {
         const result = await salesforceRequest<{ sobjects: ISalesforceObjectResponse[] }>(
-            { url, method, body },
+            { url, method },
             tokens
         );
 
         return result.data?.sobjects ?? [];
+    } catch (error) {
+        throw error;
+    }
+}
+
+interface ISalesforceObjectCountParams {
+    user: IUser;
+    objectName?: string;
+}
+
+interface ISalesforceObjectCountResponse {
+}
+
+export const salesforceObjectsCount = async (params: ISalesforceObjectCountParams): Promise<ISalesforceObjectCountResponse[]> => {
+    const { user } = params;
+    const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+
+    if (!user || !user.crmId) {
+        throw new Error('CRM not connected');
+    }
+
+    const crm = await getCrmById(user.crmId);
+    if (!crm) {
+        throw new Error('CRM not found');
+    }
+
+    const instanceUrl = crm?.instanceUrl;
+    if (!instanceUrl) {
+        throw new Error('Instance URL not found');
+    }
+
+    const tokens = {
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        userId: user.userId,
+        environment: crm.environment,
+        customUrl: user.customUrl
+    }
+    const url = `${instanceUrl}/services/data/v66.0/limits/recordCount`;
+    const method = 'GET';
+    try {
+        const result = await salesforceRequest<any>(
+            { url, method },
+            tokens
+        );
+
+        return result.data ?? [];
     } catch (error) {
         throw error;
     }
