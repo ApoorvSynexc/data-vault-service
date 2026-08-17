@@ -136,6 +136,8 @@ interface ISalesforceObjectCountParams {
 }
 
 interface ISalesforceObjectCountResponse {
+    count: number;
+    name: string;
 }
 
 export const salesforceObjectsCount = async (params: ISalesforceObjectCountParams): Promise<ISalesforceObjectCountResponse[]> => {
@@ -166,12 +168,12 @@ export const salesforceObjectsCount = async (params: ISalesforceObjectCountParam
     const url = `${instanceUrl}/services/data/v66.0/limits/recordCount`;
     const method = 'GET';
     try {
-        const result = await salesforceRequest<any>(
+        const result = await salesforceRequest<{ sobjects: ISalesforceObjectCountResponse[] }>(
             { url, method },
             tokens
         );
 
-        return result.data ?? [];
+        return result.data?.sobjects ?? [];
     } catch (error) {
         throw error;
     }
