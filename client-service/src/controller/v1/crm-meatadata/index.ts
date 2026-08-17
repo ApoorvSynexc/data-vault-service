@@ -75,8 +75,23 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
   // const result = objects?.data ? objects.data : [];
   // return makeResponse(req, res, 200, true, 'fetch', result);
 
-  const objectsList = await salesforceObjectList({user});
-  return makeResponse(req, res, 200, true, 'fetch', objectsList);
+  const objectsList = await salesforceObjectList({ user });
+  let filteredObjects = objectsList.filter((obj) =>
+    obj.deprecatedAndHidden === false &&
+    obj.customSetting === false &&
+    obj.keyPrefix !== null &&
+    obj.queryable === true
+  );
+
+  if (apexMode === 'backup' && apexType === 'realtime') {
+    filteredObjects = filteredObjects.filter((obj) => obj.triggerable === true);
+  } else if (apexMode === 'archival') {
+    filteredObjects = filteredObjects.filter((obj) => obj.deletable === true);
+  } else if (apexMode === 'restore') {
+    filteredObjects = filteredObjects.filter((obj) => obj.createable === true && obj.updateable === true);
+  }
+
+  return makeResponse(req, res, 200, true, 'fetch', filteredObjects);
 }
 
 const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
