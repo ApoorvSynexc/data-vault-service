@@ -52,11 +52,46 @@ export const salesforceMetadataHandler = async (
     }
 }
 
-interface IObjectList {
+interface IObjectListParams {
     user: IUser;
 }
 
-export const salesforceObjectList = async (params: IObjectList) => {
+export interface ISalesforceObjectResponse {
+    activateable: boolean;
+    associateEntityType: string | null;
+    associateParentEntity: string | null;
+    createable: boolean;
+    custom: boolean;
+    customSetting: boolean;
+    deepCloneable: boolean;
+    deletable: boolean;
+    deprecatedAndHidden: boolean;
+    feedEnabled: boolean;
+    hasSubtypes: boolean;
+    isInterface: boolean;
+    isSubtype: boolean;
+    keyPrefix: string | null;
+    label: string;
+    labelPlural: string;
+    layoutable: boolean;
+    mergeable: boolean;
+    mruEnabled: boolean;
+    name: string;
+    queryable: boolean;
+    replicateable: boolean;
+    retrieveable: boolean;
+    searchable: boolean;
+    triggerable: boolean;
+    undeletable: boolean;
+    updateable: boolean;
+    urls: {
+        rowTemplate: string;
+        describe: string;
+        sobject: string;
+    };
+}
+
+export const salesforceObjectList = async (params: IObjectListParams): Promise<ISalesforceObjectResponse[]> => {
     const { user, ...body } = params;
     const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
 
@@ -84,12 +119,12 @@ export const salesforceObjectList = async (params: IObjectList) => {
     const url = `${instanceUrl}/services/data/v66.0/sobjects/`;
     const method = 'GET';
     try {
-        const result = await salesforceRequest<any>(
+        const result = await salesforceRequest<{ sobjects: ISalesforceObjectResponse[] }>(
             { url, method, body },
             tokens
         );
 
-        return result;
+        return result.data?.sobjects ?? [];
     } catch (error) {
         throw error;
     }
