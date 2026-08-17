@@ -1,5 +1,8 @@
+import { salesforceRequest } from "..";
 import { logger } from "../../../../middlewares";
 import { IUser } from "../../../../models";
+import { getCrmById } from "../../../crm";
+import { getDecryptedCrmCredential } from "../../../user";
 import { childHandler } from "./child";
 import { ISalesforceMetadataHandler } from "./common";
 import { schemaHandler } from "./field";
@@ -46,5 +49,48 @@ export const salesforceMetadataHandler = async (
         logger.error(
             `Object metadata comparison failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}, errorMsg=${error?.message ?? error}`
         );
+    }
+}
+
+interface IObjectList {
+    user: IUser;
+}
+
+export const salesforceObjectList = async (params: IObjectList) => {
+    const { user, ...body } = params;
+    const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+
+    if (!user || !user.crmId) {
+        throw new Error('CRM not connected');
+    }
+
+    const crm = await getCrmById(user.crmId);
+    if (!crm) {
+        throw new Error('CRM not found');
+    }
+
+    const instanceUrl = crm?.instanceUrl;
+    if (!instanceUrl) {
+        throw new Error('Instance URL not found');
+    }
+
+    const tokens = {
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        userId: user.userId,
+        environment: crm.environment,
+        customUrl: user.customUrl
+    }
+    const url = `${instanceUrl}/services/data/v66.0/sobjects/`;
+    const method = 'GET';
+    try {
+        const result = await salesforceRequest<any>(
+            { url, method, body },
+            tokens
+        );
+
+        return result;
+    } catch (error) {
+        throw error;
     }
 }

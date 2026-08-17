@@ -1,5 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, readSchemaFile } from "../../../services";
+import { salesforceObjectList } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 
 
@@ -70,9 +71,12 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     return makeResponse(req, res, 200, true, 'fetch', result);
   }
 
-  const objects = await getApexObjects({ user, mode: apexMode, type: apexType })
-  const result = objects?.data ? objects.data : [];
-  return makeResponse(req, res, 200, true, 'fetch', result);
+  // const objects = await getApexObjects({ user, mode: apexMode, type: apexType })
+  // const result = objects?.data ? objects.data : [];
+  // return makeResponse(req, res, 200, true, 'fetch', result);
+
+  const objectsList = await salesforceObjectList({user});
+  return makeResponse(req, res, 200, true, 'fetch', objectsList);
 }
 
 const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
