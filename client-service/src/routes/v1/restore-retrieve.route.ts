@@ -8,9 +8,10 @@ import { createRestoreValidation } from '../../middlewares';
  * GET  /list                            — paginated list of restore/retrieve jobs (by config or user)
  * GET  /get-objectlist-by-configid      — object list selected on a single backup config
  * GET  /fetch-change-between-backup-jobs — backupJobIds of a config that started inside a time window
- * POST /fetch-records                   — query Athena records for given backupJobIds, objectApiName,
- *                                         and columnNames
- * POST /retrieve/show-preview           — same selection as fetch-records, every column, paired with
+ * POST /retrieve/fetch-records          — records for one object out of the compressed Hudi/Delta
+ *                                         tables: ENTIRE, or CHANGED_BETWEEN a date window, each row
+ *                                         tagged with the OPERATION a restore would perform
+ * POST /retrieve/show-preview           — raw-CSV restore-to records, every column, paired with
  *                                         the live Salesforce record
  * GET  /fetch-object-fields             — latest S3 schema for objectApiName across the (single)
  *                                         backup config shared by the given backupJobIds

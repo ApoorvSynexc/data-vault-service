@@ -508,11 +508,96 @@ const syncHudiTablePartitions = async (
   );
 };
 
+// Resolves the Glue column + partition shape for a dataset from what Spark
+// actually committed on S3. Both tables are partitioned by year/month (Hive-style
+// folders) and carry backup_job_id as a data column: guarantee all three
+// regardless of what the reader found, and keep the invariant that a name is
+// never both a partition key and a data column (Hive/Athena reject that).
+const resolveHudiTableShape = async (
+  destConfig: IDestinationConfig,
+  rootKey: string
+): Promise<{ glueColumns: Column[]; finalPartitionKeys: { name: string; type: string }[] }> => {
+  // Authoritative: matches exactly what Spark committed. Throws if not written yet.
+  const { columns, partitionKeys } = await readHudiTableSchema(destConfig, rootKey);
+
+  const PARTITION_NAMES = new Set(['year', 'month']);
+  const finalPartitionKeys = [
+    ...partitionKeys.filter((p) => !PARTITION_NAMES.has(p.name.toLowerCase())),
+    { name: 'year', type: 'string' },
+    { name: 'month', type: 'string' },
+  ];
+  const partitionNameSet = new Set(finalPartitionKeys.map((p) => p.name.toLowerCase()));
+
+  const glueColumns: Column[] = [
+    // Drop anything the reader surfaced that is actually a partition column, plus
+    // any pre-existing backup_job_id so it isn't added twice.
+    ...columns.filter(
+      (c) => !partitionNameSet.has(c.name.toLowerCase()) && c.name.toLowerCase() !== 'backup_job_id'
+    ),
+    { name: 'backup_job_id', type: 'string' },
+  ].map(({ name, type, comment }) => ({
+    Name: name,
+    Type: type,
+    ...(comment ? { Comment: comment } : {}),
+  }));
+
+  return { glueColumns, finalPartitionKeys };
+};
+
+// Refreshes the columns of an already-existing table to match what Spark last
+// committed. Necessary because the datasets evolve — the delta schema gained
+// delta_id / is_schema_change / schema_change_type after the first tables were
+// cut — and Athena fails the whole query on a column the catalog does not carry.
+//
+// Only writes when the shape actually differs: Glue keeps a version per
+// UpdateTable and this runs on every compression completion. Partition keys are
+// left exactly as they are — Glue refuses to change them on a partitioned table.
+const syncHudiTableSchema = async (
+  databaseName: string,
+  tableName: string,
+  destConfig: IDestinationConfig,
+  rootKey: string
+): Promise<void> => {
+  const { glueColumns } = await resolveHudiTableShape(destConfig, rootKey);
+  const { Table } = await glue.send(
+    new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
+  );
+
+  const signature = (cols: Column[] = []): string => cols.map((c) => `${c.Name}:${c.Type}`).join(',');
+  if (signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns)) {
+    return;
+  }
+
+  await glue.send(
+    new UpdateTableCommand({
+      DatabaseName: databaseName,
+      TableInput: {
+        Name: tableName,
+        PartitionKeys: Table?.PartitionKeys ?? [],
+        StorageDescriptor: {
+          ...HUDI_STORAGE_DESCRIPTOR_BASE,
+          Columns: glueColumns,
+          Location: Table?.StorageDescriptor?.Location ?? '',
+        },
+        Parameters: { ...(Table?.Parameters ?? {}) },
+        TableType: Table?.TableType ?? 'EXTERNAL_TABLE',
+      },
+    })
+  );
+
+  logger.info(
+    `[glue] refreshed table schema | table:${tableName} columns:${glueColumns.length}` +
+      ` (was ${Table?.StorageDescriptor?.Columns?.length ?? 0})`
+  );
+};
+
 // Creates one Hudi-format Glue table, idempotently. Reads the committed schema
 // from `.hoodie` on the client bucket, then creates the table pointing at the
 // dataset root. Returns false (no-op) when the table already exists.
 // In BOTH cases it then syncs the year/month partitions from S3 — new
-// partitions appear as compression runs land, and Athena needs them registered.
+// partitions appear as compression runs land, and Athena needs them registered —
+// and, on the existing-table path, refreshes the columns so a schema that has
+// evolved since creation reaches the catalog.
 const ensureHudiFormatTable = async (
   params: IEnsureCompressionTableParams & {
     tableName: string;
@@ -541,38 +626,17 @@ const ensureHudiFormatTable = async (
 
   if (await glueTableExists(databaseName, tableName)) {
     logger.info(
-      `[glue] ${label} table already exists, syncing partitions | db:${databaseName} table:${tableName}`
+      `[glue] ${label} table already exists, syncing schema + partitions | db:${databaseName} table:${tableName}`
     );
+    // Best-effort, same reason as the partition sync below.
+    await syncHudiTableSchema(databaseName, tableName, destConfig, rootKey).catch((err: any) => {
+      logger.warn(`[glue] schema sync failed | table:${tableName} err:${err.name}: ${err.message}`);
+    });
     await syncPartitions();
     return false;
   }
-  // Authoritative: matches exactly what Spark committed. Throws if not written yet.
-  const { columns, partitionKeys } = await readHudiTableSchema(destConfig, rootKey);
 
-  // Both tables are partitioned by year/month (Hive-style folders) and carry
-  // backup_job_id as a data column. Guarantee all three regardless of what the
-  // reader found, and keep the invariant that a name is never both a partition
-  // key and a data column (Hive/Athena reject that).
-  const PARTITION_NAMES = new Set(['year', 'month']);
-  const finalPartitionKeys = [
-    ...partitionKeys.filter((p) => !PARTITION_NAMES.has(p.name.toLowerCase())),
-    { name: 'year', type: 'string' },
-    { name: 'month', type: 'string' },
-  ];
-  const partitionNameSet = new Set(finalPartitionKeys.map((p) => p.name.toLowerCase()));
-
-  const glueColumns: Column[] = [
-    // Drop anything the reader surfaced that is actually a partition column, plus
-    // any pre-existing backup_job_id so it isn't added twice.
-    ...columns.filter(
-      (c) => !partitionNameSet.has(c.name.toLowerCase()) && c.name.toLowerCase() !== 'backup_job_id'
-    ),
-    { name: 'backup_job_id', type: 'string' },
-  ].map(({ name, type, comment }) => ({
-    Name: name,
-    Type: type,
-    ...(comment ? { Comment: comment } : {}),
-  }));
+  const { glueColumns, finalPartitionKeys } = await resolveHudiTableShape(destConfig, rootKey);
 
   try {
     await glue.send(

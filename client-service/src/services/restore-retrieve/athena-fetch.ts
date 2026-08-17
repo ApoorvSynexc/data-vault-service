@@ -5,15 +5,19 @@ import { FilterError } from './athena-filter';
  * so they are unit-checkable (see the self-check at the bottom). The service
  * (index.ts) runs the emitted SQL and merges results.
  *
- * ── CSV-ONLY MODEL ───────────────────────────────────────────────────────────
- * Only the raw CSV table is queried:
+ * ── TWO MODELS ───────────────────────────────────────────────────────────────
  *
- *   cfg_<backupConfigId>_<objectApiName>   — every backup job's CSVs, partitioned
- *                                            on backup_job_id
+ *   COMPRESSED (POST /retrieve/fetch-records) — the Hudi pair Spark writes:
+ *     cfg_<cfg>_<obj>_hudi   — main_backup_files, current state, one row per Id,
+ *                              partitioned year/month on CreatedDate
+ *     cfg_<cfg>_<obj>_delta  — the CDC history, partitioned year/month on
+ *                              change_time
+ *   See "Hudi + Delta record retrieval" below.
  *
- * The Hudi (`_hudi`) and Delta (`_delta`) builders are COMMENTED OUT at the
- * bottom of this file, together with the delta partition prune. Nothing in the
- * active path reads compressed state.
+ *   RAW CSV (POST /retrieve/show-preview and the restore CSV builder):
+ *     cfg_<backupConfigId>_<objectApiName>  — every backup job's CSVs,
+ *                                             partitioned on backup_job_id
+ *   Everything from here to that section describes this one.
  *
  * ROW TYPE: the CSV columns are exactly the object's Salesforce fields — there
  * is no operation column. The operation lives in the S3 layout that
@@ -166,40 +170,6 @@ const ROW_TYPE_EXPR =
   `WHEN "$path" LIKE '%/updates/%' THEN 'UPDATE' ` +
   `ELSE 'INSERT' END`;
 
-// =============================================================================
-// DISABLED 2026-07-30 — the LastModifiedDate window
-// =============================================================================
-//
-// Records are now selected by `backupJobIds` ALONE. `startDate` / `endDate` are
-// still accepted on ICsvFetchParams (and still travel through the request
-// models) but nothing reads them, so no date predicate reaches Athena.
-//
-// To re-enable: uncomment the two helpers and the two commented lines in
-// buildCsvRecordsSql (the `dateSelector` and the `dateWhere(...)` row filter).
-//
-// /**
-//  * LastModifiedDate is varchar, so `<= '2026-07-29'` would exclude every record
-//  * modified DURING that day. A bare upper bound is extended to end-of-day so an
-//  * inclusive range means what the caller meant.
-//  *
-//  * The /fetch-records path already resolves bare dates this way at the request
-//  * boundary (toIsoDateString with bound 'end'), so this never fires for it. It
-//  * stays because these builders are exported and unit-checked on their own: a
-//  * direct caller passing `2026-07-29` gets the same window the API would give it,
-//  * rather than silently losing a day.
-//  */
-// const endOfDay = (value: string): string =>
-//   /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? `${value.trim()}T23:59:59.999Z` : value;
-//
-// // LastModifiedDate window. Lower bounds need no adjustment — a bare date already
-// // sorts before every timestamp on that day.
-// const dateWhere = (from?: string | null, to?: string | null): string | null => {
-//   const parts: string[] = [];
-//   if (from) parts.push(`${quoteCol(LMD)} >= ${lit(from)}`);
-//   if (to) parts.push(`${quoteCol(LMD)} <= ${lit(endOfDay(to))}`);
-//   return parts.length ? parts.join(' AND ') : null;
-// };
-
 const inWhere = (column: string, values?: string[] | null): string | null =>
   values?.length ? `${column} IN (${idList(values)})` : null;
 
@@ -217,17 +187,6 @@ export interface ICsvFetchParams {
    *                      buildCsvRecordsSql.
    */
   backupJobIds?: string[] | null;
-  /**
-   * DISABLED 2026-07-30 — accepted, never read. Records are selected by
-   * `backupJobIds` alone and no date predicate reaches Athena.
-   *
-   * Kept on the interface (rather than deleted) so the request models above it
-   * still type-check while the window is switched off, and so re-enabling is
-   * uncommenting rather than re-threading. See the disabled block above
-   * `inWhere` for what they used to do.
-   */
-  startDate?: string | null;
-  endDate?: string | null;
   // Record scope: the request's top-level recordIds ∪ restoreScope.bulkCsvIds ∪
   // restoreScope.records[].recordIds. A row filter on Id — safe in the scan
   // under any picking mode, because it selects whole records, never versions.
@@ -337,11 +296,6 @@ const versionPick = (restoreTo: boolean): string => {
  * A job list under DEFAULT picking stays a plain row filter on the partition
  * key, which is what makes ENTIRE/PARTIAL cheap.
  *
- * DISABLED 2026-07-30: `startDate` was the other selector (the change inside a
- * window, CHANGED_BETWEEN only) and `startDate`/`endDate` were row filters
- * otherwise. The whole date window is switched off — see the disabled block
- * above `inWhere` — so job ids are now the only way to select a change.
- *
  * ── Shape ────────────────────────────────────────────────────────────────────
  *
  * Without a selector (inside → out):
@@ -386,21 +340,12 @@ export const buildCsvRecordsSql = (tableName: string, p: ICsvFetchParams): strin
   const restoreTo = p.fullRestore === true || changedBetween;
   const jobIds = p.backupJobIds?.length ? p.backupJobIds : null;
 
-  // The job list is the only selector — see the DISABLED block above `inWhere`
-  // for the date bound that used to be the other one.
-  const jobSelector = restoreTo && jobIds ? inWhere('backup_job_id', jobIds) : null;
-  // const dateSelector =
-  //   !jobSelector && changedBetween && p.startDate
-  //     ? `${quoteCol(LMD)} >= ${lit(p.startDate)}`
-  //     : null;
-  const selector = jobSelector;
+  // The job list is the only selector.
+  const selector = restoreTo && jobIds ? inWhere('backup_job_id', jobIds) : null;
 
   const rowFilters = [
     // A job list that selects records must not also filter rows away.
-    inWhere('backup_job_id', jobSelector ? null : jobIds),
-    // DISABLED 2026-07-30 — the LastModifiedDate window. Under changedBetween the
-    // lower bound was a selector, not a row filter.
-    // changedBetween ? dateWhere(null, p.endDate) : dateWhere(p.startDate, p.endDate),
+    inWhere('backup_job_id', selector ? null : jobIds),
     inWhere(quoteCol(ID), p.recordIds),
     p.filterWhere,
   ];
@@ -435,242 +380,320 @@ export const buildCsvRecordsSql = (tableName: string, p: ICsvFetchParams): strin
 };
 
 // =============================================================================
-// DISABLED — Hudi / Delta (compressed-state) query builders
+// Hudi + Delta record retrieval — POST /retrieve/fetch-records
 // =============================================================================
-//
-// Commented out with the move to the CSV-only model. They read the `_hudi`
-// (current state, one row per Id) and `_delta` (CDC history) tables that Spark
-// writes after compression, plus the year/month partition prune that only the
-// delta table has. Restore-time record reconstruction (restore-reconstruct.ts)
-// is still present but is no longer fed by any active query.
-//
-// To re-enable: uncomment the block, re-export the builders from index.ts, and
-// restore the compressed/uncompressed job split in fetchRecordsForBackup.
-//
-// export interface IFetchSqlParams {
-//   columnNames: string[];
-//   jobIds: string[];
-//   filterWhere: string | null;
-//   limit: number;
-//   cursor?: IPageKey | null;
-//   deltaPartition?: string | null;
-// }
-//
-// // Partition predicate for the DELTA table. Cuts the scan to the months that
-// // can possibly matter — the biggest cost lever on this endpoint, since Athena
-// // bills by bytes scanned and the delta table grows without bound.
-// //   - delta is partitioned year/month from `change_time`, both keys typed
-// //     `string` in Glue.
-// //   - `month` is zero-padded in every mainline writer but UNPADDED in
-// //     CascadeDeleteService, so both spellings exist in the same table: month
-// //     must be compared numerically (CAST(month AS integer)), never
-// //     lexicographically ('7' would sort after '12'). Trino still prunes across
-// //     that cast. Year is always four digits, so it compares as a string.
-// //   - Only ever applied to the delta table. The main Hudi table partitions on
-// //     CreatedDate, which is immutable, so pruning it by a job's timestamp would
-// //     silently drop old records.
-// //   - `from` must come from a caller-declared window, never inferred: SCHEMA_*
-// //     deltas carry the RECORD's LastModifiedDate as change_time and can land in
-// //     partitions years older than the job that wrote them.
-// export const buildDeltaPartitionWhere = (
-//   from: string | null,
-//   to: string | null
-// ): string | null => {
-//   const parts: string[] = [];
-//   const ym = (iso: string): { y: string; m: number } | null => {
-//     const d = new Date(iso);
-//     return Number.isNaN(d.getTime())
-//       ? null
-//       : { y: String(d.getUTCFullYear()), m: d.getUTCMonth() + 1 };
-//   };
-//   const lo = from ? ym(from) : null;
-//   const hi = to ? ym(to) : null;
-//   if (lo) parts.push(`(year > ${lit(lo.y)} OR (year = ${lit(lo.y)} AND CAST(month AS integer) >= ${lo.m}))`);
-//   if (hi) parts.push(`(year < ${lit(hi.y)} OR (year = ${lit(hi.y)} AND CAST(month AS integer) <= ${hi.m}))`);
-//   return parts.length ? parts.join(' AND ') : null;
-// };
-//
-// // Uncompressed (CSV) / archival: one table, filter by backup_job_id.
-// export const buildRawSql = (tableName: string, p: IFetchSqlParams): string => {
-//   const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
-//   return (
-//     `SELECT ${cols} FROM "${tableName}" ` +
-//     `WHERE backup_job_id IN (${idList(p.jobIds)})` +
-//     whereClause([p.filterWhere, keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID))], 'AND') +
-//     ` ORDER BY ${quoteCol(LMD)} DESC, ${quoteCol(ID)} DESC LIMIT ${p.limit}`
-//   );
-// };
-//
-// // Compressed archival snapshot: the Hudi current-state table IS the record, so
-// // there is no delta replay and no backup_job_id filter.
-// export const buildHudiRawSql = (
-//   hudiTable: string,
-//   p: Omit<IFetchSqlParams, 'jobIds'>
-// ): string => {
-//   const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
-//   return (
-//     `SELECT ${cols} FROM "${hudiTable}"` +
-//     whereClause([p.filterWhere, keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID))], 'WHERE') +
-//     ` ORDER BY ${quoteCol(LMD)} DESC, ${quoteCol(ID)} DESC LIMIT ${p.limit}`
-//   );
-// };
-//
-// // COMPRESSED jobs, by-field: newest delta per record_id wins; the Hudi record
-// // rides along via the join. change_data is returned raw and the service overlays
-// // each field's old value in JS, yielding the record's previous version.
-// export const buildCompressedByFieldSql = (
-//   hudiTable: string,
-//   deltaTable: string,
-//   p: IFetchSqlParams
-// ): string => {
-//   const rCols = pairedColumns(p.columnNames)
-//     .map((c) => `CAST(h.${quoteCol(c)} AS varchar) AS ${quoteCol(`r_${c}`)}`)
-//     .join(', ');
-//   const inner =
-//     `WITH d AS (` +
-//     `SELECT record_id, change_data, ` +
-//     `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
-//     `FROM "${deltaTable}" WHERE backup_job_id IN (${idList(p.jobIds)})` +
-//     whereClause([p.deltaPartition], 'AND') +
-//     `) ` +
-//     `SELECT ${rCols}, d.change_data AS "d_change_data" ` +
-//     `FROM d JOIN "${hudiTable}" h ON d.rn = 1 AND h."Id" = d.record_id` +
-//     whereClause([p.filterWhere], 'WHERE');
-//   return pageWrap(inner, p, quoteCol(`r_${LMD}`), quoteCol(`r_${ID}`));
-// };
-//
-// // Uncompressed jobs, by-field: the record must exist in the CSV rows for these
-// // jobs AND in _hudi (inner join — the Hudi existence gate). Per row the newer
-// // version wins, compared on LastModifiedDate.
-// export const buildCsvByFieldSql = (
-//   csvTable: string,
-//   hudiTable: string,
-//   p: IFetchSqlParams
-// ): string => {
-//   const cols = pairedColumns(p.columnNames);
-//   const colList = cols.map(quoteCol).join(', ');
-//   const hudiNewer = `CAST(h.${quoteCol(LMD)} AS varchar) > CAST(m.${quoteCol(LMD)} AS varchar)`;
-//   const rCols = cols
-//     .map(
-//       (c) =>
-//         `CASE WHEN ${hudiNewer} THEN CAST(h.${quoteCol(c)} AS varchar) ` +
-//         `ELSE CAST(m.${quoteCol(c)} AS varchar) END AS ${quoteCol(`r_${c}`)}`
-//     )
-//     .join(', ');
-//   const inner =
-//     `WITH ranked AS (` +
-//     `SELECT ${colList}, ` +
-//     `ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY ${quoteCol(LMD)} DESC) AS rn ` +
-//     `FROM "${csvTable}" WHERE backup_job_id IN (${idList(p.jobIds)})` +
-//     `), m AS (SELECT * FROM ranked WHERE rn = 1${whereClause([p.filterWhere], 'AND')}) ` +
-//     `SELECT ${rCols} ` +
-//     `FROM m ` +
-//     `JOIN "${hudiTable}" h ON h."Id" = m."Id"`;
-//   return pageWrap(inner, p, quoteCol(`r_${LMD}`), quoteCol(`r_${ID}`));
-// };
-//
-// // Compressed, deleted records: gone from _hudi, so their full last-known state
-// // lives in the DELETE delta's change_data JSON. Dedup to the newest change_time
-// // per record_id, and only when that newest change IS the DELETE — a record
-// // deleted and later re-created is not deleted.
-// export const buildCompressedDeletedSql = (deltaTable: string, p: IFetchSqlParams): string => {
-//   const cols = pairedColumns(p.columnNames);
-//   const extracted = cols
-//     .map((c) => `json_extract_scalar(change_data, '$["${c}"]') AS ${quoteCol(c)}`)
-//     .join(', ');
-//   const inner =
-//     `SELECT ${extracted} FROM (` +
-//     `SELECT record_id, change_data, change_type, ` +
-//     `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
-//     `FROM "${deltaTable}" WHERE backup_job_id IN (${idList(p.jobIds)})` +
-//     whereClause([p.deltaPartition], 'AND') +
-//     `) t WHERE rn = 1 AND change_type = 'DELETE'`;
-//   const filtered = `SELECT * FROM (${inner}) w${whereClause([p.filterWhere], 'WHERE')}`;
-//   return pageWrap(filtered, p, quoteCol(LMD), quoteCol(ID));
-// };
-//
-// export interface IEntireScope {
-//   jobIds: string[];
-//   recordIds?: string[];
-//   limit: number;
-//   cursor?: IPageKey | null;
-//   deltaPartition?: string | null;
-// }
-//
-// const recordScope = (recordIds: string[] | undefined, column: string): string =>
-//   recordIds?.length ? ` AND ${column} IN (${idList(recordIds)})` : '';
-//
-// // RESTORE_ENTIRE_RECORD, query 1 of 2 — defines the block: WHICH records are in
-// // this page, and in what order. Driven off the Hudi table so there is one
-// // sort-key domain and one row per Id. A record qualifies two ways, unioned:
-// // its Hudi row is stamped with a requested job (catches inserts, which write no
-// // delta), or a requested job recorded a delta against it.
-// export const buildEntireBlockSql = (
-//   hudiTable: string,
-//   deltaTable: string,
-//   s: IEntireScope,
-//   columnNames: string[],
-//   filterWhere: string | null
-// ): string => {
-//   const cols = pairedColumns(columnNames)
-//     .map((c) => `CAST(h.${quoteCol(c)} AS varchar) AS ${quoteCol(c)}`)
-//     .join(', ');
-//   const hLmd = `CAST(h.${quoteCol(LMD)} AS varchar)`;
-//   const hId = `CAST(h.${quoteCol(ID)} AS varchar)`;
-//   const touched =
-//     `SELECT DISTINCT record_id FROM "${deltaTable}" ` +
-//     `WHERE backup_job_id IN (${idList(s.jobIds)})${recordScope(s.recordIds, 'record_id')}` +
-//     whereClause([s.deltaPartition], 'AND');
-//   return (
-//     `SELECT ${cols} FROM "${hudiTable}" h ` +
-//     `WHERE (h.backup_job_id IN (${idList(s.jobIds)}) OR h."Id" IN (${touched}))` +
-//     recordScope(s.recordIds, 'h."Id"') +
-//     whereClause([filterWhere, keysetWhere(s.cursor, hLmd, hId)], 'AND') +
-//     ` ORDER BY ${hLmd} DESC, ${hId} DESC LIMIT ${s.limit}`
-//   );
-// };
-//
-// // RESTORE_ENTIRE_RECORD, query 2 of 2 — the deltas to undo, for the block's
-// // records only. No ordering or limit: the row count is bounded by the block's
-// // record ids, and reconstructRecord sorts by change_time in memory.
-// export const buildEntireDeltasSql = (
-//   deltaTable: string,
-//   jobIds: string[],
-//   recordIds: string[],
-//   deltaPartition?: string | null
-// ): string =>
-//   `SELECT record_id, change_time, change_type, change_data FROM "${deltaTable}" ` +
-//   `WHERE backup_job_id IN (${idList(jobIds)}) AND record_id IN (${idList(recordIds)})` +
-//   whereClause([deltaPartition], 'AND');
-//
-// // Uncompressed jobs, RESTORE_ENTIRE_RECORD: newest CSV row per Id vs the Hudi
-// // record — the newer LastModifiedDate wins, and a record present in only one
-// // source is returned from that source (FULL OUTER JOIN).
-// export const buildCsvEitherSql = (
-//   csvTable: string,
-//   hudiTable: string,
-//   p: IFetchSqlParams,
-//   recordIds?: string[]
-// ): string => {
-//   const cols = pairedColumns(p.columnNames);
-//   const colList = cols.map(quoteCol).join(', ');
-//   const hudiScope = recordIds?.length ? idList(recordIds) : `SELECT "Id" FROM m`;
-//   const pick = (c: string): string =>
-//     `CASE WHEN m."Id" IS NULL THEN CAST(h.${quoteCol(c)} AS varchar) ` +
-//     `WHEN h."Id" IS NOT NULL AND CAST(h.${quoteCol(LMD)} AS varchar) > CAST(m.${quoteCol(LMD)} AS varchar) ` +
-//     `THEN CAST(h.${quoteCol(c)} AS varchar) ` +
-//     `ELSE CAST(m.${quoteCol(c)} AS varchar) END AS ${quoteCol(`r_${c}`)}`;
-//   const inner =
-//     `WITH ranked AS (` +
-//     `SELECT ${colList}, ` +
-//     `ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY ${quoteCol(LMD)} DESC) AS rn ` +
-//     `FROM "${csvTable}" WHERE backup_job_id IN (${idList(p.jobIds)})${recordScope(recordIds, '"Id"')}` +
-//     `), m AS (SELECT * FROM ranked WHERE rn = 1${whereClause([p.filterWhere], 'AND')}), ` +
-//     `h AS (SELECT ${colList} FROM "${hudiTable}" WHERE "Id" IN (${hudiScope})) ` +
-//     `SELECT ${cols.map(pick).join(', ')} ` +
-//     `FROM m FULL OUTER JOIN h ON h."Id" = m."Id"`;
-//   return pageWrap(inner, p, quoteCol(`r_${LMD}`), quoteCol(`r_${ID}`));
-// };
+/**
+ * Reads compressed state only: the main_backup_files Hudi table (current state,
+ * one row per Id) and the delta table (CDC history). No CSV is touched.
+ *
+ * ── OPERATION ────────────────────────────────────────────────────────────────
+ * Every row carries the operation a RESTORE would have to perform to put the
+ * vault's version back — the inverse of what the backup recorded, not what it
+ * recorded:
+ *
+ *   INSERT — the record is gone. Re-create it from the DELETE delta's snapshot.
+ *   DELETE — the record was created inside the window, so rolling the window
+ *            back means removing it.
+ *   UPDATE — the record survives; write the reconstructed pre-window version.
+ *
+ * Emitted under the `dv_operation` alias for the same reason `dv_row_type` is —
+ * see ROW_TYPE_COLUMN. The service renames it to `OPERATION`.
+ *
+ * ── ENTIRE ───────────────────────────────────────────────────────────────────
+ * Every record the vault holds, at its stored state. UPDATE deltas are never
+ * read: the Hudi row already IS the current value, so replaying anything onto
+ * it would move it away from the state being asked for. Deleted records have no
+ * Hudi row, so their last state comes from the DELETE delta. The date window is
+ * not read here — ENTIRE means entire.
+ *
+ * ── CHANGED_BETWEEN ──────────────────────────────────────────────────────────
+ * What changed inside [startDate, endDate], each at the version a restore would
+ * write. Three disjoint groups, two queries:
+ *
+ *   created in the window   → Hudi row, OPERATION = DELETE. Its UPDATE deltas
+ *                             are deliberately NOT undone: the record did not
+ *                             exist before the window, so there is no earlier
+ *                             version, and the row is only there to name what
+ *                             to remove.
+ *   updated in the window   → Hudi row, OPERATION = UPDATE. The service undoes
+ *                             the window's deltas onto it (buildWindowDeltasSql
+ *                             + reconstructRecord), newest→oldest, landing on
+ *                             the pre-window values.
+ *   deleted in the window   → DELETE delta snapshot, OPERATION = INSERT.
+ *
+ * The two Hudi groups share one query and one ordering, so the block is a
+ * single seekable stream; the CASE decides which group each row is in, and
+ * "created" wins over "updated" when a record is both.
+ */
+
+export const OPERATION_COLUMN = 'dv_operation';
+const OP = OPERATION_COLUMN;
+
+// CreatedDate lifted out of a DELETE snapshot so the outer layer can drop
+// records created AND deleted inside the same window. Aliased rather than
+// projected: the service maps only the columns it names, so this never reaches
+// the response.
+const CREATED_ALIAS = 'dv_created';
+const CREATED = 'CreatedDate';
+
+/**
+ * Parses a stored timestamp column to a real instant.
+ *
+ * Necessary because these columns are strings whose spelling is not agreed
+ * across writers: `change_time` arrives as epoch millis on some Spark paths and
+ * as an ISO timestamp on others (restore-reconstruct's `toTime` accepts both),
+ * and Salesforce writes `+0000` where this service canonicalises to `Z`.
+ * Compared as varchar against an ISO bound, each of those silently shifts the
+ * window — `...+0000` sorts BELOW `...Z`, so a record on the lower bound drops
+ * out — which is exactly the class of bug a restore must not have.
+ *
+ * ISO is tried first because it is the common case; the epoch branch only runs
+ * when the ISO parse fails. Unparseable values yield NULL, which the callers
+ * treat as "outside the window" rather than letting it swallow the row.
+ */
+const asInstant = (expr: string): string =>
+  `COALESCE(TRY(from_iso8601_timestamp(CAST(${expr} AS varchar))), ` +
+  `TRY(from_unixtime(CAST(${expr} AS bigint) / 1000, 'UTC')))`;
+
+const inWindow = (expr: string, from: string, to: string): string =>
+  `${asInstant(expr)} BETWEEN from_iso8601_timestamp(${lit(from)}) ` +
+  `AND from_iso8601_timestamp(${lit(to)})`;
+
+/**
+ * Restricts a delta scan to RECORD rows. Applies to every read of the delta
+ * table — record retrieval never wants the other kind.
+ *
+ * The table interleaves two row kinds under one schema: a record change, and a
+ * schema change (`is_schema_change = true`) describing the OBJECT — a field
+ * added or dropped, a child, a record type, a picklist. A schema row carries a
+ * NULL `record_id` and a `change_data` that is not a field diff, so left in it
+ * corrupts every delta path: the DISTINCT record_id semi-join drags NULLs, and
+ * ROW_NUMBER() PARTITION BY record_id buckets ALL of them together and can emit
+ * one all-null phantom "deleted record" out of buildDeletedDeltaSql.
+ *
+ * COALESCE, not `= false`: the column post-dates the first delta tables, so
+ * parquet written before it exists reads back NULL, and a bare `= false` would
+ * silently drop every one of those legitimate record deltas.
+ */
+const RECORD_ROWS_ONLY = 'NOT COALESCE(is_schema_change, false)';
+
+/**
+ * Free-text search: a case-insensitive substring match across the REQUESTED
+ * columns, ORed. Id and LastModifiedDate are excluded — they are scanned for
+ * ranking and paging, not because the caller asked to see them, so matching on
+ * them would return rows for a search the user never made.
+ *
+ * `%`, `_` and the escape character are escaped, so typing `50%` searches for
+ * that text rather than for everything.
+ */
+const searchWhere = (columnNames: string[], text?: string | null): string | null => {
+  const needle = (text ?? '').trim().toLowerCase();
+  if (!needle) return null;
+  const pattern = needle.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return [...new Set(columnNames)]
+    .map((c) => `LOWER(CAST(${quoteCol(c)} AS varchar)) LIKE ${lit(`%${pattern}%`)} ESCAPE '\\'`)
+    .join(' OR ');
+};
+
+export interface IRetrieveSqlParams {
+  columnNames: string[];
+  // Canonical ISO UTC window. Both null under ENTIRE, both set under
+  // CHANGED_BETWEEN — the controller rejects a half-open one.
+  startDate?: string | null;
+  endDate?: string | null;
+  searchText?: string | null;
+  // Partition predicate for the delta table, from buildDeltaPartitionWhere.
+  deltaPartition?: string | null;
+  limit: number;
+  // Absent/null → first block.
+  cursor?: IPageKey | null;
+}
+
+// A window-bearing params object. The two CHANGED_BETWEEN builders take this so
+// the bounds are non-null by type rather than by `!` at every use.
+export type IWindowSqlParams = IRetrieveSqlParams & { startDate: string; endDate: string };
+
+const orderAndLimit = (limit: number): string =>
+  ` ORDER BY ${quoteCol(LMD)} DESC, ${quoteCol(ID)} DESC LIMIT ${limit}`;
+
+// ENTIRE: the Hudi table IS the answer — one row per record, already at the
+// state the vault holds. No delta is read, so there is nothing to reconstruct.
+export const buildHudiEntireSql = (hudiTable: string, p: IRetrieveSqlParams): string => {
+  const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
+  return (
+    `SELECT ${cols}, 'UPDATE' AS ${quoteCol(OP)} FROM "${hudiTable}"` +
+    whereClause(
+      [searchWhere(p.columnNames, p.searchText), keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID))],
+      'WHERE'
+    ) +
+    orderAndLimit(p.limit)
+  );
+};
+
+/**
+ * CHANGED_BETWEEN, the Hudi half: records created OR updated inside the window,
+ * tagged with which of the two they are.
+ *
+ * `created` is evaluated once as a predicate and once as a CASE arm, and it wins
+ * the tie: a record created inside the window and updated inside it too is
+ * still only "created", so its deltas are never undone (see the header).
+ *
+ * The delta subquery is an existence test on record_id — DISTINCT, no payload —
+ * so Trino runs it as a semi-join against a partition-pruned scan rather than
+ * dragging change_data through. DELETE deltas are excluded from it: a deleted
+ * record has no Hudi row to match, and it comes back from buildDeletedDeltaSql.
+ */
+export const buildHudiChangedSql = (
+  hudiTable: string,
+  deltaTable: string,
+  p: IWindowSqlParams
+): string => {
+  const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
+  const created = inWindow(quoteCol(CREATED), p.startDate, p.endDate);
+  const updated =
+    `${quoteCol(ID)} IN (SELECT DISTINCT record_id FROM "${deltaTable}"` +
+    whereClause(
+      [
+        RECORD_ROWS_ONLY,
+        `change_type <> 'DELETE'`,
+        inWindow('change_time', p.startDate, p.endDate),
+        p.deltaPartition,
+      ],
+      'WHERE'
+    ) +
+    `)`;
+
+  return (
+    `SELECT ${cols}, CASE WHEN ${created} THEN 'DELETE' ELSE 'UPDATE' END AS ${quoteCol(OP)}` +
+    ` FROM "${hudiTable}"` +
+    whereClause(
+      [
+        `${created} OR ${updated}`,
+        searchWhere(p.columnNames, p.searchText),
+        keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID)),
+      ],
+      'WHERE'
+    ) +
+    orderAndLimit(p.limit)
+  );
+};
+
+/**
+ * Deleted records, from the delta table alone — they have no Hudi row left, so
+ * the DELETE delta's change_data (a flat snapshot of the record's last state) is
+ * the only source there is.
+ *
+ * `rn = 1 AND change_type = 'DELETE'` is the "still deleted" test: a record
+ * deleted and later re-created has a newer non-DELETE delta and drops out here,
+ * which is also what keeps it from shadowing its own live Hudi row.
+ *
+ * Under a window the same test is scoped to the window, plus one exclusion:
+ * a record created AND deleted inside it nets out to nothing, and restoring it
+ * would insert a record that did not exist before the window either. NULL from
+ * `asInstant` (an unparseable or absent CreatedDate) coalesces to "not created
+ * in the window", so a bad timestamp keeps the record rather than losing it.
+ *
+ * Without a window (ENTIRE) every deleted record the vault holds comes back.
+ */
+export const buildDeletedDeltaSql = (deltaTable: string, p: IRetrieveSqlParams): string => {
+  const windowed =
+    p.startDate && p.endDate ? inWindow('change_time', p.startDate, p.endDate) : null;
+  const extract = (name: string, alias: string): string =>
+    `json_extract_scalar(change_data, '$["${name}"]') AS ${quoteCol(alias)}`;
+  const extracted = [
+    ...projectionColumns(p.columnNames).map((c) => extract(c, c)),
+    ...(windowed ? [extract(CREATED, CREATED_ALIAS)] : []),
+  ].join(', ');
+
+  const newest =
+    `SELECT record_id, change_data, change_type, ` +
+    `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
+    `FROM "${deltaTable}"` +
+    whereClause([RECORD_ROWS_ONLY, windowed, p.deltaPartition], 'WHERE');
+
+  const snapshots =
+    `SELECT ${extracted}, 'INSERT' AS ${quoteCol(OP)} ` +
+    `FROM (${newest}) t WHERE rn = 1 AND change_type = 'DELETE'`;
+
+  return (
+    `SELECT * FROM (${snapshots}) w` +
+    whereClause(
+      [
+        windowed
+          ? `NOT COALESCE(${inWindow(quoteCol(CREATED_ALIAS), p.startDate!, p.endDate!)}, false)`
+          : null,
+        searchWhere(p.columnNames, p.searchText),
+        keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID)),
+      ],
+      'WHERE'
+    ) +
+    orderAndLimit(p.limit)
+  );
+};
+
+/**
+ * The deltas to undo, for one block's records only.
+ *
+ * No ordering and no limit: the row count is already bounded by the block's
+ * record ids, and reconstructRecord sorts by change_time in memory. DELETE
+ * deltas are skipped — they are a full snapshot rather than a field diff, so
+ * replaying one is a no-op anyway (see applyDelta).
+ */
+export const buildWindowDeltasSql = (
+  deltaTable: string,
+  recordIds: string[],
+  p: Pick<IWindowSqlParams, 'startDate' | 'endDate' | 'deltaPartition'>
+): string =>
+  `SELECT record_id, change_time, change_type, change_data FROM "${deltaTable}"` +
+  whereClause(
+    [
+      RECORD_ROWS_ONLY,
+      `record_id IN (${idList(recordIds)})`,
+      `change_type <> 'DELETE'`,
+      inWindow('change_time', p.startDate, p.endDate),
+      p.deltaPartition,
+    ],
+    'WHERE'
+  );
+
+/**
+ * Partition predicate for the DELTA table. The biggest cost lever on this
+ * endpoint — Athena bills by bytes scanned and the delta table grows without
+ * bound — so CHANGED_BETWEEN cuts the scan to the months its window can touch.
+ *
+ *   - delta is partitioned year/month from `change_time`, both keys typed
+ *     `string` in Glue.
+ *   - `month` is zero-padded in every mainline writer but UNPADDED in
+ *     CascadeDeleteService, so both spellings exist in the same table: month
+ *     must be compared numerically (CAST(month AS integer)), never
+ *     lexicographically ('7' would sort after '12'). Trino still prunes across
+ *     that cast. Year is always four digits, so it compares as a string.
+ *   - Only ever applied to the delta table. The main Hudi table partitions on
+ *     CreatedDate, which is immutable, so pruning it by a change window would
+ *     silently drop records that were created earlier and changed inside it.
+ *   - Both bounds must come from a caller-declared window, never inferred:
+ *     SCHEMA_* deltas carry the RECORD's LastModifiedDate as change_time and can
+ *     land in partitions years older than the job that wrote them. That is safe
+ *     here because the same window is the row filter — a delta the prune drops
+ *     is one `inWindow` would have dropped too.
+ */
+export const buildDeltaPartitionWhere = (
+  from: string | null,
+  to: string | null
+): string | null => {
+  const parts: string[] = [];
+  const ym = (iso: string): { y: string; m: number } | null => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? null
+      : { y: String(d.getUTCFullYear()), m: d.getUTCMonth() + 1 };
+  };
+  const lo = from ? ym(from) : null;
+  const hi = to ? ym(to) : null;
+  if (lo) parts.push(`(year > ${lit(lo.y)} OR (year = ${lit(lo.y)} AND CAST(month AS integer) >= ${lo.m}))`);
+  if (hi) parts.push(`(year < ${lit(hi.y)} OR (year = ${lit(hi.y)} AND CAST(month AS integer) <= ${hi.m}))`);
+  return parts.length ? parts.join(' AND ') : null;
+};
 
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npx ts-node src/services/restore-retrieve/athena-fetch.ts
@@ -787,33 +810,6 @@ if (require.main === module) {
   );
   assert.ok(jobAnchored.includes(`"dv_anchor" IS NOT NULL AND "LastModifiedDate" <= "dv_anchor"`));
 
-  // ── DISABLED 2026-07-30: the date window is accepted and ignored ────────
-  // Records are selected by backupJobIds alone, so no supplied date may reach
-  // the SQL in ANY position — not as a selector, not as a row filter.
-  const withDates = buildCsvRecordsSql('t', {
-    ...base,
-    changedBetween: true,
-    backupJobIds: ['JOB_2'],
-    startDate: '2026-03-01',
-    endDate: '2026-06-30',
-  });
-  assert.ok(withDates.includes(`MAX(CASE WHEN backup_job_id IN ('JOB_2')`), 'jobs still anchor');
-  assert.ok(!withDates.includes('2026-03-01'), 'startDate is ignored');
-  assert.ok(!withDates.includes('2026-06-30'), 'endDate is ignored');
-  // Byte-identical to the same request with no dates at all.
-  assert.strictEqual(
-    withDates,
-    buildCsvRecordsSql('t', { ...base, changedBetween: true, backupJobIds: ['JOB_2'] }),
-    'supplying a window changes nothing about the query'
-  );
-  // Same under default picking, where the window used to be a plain row filter.
-  assert.strictEqual(
-    buildCsvRecordsSql('t', { ...base, startDate: '2026-01-01', endDate: '2026-07-29' }),
-    buildCsvRecordsSql('t', base)
-  );
-  // A date-only request now selects the whole table.
-  assert.ok(!buildCsvRecordsSql('t', { ...base, startDate: '2026-01-01' }).includes('LastModifiedDate" >='));
-
   // fullRestore + jobs outside CHANGED_BETWEEN gets the same treatment — the
   // trap is restore-to picking, not the source type. This is the combination
   // /show-preview produces for a PARTIAL request.
@@ -902,13 +898,10 @@ if (require.main === module) {
   const filtered = buildCsvRecordsSql('t', { ...base, backupJobIds: ['j1'], filterWhere: `"Name" LIKE '%Acme%'` });
   assert.ok(filtered.includes(`WHERE (backup_job_id IN ('j1')) AND ("Name" LIKE '%Acme%')`));
 
-  // Every filter at once, in the documented order. The dates are supplied and
-  // make no difference — the window is disabled.
+  // Every filter at once, in the documented order.
   const everything = buildCsvRecordsSql('t', {
     ...base,
     backupJobIds: ['j1'],
-    startDate: '2026-01-01',
-    endDate: '2026-02-01',
     recordIds: ['r1'],
     filterWhere: `"Name" = 'Acme'`,
     deletedOnly: true,
@@ -918,7 +911,6 @@ if (require.main === module) {
       `WHERE (backup_job_id IN ('j1')) AND ("Id" IN ('r1')) AND ("Name" = 'Acme')`
     )
   );
-  assert.ok(!everything.includes('2026-01-01') && !everything.includes('2026-02-01'));
   assert.ok(everything.includes(`AND "dv_row_type" = 'DELETE'`));
 
   // ── Keyset pagination ──────────────────────────────────────────────────────
@@ -940,6 +932,120 @@ if (require.main === module) {
   assert.ok(buildCsvRecordsSql('t', { ...base, backupJobIds: ["j'1"] }).includes(`'j''1'`));
   try {
     buildCsvRecordsSql('t', { ...base, columnNames: ['Name; DROP'] });
+    assert.fail('expected FilterError');
+  } catch (e) {
+    assert.ok(e instanceof FilterError && e.code === 'invalid_column_name');
+  }
+
+  // ══ Hudi + Delta retrieval ═════════════════════════════════════════════════
+  const START = '2026-03-01T00:00:00.000Z';
+  const END = '2026-06-30T23:59:59.999Z';
+  const retrieve = { columnNames: ['Name', 'Amount'], limit: 2000 };
+  const prune = buildDeltaPartitionWhere(START, END)!;
+  const win = { ...retrieve, startDate: START, endDate: END, deltaPartition: prune };
+
+  // ── ENTIRE: the Hudi table alone, no delta, no window ──────────────────────
+  const hudiAll = buildHudiEntireSql('t_hudi', retrieve);
+  assert.ok(hudiAll.startsWith(`SELECT "Id", "Name", "Amount", "LastModifiedDate", 'UPDATE' AS "dv_operation" FROM "t_hudi"`));
+  assert.ok(hudiAll.endsWith(`ORDER BY "LastModifiedDate" DESC, "Id" DESC LIMIT 2000`));
+  assert.ok(!hudiAll.includes('WHERE'), 'nothing filtered → no WHERE at all');
+  assert.ok(!hudiAll.includes('change_'), 'ENTIRE never reads a delta');
+
+  // ── CHANGED_BETWEEN: one Hudi query, two groups, created wins the tie ──────
+  const changedSql = buildHudiChangedSql('t_hudi', 't_delta', win);
+  assert.ok(
+    changedSql.includes(`CASE WHEN COALESCE(TRY(from_iso8601_timestamp(CAST("CreatedDate" AS varchar))), TRY(from_unixtime(CAST("CreatedDate" AS bigint) / 1000, 'UTC'))) BETWEEN from_iso8601_timestamp('${START}') AND from_iso8601_timestamp('${END}') THEN 'DELETE' ELSE 'UPDATE' END AS "dv_operation"`),
+    'created-in-window is tagged DELETE, everything else UPDATE'
+  );
+  // Timestamps are PARSED, never string-compared: Salesforce writes `+0000`
+  // where the bound says `Z`, and `+` sorts below `Z`, so a varchar comparison
+  // would drop a record sitting exactly on the lower bound.
+  assert.ok(!/"CreatedDate" >= '/.test(changedSql), 'no varchar date comparison');
+  // The updated-in-window arm is an existence test, and it is partition-pruned.
+  assert.ok(changedSql.includes(`"Id" IN (SELECT DISTINCT record_id FROM "t_delta" WHERE (NOT COALESCE(is_schema_change, false)) AND (change_type <> 'DELETE')`));
+  assert.ok(changedSql.includes(prune), 'the delta subquery prunes to the window’s months');
+  assert.ok(!changedSql.includes(`FROM "t_hudi" WHERE (year`), 'the Hudi table is NOT pruned — it partitions on CreatedDate');
+  // Both groups come out of ONE ordered, seekable stream.
+  assert.strictEqual(changedSql.match(/FROM "t_hudi"/g)!.length, 1);
+  assert.ok(changedSql.endsWith(`ORDER BY "LastModifiedDate" DESC, "Id" DESC LIMIT 2000`));
+
+  // ── Deleted records: snapshot out of the DELETE delta ──────────────────────
+  const deleted = buildDeletedDeltaSql('t_delta', win);
+  assert.ok(deleted.includes(`json_extract_scalar(change_data, '$["Name"]') AS "Name"`));
+  assert.ok(deleted.includes(`'INSERT' AS "dv_operation"`), 'restoring a deleted record is an INSERT');
+  assert.ok(deleted.includes(`) t WHERE rn = 1 AND change_type = 'DELETE'`), 'deleted-then-recreated is not deleted');
+  // Created AND deleted inside the window nets out to nothing — and an
+  // unparseable CreatedDate keeps the record rather than losing it.
+  assert.ok(deleted.includes(`NOT COALESCE(COALESCE(TRY(from_iso8601_timestamp(CAST("dv_created" AS varchar)))`));
+  assert.ok(deleted.includes(`, false)`));
+  // CreatedDate rides under an alias, so it can never reach the projection.
+  assert.ok(deleted.includes(`'$["CreatedDate"]') AS "dv_created"`));
+  assert.ok(!deleted.includes(`AS "CreatedDate"`));
+
+  // ENTIRE's deleted half has no window: every deleted record, no CreatedDate
+  // extraction, no partition prune.
+  const deletedAll = buildDeletedDeltaSql('t_delta', retrieve);
+  assert.ok(!deletedAll.includes('dv_created'));
+  assert.ok(!deletedAll.includes('from_iso8601_timestamp'));
+  // No window → no date/partition predicate; the record-row filter still applies.
+  assert.ok(deletedAll.includes(`FROM "t_delta" WHERE (NOT COALESCE(is_schema_change, false))) t WHERE rn = 1`));
+  assert.ok(!deletedAll.includes('year >'), 'no window → no partition prune');
+
+  // ── The deltas to undo, for one block ─────────────────────────────────────
+  const undo = buildWindowDeltasSql('t_delta', ['r1', 'r2'], win);
+  assert.ok(undo.startsWith(`SELECT record_id, change_time, change_type, change_data FROM "t_delta"`));
+  assert.ok(undo.includes(`(record_id IN ('r1', 'r2'))`));
+  // Schema-change rows are not record deltas — excluded from every delta scan,
+  // and pre-column NULLs still count as record rows.
+  assert.ok(undo.includes(`(NOT COALESCE(is_schema_change, false))`));
+  assert.ok(deleted.includes(`(NOT COALESCE(is_schema_change, false))`));
+  assert.ok(deletedAll.includes(`(NOT COALESCE(is_schema_change, false))`), 'applies without a window too');
+  assert.ok(undo.includes(`(change_type <> 'DELETE')`), 'a DELETE snapshot is a base, not a diff to undo');
+  assert.ok(undo.includes(prune));
+  assert.ok(!undo.includes('ORDER BY') && !undo.includes('LIMIT'), 'bounded by the block’s ids, sorted in memory');
+
+  // ── searchText ─────────────────────────────────────────────────────────────
+  const searched = buildHudiEntireSql('t_hudi', { ...retrieve, searchText: '  AcMe  ' });
+  assert.ok(
+    searched.includes(`(LOWER(CAST("Name" AS varchar)) LIKE '%acme%' ESCAPE '\\' OR LOWER(CAST("Amount" AS varchar)) LIKE '%acme%' ESCAPE '\\')`),
+    'case-insensitive OR across the requested columns, trimmed'
+  );
+  assert.ok(!searched.includes(`"Id" AS varchar)) LIKE`), 'Id/LMD are scanned, not searched');
+  // Wildcards a user typed are literal text, not a match-anything.
+  assert.ok(buildHudiEntireSql('t', { ...retrieve, searchText: '50%_x' }).includes(`'%50\\%\\_x%'`));
+  assert.ok(buildHudiEntireSql('t', { ...retrieve, searchText: "o'brien" }).includes(`'%o''brien%'`));
+  // Blank/whitespace search is "no search", not "match empty".
+  assert.strictEqual(buildHudiEntireSql('t', { ...retrieve, searchText: '   ' }), buildHudiEntireSql('t', retrieve));
+  // It reaches the delete path too, where the columns are json-extracted aliases.
+  assert.ok(buildDeletedDeltaSql('t_delta', { ...win, searchText: 'acme' }).includes(`LOWER(CAST("Name" AS varchar)) LIKE '%acme%'`));
+
+  // ── Keyset pagination is uniform across both halves ────────────────────────
+  const key = { lmd: '2026-05-01T00:00:00.000Z', id: '001A' };
+  for (const sql of [
+    buildHudiEntireSql('t_hudi', { ...retrieve, cursor: key }),
+    buildHudiChangedSql('t_hudi', 't_delta', { ...win, cursor: key }),
+    buildDeletedDeltaSql('t_delta', { ...win, cursor: key }),
+  ]) {
+    assert.ok(
+      sql.includes(`("LastModifiedDate" < '${key.lmd}' OR ("LastModifiedDate" = '${key.lmd}' AND "Id" < '001A'))`),
+      'every source seeks in the same key domain, so one cursor orders the merge'
+    );
+    assert.ok(!sql.includes('OFFSET'));
+  }
+
+  // ── Partition prune ────────────────────────────────────────────────────────
+  assert.strictEqual(
+    prune,
+    `(year > '2026' OR (year = '2026' AND CAST(month AS integer) >= 3)) AND (year < '2026' OR (year = '2026' AND CAST(month AS integer) <= 6))`
+  );
+  // Month is compared NUMERICALLY — unpadded '7' would sort after '12' as text.
+  assert.ok(prune.includes('CAST(month AS integer)'));
+  assert.strictEqual(buildDeltaPartitionWhere(null, null), null, 'ENTIRE has no window to prune with');
+
+  // ── Injection defence ──────────────────────────────────────────────────────
+  assert.ok(buildWindowDeltasSql('t', ["r'1"], win).includes(`'r''1'`));
+  try {
+    buildHudiEntireSql('t', { ...retrieve, columnNames: ['Name; DROP'] });
     assert.fail('expected FilterError');
   } catch (e) {
     assert.ok(e instanceof FilterError && e.code === 'invalid_column_name');
