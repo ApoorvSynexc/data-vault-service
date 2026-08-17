@@ -66,6 +66,7 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
 
     user = crmUser;
   }
+  const excludeObjectSuffix = ['__x', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
 
   const objectsList = await salesforceObjectList({ user });
   const objectsCount = await salesforceObjectsCount({ user });
@@ -73,7 +74,8 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     obj.deprecatedAndHidden === false &&
     obj.customSetting === false &&
     obj.keyPrefix !== null &&
-    obj.queryable === true
+    obj.queryable === true &&
+    !excludeObjectSuffix.some((suffix) => obj.name.endsWith(suffix))
   );
 
   if (apexMode === 'backup' && apexType === 'realtime') {
@@ -101,14 +103,18 @@ const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
   let user = req.user!;
   const { objectNames } = req.body;
 
-  const objectDescription: any = [];
+  const masterObjects: any = [];
+  const notAllowedNames = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'lastreferencedid', 'lastviewedid'];
   for (let index = 0; index < objectNames.length; index++) {
     const objectName = objectNames[index];
     const objectDescription = await salesforceObjectDescribe({ user, objectName });
-
+    const field = objectDescription.fields.find((f) => f.type === 'reference' && (f.nillable === false || f.relationshipOrder !== null) && !notAllowedNames.includes(f.name.toLowerCase()));
+    if (!field) {
+      masterObjects.push({ objectName, objectDescription });
+    }
   }
 
-  return makeResponse(req, res, 200, true, 'fetch', objectDescription);
+  return makeResponse(req, res, 200, true, 'fetch', masterObjects);
 }
 
 const getsalesfrocefields = async (req: IRequest, res: IResponse) => {

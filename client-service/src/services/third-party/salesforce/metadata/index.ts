@@ -184,7 +184,142 @@ interface ISalesforceObjectDescribeParams {
     objectName: string;
 }
 
-export const salesforceObjectDescribe = async (params: ISalesforceObjectDescribeParams): Promise<ISalesforceObjectCountResponse[]> => {
+interface ISalesforcePicklistValue {
+    active: boolean;
+    defaultValue: boolean;
+    label: string;
+    validFor: string | null;
+    value: string;
+}
+
+interface ISalesforceFieldDescribe {
+    aggregatable: boolean;
+    aiPredictionField: boolean;
+    autoNumber: boolean;
+    byteLength: number;
+    calculated: boolean;
+    calculatedFormula: string | null;
+    cascadeDelete: boolean;
+    caseSensitive: boolean;
+    compoundFieldName: string | null;
+    controllerName: string | null;
+    createable: boolean;
+    custom: boolean;
+    defaultValue: boolean | string | null;
+    defaultValueFormula: string | null;
+    defaultedOnCreate: boolean;
+    dependentPicklist: boolean;
+    deprecatedAndHidden: boolean;
+    digits: number;
+    displayLocationInDecimal: boolean;
+    encrypted: boolean;
+    externalId: boolean;
+    extraTypeInfo: string | null;
+    filterable: boolean;
+    filteredLookupInfo: unknown | null;
+    formulaTreatNullNumberAsZero: boolean;
+    groupable: boolean;
+    highScaleNumber: boolean;
+    htmlFormatted: boolean;
+    idLookup: boolean;
+    inlineHelpText: string | null;
+    label: string;
+    length: number;
+    mask: string | null;
+    maskType: string | null;
+    name: string;
+    nameField: boolean;
+    namePointing: boolean;
+    nillable: boolean;
+    permissionable: boolean;
+    picklistValues: ISalesforcePicklistValue[];
+    polymorphicForeignKey: boolean;
+    precision: number;
+    queryByDistance: boolean;
+    referenceTargetField: string | null;
+    referenceTo: string[];
+    relationshipName: string | null;
+    relationshipOrder: number | null;
+    restrictedDelete: boolean;
+    restrictedPicklist: boolean;
+    scale: number;
+    searchPrefilterable: boolean;
+    soapType: string;
+    sortable: boolean;
+    type: string;
+    unique: boolean;
+    updateable: boolean;
+    writeRequiresMasterRead: boolean;
+}
+
+interface ISalesforceChildRelationship {
+    cascadeDelete: boolean;
+    childSObject: string;
+    deprecatedAndHidden: boolean;
+    field: string;
+    junctionIdListNames: string[];
+    junctionReferenceTo: string[];
+    relationshipName: string | null;
+    restrictedDelete: boolean;
+}
+
+export interface ISalesforceObjectDescribeResponse {
+    actionOverrides: unknown[];
+    activateable: boolean;
+    associateEntityType: string | null;
+    associateParentEntity: string | null;
+    childRelationships: ISalesforceChildRelationship[];
+    compactLayoutable: boolean;
+    createable: boolean;
+    custom: boolean;
+    customSetting: boolean;
+    deepCloneable: boolean;
+    defaultImplementation: string | null;
+    deletable: boolean;
+    deprecatedAndHidden: boolean;
+    extendedBy: string | null;
+    extendsInterfaces: string | null;
+    feedEnabled: boolean;
+    fields: ISalesforceFieldDescribe[];
+    hasSubtypes: boolean;
+    isInterface: boolean;
+    isSubtype: boolean;
+    keyPrefix: string | null;
+    label: string;
+    labelPlural: string;
+    layoutable: boolean;
+    mergeable: boolean;
+    mruEnabled: boolean;
+    name: string;
+    namedLayoutInfos: unknown[];
+    networkScopeFieldName: string | null;
+    queryable: boolean;
+    recordTypeInfos: unknown[];
+    replicateable: boolean;
+    retrieveable: boolean;
+    searchLayoutable: boolean;
+    searchable: boolean;
+    sobjectDescribeOption: string;
+    supportedScopes: unknown[];
+    triggerable: boolean;
+    undeletable: boolean;
+    updateable: boolean;
+    urls: {
+        compactLayouts: string;
+        rowTemplate: string;
+        approvalLayouts: string;
+        uiDetailTemplate: string;
+        uiEditTemplate: string;
+        listviews: string;
+        describe: string;
+        uiNewRecord: string;
+        quickActions: string;
+        layouts: string;
+        sobject: string;
+    };
+}
+
+export const salesforceObjectDescribe = async (params: ISalesforceObjectDescribeParams): Promise<ISalesforceObjectDescribeResponse> => {
     const { user, objectName } = params;
     const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
 
@@ -212,12 +347,12 @@ export const salesforceObjectDescribe = async (params: ISalesforceObjectDescribe
     const url = `${instanceUrl}/services/data/v66.0/sobjects/${objectName}/describe`;
     const method = 'GET';
     try {
-        const result = await salesforceRequest<any>(
+        const result = await salesforceRequest<ISalesforceObjectDescribeResponse>(
             { url, method },
             tokens
         );
 
-        return result.data ?? [];
+        return result.data;
     } catch (error) {
         throw error;
     }
