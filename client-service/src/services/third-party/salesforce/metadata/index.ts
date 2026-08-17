@@ -178,3 +178,47 @@ export const salesforceObjectsCount = async (params: ISalesforceObjectCountParam
         throw error;
     }
 }
+
+interface ISalesforceObjectDescribeParams {
+    user: IUser;
+    objectName: string;
+}
+
+export const salesforceObjectDescribe = async (params: ISalesforceObjectDescribeParams): Promise<ISalesforceObjectCountResponse[]> => {
+    const { user, objectName } = params;
+    const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+
+    if (!user || !user.crmId) {
+        throw new Error('CRM not connected');
+    }
+
+    const crm = await getCrmById(user.crmId);
+    if (!crm) {
+        throw new Error('CRM not found');
+    }
+
+    const instanceUrl = crm?.instanceUrl;
+    if (!instanceUrl) {
+        throw new Error('Instance URL not found');
+    }
+
+    const tokens = {
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        userId: user.userId,
+        environment: crm.environment,
+        customUrl: user.customUrl
+    }
+    const url = `${instanceUrl}/services/data/v66.0/sobjects/${objectName}/describe`;
+    const method = 'GET';
+    try {
+        const result = await salesforceRequest<any>(
+            { url, method },
+            tokens
+        );
+
+        return result.data ?? [];
+    } catch (error) {
+        throw error;
+    }
+}
