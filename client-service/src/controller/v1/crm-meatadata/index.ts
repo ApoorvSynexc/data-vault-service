@@ -77,7 +77,7 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     obj.replicateable === true &&
     obj.keyPrefix !== null &&
     obj.queryable === true &&
-    !excludeObjectSuffix.some((suffix) => obj.name.endsWith(suffix))
+    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
   );
 
   if (apexMode === 'backup' && apexType === 'realtime') {
