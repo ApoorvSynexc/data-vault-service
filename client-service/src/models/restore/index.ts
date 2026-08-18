@@ -159,7 +159,6 @@ export interface IRestore {
   };
   destination: IRestoreDestination;
   conflict: IRestoreConflict;
-  restoreType: string; // RESTORE_ONLY_CHANGED_FIELDS | RESTORE_ENTIRE_RECORD
   jobDetail: IRestoreJobDetail;
   schedule: IScheduleConfig;
 

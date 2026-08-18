@@ -15,7 +15,6 @@ import { S3Config } from '../../utils/validate-aws-credentials';
 
 export { FilterError } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-export { PREVIEW_SYSTEM_FIELDS } from './preview-merge';
 import {
   pairedColumns,
   IPageKey,
