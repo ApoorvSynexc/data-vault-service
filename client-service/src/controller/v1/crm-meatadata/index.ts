@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, readSchemaFile } from "../../../services";
-import { salesforceObjectDescribe, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
+import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 
 
@@ -100,19 +100,19 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
-  let user = req.user!;
+  const user = req.user!;
   const { objectNames } = req.body;
 
-  const masterObjects: any = [];
   const notAllowedNames = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'lastreferencedid', 'lastviewedid'];
-  for (let index = 0; index < objectNames.length; index++) {
-    const objectName = objectNames[index];
-    const objectDescription = await salesforceObjectDescribe({ user, objectName });
+
+  const objectDescriptions = await Promise.all<ISalesforceObjectDescribeResponse>(
+    objectNames.map((objectName: string) => salesforceObjectDescribe({ user, objectName }))
+  );
+
+  const masterObjects = objectDescriptions.filter((objectDescription) => {
     const field = objectDescription.fields.find((f) => f.type === 'reference' && (f.nillable === false || f.relationshipOrder !== null) && !notAllowedNames.includes(f.name.toLowerCase()));
-    if (!field) {
-      masterObjects.push(objectDescription);
-    }
-  }
+    return !field;
+  });
 
   return makeResponse(req, res, 200, true, 'fetch', masterObjects);
 }
