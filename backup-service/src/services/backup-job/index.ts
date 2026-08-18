@@ -182,24 +182,25 @@ const expandWithBackupChildren = async (
 
         const filteredChildren = [];
         for (const child of children) {
+          const id = uuidv4();
           const describedObject = await salesforceObjectDescribe(source.instanceUrl, tokens, child.childSObject);
           const isFieldCascadeDeleted = describedObject.fields.find((f) => f.name === child.field && f.cascadeDelete);
 
           if (isFieldCascadeDeleted) {
-            filteredChildren.push(child);
+            filteredChildren.push({ ...child, id });
             const name = child.childSObject;
             if (!name) {
               continue;
             }
             const key = name.toLowerCase();
             if (!byName.has(key)) {
-              byName.set(key, { id: uuidv4(), name, salesforceApiCalls: 0, field: [] });
+              byName.set(key, { id, name, salesforceApiCalls: 0, field: [], isChild: true, parentObject: obj.name });
               discovered.push(name);
             }
           }
         }
 
-        obj.children = filteredChildren.map(obj => ({ id: uuidv4(), name: obj.childSObject, salesforceApiCalls: 0, field: [] }));
+        obj.children = filteredChildren.map(obj => ({ id: obj.id, name: obj.childSObject, salesforceApiCalls: 0, field: [] }));
       } catch (err: any) {
         console.log(`[backup-child] children fetch failed for ${obj.name}: ${err?.message ?? err}`);
       }

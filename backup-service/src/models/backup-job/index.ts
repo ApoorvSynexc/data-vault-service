@@ -126,6 +126,9 @@ export interface IBackupObject {
   currentLocator?: string;
   errorMessage?: string;
   children?: IBackupObject[];
+
+  isChild?: boolean;
+  parentObject?: string
 }
 
 export interface ISource {
