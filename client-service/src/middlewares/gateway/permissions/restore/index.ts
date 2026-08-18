@@ -15,11 +15,6 @@ const restorePermissions = [
         permissions: ['restore.read']
     },
     {
-        path: '/restore/retrieve/show-preview',
-        method: 'POST',
-        permissions: ['restore.read']
-    },
-    {
         path : '/restore/get-objectlist-by-configid',
         method: 'GET',
         permissions: ['restore.read']

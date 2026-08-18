@@ -8,23 +8,14 @@ import {
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
   retrieveRecords,
-  showRecordsPreview,
   fetchObjectFields,
-  repairGlueTables,
   getTableCounter,
   ConfigType,
   createRestore,
   updateRestore,
   getRestoreById,
-  IFetchRecordsFilters,
-  IFetchRecordsFilterField,
-  IFetchRecordsParams,
   IRetrieveRecordsParams,
-  FetchSourceType,
   RetrieveType,
-  RestoreScopeType,
-  IRestoreScope,
-  buildAthenaFilterWhere,
   FilterError,
   validateColumns,
   fetchPicklistValues,
@@ -40,6 +31,7 @@ import {
   getDestinationById,
   getBackupJobById,
   getBackupJobsByConfig,
+  retrieveInactiveRecordTypes
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -265,254 +257,11 @@ const fetchChangeBetweenBackupJobsHandler = async (req: IRequest, res: IResponse
   });
 };
 
-const VALID_FETCH_FILTER_TYPES = ['AND', 'OR', 'SOQL'] as const;
-const VALID_SOURCE_TYPES: FetchSourceType[] = ['ENTIRE', 'PARTIAL', 'CHANGED_BETWEEN'];
-const VALID_RESTORE_SCOPE_TYPES: RestoreScopeType[] = [
-  'ALL',
-  'OBJECT',
-  'RECORD',
-  'FIELD',
-  'FILTER',
-  'DELETED_ONLY',
-  'CHANGE_SINCE',
-  'BULK_CSV',
-];
-
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
-
 // De-duplicated, trimmed, non-empty strings. Returns null when the input is not
 // an array at all, so the caller can distinguish "bad shape" from "empty list".
 const toStringList = (v: unknown): string[] | null => {
   if (!Array.isArray(v)) return null;
   return [...new Set(v.map((x) => String(x).trim()).filter(Boolean))];
-};
-
-// Parses the `filters` block (shared by the top-level and restoreScope shapes).
-const parseFilters = (
-  f: unknown
-): { ok: true; value: IFetchRecordsFilters } | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  if (!isRecord(f)) return { ok: false, error: 'invalid_filters' };
-  if (!VALID_FETCH_FILTER_TYPES.includes(f.type as (typeof VALID_FETCH_FILTER_TYPES)[number])) {
-    return { ok: false, error: 'invalid_filter_type' };
-  }
-  const type = f.type as IFetchRecordsFilters['type'];
-
-  if (type === 'SOQL') {
-    if (typeof f.soqlQuery !== 'string' || f.soqlQuery.trim() === '') {
-      return { ok: false, error: 'soql_query_required' };
-    }
-    return { ok: true, value: { type, soqlQuery: f.soqlQuery.trim() } };
-  }
-
-  if (!Array.isArray(f.fields)) return { ok: false, error: 'filter_fields_required' };
-  const fields: IFetchRecordsFilterField[] = [];
-  for (const raw of f.fields) {
-    if (
-      !isRecord(raw) ||
-      typeof raw.name !== 'string' ||
-      typeof raw.dataType !== 'string' ||
-      typeof raw.operator !== 'string' ||
-      typeof raw.value !== 'string'
-    ) {
-      return { ok: false, error: 'invalid_filter_field' };
-    }
-    fields.push({ name: raw.name, dataType: raw.dataType, operator: raw.operator, value: raw.value });
-  }
-  return { ok: true, value: { type, fields } };
-};
-
-// Parses restoreScope.records[] / restoreScope.fields[] — both are
-// [{ objectName, <list> }] and differ only in the list's key name.
-const parseObjectScopedLists = <K extends string>(
-  raw: unknown,
-  listKey: K
-): { objectName: string; values: string[] }[] | null => {
-  if (!Array.isArray(raw)) return null;
-  const out: { objectName: string; values: string[] }[] = [];
-  for (const entry of raw) {
-    if (!isRecord(entry) || typeof entry.objectName !== 'string' || !entry.objectName.trim()) return null;
-    const values = toStringList(entry[listKey]);
-    if (values === null) return null;
-    out.push({ objectName: entry.objectName.trim(), values });
-  }
-  return out;
-};
-
-/**
- * Validates and normalises the entire /fetch-records body into a single
- * IFetchRecordsParams. Column names and the filter block are compiled here too,
- * so every request-shape error (including FilterError codes) maps to a 400
- * before Athena is touched. The handler only relays the result.
- *
- * Body shape:
- *   source     — backupConfigId + type + optional job/date window (required)
- *   selection  — restoreScope narrowing, or null for source-level filters only
- *
- * `columnsOptional` is for /show-preview, which projects the object's whole
- * schema and so has no column list to demand. Everything else about the body is
- * identical between the two endpoints, which is why they share this parser.
- */
-const parseFetchRecordsParams = (
-  body: Record<string, unknown>,
-  userId: string,
-  options: { columnsOptional?: boolean } = {}
-):
-  | { ok: true; value: IFetchRecordsParams }
-  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  const { source, objectApiName, columns, selection } = body;
-
-  // ── source ────────────────────────────────────────────────────────────────
-  if (!isRecord(source)) return { ok: false, error: 'invalid_source' };
-  if (typeof source.backupConfigId !== 'string' || !source.backupConfigId.trim()) {
-    return { ok: false, error: 'id_required' };
-  }
-  if (!VALID_SOURCE_TYPES.includes(source.type as FetchSourceType)) {
-    return { ok: false, error: 'invalid_source_type' };
-  }
-  const sourceType = source.type as FetchSourceType;
-
-  let backupJobIds: string[] = [];
-  if (source.backupJobIds !== undefined && source.backupJobIds !== null) {
-    const ids = toStringList(source.backupJobIds);
-    if (ids === null) return { ok: false, error: 'invalid_backup_job_ids' };
-    backupJobIds = ids;
-  }
-
-  // PARTIAL and CHANGED_BETWEEN exist to apply a specific narrowing; a request
-  // that omits it would silently behave as ENTIRE and return the whole config.
-  // Job ids are the only narrowing either can carry, so both demand them.
-  if (
-    (sourceType === 'PARTIAL' || sourceType === 'CHANGED_BETWEEN') &&
-    backupJobIds.length === 0
-  ) {
-    return { ok: false, error: 'backup_job_ids_required' };
-  }
-
-  if (!objectApiName || typeof objectApiName !== 'string') {
-    return { ok: false, error: 'object_api_name_required' };
-  }
-  // An absent list is only allowed where the endpoint supplies its own; a
-  // present-but-malformed one is still a 400 either way.
-  const columnList = columns === undefined || columns === null ? [] : toStringList(columns);
-  if (columnList === null || (!options.columnsOptional && columnList.length === 0)) {
-    return { ok: false, error: 'column_names_required' };
-  }
-
-  const value: IFetchRecordsParams = {
-    source: {
-      backupConfigId: source.backupConfigId.trim(),
-      type: sourceType,
-      ...(backupJobIds.length && { backupJobIds }),
-    },
-    objectApiName,
-    columns: columnList,
-    userId,
-  };
-
-  // ── top-level record scope / deletes-only ─────────────────────────────────
-  // Both also exist inside restoreScope; the service merges the two rather than
-  // letting either override, so a caller can use whichever shape suits it.
-  if (body.recordIds !== undefined && body.recordIds !== null) {
-    const ids = toStringList(body.recordIds);
-    if (ids === null) return { ok: false, error: 'invalid_record_ids' };
-    if (ids.length) value.recordIds = ids;
-  }
-
-  if (body.isDeleteOnly !== undefined && body.isDeleteOnly !== null) {
-    if (typeof body.isDeleteOnly !== 'boolean') return { ok: false, error: 'invalid_is_delete_only' };
-    value.isDeleteOnly = body.isDeleteOnly;
-  }
-
-  // ── selection (nullable) ──────────────────────────────────────────────────
-  // Every column list the scope can contribute is validated as an identifier,
-  // exactly like `columns`, because any of them can end up in the projection.
-  const identifierLists: string[][] = [columnList];
-
-  if (selection !== undefined && selection !== null) {
-    if (!isRecord(selection)) return { ok: false, error: 'invalid_selection' };
-    const rawScope = selection.restoreScope;
-    if (!isRecord(rawScope)) return { ok: false, error: 'invalid_restore_scope' };
-    if (!VALID_RESTORE_SCOPE_TYPES.includes(rawScope.type as RestoreScopeType)) {
-      return { ok: false, error: 'invalid_restore_scope_type' };
-    }
-
-    const scope: IRestoreScope = { type: rawScope.type as RestoreScopeType };
-
-    if (rawScope.objects !== undefined && rawScope.objects !== null) {
-      const objects = toStringList(rawScope.objects);
-      if (objects === null) return { ok: false, error: 'invalid_scope_objects' };
-      if (objects.length) scope.objects = objects;
-    }
-
-    if (rawScope.records !== undefined && rawScope.records !== null) {
-      const records = parseObjectScopedLists(rawScope.records, 'recordIds');
-      if (records === null) return { ok: false, error: 'invalid_scope_records' };
-      scope.records = records.map(({ objectName, values }) => ({ objectName, recordIds: values }));
-    }
-
-    if (rawScope.fields !== undefined && rawScope.fields !== null) {
-      const fields = parseObjectScopedLists(rawScope.fields, 'fieldNames');
-      if (fields === null) return { ok: false, error: 'invalid_scope_fields' };
-      scope.fields = fields.map(({ objectName, values }) => ({ objectName, fieldNames: values }));
-      // fields[] REPLACES columns when it matches the requested object, so its
-      // names must clear the same identifier check.
-      for (const f of scope.fields) if (f.fieldNames.length) identifierLists.push(f.fieldNames);
-    }
-
-    if (rawScope.filters !== undefined && rawScope.filters !== null) {
-      const parsed = parseFilters(rawScope.filters);
-      if (!parsed.ok) return parsed;
-      scope.filters = parsed.value;
-    }
-
-    if (rawScope.bulkCsvIds !== undefined && rawScope.bulkCsvIds !== null) {
-      const ids = toStringList(rawScope.bulkCsvIds);
-      if (ids === null) return { ok: false, error: 'invalid_bulk_csv_ids' };
-      if (ids.length) scope.bulkCsvIds = ids;
-    }
-
-    if (rawScope.deletedOnly !== undefined && rawScope.deletedOnly !== null) {
-      if (typeof rawScope.deletedOnly !== 'boolean') return { ok: false, error: 'invalid_deleted_only' };
-      scope.deletedOnly = rawScope.deletedOnly;
-    }
-
-    // A DELETED_ONLY scope means deletedOnly whether or not the flag was sent —
-    // the type and the flag say the same thing, so neither can contradict it.
-    if (scope.type === 'DELETED_ONLY') scope.deletedOnly = true;
-
-    value.selection = { restoreScope: scope };
-  }
-
-  // Full restore: return the version each record should be restored TO instead
-  // of its current state (UPDATE → the version underneath it, DELETE → the
-  // DELETE row, INSERT → itself).
-  if (body.fullRestore !== undefined && body.fullRestore !== null) {
-    if (typeof body.fullRestore !== 'boolean') return { ok: false, error: 'invalid_full_restore' };
-    value.fullRestore = body.fullRestore;
-  }
-
-  // Opaque nextCursor echoed back from a previous response. Its contents are
-  // validated in the service (fingerprint match), not here.
-  if (body.cursor !== undefined && body.cursor !== null && body.cursor !== '') {
-    if (typeof body.cursor !== 'string') return { ok: false, error: 'invalid_cursor' };
-    value.cursor = body.cursor;
-  }
-
-  // Compile columns + filter to the Athena WHERE body — bad columns, operators,
-  // or unsupported SOQL become 400 codes here instead of Athena failures.
-  try {
-    for (const list of identifierLists) validateColumns(list);
-    const filters = value.selection?.restoreScope.filters;
-    if (filters) value.filterWhere = buildAthenaFilterWhere(filters);
-  } catch (e) {
-    if (e instanceof FilterError) {
-      return { ok: false, error: e.code as Parameters<typeof makeResponse>[4] };
-    }
-    throw e;
-  }
-
-  return { ok: true, value };
 };
 
 const VALID_RETRIEVE_TYPES: RetrieveType[] = ['ENTIRE', 'CHANGED_BETWEEN'];
@@ -678,53 +427,9 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
   });
 };
 
-/**
- * POST /retrieve/show-preview
- *
- * Body: the nested source/selection shape — source (backupConfigId, type,
- * backupJobIds), objectApiName, recordIds, isDeleteOnly, selection, cursor —
- * except that `columns` is not required, see below. Unlike
- * /retrieve/fetch-records this still reads the raw CSV table, and selects
- * records by `source.backupJobIds` rather than by a date window.
- *
- * Shows what a restore would do to each record, one page of 50 at a time:
- *
- *   {
- *     "columns": ["Name", "Phone", …],
- *     "rows": [
- *       { "previous": { "Name": "Acme",  … }, "current": { "Name": "Acme Corp", … } },
- *       { "previous": { "Name": "Beta",  … } }
- *     ]
- *   }
- *
- *   previous — the version the restore would write, read from the backup. An
- *              updated record comes back at its SECOND-NEWEST version (the state
- *              before the change), a deleted record at its DELETE row, an
- *              inserted record unchanged. Same picking as `fullRestore`, which
- *              is always on here and cannot be turned off.
- *   current  — the record as it stands in Salesforce right now, queried live
- *              over the REST API and projected onto the same columns.
- *
- * `current` is absent when there is nothing to compare against: the record's
- * latest operation is DELETE (it is gone from Salesforce), or Salesforce
- * returned no row for that id.
- *
- * Both records carry EVERY backed-up column — the object's latest stored schema
- * — minus the Salesforce system fields (Id, LastModifiedDate, CreatedDate,
- * SystemModstamp, LastModifiedById, CreatedById, IsDeleted), which a restore can
- * never write. A `columns` list in the body is therefore ignored, as is
- * `restoreScope.fields`; every other narrowing still applies — including
- * `recordIds` (preview only these records) and `isDeleteOnly` (preview only
- * deletions, so every row comes back as `{ previous }` alone).
- *
- * Returns not_exist when the config/object can't be resolved or isn't owned by
- * the caller, and crm_not_connected when the org has no usable Salesforce
- * credentials to read the live half with.
- */
-const showPreviewHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const parsed = parseFetchRecordsParams(req.body as Record<string, unknown>, req.user!.userId, {
-    columnsOptional: true,
-  });
+
+const fetchInactiveRecordTypesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseRetrieveParams(req.body as Record<string, unknown>, req.user!.userId);
   if (!parsed.ok) {
     makeResponse(req, res, 400, false, parsed.error);
     return;
@@ -732,10 +437,11 @@ const showPreviewHandler = async (req: IRequest, res: IResponse): Promise<void> 
 
   let result;
   try {
-    result = await showRecordsPreview({ ...parsed.value, user: req.user! });
+    result = await retrieveInactiveRecordTypes(parsed.value);
   } catch (e) {
-    // Same contract as fetch-records: a stale cursor is reported so the UI
-    // restarts from page 1 rather than assuming it got the page it asked for.
+    // A cursor that no longer matches the request, or whose Athena results have
+    // aged out. Surfaced rather than silently restarting, so the UI knows to go
+    // back to page 1 instead of assuming it received the page it asked for.
     if (e instanceof CursorError) {
       makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
       return;
@@ -743,18 +449,13 @@ const showPreviewHandler = async (req: IRequest, res: IResponse): Promise<void> 
     throw e;
   }
 
-  if (!result.ok) {
-    makeResponse(req, res, 400, false, result.reason);
+  if (!result) {
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
-  const { nextCursor, hasMore, ...data } = result.page;
-  makeResponse(req, res, 200, true, 'fetch', data, {
-    limit: PAGE_SIZE,
-    hasMore,
-    ...(nextCursor ? { nextCursor } : {}),
-  });
-};
+  makeResponse(req, res, 200, true, 'fetch', result);
+}
 
 /**
  * GET /fetch-object-fields
@@ -804,43 +505,6 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
     fields = fields.context;
   }
   makeResponse(req, res, 200, true, 'fetch', fields);
-};
-
-/**
- * POST /retrieve/repair-glue
- * Body: { backupConfigId: string, backupJobId?: string }
- *
- * Resolves the config's CRM, destination, and object list then calls the
- * backup-service /glue/repair endpoint to:
- *   1. Patch every Glue table for this config with recurse=1 so Athena scans
- *      inserts/, updates/, deletes/ sub-folders within each partition.
- *   2. Re-register the partition for backupJobId (when supplied) so Athena
- *      knows where that job's CSVs live without waiting for the next backup run.
- */
-const repairGlueTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, backupJobId } = req.body as {
-    backupConfigId?: unknown;
-    backupJobId?: unknown;
-  };
-  const userId = req.user!.userId;
-
-  if (!backupConfigId || typeof backupConfigId !== 'string') {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const result = await repairGlueTables({
-    backupConfigId,
-    userId,
-    ...(backupJobId && typeof backupJobId === 'string' ? { backupJobId } : {}),
-  });
-
-  if (!result) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'repair', result);
 };
 
 /**
@@ -996,9 +660,8 @@ export const restoreRetrieveJobController = wrapController({
   getObjectListByConfigIdHandler,
   fetchChangeBetweenBackupJobsHandler,
   fetchRecordsHandler,
-  showPreviewHandler,
+  fetchInactiveRecordTypesHandler,
   fetchObjectFieldsHandler,
-  repairGlueTablesHandler,
   createRestoreHandler,
   activateRestoreHandler,
   getPicklistFieldValuesHandler,
