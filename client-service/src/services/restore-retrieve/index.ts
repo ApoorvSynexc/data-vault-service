@@ -427,6 +427,14 @@ export interface IRetrieveRecordsParams {
   cursor?: string;
 }
 
+export interface IFetchInactiveRecordTypesParams {
+  backupConfigId: string;
+  userId: string;
+  objectApiName: string;
+  startDate?: IsoDateString;
+  endDate?: IsoDateString;
+}
+
 // Identity of the query behind a cursor: everything that changes WHICH rows come
 // back, or in what order. The window is only in it under CHANGED_BETWEEN, since
 // that is the only type that reads it — an ENTIRE cursor stays valid whatever
@@ -541,7 +549,16 @@ const retrieveRecords = async (
   return toPage(block, params.columnNames, page.offset, page.fingerprint, executions);
 };
 
+const retrieveInactiveRecordTypes = async (
+  params: IRetrieveRecordsParams
+) : Promise<{ inactiveTypes: string[] } | null> => {
+  const config = await getBackupConfigById(params.backupConfigId);
+  if (!config || config.userId !== params.userId) return null;
 
+  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
+  const deltaTable = `${table}_delta`;
+}
 
 // ---------------------------------------------------------------------------
 // Fetch object schema (fields) from S3
