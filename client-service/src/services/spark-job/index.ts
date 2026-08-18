@@ -31,8 +31,7 @@ export interface IEnsureCompressionGlueResult {
  *
  * The actual Glue mutation lives in backup-service (which owns the GlueClient and
  * the client-bucket S3 access needed to read the committed `.hoodie` schema), so
- * this only resolves the config/crm/destination and delegates over HTTP — the
- * same pattern repairGlueTables already uses.
+ * this only resolves the config/crm/destination and delegates over HTTP.
  *
  * Idempotent end-to-end: backup-service creates each table once and never
  * updates it, so retries and duplicate completion events are safe. Returns null
