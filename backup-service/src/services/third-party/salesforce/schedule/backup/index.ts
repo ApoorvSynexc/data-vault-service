@@ -240,9 +240,9 @@ export const exportFirstTime = async (
       startCompletedRecordCount: object.completedRecordCount ?? 0,
     });
 
-    const updateParams: any = { sizeInBytes };
     backupConfig = await getBackupConfigById(backupConfigId);
-    if (backupConfig?.objects) {
+    if (!object.isChild && backupConfig?.objects) {
+      const updateParams: any = { sizeInBytes };
       const updatedObjects = backupConfig.objects.map((obj) =>
         obj.name === objectName
           ? {
@@ -255,8 +255,8 @@ export const exportFirstTime = async (
       updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
       updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + completedRecordCount;
       updateParams.objects = updatedObjects;
+      await updateBackupConfig(backupConfigId, updateParams);
     }
-    await updateBackupConfig(backupConfigId, updateParams);
 
     await salesforceMetadataHandler({
       metadataType: 'fields',
@@ -472,16 +472,16 @@ export const exportIncremental = async (
         startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
 
-      const updateParams: any = { sizeInBytes };
       backupConfig = await getBackupConfigById(backupConfigId);
-      if (backupConfig?.objects) {
+      if (!object.isChild && backupConfig?.objects) {
+        const updateParams: any = { sizeInBytes };
         const updatedObjects = backupConfig.objects.map((obj) =>
           obj.name === objectName ? { ...obj, sizeInBytes } : obj
         );
         updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
         updateParams.objects = updatedObjects;
+        await updateBackupConfig(backupConfigId, updateParams);
       }
-      await updateBackupConfig(backupConfigId, updateParams);
 
       logger.info(
         `Object changes transfered, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, sizeInBytes=${sizeInBytes}`

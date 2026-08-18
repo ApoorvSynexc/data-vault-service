@@ -199,7 +199,28 @@ const salesforceHandler: ICrmBackupHandler = {
       );
     }
 
-    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
+    const backupJob = await getBackupJob(backupJobId);
+    const parentObjects = backupJob?.object?.filter((o) => !o.isChild) ?? [];
+    const childObjects = backupJob?.object?.filter((o) => o.isChild) ?? [];
+
+    for (let childIndex = 0; childIndex < childObjects.length; childIndex++) {
+      const childObject = childObjects[childIndex];
+
+      for (let parentIndex = 0; parentIndex < parentObjects.length; parentIndex++) {
+        const parentObject = parentObjects[parentIndex];
+
+        if (parentObject.name === childObject.parentObject) {
+          parentObjects[parentIndex].children = parentObject.children?.map(c => {
+            if (c.name === childObject.name) {
+              return childObject
+            }
+            return c;
+          })
+        }
+      }
+    }
+    
+    await updateBackupConfig(backupConfigId, { objects: parentObjects, backupStatus: BACKUP_STATUS.success });
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
   },
   runArchival: async (
