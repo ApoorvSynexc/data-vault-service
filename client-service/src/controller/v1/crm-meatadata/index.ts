@@ -110,7 +110,7 @@ const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
     const objectDescription = await salesforceObjectDescribe({ user, objectName });
     const field = objectDescription.fields.find((f) => f.type === 'reference' && (f.nillable === false || f.relationshipOrder !== null) && !notAllowedNames.includes(f.name.toLowerCase()));
     if (!field) {
-      masterObjects.push({ objectName, objectDescription });
+      masterObjects.push(objectDescription);
     }
   }
 

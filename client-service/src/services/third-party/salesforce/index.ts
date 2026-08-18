@@ -246,4 +246,3 @@ export type { SalesforceTokens, SalesforceRequestResult };
 export * from './apex';
 export * from './trigger';
 export * from './metadata';
-export * from './records';

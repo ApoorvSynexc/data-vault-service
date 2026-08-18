@@ -15,8 +15,6 @@
 
 import { encodeCursor } from '../../utils/cursor';
 
-export type RestoreType = 'RESTORE_ONLY_CHANGED_FIELDS' | 'RESTORE_ENTIRE_RECORD';
-
 export interface IDeltaRecord {
   changeTime: string; // delta.change_time — orders the history
   changeData: string; // delta.change_data — payload JSON, shape depends on changeType
@@ -99,21 +97,17 @@ const applyDelta = (
 };
 
 /**
- * Reconstructs a record version by undoing deltas on the latest Hudi record.
- * Mutates and returns `latestRecord`.
+ * Reconstructs a record version by undoing every provided delta (all changes
+ * after the target version) on the latest Hudi record. Mutates and returns
+ * `latestRecord`.
  *
- * RESTORE_ONLY_CHANGED_FIELDS — undo only the selected delta (the newest of the
- *   provided set): just its fields revert to their oldValue, all others untouched.
- * RESTORE_ENTIRE_RECORD — undo every provided delta (all changes after the target
- *   version). Applied newest→oldest, so for a field changed more than once the
- *   oldest delta's oldValue wins, leaving the record exactly as at the target.
+ * Applied newest→oldest, so for a field changed more than once the oldest
+ * delta's oldValue wins, leaving the record exactly as at the target. Callers
+ * pass the deltas already identified: all deltas with change_time > target.
  *
- * Callers pass the deltas already identified: the single selected delta for
- * ONLY_CHANGED, or all deltas with change_time > target for ENTIRE.
- *
- * `columnNames` scopes the reconstruction to those fields (both modes): deltas
- * touch only those fields and any other field is pruned from the result. Empty
- * means the full record (every Hudi column). Pass the same list used to project
+ * `columnNames` scopes the reconstruction to those fields: deltas touch only
+ * those fields and any other field is pruned from the result. Empty means the
+ * full record (every Hudi column). Pass the same list used to project
  * `latestRecord` so the base query fetches only what's needed. SCHEMA_* deltas
  * are the one exception — a field they restore no longer exists in the current
  * schema, so it widens the scope instead of being pruned by it.
@@ -121,20 +115,18 @@ const applyDelta = (
 export const reconstructRecord = (
   latestRecord: Record<string, string>,
   deltas: IDeltaRecord[],
-  restoreType: RestoreType,
   columnNames: string[] = []
 ): Record<string, string> => {
   const allow = columnNames.length ? new Set(columnNames) : null;
   const ordered = [...deltas].sort((a, b) => toTime(b.changeTime) - toTime(a.changeTime));
-  const toApply = restoreType === 'RESTORE_ONLY_CHANGED_FIELDS' ? ordered.slice(0, 1) : ordered;
-  for (const delta of toApply) applyDelta(latestRecord, delta, allow);
+  for (const delta of ordered) applyDelta(latestRecord, delta, allow);
   if (allow) {
     for (const key of Object.keys(latestRecord)) if (!allow.has(key)) delete latestRecord[key];
   }
   return latestRecord;
 };
 
-// ── RESTORE_ENTIRE_RECORD bulk assembly ───────────────────────────────────────
+// ── Bulk assembly ──────────────────────────────────────────────────────────
 
 /**
  * A built record plus the keyset used to order and paginate it. `key.lmd` is
@@ -308,7 +300,7 @@ export const undoWindowDeltas = (
   for (const { record } of rows) {
     if (record[OPERATION_FIELD] !== 'UPDATE') continue;
     const deltas = byRecord.get(record['Id'] ?? '');
-    if (deltas?.length) reconstructRecord(record, deltas, 'RESTORE_ENTIRE_RECORD', allow);
+    if (deltas?.length) reconstructRecord(record, deltas, allow);
   }
 };
 
@@ -319,17 +311,7 @@ if (require.main === module) {
   const upd = (o: Record<string, [string, string]>): string =>
     JSON.stringify(Object.fromEntries(Object.entries(o).map(([k, [o1, n1]]) => [k, { old: o1, new: n1 }])));
 
-  // ONLY_CHANGED_FIELDS — undo just the selected delta (spec example).
-  assert.deepStrictEqual(
-    reconstructRecord(
-      { Name: 'Johnny', Status: 'Inactive', Salary: '1500' },
-      [{ changeTime: '8', changeData: upd({ Name: ['John', 'Johnny'] }) }],
-      'RESTORE_ONLY_CHANGED_FIELDS'
-    ),
-    { Name: 'John', Status: 'Inactive', Salary: '1500' }
-  );
-
-  // ENTIRE_RECORD — undo v5,v4,v3 back to the target (spec example).
+  // Undo v5,v4,v3 back to the target (spec example).
   assert.deepStrictEqual(
     reconstructRecord(
       { Name: 'Johnny', Status: 'Inactive', Salary: '1500' },
@@ -337,8 +319,7 @@ if (require.main === module) {
         { changeTime: '5', changeData: upd({ Status: ['Active', 'Inactive'] }) },
         { changeTime: '3', changeData: upd({ Salary: ['1000', '1500'] }) },
         { changeTime: '4', changeData: upd({ Name: ['John', 'Johnny'] }) },
-      ],
-      'RESTORE_ENTIRE_RECORD'
+      ]
     ),
     { Name: 'John', Status: 'Active', Salary: '1000' }
   );
@@ -348,25 +329,22 @@ if (require.main === module) {
     { changeTime: '6', changeData: upd({ Name: ['Johnny', 'Bob'] }) },
     { changeTime: '4', changeData: upd({ Name: ['John', 'Johnny'] }) },
   ];
-  assert.strictEqual(reconstructRecord({ Name: 'Bob' }, twice, 'RESTORE_ENTIRE_RECORD').Name, 'John');
-  // ONLY_CHANGED on the same set undoes just the newest.
-  assert.strictEqual(reconstructRecord({ Name: 'Bob' }, twice, 'RESTORE_ONLY_CHANGED_FIELDS').Name, 'Johnny');
+  assert.strictEqual(reconstructRecord({ Name: 'Bob' }, twice).Name, 'John');
 
   // In place — no cloning.
   const rec = { Name: 'Johnny' };
-  assert.ok(reconstructRecord(rec, [{ changeTime: '1', changeData: upd({ Name: ['John', 'Johnny'] }) }], 'RESTORE_ENTIRE_RECORD') === rec);
+  assert.ok(reconstructRecord(rec, [{ changeTime: '1', changeData: upd({ Name: ['John', 'Johnny'] }) }]) === rec);
 
   // Non-UPDATE payload (DELETE = full record JSON, no {old,new}) is a no-op —
   // both untyped (legacy rows) and explicitly typed.
   assert.deepStrictEqual(
-    reconstructRecord({ Name: 'Johnny' }, [{ changeTime: '9', changeData: JSON.stringify({ Name: 'X', Status: 'Y' }) }], 'RESTORE_ENTIRE_RECORD'),
+    reconstructRecord({ Name: 'Johnny' }, [{ changeTime: '9', changeData: JSON.stringify({ Name: 'X', Status: 'Y' }) }]),
     { Name: 'Johnny' }
   );
   assert.deepStrictEqual(
     reconstructRecord(
       { Name: 'Johnny' },
-      [{ changeTime: '9', changeType: 'DELETE', changeData: JSON.stringify({ Name: 'X' }) }],
-      'RESTORE_ENTIRE_RECORD'
+      [{ changeTime: '9', changeType: 'DELETE', changeData: JSON.stringify({ Name: 'X' }) }]
     ),
     { Name: 'Johnny' }
   );
@@ -378,7 +356,6 @@ if (require.main === module) {
     reconstructRecord(
       { Name: 'Johnny' },
       [{ changeTime: '9', changeType: 'SCHEMA_FIELD_DELETED', changeData: JSON.stringify({ fieldName: 'LegacyCode', value: 'X-1' }) }],
-      'RESTORE_ENTIRE_RECORD',
       ['Name']
     ),
     { Name: 'Johnny', LegacyCode: 'X-1' }
@@ -387,7 +364,6 @@ if (require.main === module) {
     reconstructRecord(
       { Amount: '10' },
       [{ changeTime: '9', changeType: 'SCHEMA_FIELD_TYPE_CHANGED', changeData: JSON.stringify({ fieldName: 'Amount', value: '1000.00' }) }],
-      'RESTORE_ENTIRE_RECORD',
       ['Amount']
     ).Amount,
     '1000.00',
@@ -395,24 +371,24 @@ if (require.main === module) {
   );
   // Malformed SCHEMA payload (no fieldName) is a no-op, not a crash.
   assert.deepStrictEqual(
-    reconstructRecord({ Name: 'Johnny' }, [{ changeTime: '9', changeType: 'SCHEMA_FIELD_DELETED', changeData: '{"value":"x"}' }], 'RESTORE_ENTIRE_RECORD'),
+    reconstructRecord({ Name: 'Johnny' }, [{ changeTime: '9', changeType: 'SCHEMA_FIELD_DELETED', changeData: '{"value":"x"}' }]),
     { Name: 'Johnny' }
   );
 
   // null oldValue → empty string.
   assert.strictEqual(
-    reconstructRecord({ Phone: '555' }, [{ changeTime: '1', changeData: JSON.stringify({ Phone: { old: null, new: '555' } }) }], 'RESTORE_ENTIRE_RECORD').Phone,
+    reconstructRecord({ Phone: '555' }, [{ changeTime: '1', changeData: JSON.stringify({ Phone: { old: null, new: '555' } }) }]).Phone,
     ''
   );
 
   // Spark to_json drops null fields: a null→value change arrives as {new} only.
   // Field presence still reverts it (to empty) — matches the Java reconstructor.
   assert.strictEqual(
-    reconstructRecord({ Phone: '555' }, [{ changeTime: '1', changeData: JSON.stringify({ Phone: { new: '555' } }) }], 'RESTORE_ENTIRE_RECORD').Phone,
+    reconstructRecord({ Phone: '555' }, [{ changeTime: '1', changeData: JSON.stringify({ Phone: { new: '555' } }) }]).Phone,
     ''
   );
 
-  // columnNames scopes ENTIRE: only Name reverts; Status delta skipped, Status pruned from base.
+  // columnNames scopes reconstruction: only Name reverts; Status delta skipped, Status pruned from base.
   assert.deepStrictEqual(
     reconstructRecord(
       { Name: 'Johnny', Status: 'Inactive' },
@@ -420,18 +396,6 @@ if (require.main === module) {
         { changeTime: '5', changeData: upd({ Status: ['Active', 'Inactive'] }) },
         { changeTime: '4', changeData: upd({ Name: ['John', 'Johnny'] }) },
       ],
-      'RESTORE_ENTIRE_RECORD',
-      ['Name']
-    ),
-    { Name: 'John' }
-  );
-
-  // columnNames scopes ONLY_CHANGED the same way.
-  assert.deepStrictEqual(
-    reconstructRecord(
-      { Name: 'Johnny', Salary: '1500' },
-      [{ changeTime: '8', changeData: upd({ Name: ['John', 'Johnny'], Salary: ['1000', '1500'] }) }],
-      'RESTORE_ONLY_CHANGED_FIELDS',
       ['Name']
     ),
     { Name: 'John' }
@@ -442,7 +406,6 @@ if (require.main === module) {
     reconstructRecord(
       { Name: 'Johnny', Status: 'Inactive' },
       [{ changeTime: '4', changeData: upd({ Name: ['John', 'Johnny'] }) }],
-      'RESTORE_ENTIRE_RECORD',
       []
     ),
     { Name: 'John', Status: 'Inactive' }
