@@ -9,6 +9,7 @@ import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { isBackupChild } from '../../utils/helper';
 import { SalesforceTokens } from '../third-party/salesforce/api-request';
 import { uploadObjectChilds } from '../third-party/salesforce/child';
+import { salesforceObjectDescribe, salesforceObjectList } from '../third-party/salesforce/metadata';
 
 // Appends children discovered during this run to the backup config, so every
 // config-driven reader (compression Glue tables, Glue repair, restore listing, UI)
@@ -94,12 +95,78 @@ const expandWithBackupChildren = async (
   }
   const discovered: string[] = [];
 
+  const excludeObjectSuffix = ['__x', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
+  const excludeObjects = [
+    'address',
+    'attachment',
+    'document',
+    'contentnote',
+    'contentdocumentlink',
+    'ideacomment',
+    'vote',
+    'brandtemplate',
+    'apexcomponent',
+    'weblink',
+    'categorynode',
+    'devopsactivitylog',
+    'apexclass',
+    'callcenter',
+    'emailservicesaddress',
+    'apextrigger',
+    'apexpage',
+    'fiscalyearsettings',
+    'orgemailaddresssecurity',
+    'chatteractivity',
+    'orgwideemailaddress',
+    'notificationmember',
+    'period',
+    'businesshours',
+    'organization',
+    'userrole',
+    'devopsactivitylogfeed',
+    'queuesobject',
+    'businessprocess',
+    'profile',
+    'forecastingadjustment',
+    'groupsubscription',
+    'staticresource',
+    'groupmember',
+    'holiday',
+    'sfdcpartnersbscroffer',
+    'user',
+    'folder',
+    'group',
+    'forecastingitem',
+    'forecastingquota',
+    'sfdcpartnersbscrofferitem',
+    'slackchannelrelatedrecord',
+    'topic',
+    'collaborationgroupmember',
+    'devopsrequestinfo',
+    'emailservicesfunction',
+    'emailtemplate',
+    'recordtype'
+  ];
+  const objectsList = await salesforceObjectList(source.instanceUrl, tokens);
+  let filteredObjects = objectsList.filter((obj) =>
+    obj.deprecatedAndHidden === false &&
+    obj.customSetting === false &&
+    obj.retrieveable === true &&
+    obj.replicateable === true &&
+    obj.updateable === true &&
+    obj.createable === true &&
+    obj.deletable === true &&
+    obj.keyPrefix !== null &&
+    obj.queryable === true &&
+    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
+    !excludeObjects.includes(obj.name.toLowerCase())
+  );
+  const objectNames = filteredObjects.map((obj) => obj.name);
+
   await Promise.all(
     objects.map(async (obj) => {
       try {
-        // Stores the whole relationship tree, not just what gets backed up; returns []
-        // when the lookup or upload fails, so this object simply expands nothing.
-        const children = await uploadObjectChilds({
+        let children = await uploadObjectChilds({
           destConfig,
           instanceUrl: source.instanceUrl!,
           tokens,
@@ -110,20 +177,29 @@ const expandWithBackupChildren = async (
           type: 'backup',
           backupJobId,
         });
+        children = children.filter(child => child.cascadeDelete);
+        children = children.filter(child => objectNames.includes(child.childSObject));
 
-        obj.children = children.map(obj => ({ id: uuidv4(), name: obj.childSObject, salesforceApiCalls: 0, field: [] })) ?? [];
-
+        const filteredChildren = [];
         for (const child of children) {
-          const name = child.childSObject;
-          if (!name) {
-            continue;
-          }
-          const key = name.toLowerCase();
-          if (!byName.has(key)) {
-            byName.set(key, { id: uuidv4(), name, salesforceApiCalls: 0, field: [] });
-            discovered.push(name);
+          const describedObject = await salesforceObjectDescribe(source.instanceUrl, tokens, child.childSObject);
+          const isFieldCascadeDeleted = describedObject.fields.find((f) => f.name === child.field && f.cascadeDelete);
+
+          if (isFieldCascadeDeleted) {
+            filteredChildren.push(child);
+            const name = child.childSObject;
+            if (!name) {
+              continue;
+            }
+            const key = name.toLowerCase();
+            if (!byName.has(key)) {
+              byName.set(key, { id: uuidv4(), name, salesforceApiCalls: 0, field: [] });
+              discovered.push(name);
+            }
           }
         }
+
+        obj.children = filteredChildren.map(obj => ({ id: uuidv4(), name: obj.childSObject, salesforceApiCalls: 0, field: [] }));
       } catch (err: any) {
         console.log(`[backup-child] children fetch failed for ${obj.name}: ${err?.message ?? err}`);
       }
@@ -131,7 +207,6 @@ const expandWithBackupChildren = async (
   );
 
   await persistChildrenToConfig(backupConfigId, discovered);
-
   return Array.from(byName.values());
 };
 
