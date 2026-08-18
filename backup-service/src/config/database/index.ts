@@ -148,6 +148,8 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
 };
 
 // ---------------------------------------------------------------------------
+// Ensure table exists — create if missing, then wait until ACTIVE
+// ---------------------------------------------------------------------------
 
 const initializeDatabase = async () => {
   await Promise.all(TABLE_DEFINITIONS.map(ensureTable));

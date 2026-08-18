@@ -11,8 +11,6 @@ import { createRestoreValidation } from '../../middlewares';
  * POST /retrieve/fetch-records          — records for one object out of the compressed Hudi/Delta
  *                                         tables: ENTIRE, or CHANGED_BETWEEN a date window, each row
  *                                         tagged with the OPERATION a restore would perform
- * POST /retrieve/show-preview           — raw-CSV restore-to records, every column, paired with
- *                                         the live Salesforce record
  * GET  /fetch-object-fields             — latest S3 schema for objectApiName across the (single)
  *                                         backup config shared by the given backupJobIds
  * GET  /                                — single restore/retrieve job (by backupJobId)
@@ -31,10 +29,9 @@ router.get(
   restoreRetrieveJobController.fetchChangeBetweenBackupJobsHandler
 );
 router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);
-router.post('/retrieve/show-preview', restoreRetrieveJobController.showPreviewHandler);
+router.post('/retrieve/fetch-inactive-record-types', restoreRetrieveJobController.fetchInactiveRecordTypesHandler);
 router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
-router.post('/retrieve/repair-glue', restoreRetrieveJobController.repairGlueTablesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 
 export const restoreRetrieveRouter = router;
