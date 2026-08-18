@@ -73,6 +73,8 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
   let filteredObjects = objectsList.filter((obj) =>
     obj.deprecatedAndHidden === false &&
     obj.customSetting === false &&
+    obj.retrieveable === true &&
+    obj.replicateable === true &&
     obj.keyPrefix !== null &&
     obj.queryable === true &&
     !excludeObjectSuffix.some((suffix) => obj.name.endsWith(suffix))
@@ -110,7 +112,7 @@ const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
   );
 
   const masterObjects = objectDescriptions.filter((objectDescription) => {
-    const field = objectDescription.fields.find((f) => f.type === 'reference' && (f.nillable === false || f.relationshipOrder !== null) && !notAllowedNames.includes(f.name.toLowerCase()));
+    const field = objectDescription.fields.find((f) => f.type === 'reference' && (f.relationshipOrder !== null) && !notAllowedNames.includes(f.name.toLowerCase()));
     return !field;
   });
 
