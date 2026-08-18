@@ -3,6 +3,7 @@ import { IDestinationConfig } from '../../../models';
 import { type S3KeyType } from '../../../utils/helper';
 import { writeSchemaFile } from '../../schema';
 import { getObjectChilds, SalesforceTokens } from './api-request';
+import { salesforceObjectDescribe } from './metadata';
 
 interface IUploadObjectChildsParams {
   destConfig: IDestinationConfig;
@@ -32,9 +33,11 @@ const uploadObjectChilds = async ({
   objectName,
   type,
   backupJobId,
-}: IUploadObjectChildsParams): Promise<any[]> => {
+}: IUploadObjectChildsParams) => {
   try {
-    const childs = await getObjectChilds(instanceUrl, tokens, objectName);
+    const describedObjects = await salesforceObjectDescribe(instanceUrl, tokens, objectName);
+    const childs = describedObjects.childRelationships ?? [];
+    // const childs = await getObjectChilds(instanceUrl, tokens, objectName);
     // await writeSchemaFile(
     //   destConfig,
     //   { crmId, crmName, backupConfigId, objectName, type, kind: 'childs', backupJobId },
