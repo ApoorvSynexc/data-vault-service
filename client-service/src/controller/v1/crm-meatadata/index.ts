@@ -67,7 +67,57 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     user = crmUser;
   }
   const excludeObjectSuffix = ['__x', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
-
+  const excludeObjects = [
+    'address',
+    'attachment',
+    'document',
+    'contentnote',
+    'contentdocumentlink',
+    'ideacomment',
+    'vote',
+    'brandtemplate',
+    'apexcomponent',
+    'weblink',
+    'categorynode',
+    'devopsactivitylog',
+    'apexclass',
+    'callcenter',
+    'emailservicesaddress',
+    'apextrigger',
+    'apexpage',
+    'fiscalyearsettings',
+    'orgemailaddresssecurity',
+    'chatteractivity',
+    'orgwideemailaddress',
+    'notificationmember',
+    'period',
+    'businesshours',
+    'organization',
+    'userrole',
+    'devopsactivitylogfeed',
+    'queuesobject',
+    'businessprocess',
+    'profile',
+    'forecastingadjustment',
+    'groupsubscription',
+    'staticresource',
+    'groupmember',
+    'holiday',
+    'sfdcpartnersbscroffer',
+    'user',
+    'folder',
+    'group',
+    'forecastingitem',
+    'forecastingquota',
+    'sfdcpartnersbscrofferitem',
+    'slackchannelrelatedrecord',
+    'topic',
+    'collaborationgroupmember',
+    'devopsrequestinfo',
+    'emailservicesfunction',
+    'emailtemplate',
+    'recordtype'
+  ];
   const objectsList = await salesforceObjectList({ user });
   const objectsCount = await salesforceObjectsCount({ user });
   let filteredObjects = objectsList.filter((obj) =>
@@ -80,7 +130,8 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     obj.deletable === true &&
     obj.keyPrefix !== null &&
     obj.queryable === true &&
-    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
+    !excludeObjects.includes(obj.name.toLowerCase())
   );
 
   if (apexMode === 'backup' && apexType === 'realtime') {
