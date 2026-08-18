@@ -75,6 +75,9 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     obj.customSetting === false &&
     obj.retrieveable === true &&
     obj.replicateable === true &&
+    obj.updateable === true &&
+    obj.createable === true &&
+    obj.deletable === true &&
     obj.keyPrefix !== null &&
     obj.queryable === true &&
     !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
