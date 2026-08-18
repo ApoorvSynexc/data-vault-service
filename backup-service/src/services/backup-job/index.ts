@@ -99,7 +99,7 @@ const expandWithBackupChildren = async (
       try {
         // Stores the whole relationship tree, not just what gets backed up; returns []
         // when the lookup or upload fails, so this object simply expands nothing.
-        const childs = await uploadObjectChilds({
+        const children = await uploadObjectChilds({
           destConfig,
           instanceUrl: source.instanceUrl!,
           tokens,
@@ -111,14 +111,16 @@ const expandWithBackupChildren = async (
           backupJobId,
         });
 
-        for (const child of childs.filter(isBackupChild)) {
-          const name = child?.apiName;
+        obj.children = children.map(obj => ({ id: uuidv4(), name: obj.childSObject, salesforceApiCalls: 0, field: [] })) ?? [];
+
+        for (const child of children) {
+          const name = child.childSObject;
           if (!name) {
             continue;
           }
           const key = name.toLowerCase();
           if (!byName.has(key)) {
-            byName.set(key, { id: name, salesforceApiCalls: 0, name, field: [] });
+            byName.set(key, { id: uuidv4(), name, salesforceApiCalls: 0, field: [] });
             discovered.push(name);
           }
         }
@@ -464,7 +466,7 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
 
 const recursivelyUpdateObjects = async (
   objects: IBackupObject[],
-  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined }
+  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined }
 ): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
@@ -479,21 +481,21 @@ const recursivelyUpdateObjects = async (
             : {}),
           ...(!isReset && (object as any)?.salesforceApiCount
             ? {
-                salesforceApiCount:
-                  (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
-              }
+              salesforceApiCount:
+                (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
+            }
             : {}),
           ...(!isReset && (object as any)?.deletedSuccessRecordCount
             ? {
-                deletedSuccessRecordCount:
-                  (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
-              }
+              deletedSuccessRecordCount:
+                (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
+            }
             : {}),
           ...(!isReset && (object as any)?.deletedfailedRecordCount
             ? {
-                deletedfailedRecordCount:
-                  (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
-              }
+              deletedfailedRecordCount:
+                (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
+            }
             : {}),
           // recordErrorsS3Prefix: last write wins (each bulk job gets its own prefix)
           ...(!isReset && (object as any)?.recordErrorsS3Prefix
@@ -520,7 +522,7 @@ const updateArchivalObject = async ({
   objects,
 }: {
   backupJobId: string;
-  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined };
+  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
   // When `objects` is provided (caller already holds the array), use it directly
