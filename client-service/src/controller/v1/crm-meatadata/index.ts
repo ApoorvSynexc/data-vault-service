@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, readSchemaFile } from "../../../services";
-import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
+import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 
 
@@ -66,49 +66,9 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
 
     user = crmUser;
   }
-  const excludeObjectSuffix = ['__x', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
-  const STANDARD_OBJECT_LIST = [
-    'Account',
-    'Contact',
-    'Lead',
-    'Opportunity',
-    'Case',
-    'WorkOrder',
-    'Asset',
-    'Contract',
-    'Product2',
-    'Pricebook2',
-    'Asset',
-    'OpportunityLineItem',
-    'Quote',
-    'QuoteLineItem',
-    'Order',
-    'OrderItem',
-    'PricebookEntry',
-    'Task',
-    'EmailMessage'
-  ];
-  const objectsList = await salesforceObjectList({ user });
+
   const objectsCount = await salesforceObjectsCount({ user });
-  let filteredObjects = objectsList.filter((obj) =>
-    obj.deprecatedAndHidden === false &&
-    obj.customSetting === false &&
-    obj.retrieveable === true &&
-    obj.replicateable === true &&
-    obj.keyPrefix !== null &&
-    obj.queryable === true &&
-    (obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name)) &&
-    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
-  );
-
-  if (apexMode === 'backup' && apexType === 'realtime') {
-    filteredObjects = filteredObjects.filter((obj) => obj.triggerable === true);
-  } else if (apexMode === 'archival') {
-    filteredObjects = filteredObjects.filter((obj) => obj.deletable === true);
-  } else if (apexMode === 'restore') {
-    filteredObjects = filteredObjects.filter((obj) => obj.createable === true && obj.updateable === true);
-  }
-
+  let filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
   filteredObjects = filteredObjects
     .map((obj) => {
       const countObj = objectsCount.find((count) => count.name === obj.name);
@@ -124,14 +84,20 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
 
 const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
-  const { objectName } = req.query;
+  const { objectName, mode, type } = req.query;
 
-  if(!objectName) {
+  if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
 
+  const apexMode = toApexMode(mode) ?? 'backup';
+  const apexType = toApexType(type ?? mode);
+
+  const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
+  const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
-  return makeResponse(req, res, 200, true, 'fetch', objectDescription);
+  const children = objectDescription.childRelationships.filter((child) => filteredObjectNames.includes(child.childSObject));
+  return makeResponse(req, res, 200, true, 'fetch', {children});
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
