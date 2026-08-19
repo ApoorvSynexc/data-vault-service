@@ -96,8 +96,18 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
-  const children = objectDescription.childRelationships.filter((child) => filteredObjectNames.includes(child.childSObject));
-  return makeResponse(req, res, 200, true, 'fetch', {children});
+  const children = objectDescription.childRelationships.filter((child) => filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName).map((child) => { name: child.childSObject });
+
+  const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
+  const parent: { name: string }[] = [];
+  parentFields.forEach((field) => {
+    field.referenceTo.forEach((ref) => {
+      if (filteredObjectNames.includes(ref)) {
+        parent.push({name: ref});
+      }
+    })
+  })
+  return makeResponse(req, res, 200, true, 'fetch', { children, parent });
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
