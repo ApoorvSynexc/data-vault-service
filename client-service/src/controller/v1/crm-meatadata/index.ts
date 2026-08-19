@@ -67,56 +67,26 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     user = crmUser;
   }
   const excludeObjectSuffix = ['__x', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
-  const excludeObjects = [
-    'address',
-    'attachment',
-    'document',
-    'contentnote',
-    'contentdocumentlink',
-    'ideacomment',
-    'vote',
-    'brandtemplate',
-    'apexcomponent',
-    'weblink',
-    'categorynode',
-    'devopsactivitylog',
-    'apexclass',
-    'callcenter',
-    'emailservicesaddress',
-    'apextrigger',
-    'apexpage',
-    'fiscalyearsettings',
-    'orgemailaddresssecurity',
-    'chatteractivity',
-    'orgwideemailaddress',
-    'notificationmember',
-    'period',
-    'businesshours',
-    'organization',
-    'userrole',
-    'devopsactivitylogfeed',
-    'queuesobject',
-    'businessprocess',
-    'profile',
-    'forecastingadjustment',
-    'groupsubscription',
-    'staticresource',
-    'groupmember',
-    'holiday',
-    'sfdcpartnersbscroffer',
-    'user',
-    'folder',
-    'group',
-    'forecastingitem',
-    'forecastingquota',
-    'sfdcpartnersbscrofferitem',
-    'slackchannelrelatedrecord',
-    'topic',
-    'collaborationgroupmember',
-    'devopsrequestinfo',
-    'emailservicesfunction',
-    'emailtemplate',
-    'recordtype'
+  const STANDARD_OBJECT_LIST = [
+    'Account',
+    'Contact',
+    'Lead',
+    'Opportunity',
+    'Case',
+    'WorkOrder',
+    'Asset',
+    'Contract',
+    'Product2',
+    'Pricebook2',
+    'Asset',
+    'OpportunityLineItem',
+    'Quote',
+    'QuoteLineItem',
+    'Order',
+    'OrderItem',
+    'PricebookEntry',
+    'Task',
+    'EmailMessage'
   ];
   const objectsList = await salesforceObjectList({ user });
   const objectsCount = await salesforceObjectsCount({ user });
@@ -125,13 +95,10 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     obj.customSetting === false &&
     obj.retrieveable === true &&
     obj.replicateable === true &&
-    obj.updateable === true &&
-    obj.createable === true &&
-    obj.deletable === true &&
     obj.keyPrefix !== null &&
     obj.queryable === true &&
-    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
-    !excludeObjects.includes(obj.name.toLowerCase())
+    (obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name)) &&
+    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
   );
 
   if (apexMode === 'backup' && apexType === 'realtime') {
@@ -153,6 +120,18 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     .sort((a, b) => b.count - a.count);
 
   return makeResponse(req, res, 200, true, 'fetch', filteredObjects);
+}
+
+const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
+  const user = req.user!;
+  const { objectName } = req.query;
+
+  if(!objectName) {
+    return makeResponse(req, res, 400, false, 'object_name_required');
+  }
+
+  const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
+  return makeResponse(req, res, 200, true, 'fetch', objectDescription);
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
@@ -208,5 +187,6 @@ export const crmMetadataController = wrapController({
   getSalesforceObjectSchema,
   getsalesfroceObjects,
   getsalesfrocefields,
-  getSalesforceMasterObjects
+  getSalesforceMasterObjects,
+  getSalesforceDescribeObject
 });
