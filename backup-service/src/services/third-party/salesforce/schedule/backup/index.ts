@@ -122,36 +122,36 @@ export const exportFirstTime = async (
       objectName,
       'backup'
     );
-    await salesforceMetadataHandler({
-      metadataType: 'picklist',
-      policyConfigType: 'backup',
-      backupConfigId,
-      backupJobId,
-      crmId,
-      crmName,
-      objectName,
-      isInitialBackup: true,
-    });
-    await salesforceMetadataHandler({
-      metadataType: 'recordTypes',
-      policyConfigType: 'backup',
-      backupConfigId,
-      backupJobId,
-      crmId,
-      crmName,
-      objectName,
-      isInitialBackup: true,
-    });
-    await salesforceMetadataHandler({
-      metadataType: 'childs',
-      policyConfigType: 'backup',
-      backupConfigId,
-      backupJobId,
-      crmId,
-      crmName,
-      objectName,
-      isInitialBackup: true,
-    }, { instanceUrl, tokens });
+    // await salesforceMetadataHandler({
+    //   metadataType: 'picklist',
+    //   policyConfigType: 'backup',
+    //   backupConfigId,
+    //   backupJobId,
+    //   crmId,
+    //   crmName,
+    //   objectName,
+    //   isInitialBackup: true,
+    // });
+    // await salesforceMetadataHandler({
+    //   metadataType: 'recordTypes',
+    //   policyConfigType: 'backup',
+    //   backupConfigId,
+    //   backupJobId,
+    //   crmId,
+    //   crmName,
+    //   objectName,
+    //   isInitialBackup: true,
+    // });
+    // await salesforceMetadataHandler({
+    //   metadataType: 'childs',
+    //   policyConfigType: 'backup',
+    //   backupConfigId,
+    //   backupJobId,
+    //   crmId,
+    //   crmName,
+    //   objectName,
+    //   isInitialBackup: true,
+    // }, { instanceUrl, tokens });
     // await uploadPicklistValues({
     //   schema,
     //   destConfig,
@@ -258,16 +258,16 @@ export const exportFirstTime = async (
       await updateBackupConfig(backupConfigId, updateParams);
     }
 
-    await salesforceMetadataHandler({
-      metadataType: 'fields',
-      policyConfigType: 'backup',
-      backupConfigId,
-      backupJobId,
-      crmId,
-      crmName,
-      objectName,
-      isInitialBackup: true,
-    });
+    // await salesforceMetadataHandler({
+    //   metadataType: 'fields',
+    //   policyConfigType: 'backup',
+    //   backupConfigId,
+    //   backupJobId,
+    //   crmId,
+    //   crmName,
+    //   objectName,
+    //   isInitialBackup: true,
+    // });
 
     // await writeSchemaFile(
     //   destConfig,
