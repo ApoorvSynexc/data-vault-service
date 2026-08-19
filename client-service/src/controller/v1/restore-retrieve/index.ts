@@ -15,6 +15,7 @@ import {
   updateRestore,
   getRestoreById,
   IRetrieveRecordsParams,
+  IFetchInactiveRecordTypesParams,
   RetrieveType,
   FilterError,
   validateColumns,
@@ -428,34 +429,58 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 };
 
 
+/**
+ * POST /retrieve/fetch-inactive-record-types
+ * Body: { backupConfigId, objectApiName, startDate, endDate }
+ *
+ * Record Types that are inactive or deleted, out of the RECORD_TYPE
+ * schema-change deltas in [startDate, endDate] — see retrieveInactiveRecordTypes.
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller.
+ */
 const fetchInactiveRecordTypesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const parsed = parseRetrieveParams(req.body as Record<string, unknown>, req.user!.userId);
-  if (!parsed.ok) {
-    makeResponse(req, res, 400, false, parsed.error);
+  const { backupConfigId, objectApiName, startDate, endDate } = req.body as Record<string, unknown>;
+  const userId = req.user!.userId;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
+    makeResponse(req, res, 400, false, 'object_api_name_required');
+    return;
+  }
+  if (typeof startDate !== 'string' || !startDate.trim() || typeof endDate !== 'string' || !endDate.trim()) {
+    makeResponse(req, res, 400, false, 'date_range_required');
     return;
   }
 
-  let result;
-  try {
-    result = await retrieveInactiveRecordTypes(parsed.value);
-  } catch (e) {
-    // A cursor that no longer matches the request, or whose Athena results have
-    // aged out. Surfaced rather than silently restarting, so the UI knows to go
-    // back to page 1 instead of assuming it received the page it asked for.
-    if (e instanceof CursorError) {
-      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
-      return;
-    }
-    throw e;
+  const start = toIsoDateString(startDate, 'start');
+  const end = toIsoDateString(endDate, 'end');
+  if (!start || !end) {
+    makeResponse(req, res, 400, false, 'invalid_source_date');
+    return;
+  }
+  if (start > end) {
+    makeResponse(req, res, 400, false, 'invalid_time_range');
+    return;
   }
 
+  const params: IFetchInactiveRecordTypesParams = {
+    backupConfigId: backupConfigId.trim(),
+    objectApiName: objectApiName.trim(),
+    startDate: start,
+    endDate: end,
+    userId,
+  };
+
+  const result = await retrieveInactiveRecordTypes(params);
   if (!result) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
   makeResponse(req, res, 200, true, 'fetch', result);
-}
+};
 
 /**
  * GET /fetch-object-fields
