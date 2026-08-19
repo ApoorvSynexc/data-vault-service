@@ -24,6 +24,7 @@ import {
   buildDeletedDeltaSql,
   buildWindowDeltasSql,
   buildDeltaPartitionWhere,
+  buildRecordTypeDeltaSql,
 } from './athena-fetch';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
@@ -431,8 +432,17 @@ export interface IFetchInactiveRecordTypesParams {
   backupConfigId: string;
   userId: string;
   objectApiName: string;
-  startDate?: IsoDateString;
-  endDate?: IsoDateString;
+  startDate: IsoDateString;
+  endDate: IsoDateString;
+}
+
+// The shape returned per inactive/deleted Record Type — always the flat
+// record-type object, never the UPDATE delta's {prev,new} wrapper.
+export interface IInactiveRecordType {
+  isActive: boolean;
+  developerName: string;
+  name: string;
+  recordTypeId: string;
 }
 
 // Identity of the query behind a cursor: everything that changes WHICH rows come
@@ -549,16 +559,52 @@ const retrieveRecords = async (
   return toPage(block, params.columnNames, page.offset, page.fingerprint, executions);
 };
 
+/**
+ * Inactive/deleted Record Types out of the RECORD_TYPE schema-change deltas
+ * inside [startDate, endDate].
+ *
+ * UPDATE deltas report the record type only when it went inactive in this
+ * change (`change_data.new.isActive === false`) — a type that stayed active,
+ * or went active→inactive→active again as separate deltas, is not what this
+ * is for. DELETE deltas always report: a deleted type has no "new" half, and
+ * being gone is itself the inactive state. INSERT never carries an inactive
+ * signal, so the SQL excludes it up front.
+ *
+ * Returns null when the config does not exist or is not owned by the caller.
+ */
 const retrieveInactiveRecordTypes = async (
-  params: IRetrieveRecordsParams
-) : Promise<{ inactiveTypes: string[] } | null> => {
+  params: IFetchInactiveRecordTypesParams
+): Promise<IInactiveRecordType[] | null> => {
   const config = await getBackupConfigById(params.backupConfigId);
   if (!config || config.userId !== params.userId) return null;
 
   const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const deltaTable = `${table}_delta`;
-}
+
+  const { startDate, endDate } = params;
+  const { run } = makeRunner(databaseName, null);
+  const result = await run('recordTypeDeltas', () =>
+    buildRecordTypeDeltaSql(deltaTable, {
+      startDate,
+      endDate,
+      deltaPartition: buildDeltaPartitionWhere(startDate, endDate),
+    })
+  );
+
+  const inactiveTypes: IInactiveRecordType[] = [];
+  for (const row of result.rows) {
+    const changeData = JSON.parse(row['change_data'] || 'null');
+    if (!changeData) continue;
+
+    if (row['change_type'] === 'DELETE') {
+      inactiveTypes.push(changeData);
+    } else if (changeData.new?.isActive === false) {
+      inactiveTypes.push(changeData.new);
+    }
+  }
+  return inactiveTypes;
+};
 
 // ---------------------------------------------------------------------------
 // Fetch object schema (fields) from S3
@@ -678,6 +724,7 @@ export {
   getBackupJobIdsChangedBetween,
   getObjectListByConfigId,
   retrieveRecords,
+  retrieveInactiveRecordTypes,
   fetchObjectFields,
   fetchPicklistValues,
 };

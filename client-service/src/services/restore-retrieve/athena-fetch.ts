@@ -371,6 +371,37 @@ export const buildWindowDeltasSql = (
   );
 
 /**
+ * RECORD_TYPE schema-change deltas inside a window — feeds
+ * retrieveInactiveRecordTypes. Only UPDATE/DELETE carry a state to report
+ * (INSERT has no prior/inactive state); schema_change_type scopes the scan to
+ * record-type rows only, out of the same interleaved delta table record rows
+ * live in.
+ *
+ * change_data is returned raw (cast to varchar, still JSON) rather than
+ * json_extract_scalar'd field-by-field like buildDeletedDeltaSql: its shape
+ * differs by change_type (UPDATE nests {prev,new}, DELETE is flat), so the
+ * service parses and picks the right half after the fact.
+ *
+ * No keyset pagination: unlike the block-and-page record endpoint, callers here
+ * get the whole window in one shot.
+ */
+export const buildRecordTypeDeltaSql = (
+  deltaTable: string,
+  p: { startDate: string; endDate: string; deltaPartition?: string | null }
+): string =>
+  `SELECT change_type, CAST(change_data AS varchar) AS change_data FROM "${deltaTable}"` +
+  whereClause(
+    [
+      `schema_change_type = 'RECORD_TYPE'`,
+      `is_schema_change = true`,
+      `change_type IN ('UPDATE', 'DELETE')`,
+      inWindow('change_time', p.startDate, p.endDate),
+      p.deltaPartition,
+    ],
+    'WHERE'
+  );
+
+/**
  * Partition predicate for the DELTA table. The biggest cost lever on this
  * endpoint — Athena bills by bytes scanned and the delta table grows without
  * bound — so CHANGED_BETWEEN cuts the scan to the months its window can touch.
@@ -522,6 +553,14 @@ if (require.main === module) {
   // Month is compared NUMERICALLY — unpadded '7' would sort after '12' as text.
   assert.ok(prune.includes('CAST(month AS integer)'));
   assert.strictEqual(buildDeltaPartitionWhere(null, null), null, 'ENTIRE has no window to prune with');
+
+  // ── RECORD_TYPE schema-change deltas ───────────────────────────────────────
+  const recordTypeSql = buildRecordTypeDeltaSql('t_delta', win);
+  assert.ok(recordTypeSql.startsWith(`SELECT change_type, CAST(change_data AS varchar) AS change_data FROM "t_delta"`));
+  assert.ok(recordTypeSql.includes(`schema_change_type = 'RECORD_TYPE'`));
+  assert.ok(recordTypeSql.includes(`change_type IN ('UPDATE', 'DELETE')`));
+  assert.ok(recordTypeSql.includes(prune), 'prunes to the window’s months like every other delta scan');
+  assert.ok(!recordTypeSql.includes('ORDER BY') && !recordTypeSql.includes('LIMIT'), 'whole window, no paging');
 
   // ── Injection defence ──────────────────────────────────────────────────────
   assert.ok(buildWindowDeltasSql('t', ["r'1"], win).includes(`'r''1'`));
