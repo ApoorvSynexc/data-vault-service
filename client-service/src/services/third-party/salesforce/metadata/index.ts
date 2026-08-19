@@ -54,6 +54,8 @@ export const salesforceMetadataHandler = async (
 
 interface ISalesforceObjectListParams {
     user: IUser;
+    apexMode?: string;
+    apexType?: string;
 }
 
 export interface ISalesforceObjectResponse {
@@ -125,6 +127,57 @@ export const salesforceObjectList = async (params: ISalesforceObjectListParams):
         );
 
         return result.data?.sobjects ?? [];
+    } catch (error) {
+        throw error;
+    }
+}
+
+export const salesforceObjectFilteredList = async (params: ISalesforceObjectListParams): Promise<ISalesforceObjectResponse[]> => {
+    const { user, apexMode, apexType } = params;
+    try {
+        const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
+        const STANDARD_OBJECT_LIST = [
+            'Account',
+            'Contact',
+            'Lead',
+            'Opportunity',
+            'Case',
+            'WorkOrder',
+            'Asset',
+            'Contract',
+            'Product2',
+            'Pricebook2',
+            'Asset',
+            'OpportunityLineItem',
+            'Quote',
+            'QuoteLineItem',
+            'Order',
+            'OrderItem',
+            'PricebookEntry',
+            'Task',
+            'EmailMessage'
+        ];
+        const objectsList = await salesforceObjectList({ user });
+        let filteredObjects = objectsList.filter((obj) =>
+            obj.deprecatedAndHidden === false &&
+            obj.customSetting === false &&
+            obj.retrieveable === true &&
+            obj.replicateable === true &&
+            obj.keyPrefix !== null &&
+            obj.queryable === true &&
+            (obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name) || obj.custom === true) &&
+            !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+        );
+
+        if (apexMode === 'backup' && apexType === 'realtime') {
+            filteredObjects = filteredObjects.filter((obj) => obj.triggerable === true);
+        } else if (apexMode === 'archival') {
+            filteredObjects = filteredObjects.filter((obj) => obj.deletable === true);
+        } else if (apexMode === 'restore') {
+            filteredObjects = filteredObjects.filter((obj) => obj.createable === true && obj.updateable === true);
+        }
+
+        return filteredObjects;
     } catch (error) {
         throw error;
     }
