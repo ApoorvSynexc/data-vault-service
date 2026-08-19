@@ -25,6 +25,7 @@ import {
   buildWindowDeltasSql,
   buildDeltaPartitionWhere,
   buildRecordTypeDeltaSql,
+  buildFieldDeleteDeltaSql,
 } from './athena-fetch';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
@@ -606,6 +607,53 @@ const retrieveInactiveRecordTypes = async (
   return inactiveTypes;
 };
 
+// Same shape retrieveInactiveRecordTypes takes — one object's delta table,
+// scoped by owner, windowed by change_time.
+export type IFetchMissingFieldsParams = IFetchInactiveRecordTypesParams;
+
+// A FIELD DELETE delta's change_data — the deleted field's own definition,
+// exactly as backup-service captured it.
+export interface IDeletedField {
+  label: string;
+  isRequired: boolean;
+  isCustom: boolean;
+  dataType: string;
+  apiName: string;
+}
+
+/**
+ * Fields deleted from an object inside [startDate, endDate], out of the FIELD
+ * schema-change deltas — the delta table's DELETE change_data is already the
+ * flat field definition, so no prev/new split like retrieveInactiveRecordTypes
+ * needs. UPDATE/INSERT FIELD deltas never reach the SQL.
+ *
+ * Returns null when the config does not exist or is not owned by the caller.
+ */
+const retrieveMissingFields = async (
+  params: IFetchMissingFieldsParams
+): Promise<IDeletedField[] | null> => {
+  const config = await getBackupConfigById(params.backupConfigId);
+  if (!config || config.userId !== params.userId) return null;
+
+  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
+  const deltaTable = `${table}_delta`;
+
+  const { startDate, endDate } = params;
+  const { run } = makeRunner(databaseName, null);
+  const result = await run('fieldDeleteDeltas', () =>
+    buildFieldDeleteDeltaSql(deltaTable, {
+      startDate,
+      endDate,
+      deltaPartition: buildDeltaPartitionWhere(startDate, endDate),
+    })
+  );
+
+  return result.rows
+    .map((row) => JSON.parse(row['change_data'] || 'null'))
+    .filter((field): field is IDeletedField => Boolean(field));
+};
+
 // ---------------------------------------------------------------------------
 // Fetch object schema (fields) from S3
 // ---------------------------------------------------------------------------
@@ -725,6 +773,7 @@ export {
   getObjectListByConfigId,
   retrieveRecords,
   retrieveInactiveRecordTypes,
+  retrieveMissingFields,
   fetchObjectFields,
   fetchPicklistValues,
 };
