@@ -229,17 +229,17 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   // Minted up front so child schema written during expansion lands in this job's changes/.
   const backupJobId = uuidv4();
 
-  const expandedObjects = await expandWithBackupChildren(
-    source,
-    backupConfigId,
-    destination.config,
-    backupJobId,
-    object
-  );
+  // const expandedObjects = await expandWithBackupChildren(
+  //   source,
+  //   backupConfigId,
+  //   destination.config,
+  //   backupJobId,
+  //   object
+  // );
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
   const encryptedDestConfig: any = encrypt(JSON.stringify(destination.config));
-  const allObjects = expandedObjects?.map((item) => ({
+  const allObjects = object?.map((item) => ({
     ...item,
     status: OBJECT_STATUS.created,
     bulkJobId: '',
