@@ -165,7 +165,7 @@ export const salesforceObjectFilteredList = async (params: ISalesforceObjectList
             obj.replicateable === true &&
             obj.keyPrefix !== null &&
             obj.queryable === true &&
-            (obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name)) &&
+            (obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name) || obj.custom === true) &&
             !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
         );
 
