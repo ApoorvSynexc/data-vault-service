@@ -11,6 +11,8 @@ import { createRestoreValidation } from '../../middlewares';
  * POST /retrieve/fetch-records          — records for one object out of the compressed Hudi/Delta
  *                                         tables: ENTIRE, or CHANGED_BETWEEN a date window, each row
  *                                         tagged with the OPERATION a restore would perform
+ * POST /retrieve/fetch-inactive-record-types — Record Types made inactive or deleted inside a date window
+ * POST /retrieve/fetch-missing-fields   — fields deleted from an object inside a date window
  * GET  /fetch-object-fields             — latest S3 schema for objectApiName across the (single)
  *                                         backup config shared by the given backupJobIds
  * GET  /                                — single restore/retrieve job (by backupJobId)
@@ -30,6 +32,7 @@ router.get(
 );
 router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);
 router.post('/retrieve/fetch-inactive-record-types', restoreRetrieveJobController.fetchInactiveRecordTypesHandler);
+router.post('/retrieve/fetch-missing-fields', restoreRetrieveJobController.fetchMissingFieldsHandler);
 router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);

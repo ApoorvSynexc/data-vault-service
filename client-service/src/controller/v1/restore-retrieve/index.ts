@@ -32,7 +32,8 @@ import {
   getDestinationById,
   getBackupJobById,
   getBackupJobsByConfig,
-  retrieveInactiveRecordTypes
+  retrieveInactiveRecordTypes,
+  retrieveMissingFields
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -430,6 +431,50 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 
 
 /**
+ * Parses the body shared by every "schema-change deltas for one object in a
+ * window" endpoint: backupConfigId, objectApiName, startDate, endDate. Used by
+ * both fetchInactiveRecordTypesHandler and fetchMissingFieldsHandler.
+ */
+const parseSchemaDeltaWindowParams = (
+  body: Record<string, unknown>,
+  userId: string
+):
+  | { ok: true; value: IFetchInactiveRecordTypesParams }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const { backupConfigId, objectApiName, startDate, endDate } = body;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
+  }
+  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
+    return { ok: false, error: 'object_api_name_required' };
+  }
+  if (typeof startDate !== 'string' || !startDate.trim() || typeof endDate !== 'string' || !endDate.trim()) {
+    return { ok: false, error: 'date_range_required' };
+  }
+
+  const start = toIsoDateString(startDate, 'start');
+  const end = toIsoDateString(endDate, 'end');
+  if (!start || !end) {
+    return { ok: false, error: 'invalid_source_date' };
+  }
+  if (start > end) {
+    return { ok: false, error: 'invalid_time_range' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      backupConfigId: backupConfigId.trim(),
+      objectApiName: objectApiName.trim(),
+      startDate: start,
+      endDate: end,
+      userId,
+    },
+  };
+};
+
+/**
  * POST /retrieve/fetch-inactive-record-types
  * Body: { backupConfigId, objectApiName, startDate, endDate }
  *
@@ -438,42 +483,37 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
 const fetchInactiveRecordTypesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, objectApiName, startDate, endDate } = req.body as Record<string, unknown>;
-  const userId = req.user!.userId;
-
-  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
-    makeResponse(req, res, 400, false, 'object_api_name_required');
-    return;
-  }
-  if (typeof startDate !== 'string' || !startDate.trim() || typeof endDate !== 'string' || !endDate.trim()) {
-    makeResponse(req, res, 400, false, 'date_range_required');
+  const parsed = parseSchemaDeltaWindowParams(req.body as Record<string, unknown>, req.user!.userId);
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
     return;
   }
 
-  const start = toIsoDateString(startDate, 'start');
-  const end = toIsoDateString(endDate, 'end');
-  if (!start || !end) {
-    makeResponse(req, res, 400, false, 'invalid_source_date');
-    return;
-  }
-  if (start > end) {
-    makeResponse(req, res, 400, false, 'invalid_time_range');
+  const result = await retrieveInactiveRecordTypes(parsed.value);
+  if (!result) {
+    makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
-  const params: IFetchInactiveRecordTypesParams = {
-    backupConfigId: backupConfigId.trim(),
-    objectApiName: objectApiName.trim(),
-    startDate: start,
-    endDate: end,
-    userId,
-  };
+  makeResponse(req, res, 200, true, 'fetch', result);
+};
 
-  const result = await retrieveInactiveRecordTypes(params);
+/**
+ * POST /retrieve/fetch-missing-fields
+ * Body: { backupConfigId, objectApiName, startDate, endDate }
+ *
+ * Fields deleted from the object inside [startDate, endDate], out of the FIELD
+ * schema-change deltas — see retrieveMissingFields.
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller.
+ */
+const fetchMissingFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseSchemaDeltaWindowParams(req.body as Record<string, unknown>, req.user!.userId);
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
+    return;
+  }
+
+  const result = await retrieveMissingFields(parsed.value);
   if (!result) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
@@ -686,6 +726,7 @@ export const restoreRetrieveJobController = wrapController({
   fetchChangeBetweenBackupJobsHandler,
   fetchRecordsHandler,
   fetchInactiveRecordTypesHandler,
+  fetchMissingFieldsHandler,
   fetchObjectFieldsHandler,
   createRestoreHandler,
   activateRestoreHandler,

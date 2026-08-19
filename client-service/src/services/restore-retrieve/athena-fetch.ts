@@ -371,35 +371,50 @@ export const buildWindowDeltasSql = (
   );
 
 /**
- * RECORD_TYPE schema-change deltas inside a window — feeds
- * retrieveInactiveRecordTypes. Only UPDATE/DELETE carry a state to report
- * (INSERT has no prior/inactive state); schema_change_type scopes the scan to
- * record-type rows only, out of the same interleaved delta table record rows
- * live in.
+ * Schema-change deltas of one kind (RECORD_TYPE, FIELD, …) inside a window,
+ * restricted to the given change_type(s). Backs every schema-change delta
+ * read this service does — schema_change_type scopes the scan to that kind's
+ * rows only, out of the same interleaved delta table record rows live in.
  *
  * change_data is returned raw (cast to varchar, still JSON) rather than
  * json_extract_scalar'd field-by-field like buildDeletedDeltaSql: its shape
- * differs by change_type (UPDATE nests {prev,new}, DELETE is flat), so the
- * service parses and picks the right half after the fact.
+ * differs by change_type (an UPDATE nests {prev,new}, a DELETE is flat), so
+ * the service parses and picks the right half after the fact.
  *
  * No keyset pagination: unlike the block-and-page record endpoint, callers here
  * get the whole window in one shot.
  */
-export const buildRecordTypeDeltaSql = (
+const buildSchemaChangeDeltaSql = (
   deltaTable: string,
+  schemaChangeType: string,
+  changeTypes: string[],
   p: { startDate: string; endDate: string; deltaPartition?: string | null }
 ): string =>
   `SELECT change_type, CAST(change_data AS varchar) AS change_data FROM "${deltaTable}"` +
   whereClause(
     [
-      `schema_change_type = 'RECORD_TYPE'`,
+      `schema_change_type = ${lit(schemaChangeType)}`,
       `is_schema_change = true`,
-      `change_type IN ('UPDATE', 'DELETE')`,
+      `change_type IN (${changeTypes.map(lit).join(', ')})`,
       inWindow('change_time', p.startDate, p.endDate),
       p.deltaPartition,
     ],
     'WHERE'
   );
+
+// RECORD_TYPE deltas — feeds retrieveInactiveRecordTypes. Only UPDATE/DELETE
+// carry a state to report; INSERT has no prior/inactive state.
+export const buildRecordTypeDeltaSql = (
+  deltaTable: string,
+  p: { startDate: string; endDate: string; deltaPartition?: string | null }
+): string => buildSchemaChangeDeltaSql(deltaTable, 'RECORD_TYPE', ['UPDATE', 'DELETE'], p);
+
+// FIELD deltas, DELETE only — feeds retrieveMissingFields. UPDATE/INSERT are
+// not "missing", so they never reach the SQL.
+export const buildFieldDeleteDeltaSql = (
+  deltaTable: string,
+  p: { startDate: string; endDate: string; deltaPartition?: string | null }
+): string => buildSchemaChangeDeltaSql(deltaTable, 'FIELD', ['DELETE'], p);
 
 /**
  * Partition predicate for the DELTA table. The biggest cost lever on this
@@ -561,6 +576,14 @@ if (require.main === module) {
   assert.ok(recordTypeSql.includes(`change_type IN ('UPDATE', 'DELETE')`));
   assert.ok(recordTypeSql.includes(prune), 'prunes to the window’s months like every other delta scan');
   assert.ok(!recordTypeSql.includes('ORDER BY') && !recordTypeSql.includes('LIMIT'), 'whole window, no paging');
+
+  // ── FIELD DELETE schema-change deltas ──────────────────────────────────────
+  const fieldDeleteSql = buildFieldDeleteDeltaSql('t_delta', win);
+  assert.ok(fieldDeleteSql.startsWith(`SELECT change_type, CAST(change_data AS varchar) AS change_data FROM "t_delta"`));
+  assert.ok(fieldDeleteSql.includes(`schema_change_type = 'FIELD'`));
+  assert.ok(fieldDeleteSql.includes(`change_type IN ('DELETE')`), 'UPDATE/INSERT never reach the SQL');
+  assert.ok(fieldDeleteSql.includes(prune));
+  assert.ok(!fieldDeleteSql.includes('ORDER BY') && !fieldDeleteSql.includes('LIMIT'));
 
   // ── Injection defence ──────────────────────────────────────────────────────
   assert.ok(buildWindowDeltasSql('t', ["r'1"], win).includes(`'r''1'`));
