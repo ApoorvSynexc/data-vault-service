@@ -98,14 +98,14 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
   const children = objectDescription.childRelationships
     .filter((child) => filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName)
-    .map((child) => ({ name: child.childSObject }));
+    .map((child) => ({ name: child.childSObject, restrictedDelete: child.restrictedDelete, cascadeDelete: child.cascadeDelete }));
 
   const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
-  const parent: { name: string }[] = [];
+  const parent: { [key: string]: string | boolean }[] = [];
   parentFields.forEach((field) => {
     field.referenceTo.forEach((ref) => {
       if (filteredObjectNames.includes(ref)) {
-        parent.push({ name: ref });
+        parent.push({ name: ref, nillable: field.nillable, cascadeDelete: field.cascadeDelete });
       }
     })
   })
