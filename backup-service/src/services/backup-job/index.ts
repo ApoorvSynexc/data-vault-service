@@ -239,12 +239,13 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
 
   const encryptedSource = encrypt(JSON.stringify(sourceCredentials));
   const encryptedDestConfig: any = encrypt(JSON.stringify(destination.config));
-  const trackedObjects = expandedObjects?.map((item) => ({
+  const allObjects = expandedObjects?.map((item) => ({
     ...item,
     status: OBJECT_STATUS.created,
     bulkJobId: '',
     totalRecordCount: 0,
   }));
+  const parentObjects = allObjects?.filter((item) => !item.isChild);
 
   const item: IBackupJob = {
     backupJobId,
@@ -255,7 +256,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     backupConfigId,
     source: encryptedSource,
     destination: { type: destination.type, ...encryptedDestConfig },
-    ...(trackedObjects?.length ? { object: trackedObjects } : {}),
+    ...(parentObjects?.length ? { object: parentObjects } : {}),
     status: JOB_STATUS.pending,
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     ...(spaceId && { spaceId }),

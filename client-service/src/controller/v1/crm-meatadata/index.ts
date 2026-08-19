@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, readSchemaFile } from "../../../services";
-import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
+import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 
 
@@ -66,82 +66,9 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
 
     user = crmUser;
   }
-  const excludeObjectSuffix = ['__x', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
-  const excludeObjects = [
-    'address',
-    'attachment',
-    'document',
-    'contentnote',
-    'contentdocumentlink',
-    'ideacomment',
-    'vote',
-    'brandtemplate',
-    'apexcomponent',
-    'weblink',
-    'categorynode',
-    'devopsactivitylog',
-    'apexclass',
-    'callcenter',
-    'emailservicesaddress',
-    'apextrigger',
-    'apexpage',
-    'fiscalyearsettings',
-    'orgemailaddresssecurity',
-    'chatteractivity',
-    'orgwideemailaddress',
-    'notificationmember',
-    'period',
-    'businesshours',
-    'organization',
-    'userrole',
-    'devopsactivitylogfeed',
-    'queuesobject',
-    'businessprocess',
-    'profile',
-    'forecastingadjustment',
-    'groupsubscription',
-    'staticresource',
-    'groupmember',
-    'holiday',
-    'sfdcpartnersbscroffer',
-    'user',
-    'folder',
-    'group',
-    'forecastingitem',
-    'forecastingquota',
-    'sfdcpartnersbscrofferitem',
-    'slackchannelrelatedrecord',
-    'topic',
-    'collaborationgroupmember',
-    'devopsrequestinfo',
-    'emailservicesfunction',
-    'emailtemplate',
-    'recordtype'
-  ];
-  const objectsList = await salesforceObjectList({ user });
+
   const objectsCount = await salesforceObjectsCount({ user });
-  let filteredObjects = objectsList.filter((obj) =>
-    obj.deprecatedAndHidden === false &&
-    obj.customSetting === false &&
-    obj.retrieveable === true &&
-    obj.replicateable === true &&
-    obj.updateable === true &&
-    obj.createable === true &&
-    obj.deletable === true &&
-    obj.keyPrefix !== null &&
-    obj.queryable === true &&
-    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
-    !excludeObjects.includes(obj.name.toLowerCase())
-  );
-
-  if (apexMode === 'backup' && apexType === 'realtime') {
-    filteredObjects = filteredObjects.filter((obj) => obj.triggerable === true);
-  } else if (apexMode === 'archival') {
-    filteredObjects = filteredObjects.filter((obj) => obj.deletable === true);
-  } else if (apexMode === 'restore') {
-    filteredObjects = filteredObjects.filter((obj) => obj.createable === true && obj.updateable === true);
-  }
-
+  let filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
   filteredObjects = filteredObjects
     .map((obj) => {
       const countObj = objectsCount.find((count) => count.name === obj.name);
@@ -153,6 +80,36 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
     .sort((a, b) => b.count - a.count);
 
   return makeResponse(req, res, 200, true, 'fetch', filteredObjects);
+}
+
+const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
+  const user = req.user!;
+  const { objectName, mode, type } = req.query;
+
+  if (!objectName) {
+    return makeResponse(req, res, 400, false, 'object_name_required');
+  }
+
+  const apexMode = toApexMode(mode) ?? 'backup';
+  const apexType = toApexType(type ?? mode);
+
+  const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
+  const filteredObjectNames = filteredObjects.map((obj) => obj.name);
+  const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
+  const children = objectDescription.childRelationships
+    .filter((child) => filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName)
+    .map((child) => ({ name: child.childSObject }));
+
+  const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
+  const parent: { name: string }[] = [];
+  parentFields.forEach((field) => {
+    field.referenceTo.forEach((ref) => {
+      if (filteredObjectNames.includes(ref)) {
+        parent.push({ name: ref });
+      }
+    })
+  })
+  return makeResponse(req, res, 200, true, 'fetch', { children, parent });
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
@@ -208,5 +165,6 @@ export const crmMetadataController = wrapController({
   getSalesforceObjectSchema,
   getsalesfroceObjects,
   getsalesfrocefields,
-  getSalesforceMasterObjects
+  getSalesforceMasterObjects,
+  getSalesforceDescribeObject
 });
