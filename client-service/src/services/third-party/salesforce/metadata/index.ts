@@ -135,7 +135,7 @@ export const salesforceObjectList = async (params: ISalesforceObjectListParams):
 export const salesforceObjectFilteredList = async (params: ISalesforceObjectListParams): Promise<ISalesforceObjectResponse[]> => {
     const { user, apexMode, apexType } = params;
     try {
-        const excludeObjectSuffix = ['__x', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
+        const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
         const STANDARD_OBJECT_LIST = [
             'Account',
             'Contact',
