@@ -503,11 +503,12 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                     },
                 ],
                 monitoringConfiguration: {
-                    managedPersistenceMonitoringConfiguration: { enabled: true },
-                    cloudWatchLoggingConfiguration: {
-                        enabled: true,
-                        logGroupName: "/aws/emr-serverless",
+                    managedPersistenceMonitoringConfiguration: {
+                        enabled: true
                     },
+                    s3MonitoringConfiguration: {
+                        logUri: "s3://qa-data-vault-logs"
+                    }
                 },
             },
         });
