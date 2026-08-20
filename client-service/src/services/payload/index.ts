@@ -4,7 +4,7 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE, NODE_ENV } from '../../constant';
+import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE, NODE_ENV } from '../../constant';
 import { runRealtimeSchemaSync } from './schema-sync';
 import { logger } from '../../middlewares';
 import { IAwsCredentials, IBackupConfig, IBackupJob, IRestoreScope, IRestoreSource } from '../../models';
@@ -385,10 +385,10 @@ type EmrTriggerPayload =
 // ─── Submit a built payload to EMR Serverless ─────────────────────────────────
 async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommandOutput> {
     try {
-        // Encrypted with AWS_EMR_ENCRYPTION_KEY (the same key Spark gets as ENCRYPTION_KEY),
+        // Encrypted with ENCRYPTION_KEY (the same key Spark gets as ENCRYPTION_KEY),
         // framed the same way decryptFromTransport expects to unpack it: base64(JSON({ ciphertext, iv })).
         const payloadB64 = Buffer.from(
-            JSON.stringify(encrypt(JSON.stringify(payload), AWS_EMR_ENCRYPTION_KEY))
+            JSON.stringify(encrypt(JSON.stringify(payload), ENCRYPTION_KEY))
         ).toString('base64');
 
         logger.info('Initializing EMR job...');
@@ -490,10 +490,10 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                     {
                         classification: "spark-defaults",
                         properties: {
-                            "spark.executorEnv.ENCRYPTION_KEY": AWS_EMR_ENCRYPTION_KEY,
-                            "spark.yarn.appMasterEnv.ENCRYPTION_KEY": AWS_EMR_ENCRYPTION_KEY,
-                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${AWS_EMR_ENCRYPTION_KEY}`,
-                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${AWS_EMR_ENCRYPTION_KEY}`,
+                            "spark.executorEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
+                            "spark.yarn.appMasterEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
+                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY}`,
+                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY}`,
                             "spark.executorEnv.NODE_SERVER_URL": "https://dev-data-vault.internaldeveloper.com/cs/",
                             "spark.yarn.appMasterEnv.NODE_SERVER_URL": "https://dev-data-vault.internaldeveloper.com/cs/",
                         },
