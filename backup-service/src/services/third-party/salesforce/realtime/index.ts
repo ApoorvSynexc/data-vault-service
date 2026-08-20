@@ -119,8 +119,10 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     // All hits for the same job share the same backupJobId folder.
     // Each hit gets a unique UUID filename so concurrent uploads never overwrite each other.
     const folder = operationToFolder(operation);
-    const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.csv`;
-    const csvBuffer = recordsToCsv(records, columns);
+    // const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.csv`;
+    // const csvBuffer = recordsToCsv(records, columns);
+    const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.json`;
+    const csvBuffer = Buffer.from(JSON.stringify(records), 'utf8');
     const sizeInBytes = csvBuffer.length;
     const s3Path = await uploadToS3(destConfig, s3Key, csvBuffer);
 

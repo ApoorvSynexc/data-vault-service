@@ -1,8 +1,7 @@
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
 import { type S3KeyType } from '../../../utils/helper';
-import { writeSchemaFile } from '../../schema';
-import { getObjectChilds, SalesforceTokens } from './api-request';
+import { SalesforceTokens } from './api-request';
 import { salesforceObjectDescribe } from './metadata';
 
 interface IUploadObjectChildsParams {
@@ -24,15 +23,10 @@ interface IUploadObjectChildsParams {
 // Never throws: a failed children lookup must not fail a backup/archival job — it
 // returns [] so callers that expand the job from this list simply expand nothing.
 const uploadObjectChilds = async ({
-  destConfig,
   instanceUrl,
   tokens,
-  crmId,
-  crmName,
   backupConfigId,
   objectName,
-  type,
-  backupJobId,
 }: IUploadObjectChildsParams) => {
   try {
     const describedObjects = await salesforceObjectDescribe(instanceUrl, tokens, objectName);

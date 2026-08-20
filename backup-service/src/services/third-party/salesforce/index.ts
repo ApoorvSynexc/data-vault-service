@@ -21,18 +21,18 @@ import { decrypt } from '../../../utils/encryption';
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
 
-
 const exportObjectToDestination = async (
   backupConfigId: string,
   backupJobId: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
   crmName: string,
+  objectNames: Array<string>,
   object: IBackupObject,
   objectIndex: number,
   destinationType: string,
   destConfig: IDestinationConfig,
-  lastUpdatedAt?: string
+  lastUpdatedAt?: string,
 ): Promise<void> => {
   if (object.status === OBJECT_STATUS.completed) {
     return;
@@ -49,6 +49,7 @@ const exportObjectToDestination = async (
       instanceUrl,
       tokens,
       crmName,
+      objectNames,
       object,
       objectIndex,
       destConfig
@@ -60,6 +61,7 @@ const exportObjectToDestination = async (
       instanceUrl,
       tokens,
       crmName,
+      objectNames,
       object,
       objectIndex,
       destConfig,
@@ -108,7 +110,7 @@ const exportObjectToDestinationArchival = async (
 const exportWithRetry = async (
   ...args: Parameters<typeof exportObjectToDestination>
 ): Promise<void> => {
-  const [, backupJobId, , , , object] = args;
+  const [, backupJobId, , , , , object] = args;
   const objectName = object.name;
   let lastError: any;
 
@@ -180,24 +182,9 @@ const salesforceHandler: ICrmBackupHandler = {
       `Backup job for ${lastUpdatedAt ? 'incremental' : 'first-time'} of has been initialize, backupJobId=${backupJobId}, objectCount=${object.length}, insatnce=${source.instanceUrl}`
     );
 
-    const formatObjectChild = new Map();
-    object.forEach((item) => {
-      if (!item.parentObjects?.length) {
-        formatObjectChild.set(item.name, { ...item, children: [] });
-      } else {
-        formatObjectChild.set(item.name, { ...item });
-        item.parentObjects.forEach((parent) => {
-          if (formatObjectChild.has(parent.name)) {
-            formatObjectChild.set(parent.name, { ...formatObjectChild.get(parent.name), children: [...formatObjectChild.get(parent.name).children, { ...item, parentObjects: undefined }] });
-          }
-        })
-      }
-    });
-    const objects = Array.from(formatObjectChild.values());
-    console.log(JSON.stringify({ objects }));
-
-    for (let i = 0; i < objects.length; i += CONCURRENCY_LIMIT) {
-      const batch = objects.slice(i, i + CONCURRENCY_LIMIT);
+    const objectNames = object.map((item) => item.name);
+    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
+      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
         batch.map((item, batchIndex) =>
           exportWithRetry(
@@ -206,11 +193,12 @@ const salesforceHandler: ICrmBackupHandler = {
             instanceUrl,
             tokens,
             crmName,
+            objectNames,
             item,
             i + batchIndex,
             destinationType,
             destConfig,
-            lastUpdatedAt
+            lastUpdatedAt,
           )
         )
       );

@@ -2,10 +2,9 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
-import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
+import { buildS3KeyPrefix } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
-import { uploadPicklistValues } from '../../picklist';
 import { uploadRecordTypeMetadata } from '../../record-type';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
 import { readLatestSchema, writeSchemaFile } from '../../../../schema';
@@ -100,6 +99,7 @@ export const exportFirstTime = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   crmName: string,
+  objectNames: Array<string>,
   object: IBackupObject,
   objectIndex: number,
   destConfig: IDestinationConfig
@@ -117,36 +117,39 @@ export const exportFirstTime = async (
       objectName,
       'backup'
     );
-    // await salesforceMetadataHandler({
-    //   metadataType: 'picklist',
-    //   policyConfigType: 'backup',
-    //   backupConfigId,
-    //   backupJobId,
-    //   crmId,
-    //   crmName,
-    //   objectName,
-    //   isInitialBackup: true,
-    // });
-    // await salesforceMetadataHandler({
-    //   metadataType: 'recordTypes',
-    //   policyConfigType: 'backup',
-    //   backupConfigId,
-    //   backupJobId,
-    //   crmId,
-    //   crmName,
-    //   objectName,
-    //   isInitialBackup: true,
-    // });
-    // await salesforceMetadataHandler({
-    //   metadataType: 'childs',
-    //   policyConfigType: 'backup',
-    //   backupConfigId,
-    //   backupJobId,
-    //   crmId,
-    //   crmName,
-    //   objectName,
-    //   isInitialBackup: true,
-    // }, { instanceUrl, tokens });
+    await salesforceMetadataHandler({
+      metadataType: 'picklist',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectNames,
+      objectName,
+      isInitialBackup: true,
+    }, { instanceUrl, tokens });
+    await salesforceMetadataHandler({
+      metadataType: 'recordTypes',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectNames,
+      objectName,
+      isInitialBackup: true,
+    }, { instanceUrl, tokens });
+    await salesforceMetadataHandler({
+      metadataType: 'childs',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectNames,
+      objectName,
+      isInitialBackup: true,
+    }, { instanceUrl, tokens });
     // await uploadPicklistValues({
     //   schema,
     //   destConfig,
@@ -253,16 +256,17 @@ export const exportFirstTime = async (
       await updateBackupConfig(backupConfigId, updateParams);
     }
 
-    // await salesforceMetadataHandler({
-    //   metadataType: 'fields',
-    //   policyConfigType: 'backup',
-    //   backupConfigId,
-    //   backupJobId,
-    //   crmId,
-    //   crmName,
-    //   objectName,
-    //   isInitialBackup: true,
-    // });
+    await salesforceMetadataHandler({
+      metadataType: 'fields',
+      policyConfigType: 'backup',
+      backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectNames,
+      objectName,
+      isInitialBackup: true,
+    }, { instanceUrl, tokens });
 
     // await writeSchemaFile(
     //   destConfig,
@@ -300,6 +304,7 @@ export const exportIncremental = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   crmName: string,
+  objectNames: Array<string>,
   object: IBackupObject,
   objectIndex: number,
   destConfig: IDestinationConfig,
@@ -326,15 +331,15 @@ export const exportIncremental = async (
     //   type: 'backup',
     //   backupJobId,
     // });
-    await uploadRecordTypeMetadata({
-      destConfig,
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      type: 'backup',
-      backupJobId,
-    });
+    // await uploadRecordTypeMetadata({
+    //   destConfig,
+    //   crmId,
+    //   crmName,
+    //   backupConfigId,
+    //   objectName,
+    //   type: 'backup',
+    //   backupJobId,
+    // });
 
     // ── Phase 1: query new + updated + deleted records in one queryAll job ────
     let bulkJobId = object.bulkJobId;
@@ -465,7 +470,6 @@ export const exportIncremental = async (
     // operation key off that, and claiming a change every run would force a Hudi
     // rewrite on every job.
 
-
     await salesforceMetadataHandler({
       metadataType: 'picklist',
       policyConfigType: 'backup',
@@ -473,9 +477,10 @@ export const exportIncremental = async (
       backupJobId,
       crmId,
       crmName,
+      objectNames,
       objectName,
       isInitialBackup: false,
-    });
+    }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
       metadataType: 'recordTypes',
       policyConfigType: 'backup',
@@ -483,29 +488,35 @@ export const exportIncremental = async (
       backupJobId,
       crmId,
       crmName,
+      objectNames,
       objectName,
       isInitialBackup: false,
-    });
+    }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
       metadataType: 'childs',
       policyConfigType: 'backup',
       backupConfigId,
       backupJobId,
       crmId,
-      crmName,
-      objectName,
-      isInitialBackup: false,
-    });
-    const schemaChanged = await salesforceMetadataHandler({
-      metadataType: 'fields',
-      policyConfigType: 'backup',
-      backupConfigId,
-      backupJobId,
-      crmId,
+      objectNames,
       crmName,
       objectName,
       isInitialBackup: false,
     }, { instanceUrl, tokens });
+    const schemaChanged = await salesforceMetadataHandler(
+      {
+        metadataType: 'fields',
+        policyConfigType: 'backup',
+        backupConfigId,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        objectName,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
 
     // const storedSchema = await readLatestSchema(destConfig, {
     //   crmId,

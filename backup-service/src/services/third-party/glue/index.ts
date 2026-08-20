@@ -258,7 +258,8 @@ const syncHudiTableSchema = async (
     new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
   );
 
-  const signature = (cols: Column[] = []): string => cols.map((c) => `${c.Name}:${c.Type}`).join(',');
+  const signature = (cols: Column[] = []): string =>
+    cols.map((c) => `${c.Name}:${c.Type}`).join(',');
   if (signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns)) {
     return;
   }
