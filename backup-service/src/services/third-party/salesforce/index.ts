@@ -27,11 +27,12 @@ const exportObjectToDestination = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   crmName: string,
+  objectNames: Array<string>,
   object: IBackupObject,
   objectIndex: number,
   destinationType: string,
   destConfig: IDestinationConfig,
-  lastUpdatedAt?: string
+  lastUpdatedAt?: string,
 ): Promise<void> => {
   if (object.status === OBJECT_STATUS.completed) {
     return;
@@ -48,6 +49,7 @@ const exportObjectToDestination = async (
       instanceUrl,
       tokens,
       crmName,
+      objectNames,
       object,
       objectIndex,
       destConfig
@@ -59,6 +61,7 @@ const exportObjectToDestination = async (
       instanceUrl,
       tokens,
       crmName,
+      objectNames,
       object,
       objectIndex,
       destConfig,
@@ -107,7 +110,7 @@ const exportObjectToDestinationArchival = async (
 const exportWithRetry = async (
   ...args: Parameters<typeof exportObjectToDestination>
 ): Promise<void> => {
-  const [, backupJobId, , , , object] = args;
+  const [, backupJobId, , , , , object] = args;
   const objectName = object.name;
   let lastError: any;
 
@@ -179,6 +182,7 @@ const salesforceHandler: ICrmBackupHandler = {
       `Backup job for ${lastUpdatedAt ? 'incremental' : 'first-time'} of has been initialize, backupJobId=${backupJobId}, objectCount=${object.length}, insatnce=${source.instanceUrl}`
     );
 
+    const objectNames = object.map((item) => item.name);
     for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
       const batch = object.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
@@ -189,11 +193,12 @@ const salesforceHandler: ICrmBackupHandler = {
             instanceUrl,
             tokens,
             crmName,
+            objectNames,
             item,
             i + batchIndex,
             destinationType,
             destConfig,
-            lastUpdatedAt
+            lastUpdatedAt,
           )
         )
       );
