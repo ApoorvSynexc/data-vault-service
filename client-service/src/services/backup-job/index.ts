@@ -21,6 +21,7 @@ const getSourceObjects = (objects?: IObject[]) => {
       ...(object.condition ? { condition: object.condition } : {}),
       ...(object.children ? { children: object.children } : {}),
       ...(object.id ? { id: object.id } : {}),
+      ...(object.parentObjects ? { parentObjects: object.parentObjects } : {}),
     }));
   }
 };
