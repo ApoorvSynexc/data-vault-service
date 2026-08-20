@@ -131,7 +131,7 @@ export const exportFirstTime = async (
       objectNames,
       objectName,
       isInitialBackup: true,
-    });
+    }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
       metadataType: 'recordTypes',
       policyConfigType: 'backup',
@@ -142,7 +142,7 @@ export const exportFirstTime = async (
       objectNames,
       objectName,
       isInitialBackup: true,
-    });
+    }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
       metadataType: 'childs',
       policyConfigType: 'backup',
@@ -270,7 +270,7 @@ export const exportFirstTime = async (
       objectNames,
       objectName,
       isInitialBackup: true,
-    });
+    }, { instanceUrl, tokens });
 
     // await writeSchemaFile(
     //   destConfig,
@@ -512,7 +512,7 @@ export const exportIncremental = async (
       objectNames,
       objectName,
       isInitialBackup: false,
-    });
+    }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
       metadataType: 'recordTypes',
       policyConfigType: 'backup',
@@ -523,7 +523,7 @@ export const exportIncremental = async (
       objectNames,
       objectName,
       isInitialBackup: false,
-    });
+    }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
       metadataType: 'childs',
       policyConfigType: 'backup',
@@ -534,7 +534,7 @@ export const exportIncremental = async (
       crmName,
       objectName,
       isInitialBackup: false,
-    });
+    }, { instanceUrl, tokens });
     const schemaChanged = await salesforceMetadataHandler(
       {
         metadataType: 'fields',
