@@ -21,6 +21,7 @@ import { decrypt } from '../../../utils/encryption';
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
 
+
 const exportObjectToDestination = async (
   backupConfigId: string,
   backupJobId: string,
@@ -179,8 +180,23 @@ const salesforceHandler: ICrmBackupHandler = {
       `Backup job for ${lastUpdatedAt ? 'incremental' : 'first-time'} of has been initialize, backupJobId=${backupJobId}, objectCount=${object.length}, insatnce=${source.instanceUrl}`
     );
 
-    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
-      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+    const formatObjectChild = new Map();
+    object.forEach((item) => {
+      if (!item.parentObjects?.length) {
+        formatObjectChild.set(item.name, { ...item, children: [] }); ``
+      } else {
+        item.parentObjects.forEach((parent) => {
+          if (formatObjectChild.has(parent.name)) {
+            formatObjectChild.set(parent.name, { ...formatObjectChild.get(parent.name), children: [...formatObjectChild.get(parent.name).children, item] });
+          }
+        })
+      }
+    });
+    const objects = Array.from(formatObjectChild.values());
+    console.log(JSON.stringify({ objects }));
+
+    for (let i = 0; i < objects.length; i += CONCURRENCY_LIMIT) {
+      const batch = objects.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
         batch.map((item, batchIndex) =>
           exportWithRetry(
@@ -199,28 +215,7 @@ const salesforceHandler: ICrmBackupHandler = {
       );
     }
 
-    const backupJob = await getBackupJob(backupJobId);
-    const parentObjects = backupJob?.object?.filter((o) => !o.isChild) ?? [];
-    const childObjects = backupJob?.object?.filter((o) => o.isChild) ?? [];
-
-    for (let childIndex = 0; childIndex < childObjects.length; childIndex++) {
-      const childObject = childObjects[childIndex];
-
-      for (let parentIndex = 0; parentIndex < parentObjects.length; parentIndex++) {
-        const parentObject = parentObjects[parentIndex];
-
-        if (parentObject.name === childObject.parentObject) {
-          parentObjects[parentIndex].children = parentObject.children?.map(c => {
-            if (c.name === childObject.name) {
-              return childObject
-            }
-            return c;
-          })
-        }
-      }
-    }
-    
-    await updateBackupConfig(backupConfigId, { objects: parentObjects, backupStatus: BACKUP_STATUS.success });
+    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
   },
   runArchival: async (

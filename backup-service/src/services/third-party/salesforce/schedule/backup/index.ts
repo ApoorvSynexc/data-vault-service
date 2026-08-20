@@ -241,7 +241,7 @@ export const exportFirstTime = async (
     });
 
     backupConfig = await getBackupConfigById(backupConfigId);
-    if (!object.isChild && backupConfig?.objects) {
+    if (backupConfig?.objects) {
       const updateParams: any = { sizeInBytes };
       const updatedObjects = backupConfig.objects.map((obj) =>
         obj.name === objectName
@@ -473,7 +473,7 @@ export const exportIncremental = async (
       });
 
       backupConfig = await getBackupConfigById(backupConfigId);
-      if (!object.isChild && backupConfig?.objects) {
+      if (backupConfig?.objects) {
         const updateParams: any = { sizeInBytes };
         const updatedObjects = backupConfig.objects.map((obj) =>
           obj.name === objectName ? { ...obj, sizeInBytes } : obj
