@@ -97,18 +97,18 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
   const children = objectDescription.childRelationships
-    .filter((child) => filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName)
-    .map((child) => ({ name: child.childSObject, restrictedDelete: child.restrictedDelete, cascadeDelete: child.cascadeDelete }));
+    .filter((child) => filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName && child.cascadeDelete)
+    .map((child) => ({ name: child.childSObject }));
 
-  const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
-  const parent: { [key: string]: string | boolean }[] = [];
-  parentFields.forEach((field) => {
-    field.referenceTo.forEach((ref) => {
-      if (filteredObjectNames.includes(ref)) {
-        parent.push({ name: ref, nillable: field.nillable, cascadeDelete: field.cascadeDelete });
-      }
-    })
-  })
+  // const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
+  // const parent: { [key: string]: string | boolean }[] = [];
+  // parentFields.forEach((field) => {
+  //   field.referenceTo.forEach((ref) => {
+  //     if (filteredObjectNames.includes(ref)) {
+  //       parent.push({ name: ref, nillable: field.nillable, cascadeDelete: field.cascadeDelete });
+  //     }
+  //   })
+  // })
   return makeResponse(req, res, 200, true, 'fetch', { children, parent });
 }
 
