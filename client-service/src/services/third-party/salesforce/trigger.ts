@@ -169,7 +169,7 @@ const buildRecordTriggeredFlow = (
   flowName: string,
   event: (typeof FLOW_EVENTS)[number]
 ): string => {
-  const actionName = `${HANDLER_CLASS_NAME}`;
+  const actionName = `${NAMESPACE_PREFIX}.${HANDLER_CLASS_NAME}`;
   const label = flowName.replace(/_/g, ' ');
 
   return (
