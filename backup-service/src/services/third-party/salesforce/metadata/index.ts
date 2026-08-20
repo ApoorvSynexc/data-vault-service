@@ -24,6 +24,15 @@ export const salesforceMetadataHandler = async (
       `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
     );
 
+    if (!salesforceContext) {
+      throw new Error(`Salesforce metadata comparison requires instanceUrl + tokens`);
+    }
+
+    const describedObject = await salesforceObjectDescribe(
+      salesforceContext?.instanceUrl,
+      salesforceContext?.tokens,
+      objectName
+    );
     switch (metadataType) {
       case 'fields': {
         const diff = await schemaHandler(params);
