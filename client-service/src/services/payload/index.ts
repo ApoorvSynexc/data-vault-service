@@ -7,7 +7,7 @@ import { getRestoreById } from '../restore';
 import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, AWS_EMR_ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE, NODE_ENV } from '../../constant';
 import { runRealtimeSchemaSync } from './schema-sync';
 import { logger } from '../../middlewares';
-import { IAwsCredentials, IBackupConfig, IBackupJob } from '../../models';
+import { IAwsCredentials, IBackupConfig, IBackupJob, IRestoreScope, IRestoreSource } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
 import { encrypt } from '../../utils/encryption';
 import { getRestoreJobById } from '../restore-job';
@@ -250,6 +250,51 @@ async function buildPayload(backupConfigId: string) {
     return payload;
 }
 
+// ─── Conditionally map restore source fields by type ──────────────────────────
+// A stored IRestoreSource can carry fields irrelevant to its type (e.g. a client
+// posted backupJobIds alongside ENTIRE) — only forward what the type uses.
+// No type on legacy records: forward as stored, unchanged.
+function mapRestoreSource(source: IRestoreSource) {
+    const { backupConfigId, type, backupJobIds, startDate, endDate } = source;
+    switch (type) {
+        case 'ENTIRE':
+            return { backupConfigId, type };
+        case 'PARTIAL':
+            return { backupConfigId, type, backupJobIds };
+        case 'CHANGED_BETWEEN':
+            return { backupConfigId, type, startDate, endDate };
+        default:
+            return source;
+    }
+}
+
+// ─── Conditionally map restore scope fields by type ────────────────────────────
+// Same rule as mapRestoreSource: only the selection field the scope type reads.
+// Unrecognised type (legacy, e.g. INSERTS_ONLY): forward as stored.
+function mapRestoreScope(restoreScope: IRestoreScope) {
+    const { type, objects, records, fields, filters, changeSince, bulkCsvIds, deletedOnly } = restoreScope;
+    switch (type) {
+        case 'ALL':
+            return { type };
+        case 'OBJECT':
+            return { type, objects };
+        case 'RECORD':
+            return { type, records };
+        case 'FIELD':
+            return { type, fields };
+        case 'FILTER':
+            return { type, filters };
+        case 'CHANGE_SINCE':
+            return { type, changeSince };
+        case 'BULK_CSV':
+            return { type, bulkCsvIds };
+        case 'DELETED_ONLY':
+            return { type, deletedOnly: deletedOnly ?? true };
+        default:
+            return restoreScope;
+    }
+}
+
 // ─── Build EMR RESTORE payload from a restoreConfigId ─────────────────────────
 // Restore mirrors buildPayload's resolve-then-shape contract, but reads a restore
 // config instead of backup jobs. The stored restore already carries source,
@@ -308,14 +353,15 @@ async function buildRestorePayload(restoreConfigId: string) {
         isDemoOnly: true,
         details: {
             clientId: restore.userId,
+            backupType: backupConfig.schedule,
             sourceDetails: {
                 sourceName: crm.crmName,
                 orgId: crm.crmId,
             },
-            // Stored as-is in the shape Spark reads.
             'restore-configs': {
-                source: restore.source,
-                selection: restore.selection,
+                source: mapRestoreSource(restore.source),
+                selection: { restoreScope: mapRestoreScope(restore.selection.restoreScope) },
+                // Already optional-in/optional-out as stored — undefined keys drop on JSON.stringify.
                 conflict: restore.conflict,
             },
             destinationConfigs: {
@@ -363,13 +409,42 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
         const sparkSubmitParameters = [
             '--class com.example.Main',
 
+            // Driver
+            '--conf spark.driver.cores=4',
+            '--conf spark.driver.memory=14g',
+            '--conf spark.driver.memoryOverhead=2g',
+            '--conf spark.driver.maxResultSize=2g',
+
+            // Executors
+            '--conf spark.executor.cores=4',
+            '--conf spark.executor.memory=14g',
+            '--conf spark.executor.memoryOverhead=2g',
+
+            // Dynamic Allocation
+            '--conf spark.dynamicAllocation.enabled=true',
+            '--conf spark.dynamicAllocation.minExecutors=1',
+            '--conf spark.dynamicAllocation.initialExecutors=2',
+            '--conf spark.dynamicAllocation.maxExecutors=2',
+            '--conf spark.dynamicAllocation.executorIdleTimeout=60s',
+            '--conf spark.dynamicAllocation.schedulerBacklogTimeout=1s',
+            '--conf spark.dynamicAllocation.sustainedSchedulerBacklogTimeout=1s',
+            '--conf spark.dynamicAllocation.shuffleTracking.enabled=true',
+
+            // EMR Serverless disk
+            '--conf spark.emr-serverless.executor.disk=100g',
+
+            // Memory
+            '--conf spark.memory.fraction=0.7',
+            '--conf spark.memory.storageFraction=0.3',
+
             // Serialization
             '--conf spark.serializer=org.apache.spark.serializer.KryoSerializer',
             '--conf spark.kryo.registrator=org.apache.spark.HoodieSparkKryoRegistrar',
+            '--conf spark.kryoserializer.buffer.max=512m',
 
             // S3A
             '--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
-            '--conf spark.hadoop.fs.s3a.connection.maximum=100',
+            '--conf spark.hadoop.fs.s3a.connection.maximum=200',
             '--conf spark.hadoop.fs.s3a.threads.max=64',
             '--conf spark.hadoop.fs.s3a.threads.keepalivetime=60',
             '--conf spark.hadoop.fs.s3a.connection.timeout=60000',
@@ -379,12 +454,12 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.hadoop.fs.s3a.retry.throttle.limit=20',
             '--conf spark.hadoop.fs.s3a.paging.maximum=1000',
 
-            '--conf spark.hadoop.fs.s3a.multipart.size=134217728',
+            '--conf spark.hadoop.fs.s3a.multipart.size=67108864',
+            '--conf spark.hadoop.fs.s3a.block.size=67108864',
             '--conf spark.hadoop.fs.s3a.multipart.threshold=134217728',
-            '--conf spark.hadoop.fs.s3a.block.size=134217728',
 
             '--conf spark.hadoop.fs.s3a.fast.upload=true',
-            '--conf spark.hadoop.fs.s3a.fast.upload.buffer=bytebuffer',
+            '--conf spark.hadoop.fs.s3a.fast.upload.buffer=disk',
             '--conf spark.hadoop.fs.s3a.fast.upload.active.blocks=4',
 
             '--conf spark.hadoop.fs.s3a.readahead.range=4194304',
@@ -392,38 +467,6 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             // Network
             '--conf spark.network.timeout=600s',
             '--conf spark.executor.heartbeatInterval=60s',
-
-            // Dynamic Allocation
-            '--conf spark.dynamicAllocation.enabled=true',
-            '--conf spark.dynamicAllocation.minExecutors=1',
-            '--conf spark.dynamicAllocation.initialExecutors=2',
-            '--conf spark.dynamicAllocation.maxExecutors=6',
-            '--conf spark.dynamicAllocation.executorIdleTimeout=60s',
-            '--conf spark.dynamicAllocation.schedulerBacklogTimeout=1s',
-            '--conf spark.dynamicAllocation.sustainedSchedulerBacklogTimeout=1s',
-
-            // Driver
-            '--conf spark.driver.memory=8g',
-            '--conf spark.driver.cores=4',
-            '--conf spark.driver.maxResultSize=2g',
-
-            // Executors
-            '--conf spark.executor.memory=6g',
-            '--conf spark.executor.cores=2',
-            '--conf spark.executor.memoryOverhead=1g',
-
-            '--conf spark.memory.fraction=0.8',
-            '--conf spark.memory.storageFraction=0.3',
-
-            // Spark SQL
-            '--conf spark.sql.shuffle.partitions=100',
-            '--conf spark.sql.adaptive.enabled=true',
-            '--conf spark.sql.adaptive.coalescePartitions.enabled=true',
-            '--conf spark.sql.adaptive.skewJoin.enabled=true',
-            '--conf spark.sql.adaptive.localShuffleReader.enabled=true',
-
-            '--conf spark.sql.files.maxPartitionBytes=134217728',
-            '--conf spark.sql.files.openCostInBytes=4194304',
 
             // Scheduler
             '--conf spark.scheduler.mode=FAIR',
@@ -525,6 +568,8 @@ export {
     // exported for payload.check.ts — the per-job grouping contract with Spark
     processObjectOperations,
     processArchivalObjectOperations,
+    mapRestoreSource,
+    mapRestoreScope,
     EmrPayload,
     EmrTriggerPayload,
 };
