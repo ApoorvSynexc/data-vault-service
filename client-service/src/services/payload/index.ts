@@ -478,6 +478,7 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.speculation=false',
         ].join(' ');
 
+        console.log('NODE ENV:', NODE_ENV_URL);
         const command = new StartJobRunCommand({
             applicationId: AWS_EMR_APPLICATION_ID,
             executionRoleArn: AWS_EMR_EXECUTION_ROLE_ARN,
