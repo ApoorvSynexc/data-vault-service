@@ -16,14 +16,14 @@ const COUNTER_TABLE = String(process.env.COUNTER_TABLE || 'data-vault-counters')
 
 // Event Bridge Scheduler Config
 const AWS_SCHEDULER_REGION = String(process.env.AWS_SCHEDULER_REGION);
-const AWS_SCHEDULER_ROLE_ARN = String(process.env.AWS_SCHEDULER_ROLE_ARN);
+const AWS_SCHEDULER_ROLE_ARN = String(process.env.AWS_SCHEDULER_ROLE_ARN).trim();
 const AWS_EVENT_BUS_ARN = String(process.env.AWS_EVENT_BUS_ARN);
 const AWS_EVENT_DETAIL_TYPE = String(process.env.AWS_EVENT_DETAIL_TYPE);
 const AWS_EVENT_SOURCE = String(process.env.AWS_EVENT_SOURCE);
 
 // AWS EMR
 const AWS_EMR_APPLICATION_ID = String(process.env.AWS_EMR_APPLICATION_ID);
-const AWS_EMR_EXECUTION_ROLE_ARN = String(process.env.AWS_EMR_EXECUTION_ROLE_ARN);
+const AWS_EMR_EXECUTION_ROLE_ARN = String(process.env.AWS_EMR_EXECUTION_ROLE_ARN).trim();
 const AWS_EMR_ENCRYPTION_KEY = String(process.env.AWS_EMR_ENCRYPTION_KEY);
 
 // AWS Glue
@@ -32,7 +32,7 @@ const AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 
 // AWS Athena
 // IAM Role ARN that Athena assumes when reading from client S3 buckets.
 // The client's bucket policy must grant this ARN s3:GetObject + s3:ListBucket.
-const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN);
+const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN).trim();
 // S3 location where Athena writes query result files (required by StartQueryExecution).
 // e.g. s3://datavault-athena-results/
 const AWS_ATHENA_OUTPUT_LOCATION = String(process.env.AWS_ATHENA_OUTPUT_LOCATION);

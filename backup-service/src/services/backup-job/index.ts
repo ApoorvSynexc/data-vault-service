@@ -245,7 +245,6 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     bulkJobId: '',
     totalRecordCount: 0,
   }));
-  const parentObjects = allObjects?.filter((item) => !item.isChild);
 
   const item: IBackupJob = {
     backupJobId,
@@ -256,7 +255,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     backupConfigId,
     source: encryptedSource,
     destination: { type: destination.type, ...encryptedDestConfig },
-    ...(parentObjects?.length ? { object: parentObjects } : {}),
+    ...(allObjects?.length ? { object: allObjects } : {}),
     status: JOB_STATUS.pending,
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     ...(spaceId && { spaceId }),
