@@ -44,6 +44,7 @@ const objectParentSchema = Joi.object({
 });
 
 const objectSchema = Joi.object({
+  id: Joi.string().required(),
   name: Joi.string().required(),
   type: Joi.string()
     .valid(...Object.values(OBJECT_TYPE))
