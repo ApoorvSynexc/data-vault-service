@@ -1,6 +1,6 @@
 import { logger } from '../../../../middlewares';
 import { salesforceRequest, SalesforceTokens } from '../api-request';
-import { childHandler } from './child';
+import { childHandler, ISalesforceChildRelationship } from './child';
 import { ISalesforceMetadataHandler } from './common';
 import { schemaHandler } from './field';
 import { picklistHandler } from './picklist';
@@ -18,7 +18,7 @@ export const salesforceMetadataHandler = async (
   params: ISalesforceMetadataHandler,
   salesforceContext?: ISalesforceContext
 ) => {
-  const { metadataType, backupConfigId, backupJobId, objectName } = params;
+  const { metadataType, backupConfigId, backupJobId, objectNames, objectName } = params;
   try {
     logger.info(
       `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
@@ -33,20 +33,16 @@ export const salesforceMetadataHandler = async (
       salesforceContext?.tokens,
       objectName
     );
+
+    const children = describedObject.childRelationships.filter(ch => objectNames.includes(ch.childSObject));
+
     switch (metadataType) {
       case 'fields': {
         const diff = await schemaHandler(params);
         return { diff, metadataType };
       }
       case 'childs': {
-        if (!salesforceContext) {
-          throw new Error(`childs comparison requires instanceUrl + tokens`);
-        }
-        const diff = await childHandler(
-          params,
-          salesforceContext.instanceUrl,
-          salesforceContext.tokens
-        );
+        const diff = await childHandler(params, children);
         return { diff, metadataType };
       }
       case 'picklist': {
@@ -195,17 +191,6 @@ interface ISalesforceFieldDescribe {
   unique: boolean;
   updateable: boolean;
   writeRequiresMasterRead: boolean;
-}
-
-interface ISalesforceChildRelationship {
-  cascadeDelete: boolean;
-  childSObject: string;
-  deprecatedAndHidden: boolean;
-  field: string;
-  junctionIdListNames: string[];
-  junctionReferenceTo: string[];
-  relationshipName: string | null;
-  restrictedDelete: boolean;
 }
 
 export interface ISalesforceObjectDescribeResponse {
