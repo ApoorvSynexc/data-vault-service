@@ -188,7 +188,7 @@ export const fetchStoredResults = async (
 };
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
-// database must be a Glue Catalog database name (e.g. datavault_<crmId>).
+// database must be a Glue Catalog database name (e.g. the backupConfigId).
 // `maxRows` caps how many rows are pulled back; the returned queryExecutionId
 // lets a later request replay the same rows via fetchStoredResults.
 export const runAthenaQuery = async (

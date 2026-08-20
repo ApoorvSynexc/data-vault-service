@@ -189,7 +189,7 @@ Unchanged from the AWS default — attach `AmazonECSTaskExecutionRolePolicy` (EC
 ```
 plus `s3:GetObject`/`s3:PutObject` on the Athena output bucket and `glue:GetDatabase`/`GetTable`/`GetPartitions` for query planning.
 
-Glue on the ECS role would need `glue:CreateDatabase`, `GetTable`, `CreateTable`, `UpdateTable`, `BatchCreatePartition` on `catalog`, `database/datavault*`, and `table/datavault*/*`.
+Glue on the ECS role would need `glue:CreateDatabase`, `GetTable`, `CreateTable`, `UpdateTable`, `BatchCreatePartition` on `catalog`, `database/*`, and `table/*/*` — the Glue database is now named `<backupConfigId>` directly (one per config, no shared prefix), so it can no longer be scoped with a single `datavault*` wildcard.
 
 **3. Bootstrap permissions are permanent.** `CreateTable` / `UpdateTable` / `UpdateTimeToLive` are only used on boot, but sit in the role 24/7. Splitting them into a one-time deploy role and dropping the `DynamoBootstrap` statements is the tighter setup — at the cost of tables no longer self-creating.
 

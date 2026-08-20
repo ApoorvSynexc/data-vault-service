@@ -188,7 +188,7 @@ The ECS task running `backup-service` requires the following runtime permissions
 
 Glue *is* used heavily (`services/third-party/glue/index.ts` — creating databases, tables and partitions for the Athena-queryable catalog), but the client is constructed with static IAM user keys (`AWS_GLUE_ACCESS_KEY` / `AWS_GLUE_SECRET_KEY`), so it bypasses the task role.
 
-If you migrate it to the role, add `glue:CreateDatabase`, `glue:GetTable`, `glue:CreateTable`, `glue:UpdateTable` and `glue:BatchCreatePartition`, scoped to the `catalog`, `database/datavault*` and `table/datavault*/*` resources.
+If you migrate it to the role, add `glue:CreateDatabase`, `glue:GetTable`, `glue:CreateTable`, `glue:UpdateTable` and `glue:BatchCreatePartition`, scoped to the `catalog` resource and one `database`/`table` resource per `backupConfigId` — the Glue database is now named `<backupConfigId>` directly (no shared prefix), so a `database/datavault*` wildcard no longer matches every tenant database.
 
 ## Amazon EC2
 
@@ -229,7 +229,7 @@ Both services call each other directly, resolving the target's private IP throug
 
 | Direction | Discovery | Transport | Auth |
 |---|---|---|---|
-| EC2 → ECS | `ecs:ListTasks` + `ecs:DescribeTasks` → task private IP | HTTP to `/v1/backup-job`, `/v1/restore`, `/v1/glue/repair`, `/v1/realtime-backup` | `x-internal-secret` header |
+| EC2 → ECS | `ecs:ListTasks` + `ecs:DescribeTasks` → task private IP | HTTP to `/v1/backup-job`, `/v1/restore`, `/v1/glue/ensure-compression-tables`, `/v1/realtime-backup` | `x-internal-secret` header |
 | ECS → EC2 | `ec2:DescribeInstances` → instance private IP | HTTP to `/v1/internal/backup-payload`, `/v1/internal/refresh-token`, `/v1/internal/fields` | `x-internal-secret` header |
 
 Two distinct layers, and they need different things:
