@@ -2,9 +2,9 @@ import { logger } from '../../../../middlewares';
 import { salesforceRequest, SalesforceTokens } from '../api-request';
 import { childHandler, ISalesforceChildRelationship } from './child';
 import { ISalesforceMetadataHandler } from './common';
-import { schemaHandler } from './field';
+import { ISalesforceFieldDescribe, schemaHandler } from './field';
 import { picklistHandler } from './picklist';
-import { recordTypeHandler } from './recordType';
+import { ISalesforceRecordTypeInfo, recordTypeHandler } from './recordType';
 
 // Only the "childs" comparison needs live Salesforce API access (see
 // child/index.ts) — the rest resolve everything from backupConfigId via the
@@ -34,23 +34,26 @@ export const salesforceMetadataHandler = async (
       objectName
     );
 
-    const children = describedObject.childRelationships.filter(ch => objectNames.includes(ch.childSObject));
 
     switch (metadataType) {
       case 'fields': {
-        const diff = await schemaHandler(params);
+        const fields = describedObject.fields;
+        const diff = await schemaHandler(params, fields);
         return { diff, metadataType };
       }
       case 'childs': {
+        const children = describedObject.childRelationships.filter(ch => objectNames.includes(ch.childSObject));
         const diff = await childHandler(params, children);
         return { diff, metadataType };
       }
       case 'picklist': {
-        const diff = await picklistHandler(params);
+        const fields = describedObject.fields;
+        const diff = await picklistHandler(params, fields);
         return { diff, metadataType };
       }
       case 'recordTypes': {
-        const diff = await recordTypeHandler(params);
+        const recordTypes = describedObject.recordTypeInfos;
+        const diff = await recordTypeHandler(params, recordTypes);
         return { diff, metadataType };
       }
     }
@@ -125,74 +128,6 @@ export const salesforceObjectsCount = async (
   return result?.sObjects ?? [];
 };
 
-interface ISalesforcePicklistValue {
-  active: boolean;
-  defaultValue: boolean;
-  label: string;
-  validFor: string | null;
-  value: string;
-}
-
-interface ISalesforceFieldDescribe {
-  aggregatable: boolean;
-  aiPredictionField: boolean;
-  autoNumber: boolean;
-  byteLength: number;
-  calculated: boolean;
-  calculatedFormula: string | null;
-  cascadeDelete: boolean;
-  caseSensitive: boolean;
-  compoundFieldName: string | null;
-  controllerName: string | null;
-  createable: boolean;
-  custom: boolean;
-  defaultValue: boolean | string | null;
-  defaultValueFormula: string | null;
-  defaultedOnCreate: boolean;
-  dependentPicklist: boolean;
-  deprecatedAndHidden: boolean;
-  digits: number;
-  displayLocationInDecimal: boolean;
-  encrypted: boolean;
-  externalId: boolean;
-  extraTypeInfo: string | null;
-  filterable: boolean;
-  filteredLookupInfo: unknown | null;
-  formulaTreatNullNumberAsZero: boolean;
-  groupable: boolean;
-  highScaleNumber: boolean;
-  htmlFormatted: boolean;
-  idLookup: boolean;
-  inlineHelpText: string | null;
-  label: string;
-  length: number;
-  mask: string | null;
-  maskType: string | null;
-  name: string;
-  nameField: boolean;
-  namePointing: boolean;
-  nillable: boolean;
-  permissionable: boolean;
-  picklistValues: ISalesforcePicklistValue[];
-  polymorphicForeignKey: boolean;
-  precision: number;
-  queryByDistance: boolean;
-  referenceTargetField: string | null;
-  referenceTo: string[];
-  relationshipName: string | null;
-  relationshipOrder: number | null;
-  restrictedDelete: boolean;
-  restrictedPicklist: boolean;
-  scale: number;
-  searchPrefilterable: boolean;
-  soapType: string;
-  sortable: boolean;
-  type: string;
-  unique: boolean;
-  updateable: boolean;
-  writeRequiresMasterRead: boolean;
-}
-
 export interface ISalesforceObjectDescribeResponse {
   actionOverrides: unknown[];
   activateable: boolean;
@@ -224,7 +159,7 @@ export interface ISalesforceObjectDescribeResponse {
   namedLayoutInfos: unknown[];
   networkScopeFieldName: string | null;
   queryable: boolean;
-  recordTypeInfos: unknown[];
+  recordTypeInfos: ISalesforceRecordTypeInfo[];
   replicateable: boolean;
   retrieveable: boolean;
   searchLayoutable: boolean;

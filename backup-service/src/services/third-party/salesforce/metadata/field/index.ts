@@ -1,7 +1,5 @@
 import { logger } from '../../../../../middlewares';
-import { ISchemaField } from '../../../../../models';
 import { uploadToS3 } from '../../../../destination';
-import { getObjectMetadata } from '../../api-request';
 import {
   buildS3Key,
   diffEntities,
@@ -12,11 +10,86 @@ import {
   IStoredEntry,
 } from '../common';
 
+// One entry in describedObject.picklistValues (nested under a field, standard
+// sobjects/{name}/describe) — see picklist/index.ts, which slices these out of
+// picklist/multipicklist fields.
+export interface ISalesforcePicklistValue {
+  active: boolean;
+  defaultValue: boolean;
+  label: string;
+  validFor: string | null;
+  value: string;
+}
+
+// Shape of one entry in describedObject.fields (standard sobjects/{name}/describe)
+// — the orchestrator (../index.ts) fetches the describe once per object and
+// hands `fields` in directly. This module no longer fetches anything itself
+// (no more CORE_SERVICE getObjectMetadata call).
+export interface ISalesforceFieldDescribe {
+  aggregatable: boolean;
+  aiPredictionField: boolean;
+  autoNumber: boolean;
+  byteLength: number;
+  calculated: boolean;
+  calculatedFormula: string | null;
+  cascadeDelete: boolean;
+  caseSensitive: boolean;
+  compoundFieldName: string | null;
+  controllerName: string | null;
+  createable: boolean;
+  custom: boolean;
+  defaultValue: boolean | string | null;
+  defaultValueFormula: string | null;
+  defaultedOnCreate: boolean;
+  dependentPicklist: boolean;
+  deprecatedAndHidden: boolean;
+  digits: number;
+  displayLocationInDecimal: boolean;
+  encrypted: boolean;
+  externalId: boolean;
+  extraTypeInfo: string | null;
+  filterable: boolean;
+  filteredLookupInfo: unknown | null;
+  formulaTreatNullNumberAsZero: boolean;
+  groupable: boolean;
+  highScaleNumber: boolean;
+  htmlFormatted: boolean;
+  idLookup: boolean;
+  inlineHelpText: string | null;
+  label: string;
+  length: number;
+  mask: string | null;
+  maskType: string | null;
+  name: string;
+  nameField: boolean;
+  namePointing: boolean;
+  nillable: boolean;
+  permissionable: boolean;
+  picklistValues: ISalesforcePicklistValue[];
+  polymorphicForeignKey: boolean;
+  precision: number;
+  queryByDistance: boolean;
+  referenceTargetField: string | null;
+  referenceTo: string[];
+  relationshipName: string | null;
+  relationshipOrder: number | null;
+  restrictedDelete: boolean;
+  restrictedPicklist: boolean;
+  scale: number;
+  searchPrefilterable: boolean;
+  soapType: string;
+  sortable: boolean;
+  type: string;
+  unique: boolean;
+  updateable: boolean;
+  writeRequiresMasterRead: boolean;
+}
+
 export interface ISchemaFieldChange {
   apiName: string;
   changedKeys: string[];
-  before: ISchemaField;
-  after: ISchemaField;
+  before: ISalesforceFieldDescribe;
+  after: ISalesforceFieldDescribe;
 }
 
 export interface ISchemaDiff {
@@ -26,18 +99,25 @@ export interface ISchemaDiff {
   modifiedFields: ISchemaFieldChange[];
 }
 
-export type IStoredSchemaEntry = IStoredEntry<ISchemaField[]>;
+export type IStoredSchemaEntry = IStoredEntry<ISalesforceFieldDescribe[]>;
 
 export interface ISchemaComparisonResult extends ISchemaDiff {
-  latestSchema: ISchemaField[];
+  latestSchema: ISalesforceFieldDescribe[];
   storedEntries: IStoredSchemaEntry[];
 }
 
-const fieldKey = (field: ISchemaField): string => field.apiName ?? (field as any).name ?? '';
+export interface IFieldComparisonParams extends ISchemaComparison {
+  latestSchema: ISalesforceFieldDescribe[];
+}
+
+const fieldKey = (field: ISalesforceFieldDescribe): string => field.name ?? '';
 
 // Field-by-field, object-level diff of two schema snapshots — see diffEntities
 // in ../common for the shared, order-independent, non-stringify comparison.
-export const diffSchemas = (existing: ISchemaField[], latest: ISchemaField[]): ISchemaDiff => {
+export const diffSchemas = (
+  existing: ISalesforceFieldDescribe[],
+  latest: ISalesforceFieldDescribe[]
+): ISchemaDiff => {
   const { changed, added, removed, modified } = diffEntities(existing, latest, fieldKey);
   return {
     schemaChanged: changed,
@@ -53,27 +133,28 @@ export const diffSchemas = (existing: ISchemaField[], latest: ISchemaField[]): I
 };
 
 export const schemaComparison = async (
-  params: ISchemaComparison
+  params: IFieldComparisonParams
 ): Promise<ISchemaComparisonResult> => {
-  const { backupConfigId, objectName, destConfig, policyConfigType } = params;
+  const { destConfig, latestSchema } = params;
   const key = buildS3Key({ ...params, metadataType: 'fields' });
 
-  const [storedEntries, { schema: latestSchema }] = await Promise.all([
-    getStoredEntries<ISchemaField[]>(destConfig, key),
-    getObjectMetadata(backupConfigId, objectName, policyConfigType),
-  ]);
-
+  const storedEntries = await getStoredEntries<ISalesforceFieldDescribe[]>(destConfig, key);
   const storedSchema = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
   const diff = diffSchemas(storedSchema, latestSchema);
 
   return { ...diff, latestSchema, storedEntries };
 };
 
-export const schemaHandler = async (params: ISalesforceMetadataHandler) => {
+// `fields` is the already-fetched latest snapshot (the orchestrator's describe
+// call), treated here as-is — no live Salesforce call happens in this module.
+export const schemaHandler = async (
+  params: ISalesforceMetadataHandler,
+  fields: ISalesforceFieldDescribe[]
+) => {
   const { backupConfigId, backupJobId, objectName } = params;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
-    const diff = await schemaComparison({ ...params, destConfig });
+    const diff = await schemaComparison({ ...params, destConfig, latestSchema: fields });
     if (diff.schemaChanged) {
       logger.info(
         `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedFields.length}, removed=${diff.removedFields.length}, modified=${diff.modifiedFields.length}`
