@@ -21,12 +21,12 @@ const getS3Client = (config: IS3Config): S3Client => {
             region: config.region
         }
 
-        if (NODE_ENV === 'dev' && config.accessKeyId && config.secretAccessKey) {
+        //if (NODE_ENV === 'dev' && config.accessKeyId && config.secretAccessKey) {
             awsConfig.credentials = {
                 accessKeyId: config.accessKeyId,
                 secretAccessKey: config.secretAccessKey,
             }
-        }
+        //}
 
         client = new S3Client(awsConfig);
         clientCache.set(cacheKey, client);
