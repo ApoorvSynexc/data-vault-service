@@ -180,8 +180,23 @@ const salesforceHandler: ICrmBackupHandler = {
       `Backup job for ${lastUpdatedAt ? 'incremental' : 'first-time'} of has been initialize, backupJobId=${backupJobId}, objectCount=${object.length}, insatnce=${source.instanceUrl}`
     );
 
-    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
-      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+    const formatObjectChild = new Map();
+    object.forEach((item) => {
+      if (!item.parentObjects?.length) {
+        formatObjectChild.set(item.name, { ...item, children: [] }); ``
+      } else {
+        item.parentObjects.forEach((parent) => {
+          if (formatObjectChild.has(parent.name)) {
+            formatObjectChild.set(parent.name, { ...formatObjectChild.get(parent.name), children: [...formatObjectChild.get(parent.name).children, item] });
+          }
+        })
+      }
+    });
+    const objects = Array.from(formatObjectChild.values());
+    console.log(JSON.stringify({ objects }));
+
+    for (let i = 0; i < objects.length; i += CONCURRENCY_LIMIT) {
+      const batch = objects.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
         batch.map((item, batchIndex) =>
           exportWithRetry(
@@ -199,7 +214,7 @@ const salesforceHandler: ICrmBackupHandler = {
         )
       );
     }
-    
+
     await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
   },
