@@ -14,7 +14,7 @@ import {
   AWS_GLUE_ACCESS_KEY,
   AWS_GLUE_SECRET_KEY,
   AWS_GLUE_DATABASE_PREFIX,
-  NODE_ENV
+  NODE_ENV,
 } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
@@ -568,7 +568,8 @@ const syncHudiTableSchema = async (
     new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
   );
 
-  const signature = (cols: Column[] = []): string => cols.map((c) => `${c.Name}:${c.Type}`).join(',');
+  const signature = (cols: Column[] = []): string =>
+    cols.map((c) => `${c.Name}:${c.Type}`).join(',');
   if (signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns)) {
     return;
   }

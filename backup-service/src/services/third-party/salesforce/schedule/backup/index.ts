@@ -2,13 +2,11 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
-import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
+import { buildS3KeyPrefix } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
-import { uploadPicklistValues } from '../../picklist';
 import { uploadRecordTypeMetadata } from '../../record-type';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
-import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import {
   createCsvGlueTable,
   registerBackupJobPartition,
@@ -246,10 +244,10 @@ export const exportFirstTime = async (
       const updatedObjects = backupConfig.objects.map((obj) =>
         obj.name === objectName
           ? {
-            ...obj,
-            sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes,
-            completedRecordCount: (obj.completedRecordCount ?? 0) + completedRecordCount,
-          }
+              ...obj,
+              sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes,
+              completedRecordCount: (obj.completedRecordCount ?? 0) + completedRecordCount,
+            }
           : obj
       );
       updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
@@ -498,7 +496,6 @@ export const exportIncremental = async (
     // operation key off that, and claiming a change every run would force a Hudi
     // rewrite on every job.
 
-
     await salesforceMetadataHandler({
       metadataType: 'picklist',
       policyConfigType: 'backup',
@@ -529,16 +526,19 @@ export const exportIncremental = async (
       objectName,
       isInitialBackup: false,
     });
-    const schemaChanged = await salesforceMetadataHandler({
-      metadataType: 'fields',
-      policyConfigType: 'backup',
-      backupConfigId,
-      backupJobId,
-      crmId,
-      crmName,
-      objectName,
-      isInitialBackup: false,
-    }, { instanceUrl, tokens });
+    const schemaChanged = await salesforceMetadataHandler(
+      {
+        metadataType: 'fields',
+        policyConfigType: 'backup',
+        backupConfigId,
+        backupJobId,
+        crmId,
+        crmName,
+        objectName,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
 
     // const storedSchema = await readLatestSchema(destConfig, {
     //   crmId,

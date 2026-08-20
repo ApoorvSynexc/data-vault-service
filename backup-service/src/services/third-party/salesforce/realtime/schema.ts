@@ -52,10 +52,7 @@ export const persistRealtimeSchema = async ({
   const writes: Array<[string, () => Promise<void>]> = [];
 
   if (fields?.length) {
-    writes.push([
-      'fields',
-      () => writeSchemaFile(destConfig, { ...base, kind: 'fields' }, fields),
-    ]);
+    writes.push(['fields', () => writeSchemaFile(destConfig, { ...base, kind: 'fields' }, fields)]);
   }
 
   if (children?.length) {
