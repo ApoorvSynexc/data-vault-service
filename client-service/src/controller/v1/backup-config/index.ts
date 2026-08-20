@@ -195,7 +195,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       if (isOnceImmediate) {
         await triggerBackupJob({ user, config, type: 'backup' });
       } else {
-        // await createAwsEventScheduler(buildEventScheduleInput(config));
+        await createAwsEventScheduler(buildEventScheduleInput(config));
       }
     }
 
