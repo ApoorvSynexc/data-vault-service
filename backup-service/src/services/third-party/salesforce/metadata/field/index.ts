@@ -85,11 +85,39 @@ export interface ISalesforceFieldDescribe {
   writeRequiresMasterRead: boolean;
 }
 
+// Trimmed subset of ISalesforceFieldDescribe actually tracked/stored/diffed by
+// the schema handler — the rest of the describe payload is noise for drift
+// detection purposes (picklist/index.ts still reads the full describe fields
+// directly, since it needs `type` + `picklistValues`).
+export interface ISalesforceFieldSnapshot {
+  cascadeDelete: boolean;
+  label: string;
+  length: number;
+  name: string;
+  referenceTo: string[];
+  relationshipName: string | null;
+  relationshipOrder: number | null;
+  restrictedDelete: boolean;
+  type: string;
+}
+
+const toFieldSnapshot = (field: ISalesforceFieldDescribe): ISalesforceFieldSnapshot => ({
+  cascadeDelete: field.cascadeDelete,
+  label: field.label,
+  length: field.length,
+  name: field.name,
+  referenceTo: field.referenceTo,
+  relationshipName: field.relationshipName,
+  relationshipOrder: field.relationshipOrder,
+  restrictedDelete: field.restrictedDelete,
+  type: field.type,
+});
+
 export interface ISchemaFieldChange {
   apiName: string;
   changedKeys: string[];
-  before: ISalesforceFieldDescribe;
-  after: ISalesforceFieldDescribe;
+  before: ISalesforceFieldSnapshot;
+  after: ISalesforceFieldSnapshot;
 }
 
 export interface ISchemaDiff {
@@ -99,24 +127,24 @@ export interface ISchemaDiff {
   modifiedFields: ISchemaFieldChange[];
 }
 
-export type IStoredSchemaEntry = IStoredEntry<ISalesforceFieldDescribe[]>;
+export type IStoredSchemaEntry = IStoredEntry<ISalesforceFieldSnapshot[]>;
 
 export interface ISchemaComparisonResult extends ISchemaDiff {
-  latestSchema: ISalesforceFieldDescribe[];
+  latestSchema: ISalesforceFieldSnapshot[];
   storedEntries: IStoredSchemaEntry[];
 }
 
 export interface IFieldComparisonParams extends ISchemaComparison {
-  latestSchema: ISalesforceFieldDescribe[];
+  latestSchema: ISalesforceFieldSnapshot[];
 }
 
-const fieldKey = (field: ISalesforceFieldDescribe): string => field.name ?? '';
+const fieldKey = (field: ISalesforceFieldSnapshot): string => field.name ?? '';
 
 // Field-by-field, object-level diff of two schema snapshots — see diffEntities
 // in ../common for the shared, order-independent, non-stringify comparison.
 export const diffSchemas = (
-  existing: ISalesforceFieldDescribe[],
-  latest: ISalesforceFieldDescribe[]
+  existing: ISalesforceFieldSnapshot[],
+  latest: ISalesforceFieldSnapshot[]
 ): ISchemaDiff => {
   const { changed, added, removed, modified } = diffEntities(existing, latest, fieldKey);
   return {
@@ -138,7 +166,7 @@ export const schemaComparison = async (
   const { destConfig, latestSchema } = params;
   const key = buildS3Key({ ...params, metadataType: 'fields' });
 
-  const storedEntries = await getStoredEntries<ISalesforceFieldDescribe[]>(destConfig, key);
+  const storedEntries = await getStoredEntries<ISalesforceFieldSnapshot[]>(destConfig, key);
   const storedSchema = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
   const diff = diffSchemas(storedSchema, latestSchema);
 
@@ -154,7 +182,8 @@ export const schemaHandler = async (
   const { backupConfigId, backupJobId, objectName } = params;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
-    const diff = await schemaComparison({ ...params, destConfig, latestSchema: fields });
+    const latestSchema = fields.map(toFieldSnapshot);
+    const diff = await schemaComparison({ ...params, destConfig, latestSchema });
     if (diff.schemaChanged) {
       logger.info(
         `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedFields.length}, removed=${diff.removedFields.length}, modified=${diff.modifiedFields.length}`
