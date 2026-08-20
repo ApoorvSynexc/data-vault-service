@@ -127,8 +127,6 @@ export interface IBackupObject {
   errorMessage?: string;
   children?: IBackupObject[];
 
-  isChild?: boolean;
-  parentObject?: string
 }
 
 export interface ISource {
