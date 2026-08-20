@@ -3,6 +3,11 @@ import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 import { DESTINATION_TYPE } from '../../../constant';
 
+const objectParentSchema = Joi.object({
+  id: Joi.string().required(),
+  name: Joi.string().required(),
+});
+
 const sourceSchema = Joi.object({
   access_token: Joi.string().required(),
   refresh_token: Joi.string().required(),
@@ -35,6 +40,7 @@ const sourceSchema = Joi.object({
             })
           )
           .optional(),
+        parentObjects: Joi.array().items(objectParentSchema).optional(),
       })
     )
     .optional(),
