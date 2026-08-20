@@ -6,15 +6,22 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_OUTPUT_LOCATION } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_OUTPUT_LOCATION, NODE_ENV } from '../../../constant';
 import { logger } from '../../../middlewares';
+
+const shouldProvideCredentials = 
+  process.env.NODE_ENV === 'DEV' && 
+  Boolean(AWS_ATHENA_ACCESS_KEY) && 
+  Boolean(AWS_ATHENA_SECRET_KEY);
 
 const athena = new AthenaClient({
   region: AWS_REGION,
-  credentials: {
-    accessKeyId: AWS_ATHENA_ACCESS_KEY,
-    secretAccessKey: AWS_ATHENA_SECRET_KEY,
-  },
+  ...(shouldProvideCredentials && {
+    credentials: {
+      accessKeyId: AWS_ATHENA_ACCESS_KEY,
+      secretAccessKey: AWS_ATHENA_SECRET_KEY,
+    },
+  }),
 });
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
