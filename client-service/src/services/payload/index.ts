@@ -4,7 +4,7 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE, NODE_ENV } from '../../constant';
+import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL } from '../../constant';
 import { runRealtimeSchemaSync } from './schema-sync';
 import { logger } from '../../middlewares';
 import { IAwsCredentials, IBackupConfig, IBackupJob, IRestoreScope, IRestoreSource } from '../../models';
@@ -480,7 +480,7 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             executionRoleArn: AWS_EMR_EXECUTION_ROLE_ARN,
             jobDriver: {
                 sparkSubmit: {
-                    entryPoint: "s3://jar-files-360datavault/TEST/datavault-1.0.0.jar",
+                    entryPoint: AWS_EMR_S3_FILE_PATH,
                     entryPointArguments: [payloadB64],
                     sparkSubmitParameters,
                 },
@@ -494,8 +494,8 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                             "spark.yarn.appMasterEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
                             "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY}`,
                             "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY}`,
-                            "spark.executorEnv.NODE_SERVER_URL": "https://dev-data-vault.internaldeveloper.com/cs/",
-                            "spark.yarn.appMasterEnv.NODE_SERVER_URL": "https://dev-data-vault.internaldeveloper.com/cs/",
+                            "spark.executorEnv.NODE_SERVER_URL": NODE_ENV_URL,
+                            "spark.yarn.appMasterEnv.NODE_SERVER_URL": NODE_ENV_URL,
                         },
                     },
                 ],
