@@ -183,11 +183,12 @@ const salesforceHandler: ICrmBackupHandler = {
     const formatObjectChild = new Map();
     object.forEach((item) => {
       if (!item.parentObjects?.length) {
-        formatObjectChild.set(item.name, { ...item, children: [] }); ``
+        formatObjectChild.set(item.name, { ...item, children: [] });
       } else {
+        formatObjectChild.set(item.name, { ...item });
         item.parentObjects.forEach((parent) => {
           if (formatObjectChild.has(parent.name)) {
-            formatObjectChild.set(parent.name, { ...formatObjectChild.get(parent.name), children: [...formatObjectChild.get(parent.name).children, item] });
+            formatObjectChild.set(parent.name, { ...formatObjectChild.get(parent.name), children: [...formatObjectChild.get(parent.name).children, { ...item, parentObjects: undefined }] });
           }
         })
       }
