@@ -1,4 +1,5 @@
 ﻿const NODE_ENV =  String(process.env.NODE_ENV);
+const NODE_ENV_URL = String(process.env.NODE_ENV_URL);
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -25,6 +26,7 @@ const AWS_EVENT_SOURCE = String(process.env.AWS_EVENT_SOURCE);
 const AWS_EMR_APPLICATION_ID = String(process.env.AWS_EMR_APPLICATION_ID);
 const AWS_EMR_EXECUTION_ROLE_ARN = String(process.env.AWS_EMR_EXECUTION_ROLE_ARN).trim();
 const AWS_EMR_ENCRYPTION_KEY = String(process.env.AWS_EMR_ENCRYPTION_KEY);
+const AWS_EMR_S3_FILE_PATH = String(process.env.AWS_EMR_S3_FILE_PATH);
 
 // AWS Glue
 const AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 'datavault');
@@ -225,6 +227,7 @@ const SESSION_STATUS = {
 
 export {
   NODE_ENV,
+  NODE_ENV_URL,
   HOST,
   PORT,
 
@@ -251,6 +254,7 @@ export {
   AWS_EMR_APPLICATION_ID,
   AWS_EMR_EXECUTION_ROLE_ARN,
   AWS_EMR_ENCRYPTION_KEY,
+  AWS_EMR_S3_FILE_PATH,
 
   // AWS Glue
   AWS_GLUE_DATABASE_PREFIX,
