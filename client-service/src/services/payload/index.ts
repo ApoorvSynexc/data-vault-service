@@ -493,24 +493,14 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                 applicationConfiguration: [
                     {
                         classification: "spark-defaults",
-                          properties: {
-                            "spark.executorEnv.ENCRYPTION_KEY":
-                            ENCRYPTION_KEY,
-
-                            "spark.emr-serverless.driverEnv.ENCRYPTION_KEY":
-                            ENCRYPTION_KEY,
-                                "spark.driver.extraJavaOptions":
-                            `-DENCRYPTION_KEY=${ENCRYPTION_KEY}
-                            -DNODE_SERVER_URL=${NODE_ENV_URL}`,
-                                "spark.executor.extraJavaOptions":
-                            `-DENCRYPTION_KEY=${ENCRYPTION_KEY}
-                            -DNODE_SERVER_URL=${NODE_ENV_URL}`,
-                                "spark.executorEnv.NODE_SERVER_URL":
-                            NODE_ENV_URL,
-
-                            "spark.emr-serverless.driverEnv.NODE_SERVER_URL":
-                            NODE_ENV_URL,
-                            },
+                        properties: {
+                            "spark.executorEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
+                            "spark.emr-serverless.driverEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
+                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL}`,
+                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL}`,
+                            "spark.executorEnv.NODE_SERVER_URL": NODE_ENV_URL,
+                            "spark.emr-serverless.driverEnv.NODE_SERVER_URL": NODE_ENV_URL,
+                        },
                     },
                 ],
                 monitoringConfiguration: {
