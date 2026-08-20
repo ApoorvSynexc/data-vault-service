@@ -421,6 +421,9 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.executor.memoryOverhead=2g',
 
             // Dynamic Allocation
+            // executor.instances must be set explicitly — EMR Serverless defaults it to 3,
+            // which fails validation once it exceeds maxExecutors.
+            '--conf spark.executor.instances=1',
             '--conf spark.dynamicAllocation.enabled=true',
             '--conf spark.dynamicAllocation.minExecutors=1',
             '--conf spark.dynamicAllocation.initialExecutors=2',
