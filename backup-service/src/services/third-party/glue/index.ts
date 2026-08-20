@@ -19,15 +19,20 @@ import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
 import { readHudiTableSchema } from './hudi-schema';
 import { listS3Prefixes } from '../../destination/s3';
+import { NODE_ENV } from '../../../constant';
 
 // Platform-owned Glue client — always uses our own AWS credentials,
 // never the customer's destination bucket credentials.
 const glue = new GlueClient({
   region: AWS_REGION,
-  credentials: {
-    accessKeyId: AWS_GLUE_ACCESS_KEY,
-    secretAccessKey: AWS_GLUE_SECRET_KEY,
-  },
+  ...(NODE_ENV === 'dev' && AWS_GLUE_ACCESS_KEY && AWS_GLUE_SECRET_KEY
+    ? {
+        credentials: {
+          accessKeyId: AWS_GLUE_ACCESS_KEY,
+          secretAccessKey: AWS_GLUE_SECRET_KEY,
+        },
+      }
+    : {}),
 });
 
 // Glue identifiers (database/table names) only allow lowercase letters,

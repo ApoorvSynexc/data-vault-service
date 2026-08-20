@@ -206,6 +206,7 @@ const uploadBulkResultsByPage = async (
   let completedRecordCount = startCompletedRecordCount;
   let sizeInBytes = 0;
 
+  console.log('TRY BLOCK WORKING');
   try {
     await updateBackupObject({
       backupJobId,
@@ -218,7 +219,7 @@ const uploadBulkResultsByPage = async (
         : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
 
       const response = await fetchPage(url);
-
+      console.log('RESPONSE ==> ' + JSON.stringify(response));
       ++salesforceApiCount;
       if (!response.ok) {
         throw new Error(`Salesforce results fetch failed with status ${response.status}`);
@@ -240,6 +241,8 @@ const uploadBulkResultsByPage = async (
       sizeInBytes += csvBuffer.length;
 
       await uploadToS3(destConfig, s3Key, csvBuffer);
+      console.log('UPLOADED TO S3');
+
       locator = nextLocator;
 
       await updateBackupObject({
