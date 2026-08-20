@@ -1,6 +1,5 @@
 import { logger } from '../../../../../middlewares';
 import { uploadToS3 } from '../../../../destination';
-import { getObjectChilds, ISalesforceChild, SalesforceTokens } from '../../api-request';
 import {
   buildS3Key,
   diffEntities,
@@ -11,11 +10,28 @@ import {
   IStoredEntry,
 } from '../common';
 
+// Shape of one entry in describedObject.childRelationships (standard sobjects/
+// {name}/describe) — the orchestrator (../index.ts) fetches the describe once
+// per object and filters childRelationships down to this config's own tracked
+// objects, then hands the result in as `children`. This module no longer fetches
+// anything itself (no more instanceUrl/tokens/getObjectChilds apex call).
+export interface ISalesforceChildRelationship {
+  cascadeDelete: boolean;
+  childSObject: string;
+  deprecatedAndHidden: boolean;
+  field: string;
+  junctionIdListNames: string[];
+  junctionReferenceTo: string[];
+  relationshipName: string | null;
+  restrictedDelete: boolean;
+}
+
 export interface IChildChange {
-  apiName: string;
+  childSObject: string;
+  field: string;
   changedKeys: string[];
-  before: ISalesforceChild;
-  after: ISalesforceChild;
+  before: ISalesforceChildRelationship;
+  after: ISalesforceChildRelationship;
 }
 
 export interface IChildDiff {
@@ -25,33 +41,36 @@ export interface IChildDiff {
   modifiedChilds: IChildChange[];
 }
 
-export type IStoredChildEntry = IStoredEntry<ISalesforceChild[]>;
+export type IStoredChildEntry = IStoredEntry<ISalesforceChildRelationship[]>;
 
 export interface IChildComparisonResult extends IChildDiff {
-  latestChilds: ISalesforceChild[];
+  latestChilds: ISalesforceChildRelationship[];
   storedEntries: IStoredChildEntry[];
 }
 
 export interface IChildComparisonParams extends ISchemaComparison {
-  instanceUrl: string;
-  tokens: SalesforceTokens;
+  latestChilds: ISalesforceChildRelationship[];
 }
 
-const childKey = (child: ISalesforceChild): string => child.apiName ?? '';
+// childSObject alone isn't always unique — a parent can have more than one
+// relationship to the same child object type (e.g. two lookups to Contact) —
+// so the field (the FK field name on the child) disambiguates.
+const childKey = (child: ISalesforceChildRelationship): string => `${child.childSObject}:${child.field}`;
 
 // Child-by-child, object-level diff of two relationship-tree snapshots — see
 // diffEntities in ../common for the shared, order-independent, non-stringify comparison.
 export const diffChilds = (
-  existing: ISalesforceChild[],
-  latest: ISalesforceChild[]
+  existing: ISalesforceChildRelationship[],
+  latest: ISalesforceChildRelationship[]
 ): IChildDiff => {
   const { changed, added, removed, modified } = diffEntities(existing, latest, childKey);
   return {
     childsChanged: changed,
     addedChilds: added,
     removedChilds: removed,
-    modifiedChilds: modified.map(({ key, changedKeys, before, after }) => ({
-      apiName: key,
+    modifiedChilds: modified.map(({ changedKeys, before, after }) => ({
+      childSObject: after.childSObject,
+      field: after.field,
       changedKeys,
       before,
       after,
@@ -59,35 +78,29 @@ export const diffChilds = (
   };
 };
 
-// Unlike fields/picklist/recordTypes, children come straight from the Salesforce
-// REST API (the object-children apex endpoint) rather than the core service, so
-// this needs live instanceUrl + tokens, not just a backupConfigId.
 export const childComparison = async (
   params: IChildComparisonParams
 ): Promise<IChildComparisonResult> => {
-  const { destConfig, objectName, instanceUrl, tokens } = params;
+  const { destConfig, latestChilds } = params;
   const key = buildS3Key({ ...params, metadataType: 'childs' });
 
-  const [storedEntries, latestChilds] = await Promise.all([
-    getStoredEntries<ISalesforceChild[]>(destConfig, key),
-    getObjectChilds(instanceUrl, tokens, objectName),
-  ]);
-
+  const storedEntries = await getStoredEntries<ISalesforceChildRelationship[]>(destConfig, key);
   const storedChilds = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
   const diff = diffChilds(storedChilds, latestChilds);
 
   return { ...diff, latestChilds, storedEntries };
 };
 
+// `children` is the already-fetched latest snapshot (the orchestrator's describe
+// call), treated here as-is — no live Salesforce call happens in this module.
 export const childHandler = async (
   params: ISalesforceMetadataHandler,
-  instanceUrl: string,
-  tokens: SalesforceTokens
+  children: ISalesforceChildRelationship[]
 ) => {
   const { backupConfigId, backupJobId, objectName } = params;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
-    const diff = await childComparison({ ...params, destConfig, instanceUrl, tokens });
+    const diff = await childComparison({ ...params, destConfig, latestChilds: children });
     if (diff.childsChanged) {
       logger.info(
         `Object child relationship change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedChilds.length}, removed=${diff.removedChilds.length}, modified=${diff.modifiedChilds.length}`
