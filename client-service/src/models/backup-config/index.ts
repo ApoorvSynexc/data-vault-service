@@ -32,6 +32,11 @@ export interface IObjectCondition {
   soqlQuery?: string; // required when type === SOQL
 }
 
+export interface IObjectParent {
+  id: string;
+  name: string;
+}
+
 export interface IObject {
   id: string;
   schemaChange?: boolean;
@@ -43,6 +48,7 @@ export interface IObject {
   condition?: IObjectCondition;
   scheduleConfig?: IScheduleConfig;
   children?: IObject[];
+  parentObjects?: IObjectParent[];
 }
 
 export interface ITriggerResult {
