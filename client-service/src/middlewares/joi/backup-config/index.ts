@@ -38,13 +38,20 @@ const conditionSchema = Joi.object({
   }),
 });
 
+const objectParentSchema = Joi.object({
+  id: Joi.string().required(),
+  name: Joi.string().required(),
+});
+
 const objectSchema = Joi.object({
+  id: Joi.string().required(),
   name: Joi.string().required(),
   type: Joi.string()
     .valid(...Object.values(OBJECT_TYPE))
     .required(),
   condition: conditionSchema.optional(),
   field: Joi.array().items(objectFieldSchema).required(),
+  parentObjects: Joi.array().items(objectParentSchema).optional(),
 });
 
 const schedulingSchema = Joi.object({

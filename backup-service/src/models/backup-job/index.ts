@@ -105,6 +105,11 @@ export interface IObjectCondition {
   expression?: string; // required when type is CUSTOM; 1-based field indexes e.g. "1 AND 2 OR 3"
 }
 
+export interface IBackupObjectParent {
+  id: string;
+  name: string;
+}
+
 export interface IBackupObject {
   id: string;
   salesforceApiCalls: number;
@@ -126,9 +131,7 @@ export interface IBackupObject {
   currentLocator?: string;
   errorMessage?: string;
   children?: IBackupObject[];
-
-  isChild?: boolean;
-  parentObject?: string
+  parentObjects?: IBackupObjectParent[];
 }
 
 export interface ISource {
