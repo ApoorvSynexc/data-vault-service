@@ -14,12 +14,12 @@ import {
   AWS_GLUE_ACCESS_KEY,
   AWS_GLUE_SECRET_KEY,
   AWS_GLUE_DATABASE_PREFIX,
+  NODE_ENV
 } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
 import { readHudiTableSchema } from './hudi-schema';
 import { listS3Prefixes } from '../../destination/s3';
-import { NODE_ENV } from '../../../constant';
 
 // Platform-owned Glue client — always uses our own AWS credentials,
 // never the customer's destination bucket credentials.
