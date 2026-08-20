@@ -430,9 +430,6 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.dynamicAllocation.sustainedSchedulerBacklogTimeout=1s',
             '--conf spark.dynamicAllocation.shuffleTracking.enabled=true',
 
-            // EMR Serverless disk
-            '--conf spark.emr-serverless.executor.disk=100g',
-
             // Memory
             '--conf spark.memory.fraction=0.7',
             '--conf spark.memory.storageFraction=0.3',
