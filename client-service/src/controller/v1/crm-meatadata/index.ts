@@ -109,7 +109,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   //     }
   //   })
   // })
-  return makeResponse(req, res, 200, true, 'fetch', { children, parent });
+  return makeResponse(req, res, 200, true, 'fetch', { children });
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
