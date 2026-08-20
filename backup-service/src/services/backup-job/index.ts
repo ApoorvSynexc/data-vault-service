@@ -5,211 +5,6 @@ import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE, OBJECT_STATUS } from '../../con
 import { IBackupJob, IBackupObject, ISource, IDestinationConfig } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
-import { getBackupConfigById, updateBackupConfig } from '../backup-config';
-import { isBackupChild } from '../../utils/helper';
-import { SalesforceTokens } from '../third-party/salesforce/api-request';
-import { uploadObjectChilds } from '../third-party/salesforce/child';
-import { salesforceObjectDescribe, salesforceObjectList } from '../third-party/salesforce/metadata';
-
-// Appends children discovered during this run to the backup config, so every
-// config-driven reader (compression Glue tables, Glue repair, restore listing, UI)
-// sees the objects that are actually being backed up. Append-only: existing entries
-// carry filters, counters and schedule settings the job payload doesn't have, and
-// must never be overwritten with the stripped-down job shape.
-// Never throws — a failed config write must not stop the job from running.
-const persistChildrenToConfig = async (
-  backupConfigId: string,
-  childNames: string[]
-): Promise<void> => {
-  if (!childNames.length) {
-    return;
-  }
-
-  try {
-    const config = await getBackupConfigById(backupConfigId);
-    if (!config) {
-      return;
-    }
-
-    const existing = new Set((config.objects ?? []).map((obj) => obj.name?.toLowerCase()));
-    const additions = childNames.filter((name) => !existing.has(name.toLowerCase()));
-    if (!additions.length) {
-      return;
-    }
-
-    await updateBackupConfig(backupConfigId, {
-      objects: [
-        ...(config.objects ?? []),
-        ...additions.map((name) => ({
-          id: name,
-          name,
-          type: name.endsWith('__c') ? 'CUSTOM' : 'STANDARD',
-          field: [],
-        })),
-      ],
-      objectNames: [...new Set([...(config.objectNames ?? []), ...additions])],
-    });
-  } catch (err: any) {
-    console.log(
-      `[backup-child] config update failed | backupConfigId:${backupConfigId} err:${err?.message ?? err}`
-    );
-  }
-};
-
-// Child expansion — backup jobs only. Archival children are configured by the user
-// with their own filters and stay a nested tree, so createArchivalJob does not go
-// through here.
-//
-// For every object in the job: fetch *all* its children, store the whole raw child
-// payload at schema/main/{objectName}/childs/childs.json (with a copy in this job's
-// changes/ folder, so a tree that gained or lost a child is visible per job), and
-// append the backup-eligible
-// ones missing from the list so they get backed up in full (field: []) — each one
-// then gets its own bulk query job. New children are written back to the backup
-// config, so the next run starts from them and picks up *their* children — the tree
-// deepens one level per run instead of recursing here, which keeps a single deep or
-// cyclic relationship chain from stalling job creation.
-// Best-effort per object: a failed lookup or upload leaves the rest intact.
-// No-op when the source carries no Salesforce tokens.
-const expandWithBackupChildren = async (
-  source: ISource,
-  backupConfigId: string,
-  destConfig: IDestinationConfig,
-  backupJobId: string,
-  objects?: IBackupObject[]
-): Promise<IBackupObject[] | undefined> => {
-  if (!objects?.length || !source.instanceUrl || !source.access_token) {
-    return objects;
-  }
-
-  const tokens: SalesforceTokens = {
-    accessToken: source.access_token,
-    refreshToken: source.refresh_token,
-    crmId: source.crmId,
-    backupConfigId,
-  };
-
-  const byName = new Map<string, IBackupObject>();
-  for (const obj of objects) {
-    byName.set(obj.name.toLowerCase(), obj);
-  }
-  const discovered: string[] = [];
-
-  const excludeObjectSuffix = ['__x', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
-  const excludeObjects = [
-    'address',
-    'attachment',
-    'document',
-    'contentnote',
-    'contentdocumentlink',
-    'ideacomment',
-    'vote',
-    'brandtemplate',
-    'apexcomponent',
-    'weblink',
-    'categorynode',
-    'devopsactivitylog',
-    'apexclass',
-    'callcenter',
-    'emailservicesaddress',
-    'apextrigger',
-    'apexpage',
-    'fiscalyearsettings',
-    'orgemailaddresssecurity',
-    'chatteractivity',
-    'orgwideemailaddress',
-    'notificationmember',
-    'period',
-    'businesshours',
-    'organization',
-    'userrole',
-    'devopsactivitylogfeed',
-    'queuesobject',
-    'businessprocess',
-    'profile',
-    'forecastingadjustment',
-    'groupsubscription',
-    'staticresource',
-    'groupmember',
-    'holiday',
-    'sfdcpartnersbscroffer',
-    'user',
-    'folder',
-    'group',
-    'forecastingitem',
-    'forecastingquota',
-    'sfdcpartnersbscrofferitem',
-    'slackchannelrelatedrecord',
-    'topic',
-    'collaborationgroupmember',
-    'devopsrequestinfo',
-    'emailservicesfunction',
-    'emailtemplate',
-    'recordtype'
-  ];
-  const objectsList = await salesforceObjectList(source.instanceUrl, tokens);
-  let filteredObjects = objectsList.filter((obj) =>
-    obj.deprecatedAndHidden === false &&
-    obj.customSetting === false &&
-    obj.retrieveable === true &&
-    obj.replicateable === true &&
-    obj.updateable === true &&
-    obj.createable === true &&
-    obj.deletable === true &&
-    obj.keyPrefix !== null &&
-    obj.queryable === true &&
-    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
-    !excludeObjects.includes(obj.name.toLowerCase())
-  );
-  const objectNames = filteredObjects.map((obj) => obj.name);
-
-  await Promise.all(
-    objects.map(async (obj) => {
-      try {
-        let children = await uploadObjectChilds({
-          destConfig,
-          instanceUrl: source.instanceUrl!,
-          tokens,
-          crmId: source.crmId,
-          crmName: source.crmName,
-          backupConfigId,
-          objectName: obj.name,
-          type: 'backup',
-          backupJobId,
-        });
-        children = children.filter(child => child.cascadeDelete);
-        children = children.filter(child => objectNames.includes(child.childSObject));
-
-        const filteredChildren = [];
-        for (const child of children) {
-          const id = uuidv4();
-          const describedObject = await salesforceObjectDescribe(source.instanceUrl, tokens, child.childSObject);
-          const isFieldCascadeDeleted = describedObject.fields.find((f) => f.name === child.field && f.cascadeDelete);
-
-          if (isFieldCascadeDeleted) {
-            filteredChildren.push({ ...child, id });
-            const name = child.childSObject;
-            if (!name) {
-              continue;
-            }
-            const key = name.toLowerCase();
-            if (!byName.has(key)) {
-              byName.set(key, { id, name, salesforceApiCalls: 0, field: [], isChild: true, parentObject: obj.name });
-              discovered.push(name);
-            }
-          }
-        }
-
-        obj.children = filteredChildren.map(obj => ({ id: obj.id, name: obj.childSObject, salesforceApiCalls: 0, field: [] }));
-      } catch (err: any) {
-        console.log(`[backup-child] children fetch failed for ${obj.name}: ${err?.message ?? err}`);
-      }
-    })
-  );
-
-  await persistChildrenToConfig(backupConfigId, discovered);
-  return Array.from(byName.values());
-};
 
 interface CreateBackupJobParams {
   userId: string;
@@ -542,7 +337,7 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
 
 const recursivelyUpdateObjects = async (
   objects: IBackupObject[],
-  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined }
+  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined }
 ): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
@@ -557,21 +352,21 @@ const recursivelyUpdateObjects = async (
             : {}),
           ...(!isReset && (object as any)?.salesforceApiCount
             ? {
-              salesforceApiCount:
-                (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
-            }
+                salesforceApiCount:
+                  (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
+              }
             : {}),
           ...(!isReset && (object as any)?.deletedSuccessRecordCount
             ? {
-              deletedSuccessRecordCount:
-                (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
-            }
+                deletedSuccessRecordCount:
+                  (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
+              }
             : {}),
           ...(!isReset && (object as any)?.deletedfailedRecordCount
             ? {
-              deletedfailedRecordCount:
-                (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
-            }
+                deletedfailedRecordCount:
+                  (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
+              }
             : {}),
           // recordErrorsS3Prefix: last write wins (each bulk job gets its own prefix)
           ...(!isReset && (object as any)?.recordErrorsS3Prefix
@@ -598,7 +393,7 @@ const updateArchivalObject = async ({
   objects,
 }: {
   backupJobId: string;
-  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined };
+  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
   // When `objects` is provided (caller already holds the array), use it directly

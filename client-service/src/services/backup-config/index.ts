@@ -397,7 +397,7 @@ const getBackupConfigsWithPagination = async (
     const expressions: string[] = [];
 
     if (isSearch) {
-      expressionAttributeValues[':search'] = search!.toLowerCase();
+      expressionAttributeValues[':search'] = search!;
       expressions.push('contains(#name, :search)');
     } else if (name) {
       expressionAttributeValues[':name'] = name;
