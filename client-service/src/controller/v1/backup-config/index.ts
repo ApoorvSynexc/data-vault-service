@@ -62,6 +62,7 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
 const buildEventScheduleInput = (config: IBackupConfig) => ({
   name: `datavault-${config.backupConfigId}`,
   scheduleExpression: toAwsCronExpression(config.scheduleConfig!),
+  timeZone: config.scheduleConfig!.timeZone,
   payload: { backupConfigId: config.backupConfigId, userId: config.userId },
 });
 import { wrapController, isOwner } from '../../../utils/helper';
