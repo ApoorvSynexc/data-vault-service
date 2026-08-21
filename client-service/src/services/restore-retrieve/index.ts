@@ -251,12 +251,33 @@ const getObjectListByConfigId = async (
 const toGlueId = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
-// Where Athena writes result files for this fetch-records query. Scoped by
-// crmId + backupConfigId so one config's results never land in another's
-// prefix — the previous hardcoded bucket-wide location gave every query the
-// same output path.
-const buildAthenaOutputLocation = (crmId: string, backupConfigId: string): string =>
-  `s3://salesforce/${crmId}/backup/${backupConfigId}/retrieve/`;
+// Where Athena writes result files for this fetch-records query: the same S3
+// bucket, and the same <crmName>/<crmId>/<type>/<backupConfigId>/ root, that
+// raw_data and schema already use (see buildSchemaS3Key) — just a "retrieve"
+// leaf instead of "raw_data"/"schema", so one config's results stay isolated
+// under its own existing prefix rather than a new bucket-wide location.
+const buildAthenaOutputLocation = (
+  bucketName: string,
+  crmName: string,
+  crmId: string,
+  type: 'backup' | 'archival',
+  backupConfigId: string
+): string => `s3://${bucketName}/${crmName}/${crmId}/${type}/${backupConfigId}/retrieve/`;
+
+// Resolves a caller-owned config down to the S3 location Athena should write
+// this query's results into. Returns null when the CRM or destination can't
+// be resolved, same as resolveSchemaS3's failure cases.
+const resolveAthenaOutputLocation = async (config: IBackupConfig): Promise<string | null> => {
+  const crm = await getCrmById(config.crmId);
+  if (!crm) return null;
+
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) return null;
+
+  const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
+  const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
+  return buildAthenaOutputLocation(destConfig.bucketName, crm.crmName, config.crmId, type, config.backupConfigId);
+};
 
 /**
  * ── Block-and-page model ─────────────────────────────────────────────────────
@@ -519,8 +540,10 @@ const retrieveRecords = async (
   const startDate = changed ? params.startDate! : null;
   const endDate = changed ? params.endDate! : null;
 
+  const outputLocation = await resolveAthenaOutputLocation(config);
+  if (!outputLocation) return null;
+
   const page = resolvePage(fingerprintRetrieve(params), params.cursor);
-  const outputLocation = buildAthenaOutputLocation(config.crmId, params.backupConfigId);
   const { run, executions } = makeRunner(databaseName, outputLocation, page.replay);
 
   const sql = {
@@ -595,8 +618,10 @@ const retrieveInactiveRecordTypes = async (
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const deltaTable = `${table}_delta`;
 
+  const outputLocation = await resolveAthenaOutputLocation(config);
+  if (!outputLocation) return null;
+
   const { startDate, endDate } = params;
-  const outputLocation = buildAthenaOutputLocation(config.crmId, params.backupConfigId);
   const { run } = makeRunner(databaseName, outputLocation, null);
   const result = await run('recordTypeDeltas', () =>
     buildRecordTypeDeltaSql(deltaTable, {
@@ -652,8 +677,10 @@ const retrieveMissingFields = async (
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const deltaTable = `${table}_delta`;
 
+  const outputLocation = await resolveAthenaOutputLocation(config);
+  if (!outputLocation) return null;
+
   const { startDate, endDate } = params;
-  const outputLocation = buildAthenaOutputLocation(config.crmId, params.backupConfigId);
   const { run } = makeRunner(databaseName, outputLocation, null);
   const result = await run('fieldDeleteDeltas', () =>
     buildFieldDeleteDeltaSql(deltaTable, {
