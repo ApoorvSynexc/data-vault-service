@@ -9,7 +9,7 @@ import {
   ISource,
 } from '../../../models';
 import { ICrmBackupHandler } from '../types';
-import { updateBackupConfig } from '../../backup-config';
+import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getBackupJob } from '../../backup-job';
 
 import { SalesforceTokens } from './api-request';
@@ -204,7 +204,16 @@ const salesforceHandler: ICrmBackupHandler = {
       );
     }
 
-    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success });
+    const backupConfig = await getBackupConfigById(backupConfigId);
+    let sizeInBytes = 0;
+    let completedRecordCount = 0;
+    if(backupConfig) {
+      backupConfig.objects?.forEach((obj) => {
+        sizeInBytes += obj.sizeInBytes ?? 0;
+        completedRecordCount += obj.completedRecordCount ?? 0;
+      })
+    }
+    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success, sizeInBytes, completedRecordCount });
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
   },
   runArchival: async (

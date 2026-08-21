@@ -16,6 +16,7 @@ interface UpdateBackupConfigParams {
   lastEventId?: string;
   schemaChange?: boolean;
   sizeInBytes?: number;
+  completedRecordCount?: number;
   triggerResults?: ITriggerResult[];
   type?: string;
 }
@@ -165,6 +166,151 @@ const incrementBackupConfigCounters = async (
   );
 };
 
+interface UpdateBackupConfigObjectParams {
+  backupConfigId: string;
+  objectName: string;
+  status?: string;
+  bulkJobId?: string;
+  totalRecordCount?: number;
+  completedRecordCount?: number;
+  insertCount?: number;
+  updateCount?: number;
+  deleteCount?: number;
+  sizeInBytes?: number;
+  currentLocator?: string;
+  errorMessage?: string;
+  salesforceApiCount?: number;
+  schemaChange?: boolean;
+}
+
+// ref: updateBackupObject in ../backup-job/index.ts — same targeted
+// array-index UpdateExpression pattern, applied to backup-config's `objects`
+// attribute (keyed by backupConfigId) instead of backup-job's `object`.
+const updateBackupConfigObject = async (params: UpdateBackupConfigObjectParams): Promise<void> => {
+  const {
+    backupConfigId,
+    objectName,
+    status,
+    bulkJobId,
+    totalRecordCount,
+    completedRecordCount,
+    insertCount,
+    updateCount,
+    deleteCount,
+    sizeInBytes,
+    currentLocator,
+    errorMessage,
+    salesforceApiCount,
+    schemaChange,
+  } = params;
+
+  const backupConfig = await getBackupConfigById(backupConfigId);
+  const objectIndex = backupConfig?.objects?.findIndex((obj) => obj.name === objectName) ?? -1;
+  if (objectIndex === -1) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const expressionParts = ['updatedAt = :updatedAt'];
+  const expressionNames: Record<string, string> = {
+    '#object': 'objects',
+  };
+  const expressionValues: Record<string, unknown> = {
+    ':updatedAt': now,
+  };
+
+  if (status !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#status = :status`);
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = status;
+  }
+
+  if (bulkJobId !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#bulkJobId = :bulkJobId`);
+    expressionNames['#bulkJobId'] = 'bulkJobId';
+    expressionValues[':bulkJobId'] = bulkJobId;
+  }
+
+  if (totalRecordCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#totalRecordCount = :totalRecordCount`);
+    expressionNames['#totalRecordCount'] = 'totalRecordCount';
+    expressionValues[':totalRecordCount'] = totalRecordCount;
+  }
+
+  if (completedRecordCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#completedRecordCount = :completedRecordCount`);
+    expressionNames['#completedRecordCount'] = 'completedRecordCount';
+    expressionValues[':completedRecordCount'] = completedRecordCount;
+  }
+
+  if (insertCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#insertCount = :insertCount`);
+    expressionNames['#insertCount'] = 'insertCount';
+    expressionValues[':insertCount'] = insertCount;
+  }
+
+  if (updateCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#updateCount = :updateCount`);
+    expressionNames['#updateCount'] = 'updateCount';
+    expressionValues[':updateCount'] = updateCount;
+  }
+
+  if (deleteCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#deleteCount = :deleteCount`);
+    expressionNames['#deleteCount'] = 'deleteCount';
+    expressionValues[':deleteCount'] = deleteCount;
+  }
+
+  if (sizeInBytes !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#sizeInBytes = :sizeInBytes`);
+    expressionNames['#sizeInBytes'] = 'sizeInBytes';
+    expressionValues[':sizeInBytes'] = sizeInBytes;
+  }
+
+  if (currentLocator !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#currentLocator = :currentLocator`);
+    expressionNames['#currentLocator'] = 'currentLocator';
+    expressionValues[':currentLocator'] = currentLocator;
+  }
+
+  if (errorMessage !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#errorMessage = :errorMessage`);
+    expressionNames['#errorMessage'] = 'errorMessage';
+    expressionValues[':errorMessage'] = errorMessage;
+  }
+
+  if (salesforceApiCount !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#salesforceApiCount = :salesforceApiCount`);
+    expressionNames['#salesforceApiCount'] = 'salesforceApiCount';
+    expressionValues[':salesforceApiCount'] = salesforceApiCount;
+  }
+
+  if (schemaChange !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#schemaChange = :schemaChange`);
+    expressionNames['#schemaChange'] = 'schemaChange';
+    expressionValues[':schemaChange'] = schemaChange;
+  }
+
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        Key: { backupConfigId },
+        UpdateExpression: `SET ${expressionParts.join(', ')}`,
+        ExpressionAttributeNames: expressionNames,
+        ExpressionAttributeValues: expressionValues,
+        ConditionExpression: 'attribute_exists(backupConfigId)',
+      })
+    );
+  } catch (error: any) {
+    // If record doesn't exist, silently return instead of throwing
+    if (error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
+  }
+};
+
 const updateBackupConfigSizeRecords = async (params: {
   backupConfigId: string;
   sizeInBytes: number;
@@ -194,6 +340,7 @@ const updateBackupConfigSizeRecords = async (params: {
 
 export {
   updateBackupConfig,
+  updateBackupConfigObject,
   updateBackupConfigSizeRecords,
   getBackupConfigById,
   incrementBackupConfigCounters,
