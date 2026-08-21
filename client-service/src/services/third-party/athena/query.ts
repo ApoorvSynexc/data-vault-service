@@ -6,7 +6,7 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_OUTPUT_LOCATION, NODE_ENV } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, NODE_ENV } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 const shouldProvideCredentials = 
@@ -49,11 +49,11 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
 ]);
 
 // Submits a query to Athena and returns the queryExecutionId.
-const startQuery = async (sql: string, database: string): Promise<string> => {
+const startQuery = async (sql: string, database: string, outputLocation: string): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ResultConfiguration: { OutputLocation: AWS_ATHENA_OUTPUT_LOCATION },
+    ResultConfiguration: { OutputLocation: outputLocation },
     ResultReuseConfiguration: {
       ResultReuseByAgeConfiguration: { Enabled: true, MaxAgeInMinutes: RESULT_REUSE_MINUTES },
     },
@@ -189,16 +189,19 @@ export const fetchStoredResults = async (
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
 // database must be a Glue Catalog database name (e.g. the backupConfigId).
+// outputLocation is the S3 prefix Athena writes results to — isolated per
+// backupConfigId by the caller (see buildAthenaOutputLocation).
 // `maxRows` caps how many rows are pulled back; the returned queryExecutionId
 // lets a later request replay the same rows via fetchStoredResults.
 export const runAthenaQuery = async (
   sql: string,
   database: string,
+  outputLocation: string,
   maxRows?: number
 ): Promise<IQueryResult> => {
   logger.info(`[athena] executing query | database:${database} sql:${sql}`);
 
-  const queryExecutionId = await startQuery(sql, database);
+  const queryExecutionId = await startQuery(sql, database, outputLocation);
 
   logger.info(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
 

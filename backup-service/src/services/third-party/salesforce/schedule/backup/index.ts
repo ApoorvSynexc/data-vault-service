@@ -22,6 +22,14 @@ const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
 const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
 
+// Compound/binary describe types (Schema.DisplayType: ADDRESS, LOCATION, BASE64)
+// aren't directly SELECT-able in SOQL — their sub-fields are queried individually
+// instead (e.g. MailingAddress -> MailingStreet, MailingCity, ...).
+const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
+const EXCLUDED_FIELD_NAMES = new Set(['InformalName']);
+const isQueryableField = (f: { name: string; type: string }): boolean =>
+  !EXCLUDED_FIELD_NAMES.has(f.name) && !EXCLUDED_FIELD_TYPES.has(f.type);
+
 const buildFilterCondition = (name: string, operator: string, value: string): string => {
   if (!SAFE_FIELD_NAME_RE.test(name)) {
     throw new Error(`Invalid SOQL field name: "${name}"`);
@@ -126,7 +134,7 @@ export const exportFirstTime = async (
     }, { instanceUrl, tokens });
     const allFieldNames =
       fieldsMetadata?.metadataType === 'fields'
-        ? fieldsMetadata.fields.filter((f) => f.name !== 'InformalName').map((f) => f.name)
+        ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
         : [];
     await salesforceMetadataHandler({
       metadataType: 'picklist',
@@ -333,7 +341,7 @@ export const exportIncremental = async (
     }, { instanceUrl, tokens });
     const allFieldNames =
       fieldsMetadata?.metadataType === 'fields'
-        ? fieldsMetadata.fields.filter((f) => f.name !== 'InformalName').map((f) => f.name)
+        ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
         : [];
     // await uploadPicklistValues({
     //   schema: latestSchema,
