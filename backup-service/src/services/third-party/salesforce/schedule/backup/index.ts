@@ -6,7 +6,7 @@ import { buildS3KeyPrefix } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { uploadRecordTypeMetadata } from '../../record-type';
-import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
+import { getBackupConfigById, updateBackupConfig, updateBackupConfigObject } from '../../../../backup-config';
 import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import { salesforceMetadataHandler } from '../../metadata';
 
@@ -243,18 +243,14 @@ export const exportFirstTime = async (
       backupConfig = await getBackupConfigById(backupConfigId);
       if (backupConfig?.objects) {
         const updateParams: any = { sizeInBytes };
-        const updatedObjects = backupConfig.objects.map((obj) =>
-          obj.name === objectName
-            ? {
-              ...obj,
-              sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes,
-              completedRecordCount: (obj.completedRecordCount ?? 0) + completedRecordCount,
-            }
-            : obj
-        );
         updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
         updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + completedRecordCount;
-        updateParams.objects = updatedObjects;
+        await updateBackupConfigObject({
+          backupConfigId,
+          objectName,
+          sizeInBytes,
+          completedRecordCount
+        })
         await updateBackupConfig(backupConfigId, updateParams);
       }
     } else {
