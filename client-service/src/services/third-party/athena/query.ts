@@ -31,13 +31,13 @@ const staticKeys =
     : null;
 
 const athena = new AthenaClient({
-  region: AWS_REGION,
-  credentials: staticKeys
-    ? fromTemporaryCredentials({
-        masterCredentials: staticKeys,
-        params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
-      })
-    : undefined,
+  region: AWS_REGION
+  // credentials: staticKeys
+  //   ? fromTemporaryCredentials({
+  //       masterCredentials: staticKeys,
+  //       params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
+  //     })
+  //   : undefined,
 });
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
