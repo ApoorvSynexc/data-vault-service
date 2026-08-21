@@ -179,6 +179,7 @@ interface UpdateBackupConfigObjectParams {
   currentLocator?: string;
   errorMessage?: string;
   salesforceApiCount?: number;
+  schemaChange?: boolean;
 }
 
 // ref: updateBackupObject in ../backup-job/index.ts — same targeted
@@ -199,6 +200,7 @@ const updateBackupConfigObject = async (params: UpdateBackupConfigObjectParams):
     currentLocator,
     errorMessage,
     salesforceApiCount,
+    schemaChange,
   } = params;
 
   const backupConfig = await getBackupConfigById(backupConfigId);
@@ -280,6 +282,12 @@ const updateBackupConfigObject = async (params: UpdateBackupConfigObjectParams):
     expressionParts.push(`#object[${objectIndex}].#salesforceApiCount = :salesforceApiCount`);
     expressionNames['#salesforceApiCount'] = 'salesforceApiCount';
     expressionValues[':salesforceApiCount'] = salesforceApiCount;
+  }
+
+  if (schemaChange !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#schemaChange = :schemaChange`);
+    expressionNames['#schemaChange'] = 'schemaChange';
+    expressionValues[':schemaChange'] = schemaChange;
   }
 
   try {

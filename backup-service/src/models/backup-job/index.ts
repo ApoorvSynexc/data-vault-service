@@ -132,6 +132,7 @@ export interface IBackupObject {
   errorMessage?: string;
   children?: IBackupObject[];
   parentObjects?: IBackupObjectParent[];
+  schemaChange?: boolean;
 }
 
 export interface ISource {
