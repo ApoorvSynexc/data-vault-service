@@ -69,7 +69,7 @@ const startQuery = async (sql: string, database: string, outputLocation: string)
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ResultConfiguration: { OutputLocation: outputLocation },
+    ResultConfiguration: { OutputLocation: 's3://qa-data-craft-test/salesforce/50616c3e-1b23-4c91-9750-09906a89606f/backup/17ec8ce7-c5a0-4e43-8211-aba1cb40a21a/' },
     ResultReuseConfiguration: {
       ResultReuseByAgeConfiguration: { Enabled: true, MaxAgeInMinutes: RESULT_REUSE_MINUTES },
     },
