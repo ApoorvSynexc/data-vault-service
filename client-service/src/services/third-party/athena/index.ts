@@ -27,9 +27,11 @@ const buildAthenaStatement = (bucketName: string) => ({
   Sid: ATHENA_POLICY_SID,
   Effect: 'Allow',
   Principal: { AWS: AWS_ATHENA_ROLE_ARN },
-  // s3:GetObject  — read individual objects (Athena query execution)
-  // s3:ListBucket — list prefixes (Athena partition discovery)
-  Action: ['s3:GetObject', 's3:ListBucket'],
+  // s3:GetObject        — read individual objects (Athena query execution)
+  // s3:ListBucket       — list prefixes (Athena partition discovery)
+  // s3:GetBucketLocation — Athena checks this on the output location bucket
+  // s3:PutObject        — write query results under the per-config output prefix
+  Action: ['s3:GetObject', 's3:ListBucket', 's3:GetBucketLocation', 's3:PutObject'],
   Resource: [
     `arn:aws:s3:::${bucketName}`,
     `arn:aws:s3:::${bucketName}/*`,
