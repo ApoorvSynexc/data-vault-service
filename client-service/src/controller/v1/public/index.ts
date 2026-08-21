@@ -153,6 +153,7 @@ const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise
 };
 
 const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  console.log('GEETING HIT FROM EVENT BRIDGE');
   try {
     const event = req.body;
     console.log('Event Bridge: ', JSON.stringify({ event }));
