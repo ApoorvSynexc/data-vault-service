@@ -70,7 +70,7 @@ const startQuery = async (sql: string, database: string, outputLocation: string)
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ResultConfiguration: { OutputLocation: 's3://qa-data-vault-logs' },
+    ResultConfiguration: { OutputLocation: outputLocation },
     ResultReuseConfiguration: {
       ResultReuseByAgeConfiguration: { Enabled: true, MaxAgeInMinutes: RESULT_REUSE_MINUTES },
     },
