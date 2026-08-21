@@ -251,6 +251,13 @@ const getObjectListByConfigId = async (
 const toGlueId = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
+// Where Athena writes result files for this fetch-records query. Scoped by
+// crmId + backupConfigId so one config's results never land in another's
+// prefix — the previous hardcoded bucket-wide location gave every query the
+// same output path.
+const buildAthenaOutputLocation = (crmId: string, backupConfigId: string): string =>
+  `s3://salesforce/${crmId}/backup/${backupConfigId}/retrieve/`;
+
 /**
  * ── Block-and-page model ─────────────────────────────────────────────────────
  *
@@ -299,7 +306,11 @@ export class CursorError extends Error {
  * query tolerates a missing table — those only exist after the first
  * compression run, so absence means "no compressed state yet", not an error.
  */
-const makeRunner = (databaseName: string, replay: Record<string, string> | null) => {
+const makeRunner = (
+  databaseName: string,
+  outputLocation: string,
+  replay: Record<string, string> | null
+) => {
   const executions: Record<string, string> = {};
 
   const run = async (name: string, sql: () => string): Promise<IQueryResult> => {
@@ -307,7 +318,7 @@ const makeRunner = (databaseName: string, replay: Record<string, string> | null)
     try {
       const result = stored
         ? await fetchStoredResults(stored)
-        : await runAthenaQuery(sql(), databaseName);
+        : await runAthenaQuery(sql(), databaseName, outputLocation);
       if (result.queryExecutionId) executions[name] = result.queryExecutionId;
       return result;
     } catch (e: unknown) {
@@ -509,7 +520,8 @@ const retrieveRecords = async (
   const endDate = changed ? params.endDate! : null;
 
   const page = resolvePage(fingerprintRetrieve(params), params.cursor);
-  const { run, executions } = makeRunner(databaseName, page.replay);
+  const outputLocation = buildAthenaOutputLocation(config.crmId, params.backupConfigId);
+  const { run, executions } = makeRunner(databaseName, outputLocation, page.replay);
 
   const sql = {
     columnNames: params.columnNames,
@@ -584,7 +596,8 @@ const retrieveInactiveRecordTypes = async (
   const deltaTable = `${table}_delta`;
 
   const { startDate, endDate } = params;
-  const { run } = makeRunner(databaseName, null);
+  const outputLocation = buildAthenaOutputLocation(config.crmId, params.backupConfigId);
+  const { run } = makeRunner(databaseName, outputLocation, null);
   const result = await run('recordTypeDeltas', () =>
     buildRecordTypeDeltaSql(deltaTable, {
       startDate,
@@ -640,7 +653,8 @@ const retrieveMissingFields = async (
   const deltaTable = `${table}_delta`;
 
   const { startDate, endDate } = params;
-  const { run } = makeRunner(databaseName, null);
+  const outputLocation = buildAthenaOutputLocation(config.crmId, params.backupConfigId);
+  const { run } = makeRunner(databaseName, outputLocation, null);
   const result = await run('fieldDeleteDeltas', () =>
     buildFieldDeleteDeltaSql(deltaTable, {
       startDate,
