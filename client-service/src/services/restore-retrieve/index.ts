@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE } from '../../constant';
-import { IBackupConfig, IBackupJob, IObject } from '../../models';
+import { IBackupJob, IObject } from '../../models';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
@@ -251,34 +251,6 @@ const getObjectListByConfigId = async (
 const toGlueId = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
-// Where Athena writes result files for this fetch-records query: the same S3
-// bucket, and the same <crmName>/<crmId>/<type>/<backupConfigId>/ root, that
-// raw_data and schema already use (see buildSchemaS3Key) — just a "retrieve"
-// leaf instead of "raw_data"/"schema", so one config's results stay isolated
-// under its own existing prefix rather than a new bucket-wide location.
-const buildAthenaOutputLocation = (
-  bucketName: string,
-  crmName: string,
-  crmId: string,
-  type: 'backup' | 'archival',
-  backupConfigId: string
-): string => `s3://${bucketName}/${crmName}/${crmId}/${type}/${backupConfigId}/retrieve/`;
-
-// Resolves a caller-owned config down to the S3 location Athena should write
-// this query's results into. Returns null when the CRM or destination can't
-// be resolved, same as resolveSchemaS3's failure cases.
-const resolveAthenaOutputLocation = async (config: IBackupConfig): Promise<string | null> => {
-  const crm = await getCrmById(config.crmId);
-  if (!crm) return null;
-
-  const destination = await getDestinationById(config.destinationId);
-  if (!destination) return null;
-
-  const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
-  const type = config.type === 'ARCHIVAL' ? 'archival' : 'backup';
-  return buildAthenaOutputLocation(destConfig.bucketName, crm.crmName, config.crmId, type, config.backupConfigId);
-};
-
 /**
  * ── Block-and-page model ─────────────────────────────────────────────────────
  *
@@ -327,11 +299,7 @@ export class CursorError extends Error {
  * query tolerates a missing table — those only exist after the first
  * compression run, so absence means "no compressed state yet", not an error.
  */
-const makeRunner = (
-  databaseName: string,
-  outputLocation: string,
-  replay: Record<string, string> | null
-) => {
+const makeRunner = (databaseName: string, replay: Record<string, string> | null) => {
   const executions: Record<string, string> = {};
 
   const run = async (name: string, sql: () => string): Promise<IQueryResult> => {
@@ -339,7 +307,7 @@ const makeRunner = (
     try {
       const result = stored
         ? await fetchStoredResults(stored)
-        : await runAthenaQuery(sql(), databaseName, outputLocation);
+        : await runAthenaQuery(sql(), databaseName);
       if (result.queryExecutionId) executions[name] = result.queryExecutionId;
       return result;
     } catch (e: unknown) {
@@ -540,11 +508,8 @@ const retrieveRecords = async (
   const startDate = changed ? params.startDate! : null;
   const endDate = changed ? params.endDate! : null;
 
-  const outputLocation = await resolveAthenaOutputLocation(config);
-  if (!outputLocation) return null;
-
   const page = resolvePage(fingerprintRetrieve(params), params.cursor);
-  const { run, executions } = makeRunner(databaseName, outputLocation, page.replay);
+  const { run, executions } = makeRunner(databaseName, page.replay);
 
   const sql = {
     columnNames: params.columnNames,
@@ -618,11 +583,8 @@ const retrieveInactiveRecordTypes = async (
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const deltaTable = `${table}_delta`;
 
-  const outputLocation = await resolveAthenaOutputLocation(config);
-  if (!outputLocation) return null;
-
   const { startDate, endDate } = params;
-  const { run } = makeRunner(databaseName, outputLocation, null);
+  const { run } = makeRunner(databaseName, null);
   const result = await run('recordTypeDeltas', () =>
     buildRecordTypeDeltaSql(deltaTable, {
       startDate,
@@ -677,11 +639,8 @@ const retrieveMissingFields = async (
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const deltaTable = `${table}_delta`;
 
-  const outputLocation = await resolveAthenaOutputLocation(config);
-  if (!outputLocation) return null;
-
   const { startDate, endDate } = params;
-  const { run } = makeRunner(databaseName, outputLocation, null);
+  const { run } = makeRunner(databaseName, null);
   const result = await run('fieldDeleteDeltas', () =>
     buildFieldDeleteDeltaSql(deltaTable, {
       startDate,
