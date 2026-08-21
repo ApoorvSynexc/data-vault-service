@@ -26,4 +26,4 @@ export const stripNamespace = (apiName: string, namespace: string = SALESFORCE_N
 // /services/apexrest/{namespace}/v1/data-vault; an unpackaged dev/scratch org
 // (namespace unset) exposes them directly under /services/apexrest/v1/data-vault.
 export const apexRestBase = (instanceUrl?: string, namespace: string = SALESFORCE_NAMESPACE): string =>
-  `${instanceUrl}/services/apexrest/${namespace ? `${namespace}/` : ''}v1/data-vault`;
+  `${instanceUrl}/services/apexrest/${namespace ? `${namespace.replace('__', '')}/` : ''}v1/data-vault`;
