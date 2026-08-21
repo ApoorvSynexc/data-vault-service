@@ -200,6 +200,7 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   const instanceUrl = user.crmProfile?.instanceUrl;
 
   const url = `${APEX_BASE(instanceUrl)}/object-fields-metadata?${apexQuery({ apiName: objectName, mode })}`;
+  console.log('APEX URL ==> ' + url);
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
