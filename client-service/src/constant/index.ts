@@ -36,6 +36,10 @@ const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN).trim();
 // Dedicated IAM credentials scoped to Athena (separate from the default AWS creds).
 const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
 const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
+// S3 location (ours, not the client's) where Athena writes query result files.
+// Athena requires the output bucket to be in the same region as the workgroup,
+// which rules out writing into an arbitrary client-owned bucket.
+const AWS_ATHENA_OUTPUT_LOCATION = String(process.env.AWS_ATHENA_OUTPUT_LOCATION).trim();
 
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET);
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET);
@@ -258,6 +262,7 @@ export {
   AWS_ATHENA_ROLE_ARN,
   AWS_ATHENA_ACCESS_KEY,
   AWS_ATHENA_SECRET_KEY,
+  AWS_ATHENA_OUTPUT_LOCATION,
 
   // JWT Config
   JWT_ACCESS_SECRET,

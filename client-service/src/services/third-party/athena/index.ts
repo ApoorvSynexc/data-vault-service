@@ -23,24 +23,12 @@ const buildEmptyBucketPolicy = (): BucketPolicy => ({
   Statement: [],
 });
 
-// Mirrors the Athena role's own IAM policy exactly — every action granted
-// there but missing here would be a no-op on the role side; every action
-// granted here but missing there would be a no-op on the bucket side. Keep
-// both lists in lockstep.
-//   s3:GetObject                 — read individual objects (Athena query execution)
-//   s3:ListBucket                — list prefixes (Athena partition discovery)
-//   s3:GetBucketLocation         — Athena checks this on the output location bucket
-//   s3:PutObject                 — write query result files
-//   s3:ListBucketMultipartUploads — list in-progress multipart uploads (large result sets)
-//   s3:AbortMultipartUpload      — clean up a failed/partial multipart result write
-const REQUIRED_ATHENA_ACTIONS = [
-  's3:GetObject',
-  's3:ListBucket',
-  's3:GetBucketLocation',
-  's3:PutObject',
-  's3:ListBucketMultipartUploads',
-  's3:AbortMultipartUpload',
-];
+// Client buckets are read-only source data for Athena — query results write
+// to our own AWS_ATHENA_OUTPUT_LOCATION bucket instead (see athena/query.ts),
+// so no client bucket policy needs write-side actions.
+//   s3:GetObject  — read individual objects (Athena query execution)
+//   s3:ListBucket — list prefixes (Athena partition discovery)
+const REQUIRED_ATHENA_ACTIONS = ['s3:GetObject', 's3:ListBucket'];
 
 const buildAthenaStatement = (bucketName: string) => ({
   Sid: ATHENA_POLICY_SID,

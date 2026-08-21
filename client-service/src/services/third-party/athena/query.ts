@@ -7,7 +7,7 @@ import {
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
 import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN, AWS_ATHENA_OUTPUT_LOCATION } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 // Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
@@ -66,11 +66,11 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
 ]);
 
 // Submits a query to Athena and returns the queryExecutionId.
-const startQuery = async (sql: string, database: string, outputLocation: string): Promise<string> => {
+const startQuery = async (sql: string, database: string): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ResultConfiguration: { OutputLocation: outputLocation },
+    ResultConfiguration: { OutputLocation: AWS_ATHENA_OUTPUT_LOCATION },
     ResultReuseConfiguration: {
       ResultReuseByAgeConfiguration: { Enabled: true, MaxAgeInMinutes: RESULT_REUSE_MINUTES },
     },
@@ -206,19 +206,19 @@ export const fetchStoredResults = async (
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
 // database must be a Glue Catalog database name (e.g. the backupConfigId).
-// outputLocation is the S3 prefix Athena writes results to — isolated per
-// backupConfigId by the caller (see buildAthenaOutputLocation).
+// Results are written to AWS_ATHENA_OUTPUT_LOCATION (our own bucket — Athena
+// requires the output bucket to be in the same region as the workgroup, which
+// rules out a per-client bucket).
 // `maxRows` caps how many rows are pulled back; the returned queryExecutionId
 // lets a later request replay the same rows via fetchStoredResults.
 export const runAthenaQuery = async (
   sql: string,
   database: string,
-  outputLocation: string,
   maxRows?: number
 ): Promise<IQueryResult> => {
   logger.info(`[athena] executing query | database:${database} sql:${sql}`);
 
-  const queryExecutionId = await startQuery(sql, database, outputLocation);
+  const queryExecutionId = await startQuery(sql, database);
 
   logger.info(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
 
