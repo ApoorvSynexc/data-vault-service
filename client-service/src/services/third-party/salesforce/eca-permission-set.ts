@@ -3,6 +3,7 @@ import { salesforceRequest, SalesforceTokens, SalesforceAuthExpiredError } from 
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
 import { listMetadataSoap, readMetadataSoap } from './metadata-listing';
 import { callApex, APEX_BASE } from './apex';
+import { stripNamespace } from '../../../utils/salesforce-namespace';
 
 // Packaged API/developer name of the ECA shipped with the managed package
 // (force-app/internal/360DV/externalClientApps/Data_Vault_Connected_App.eca-meta.xml).
@@ -387,7 +388,7 @@ export const provisionEcaPermissionSet = async (
     // its fullName is never the ECA's own name (see resolveEcaOauthPolicyName)
     // and must be discovered, not assumed, or the deploy creates a colliding
     // duplicate instead of updating the real one.
-    const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${developerName.replace('SYX_DVV__', '')}_oauthPlcy`;
+    const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${stripNamespace(developerName)}_oauthPlcy`;
     console.log('[eca-permission-set] Deploying ECA OAuth policy:', policyName);
     const union = Array.from(new Set([...existingPermittedPermissionSets, ECA_PERMISSION_SET_NAME]));
 
