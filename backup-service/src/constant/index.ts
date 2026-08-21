@@ -24,6 +24,9 @@ const AWS_GLUE_SECRET_KEY = String(process.env.AWS_GLUE_SECRET_KEY);
 const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
 const SALESFORCE_CLIENT_SECRET = String(process.env.SALESFORCE_CLIENT_SECRET);
 const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
+// Managed package namespace prefix (e.g. "SYX_DVV"). Empty when unpackaged/unset —
+// see utils/salesforce-namespace.ts for the only place this should be consumed.
+const SALESFORCE_NAMESPACE = String(process.env.SALESFORCE_NAMESPACE || '').trim();
 
 // Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
@@ -137,6 +140,7 @@ export {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
+  SALESFORCE_NAMESPACE,
 
   //service
   CORE_SERVICE,
