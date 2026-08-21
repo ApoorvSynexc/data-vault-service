@@ -7,14 +7,17 @@ import { appendObjectsToBackupConfig } from '../../backup-config';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
 import { getMasterChildApiNames } from './apex';
+import { withNamespace } from '../../../utils/salesforce-namespace';
+import { SALESFORCE_NAMESPACE } from '../../../constant';
 
-const NAMESPACE_PREFIX = 'SYX_DVV';
 const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
 const API_VERSION = '66.0';
 
-// Full qualified name of the External Credential Principal inside the managed package.
-// Format: {Namespace}__{ExternalCredentialDeveloperName}-{PrincipalDeveloperName}
-const EXTERNAL_CREDENTIAL_PRINCIPAL_NAME = `Middleware_Endpoint-DataVaultParam`;
+// Unqualified name of the External Credential Principal inside the managed
+// package. Format once namespaced: {Namespace}__{ExternalCredentialDeveloperName}-{PrincipalDeveloperName}
+// — withNamespace prefixes the whole string once, which lands the namespace on
+// exactly the ExternalCredential half, matching that format.
+const EXTERNAL_CREDENTIAL_PRINCIPAL_NAME = `DataVaultAPIExt-DataVaultAPIUser`;
 
 // ---------------------------------------------------------------------------
 // Real-time sync is delivered as record-triggered Flows, not Apex triggers.
@@ -169,7 +172,7 @@ const buildRecordTriggeredFlow = (
   flowName: string,
   event: (typeof FLOW_EVENTS)[number]
 ): string => {
-  const actionName = `${NAMESPACE_PREFIX}__${HANDLER_CLASS_NAME}`;
+  const actionName = withNamespace(HANDLER_CLASS_NAME);
   const label = flowName.replace(/_/g, ' ');
 
   return (
@@ -628,7 +631,7 @@ const setupPermissionSet = async (
       tokens,
       PERMISSION_SET_NAME,
       'DataVault Real-Time Trigger Access',
-      EXTERNAL_CREDENTIAL_PRINCIPAL_NAME
+      withNamespace(EXTERNAL_CREDENTIAL_PRINCIPAL_NAME)
     );
 
     for (const trigger of triggerResults) {
@@ -647,8 +650,8 @@ const setupPermissionSet = async (
 
 // ---------------------------------------------------------------------------
 // Ensure the shared handler ApexClass exists — throws if not installed.
-// The class ships with the DataVault managed package (namespace: SYX_DVV) and
-// is what the generated Flows invoke, so a missing package means dead flows.
+// The class ships with the DataVault managed package (namespace: SALESFORCE_NAMESPACE)
+// and is what the generated Flows invoke, so a missing package means dead flows.
 // ---------------------------------------------------------------------------
 const ensureHandlerClass = async (instanceUrl: string, tokens: SalesforceTokens): Promise<string> => {
   const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
@@ -662,7 +665,7 @@ const ensureHandlerClass = async (instanceUrl: string, tokens: SalesforceTokens)
   if (data.totalSize === 0) {
     throw new Error(
       `handler_class_not_present: ApexClass '${HANDLER_CLASS_NAME}' was not found in this org. ` +
-      `Install the DataVault managed package (namespace: ${NAMESPACE_PREFIX}) before enabling real-time triggers.`
+      `Install the DataVault managed package${SALESFORCE_NAMESPACE ? ` (namespace: ${SALESFORCE_NAMESPACE})` : ''} before enabling real-time triggers.`
     );
   }
 
