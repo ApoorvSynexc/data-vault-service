@@ -6,22 +6,38 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, NODE_ENV } from '../../../constant';
+import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { logger } from '../../../middlewares';
 
-const shouldProvideCredentials = 
-  process.env.NODE_ENV === 'DEV' && 
-  Boolean(AWS_ATHENA_ACCESS_KEY) && 
-  Boolean(AWS_ATHENA_SECRET_KEY);
+// Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
+// Principal) — only a caller that has actually assumed that role via STS can
+// satisfy it. Locally there's no instance profile, so a static IAM user key
+// must explicitly assume it. On EC2, the instance profile IS already
+// AWS_ATHENA_ROLE_ARN, so its default-chain credentials already ARE that role
+// — wrapping them in another AssumeRole would be a role assuming itself,
+// which fails unless the trust policy explicitly allows that (it doesn't, by
+// default), for no benefit since the permissions are already there.
+//
+// constant/index.ts builds these with String(process.env.X), so an unset var
+// reads back as the literal string "undefined" rather than undefined itself —
+// excluded here so a deployed environment without these set skips straight to
+// the default provider chain instead of assuming the role with garbage keys.
+const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
+
+const staticKeys =
+  isSet(AWS_ATHENA_ACCESS_KEY) && isSet(AWS_ATHENA_SECRET_KEY)
+    ? { accessKeyId: AWS_ATHENA_ACCESS_KEY, secretAccessKey: AWS_ATHENA_SECRET_KEY }
+    : null;
 
 const athena = new AthenaClient({
   region: AWS_REGION,
-  ...(shouldProvideCredentials && {
-    credentials: {
-      accessKeyId: AWS_ATHENA_ACCESS_KEY,
-      secretAccessKey: AWS_ATHENA_SECRET_KEY,
-    },
-  }),
+  credentials: staticKeys
+    ? fromTemporaryCredentials({
+        masterCredentials: staticKeys,
+        params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
+      })
+    : undefined,
 });
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
