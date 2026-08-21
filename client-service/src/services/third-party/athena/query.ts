@@ -12,32 +12,33 @@ import { logger } from '../../../middlewares';
 
 // Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
 // Principal) — only a caller that has actually assumed that role via STS can
-// satisfy it. Locally there's no instance profile, so a static IAM user key
-// must explicitly assume it. On EC2, the instance profile IS already
-// AWS_ATHENA_ROLE_ARN, so its default-chain credentials already ARE that role
-// — wrapping them in another AssumeRole would be a role assuming itself,
-// which fails unless the trust policy explicitly allows that (it doesn't, by
-// default), for no benefit since the permissions are already there.
+// satisfy it. The EC2 instance role is a SEPARATE identity from this role
+// (confirmed manually: `aws sts assume-role` from the instance succeeds), so
+// this must always assume it — there is no environment where skipping the
+// assume step is correct.
+//
+// masterCredentials is the base identity used to do the assuming: explicit
+// static keys when configured (local/dev), otherwise omitted so
+// fromTemporaryCredentials falls back to ITS OWN default provider chain (the
+// EC2 instance role in a deployed environment) as the base.
 //
 // constant/index.ts builds these with String(process.env.X), so an unset var
 // reads back as the literal string "undefined" rather than undefined itself —
-// excluded here so a deployed environment without these set skips straight to
-// the default provider chain instead of assuming the role with garbage keys.
+// excluded here so a deployed environment without these set assumes from the
+// default chain instead of assuming with garbage keys.
 const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
 
-const staticKeys =
+const masterCredentials =
   isSet(AWS_ATHENA_ACCESS_KEY) && isSet(AWS_ATHENA_SECRET_KEY)
     ? { accessKeyId: AWS_ATHENA_ACCESS_KEY, secretAccessKey: AWS_ATHENA_SECRET_KEY }
-    : null;
+    : undefined;
 
 const athena = new AthenaClient({
   region: AWS_REGION,
-  credentials: staticKeys
-    ? fromTemporaryCredentials({
-        masterCredentials: staticKeys,
-        params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
-      })
-    : undefined,
+  credentials: fromTemporaryCredentials({
+    masterCredentials,
+    params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
+  }),
 });
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
