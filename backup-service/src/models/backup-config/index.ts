@@ -37,6 +37,7 @@ export interface IBackupConfig {
   schemaChange?: boolean;
   uploadedRecords?: number;
   sizeInBytes?: number;
+  completedRecordCount?: number;
   successRecordCount?: number;
   triggerResults?: ITriggerResult[];
   spaceId?: string;
