@@ -18,8 +18,6 @@ const validateEnv = (): void => {
     'SALESFORCE_CLIENT_ID',
     'SALESFORCE_CLIENT_SECRET',
     'SALESFORCE_REDIRECT_URI',
-    'BACKUP_JOB_TABLE',
-    'TABLE_COUNTER_TABLE',
     'AWS_REGION',
   ];
   for (const name of required) {
