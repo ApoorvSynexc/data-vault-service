@@ -16,13 +16,14 @@ const scheduler = new SchedulerClient({ region: AWS_SCHEDULER_REGION });
 interface ScheduleInput {
     name: string;
     scheduleExpression: string;
+    timeZone?: string;
     payload?: Record<string, unknown>;
 }
 
-const buildParams = ({ name, scheduleExpression, payload }: ScheduleInput) => ({
+const buildParams = ({ name, scheduleExpression, timeZone, payload }: ScheduleInput) => ({
     Name: name,
     ScheduleExpression: scheduleExpression,
-    ScheduleExpressionTimezone: "UTC",
+    ScheduleExpressionTimezone: timeZone ?? "UTC",
     FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
     Target: {
         Arn: AWS_EVENT_BUS_ARN,
@@ -36,10 +37,10 @@ const buildParams = ({ name, scheduleExpression, payload }: ScheduleInput) => ({
 });
 
 const createAwsEventScheduler = async (input: ScheduleInput): Promise<CreateScheduleCommandOutput> => {
-    const { name, scheduleExpression, payload } = input;
+    const { name, scheduleExpression, timeZone, payload } = input;
 
     try {
-        return await scheduler.send(new CreateScheduleCommand(buildParams({ name, scheduleExpression, payload })));
+        return await scheduler.send(new CreateScheduleCommand(buildParams({ name, scheduleExpression, timeZone, payload })));
     } catch (err: any) {
         if (err.name === "ConflictException")
             throw new Error(`Schedule "${name}" already exists. Use update instead.`);
@@ -48,11 +49,11 @@ const createAwsEventScheduler = async (input: ScheduleInput): Promise<CreateSche
 };
 
 const updateAwsEventSchedule = async (input: ScheduleInput): Promise<UpdateScheduleCommandOutput> => {
-    const { name, scheduleExpression, payload } = input;
+    const { name, scheduleExpression, timeZone, payload } = input;
 
     try {
         return await scheduler.send(
-            new UpdateScheduleCommand({ ...buildParams({ name, scheduleExpression, payload }), State: ScheduleState.ENABLED })
+            new UpdateScheduleCommand({ ...buildParams({ name, scheduleExpression, timeZone, payload }), State: ScheduleState.ENABLED })
         );
     } catch (err: any) {
         if (err.name === "ResourceNotFoundException")

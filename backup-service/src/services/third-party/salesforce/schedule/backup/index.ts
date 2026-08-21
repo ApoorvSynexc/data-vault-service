@@ -6,7 +6,7 @@ import { buildS3KeyPrefix } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { uploadRecordTypeMetadata } from '../../record-type';
-import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
+import { getBackupConfigById, updateBackupConfig, updateBackupConfigObject } from '../../../../backup-config';
 import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import { salesforceMetadataHandler } from '../../metadata';
 
@@ -212,49 +212,54 @@ export const exportFirstTime = async (
       });
     }
 
-    logger.info(
-      `Object found records, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, Changes=${totalRecordCount}`
-    );
 
-    const insertPrefix = buildS3KeyPrefix({
-      crmId,
-      crmName,
-      backupConfigId,
-      backupJobId,
-      objectName,
-      operation: 'inserts',
-      type: 'backup',
-    });
-    const { sizeInBytes, completedRecordCount } = await uploadBulkResultsByPage({
-      instanceUrl,
-      tokens,
-      jobId,
-      backupJobId,
-      objectIndex,
-      destConfig,
-      salesforceApiCount,
-      s3KeyPrefix: insertPrefix,
-      startLocator: object.currentLocator ?? null,
-      startCompletedRecordCount: object.completedRecordCount ?? 0,
-    });
-
-    backupConfig = await getBackupConfigById(backupConfigId);
-    if (backupConfig?.objects) {
-      const updateParams: any = { sizeInBytes };
-      const updatedObjects = backupConfig.objects.map((obj) =>
-        obj.name === objectName
-          ? {
-            ...obj,
-            sizeInBytes: (obj.sizeInBytes ?? 0) + sizeInBytes,
-            completedRecordCount: (obj.completedRecordCount ?? 0) + completedRecordCount,
-          }
-          : obj
+    if (totalRecordCount) {
+      logger.info(
+        `Object found records, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, Changes=${totalRecordCount}`
       );
-      updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-      updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + completedRecordCount;
-      updateParams.objects = updatedObjects;
-      await updateBackupConfig(backupConfigId, updateParams);
+
+      const insertPrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        backupJobId,
+        objectName,
+        operation: 'inserts',
+        type: 'backup',
+      });
+      const { sizeInBytes, completedRecordCount } = await uploadBulkResultsByPage({
+        instanceUrl,
+        tokens,
+        jobId,
+        backupJobId,
+        objectIndex,
+        destConfig,
+        salesforceApiCount,
+        s3KeyPrefix: insertPrefix,
+        startLocator: object.currentLocator ?? null,
+        startCompletedRecordCount: object.completedRecordCount ?? 0,
+      });
+
+      await updateBackupConfigObject({
+        backupConfigId,
+        objectName,
+        sizeInBytes,
+        completedRecordCount
+      });
+      // backupConfig = await getBackupConfigById(backupConfigId);
+      // if (backupConfig?.objects) {
+      //   const updateParams: any = { sizeInBytes };
+      //   updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+      //   updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + completedRecordCount;
+
+      //   await updateBackupConfig(backupConfigId, updateParams);
+      // }
+    } else {
+      logger.info(
+        `Object changes not found, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+      );
     }
+
 
     await salesforceMetadataHandler({
       metadataType: 'fields',
@@ -313,7 +318,7 @@ export const exportIncremental = async (
   const { crmId } = tokens;
   const objectName = object.name;
   let salesforceApiCount = 0;
-  let backupConfig;
+  // let backupConfig;
 
   try {
     const { fieldNames: allFieldNames } = await getObjectMetadata(
@@ -444,16 +449,23 @@ export const exportIncremental = async (
         startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
 
-      backupConfig = await getBackupConfigById(backupConfigId);
-      if (backupConfig?.objects) {
-        const updateParams: any = { sizeInBytes };
-        const updatedObjects = backupConfig.objects.map((obj) =>
-          obj.name === objectName ? { ...obj, sizeInBytes } : obj
-        );
-        updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-        updateParams.objects = updatedObjects;
-        await updateBackupConfig(backupConfigId, updateParams);
-      }
+      // backupConfig = await getBackupConfigById(backupConfigId);
+      // if (backupConfig?.objects) {
+      //   const updateParams: any = { sizeInBytes };
+      //   const updatedObjects = backupConfig.objects.map((obj) =>
+      //     obj.name === objectName ? { ...obj, sizeInBytes } : obj
+      //   );
+      //   updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+      //   updateParams.objects = updatedObjects;
+      //   await updateBackupConfig(backupConfigId, updateParams);
+      // }
+
+      await updateBackupConfigObject({
+        backupConfigId,
+        objectName,
+        sizeInBytes,
+        completedRecordCount:  object.completedRecordCount
+      });
 
       logger.info(
         `Object changes transfered, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, sizeInBytes=${sizeInBytes}`
@@ -534,12 +546,18 @@ export const exportIncremental = async (
     // );
 
     if (schemaChanged?.metadataType === 'fields' && schemaChanged?.diff.schemaChanged) {
-      if (backupConfig?.objects) {
-        const updatedObjects = backupConfig.objects.map((obj) =>
-          obj.name === objectName ? { ...obj, schemaChange: true } : obj
-        );
-        await updateBackupConfig(backupConfigId, { objects: updatedObjects });
-      }
+      // if (backupConfig?.objects) {
+      //   const updatedObjects = backupConfig.objects.map((obj) =>
+      //     obj.name === objectName ? { ...obj, schemaChange: true } : obj
+      //   );
+      //   await updateBackupConfig(backupConfigId, { objects: updatedObjects });
+      // }
+
+      await updateBackupConfigObject({
+        backupConfigId,
+        objectName,
+        schemaChange: true
+      });
 
       logger.info(
         `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
