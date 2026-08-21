@@ -1,4 +1,5 @@
 ﻿const NODE_ENV =  String(process.env.NODE_ENV);
+const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 const NODE_ENV_URL = String(process.env.NODE_ENV_URL);
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
@@ -8,12 +9,12 @@ const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
 const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
 const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT; // optional: for DynamoDB Local
-const USER_TABLE = String(process.env.USER_TABLE || 'data-vault-users');
-const OTP_TABLE = String(process.env.OTP_TABLE || 'data-vault-otps');
-const SESSION_TABLE = String(process.env.SESSION_TABLE || 'data-vault-sessions');
-const ROLE_TABLE = String(process.env.ROLE_TABLE || 'data-vault-roles');
-const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters');
-const COUNTER_TABLE = String(process.env.COUNTER_TABLE || 'data-vault-counters');
+const USER_TABLE = `${NODE_ENV_PREFIX}-${process.env.USER_TABLE || 'data-vault-users'}`;
+const OTP_TABLE = `${NODE_ENV_PREFIX}-${process.env.OTP_TABLE || 'data-vault-otps'}`;
+const SESSION_TABLE = `${NODE_ENV_PREFIX}-${process.env.SESSION_TABLE || 'data-vault-sessions'}`;
+const ROLE_TABLE = `${NODE_ENV_PREFIX}-${process.env.ROLE_TABLE || 'data-vault-roles'}`;
+const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters'}`;
+const COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.COUNTER_TABLE || 'data-vault-counters'}`;
 
 // Event Bridge Scheduler Config
 const AWS_SCHEDULER_REGION = String(process.env.AWS_SCHEDULER_REGION);
@@ -52,12 +53,12 @@ const SALESFORCE_LOGIN_REDIRECT_URI = String(process.env.SALESFORCE_LOGIN_REDIRE
 // Managed package namespace prefix (e.g. "SYX_DVV"). Empty when unpackaged/unset —
 // see utils/salesforce-namespace.ts for the only place this should be consumed.
 const SALESFORCE_NAMESPACE = String(process.env.SALESFORCE_NAMESPACE || '').trim();
-const OAUTH_STATE_TABLE = String(process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states');
-const CRM_TABLE = String(process.env.CRM_TABLE || 'data-vault-crms');
-const BACKUP_CONFIG_TABLE = String(process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs');
-const DESTINATION_TABLE = String(process.env.DESTINATION_TABLE || 'data-vault-destinations');
-const RESTORE_TABLE = String(process.env.RESTORE_TABLE || 'data-vault-restores');
-const RESTORE_JOB_TABLE = String(process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs');
+const OAUTH_STATE_TABLE = `${NODE_ENV_PREFIX}-${process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states'}`;
+const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
+const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
+const DESTINATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.DESTINATION_TABLE || 'data-vault-destinations'}`;
+const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
+const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
 
 // Encryption â€” must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
@@ -71,8 +72,8 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
-const BACKUP_JOB_TABLE = String(process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs');
-const SPACE_TABLE = String(process.env.SPACE_TABLE || 'data-vault-spaces');
+const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
+const SPACE_TABLE = `${NODE_ENV_PREFIX}-${process.env.SPACE_TABLE || 'data-vault-spaces'}`;
 
 // S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.

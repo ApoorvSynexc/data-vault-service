@@ -80,6 +80,9 @@ const updateBackupConfig = async (
   if (params.sizeInBytes !== undefined) {
     updates.sizeInBytes = params.sizeInBytes;
   }
+  if (params.completedRecordCount !== undefined) {
+    updates.completedRecordCount = params.completedRecordCount;
+  }
   if (params.scheduleConfig !== undefined) {
     updates.scheduleConfig = params.scheduleConfig;
   }
