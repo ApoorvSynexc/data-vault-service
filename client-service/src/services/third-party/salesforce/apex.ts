@@ -2,8 +2,7 @@ import { IUser } from '../../../models';
 import { getDecryptedCrmCredential } from '../../user';
 import { getCrmById } from '../../crm';
 import { salesforceRequest, SalesforceTokens } from '../salesforce';
-
-const salesforceNamespace = 'SYX_DVV';
+import { apexRestBase as APEX_BASE } from '../../../utils/salesforce-namespace';
 
 /**
  * Outbound Node -> Salesforce REST calls. Auth is the OAuth access/refresh
@@ -89,7 +88,7 @@ const getApexObjects = async ({ user, mode, type }: { user?: IUser; mode?: ApexM
     throw new Error('Instance URL not found');
   }
 
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/accessible-objects?${apexQuery({ mode, type })}`;
+  const url = `${APEX_BASE(instanceUrl)}/accessible-objects?${apexQuery({ mode, type })}`;
 
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
@@ -113,7 +112,7 @@ const getApexObjectRecords = async ({ user, body }: { user?: IUser; body?: objec
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/preview-records`;
+  const url = `${APEX_BASE(instanceUrl)}/preview-records`;
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'POST', body }
@@ -138,7 +137,7 @@ const getApexObjectsCount = async ({ user, apiNames }: { user?: IUser; apiNames?
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-record-count`;
+  const url = `${APEX_BASE(instanceUrl)}/object-record-count`;
 
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
@@ -162,7 +161,7 @@ const getApexObjectChilds = async ({ user, objectName, mode, type, relationshipT
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-children?${apexQuery({ apiName: objectName, mode, type, relationshipType, relationshipDepth })}`;
+  const url = `${APEX_BASE(instanceUrl)}/object-children?${apexQuery({ apiName: objectName, mode, type, relationshipType, relationshipDepth })}`;
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
@@ -200,7 +199,7 @@ const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectN
   const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
   const instanceUrl = user.crmProfile?.instanceUrl;
 
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-fields-metadata?${apexQuery({ apiName: objectName, mode })}`;
+  const url = `${APEX_BASE(instanceUrl)}/object-fields-metadata?${apexQuery({ apiName: objectName, mode })}`;
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
@@ -222,7 +221,7 @@ const getApexPicklistValues = async ({ user, objectApiName, fieldApiName }: { us
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/get-picklist-values?objectApiName=${encodeURIComponent(objectApiName!)}&fieldApiName=${encodeURIComponent(fieldApiName!)}`;
+  const url = `${APEX_BASE(instanceUrl)}/get-picklist-values?objectApiName=${encodeURIComponent(objectApiName!)}&fieldApiName=${encodeURIComponent(fieldApiName!)}`;
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
@@ -244,15 +243,12 @@ const getRecordTypeMetadata = async ({ user, objectApiName }: { user?: IUser; ob
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
   }
-  const url = `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault/object-record-type-metadata?objectApiName=${encodeURIComponent(objectApiName!)}`;
+  const url = `${APEX_BASE(instanceUrl)}/object-record-type-metadata?objectApiName=${encodeURIComponent(objectApiName!)}`;
   return callApex(
     { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
     { url, method: 'GET' }
   );
 };
-
-const APEX_BASE = (instanceUrl?: string) =>
-  `${instanceUrl}/services/apexrest/${salesforceNamespace}/v1/data-vault`;
 
 const apexValidateSoql = async (
   user?: IUser,

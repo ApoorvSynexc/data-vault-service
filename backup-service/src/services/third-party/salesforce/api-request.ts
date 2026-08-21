@@ -1,5 +1,6 @@
 import { httpRequest } from '../../../utils/http-request';
 import { CORE_SERVICE, INTERNAL_SECRET } from '../../../constant';
+import { apexRestBase } from '../../../utils/salesforce-namespace';
 
 const SF_API_VERSION = 'v65.0';
 
@@ -160,9 +161,6 @@ const getRecordTypeValues = async (backupConfigId: string, objectApiName: string
   return res?.data;
 };
 
-// Managed-package namespace for the DataVault apex REST endpoints.
-const SALESFORCE_NAMESPACE = 'SYX_DVV';
-
 export interface ISalesforceChild {
   apiName?: string;
   relationshipType?: string; // MASTER | LOOKUP | REQUIRED_LOOKUP
@@ -184,7 +182,7 @@ const getObjectChilds = async (
   type: 'schedule' | 'realtime' = 'schedule'
 ): Promise<ISalesforceChild[]> => {
   const url =
-    `${instanceUrl}/services/apexrest/${SALESFORCE_NAMESPACE}/v1/data-vault/object-children` +
+    `${apexRestBase(instanceUrl)}/object-children` +
     `?apiName=${encodeURIComponent(objectName)}&mode=backup&type=${type}&relationshipType=ALL`;
   const res = await salesforceRequest<{ data?: { childs?: ISalesforceChild[] } }>(
     { url, method: 'GET' },

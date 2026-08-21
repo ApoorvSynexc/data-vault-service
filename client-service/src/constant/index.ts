@@ -50,6 +50,9 @@ const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
 const SALESFORCE_CLIENT_SECRET = String(process.env.SALESFORCE_CLIENT_SECRET);
 const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
 const SALESFORCE_LOGIN_REDIRECT_URI = String(process.env.SALESFORCE_LOGIN_REDIRECT_URI);
+// Managed package namespace prefix (e.g. "SYX_DVV"). Empty when unpackaged/unset —
+// see utils/salesforce-namespace.ts for the only place this should be consumed.
+const SALESFORCE_NAMESPACE = String(process.env.SALESFORCE_NAMESPACE || '').trim();
 const OAUTH_STATE_TABLE = `${NODE_ENV_PREFIX}-${process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states'}`;
 const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
 const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
@@ -271,6 +274,7 @@ export {
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
   SALESFORCE_LOGIN_REDIRECT_URI,
+  SALESFORCE_NAMESPACE,
   OAUTH_STATE_TABLE,
   CRM_TABLE,
   BACKUP_CONFIG_TABLE,
