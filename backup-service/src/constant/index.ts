@@ -15,7 +15,6 @@ const TABLE_COUNTER_TABLE = String(process.env.TABLE_COUNTER_TABLE || 'data-vaul
 const CRM_TABLE = String(process.env.CRM_TABLE || 'data-vault-crms');
 
 // AWS Glue / Athena
-const AWS_GLUE_DATABASE_PREFIX = String(process.env.AWS_GLUE_DATABASE_PREFIX || 'datavault');
 // Dedicated IAM credentials scoped to Glue (separate from the default AWS creds).
 const AWS_GLUE_ACCESS_KEY = String(process.env.AWS_GLUE_ACCESS_KEY);
 const AWS_GLUE_SECRET_KEY = String(process.env.AWS_GLUE_SECRET_KEY);
@@ -124,7 +123,6 @@ export {
   DYNAMODB_ENDPOINT,
 
   // AWS Glue / Athena
-  AWS_GLUE_DATABASE_PREFIX,
   AWS_GLUE_ACCESS_KEY,
   AWS_GLUE_SECRET_KEY,
   BACKUP_CONFIG_TABLE,

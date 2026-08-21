@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, AWS_GLUE_DATABASE_PREFIX } from '../../constant';
+import { BACKUP_JOB_TABLE } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject } from '../../models';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
@@ -498,7 +498,7 @@ const retrieveRecords = async (
   const config = await getBackupConfigById(params.backupConfigId);
   if (!config || config.userId !== params.userId) return null;
 
-  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const databaseName = toGlueId(params.backupConfigId);
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const hudiTable = `${table}_hudi`;
   const deltaTable = `${table}_delta`;
@@ -579,7 +579,7 @@ const retrieveInactiveRecordTypes = async (
   const config = await getBackupConfigById(params.backupConfigId);
   if (!config || config.userId !== params.userId) return null;
 
-  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const databaseName = toGlueId(params.backupConfigId);
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const deltaTable = `${table}_delta`;
 
@@ -635,7 +635,7 @@ const retrieveMissingFields = async (
   const config = await getBackupConfigById(params.backupConfigId);
   if (!config || config.userId !== params.userId) return null;
 
-  const databaseName = `${toGlueId(AWS_GLUE_DATABASE_PREFIX)}_${toGlueId(config.crmId)}`;
+  const databaseName = toGlueId(params.backupConfigId);
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const deltaTable = `${table}_delta`;
 

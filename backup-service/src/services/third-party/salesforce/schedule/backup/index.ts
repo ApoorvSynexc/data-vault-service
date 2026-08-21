@@ -7,11 +7,7 @@ import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPag
 import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
 import { uploadRecordTypeMetadata } from '../../record-type';
 import { getBackupConfigById, updateBackupConfig } from '../../../../backup-config';
-import {
-  createCsvGlueTable,
-  registerBackupJobPartition,
-  updateGlueTableSchema,
-} from '../../../glue';
+import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import { salesforceMetadataHandler } from '../../metadata';
 
 // SOQL injection guards.
@@ -116,7 +112,7 @@ export const exportFirstTime = async (
   let jobId: string;
 
   try {
-    const { fieldNames: allFieldNames, schema } = await getObjectMetadata(
+    const { fieldNames: allFieldNames } = await getObjectMetadata(
       backupConfigId,
       objectName,
       'backup'
@@ -286,34 +282,6 @@ export const exportFirstTime = async (
     //   schema
     // );
 
-    await createCsvGlueTable({
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      type: 'backup',
-      destConfig,
-      columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
-    }).catch((err) =>
-      logger.error(
-        `[glue] failed to create table | backupJobId:${backupJobId} objectName:${objectName} err:${err?.message ?? err}`
-      )
-    );
-
-    await registerBackupJobPartition({
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      backupJobId,
-      type: 'backup',
-      destConfig,
-    }).catch((err) =>
-      logger.error(
-        `[glue] failed to register partition | backupJobId:${backupJobId} objectName:${objectName} err:${err?.message ?? err}`
-      )
-    );
-
     logger.info(
       `Object first-time backup complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
     );
@@ -356,7 +324,7 @@ export const exportIncremental = async (
   let backupConfig;
 
   try {
-    const { fieldNames: allFieldNames, schema: latestSchema } = await getObjectMetadata(
+    const { fieldNames: allFieldNames } = await getObjectMetadata(
       backupConfigId,
       objectName,
       'backup'
@@ -581,38 +549,10 @@ export const exportIncremental = async (
         await updateBackupConfig(backupConfigId, { objects: updatedObjects });
       }
 
-      updateGlueTableSchema({
-        crmId,
-        backupConfigId,
-        objectName,
-        columns: latestSchema.map((f: { apiName: string }) => ({
-          name: f.apiName,
-          type: 'string',
-        })),
-      }).catch((err) =>
-        logger.error(
-          `[glue] failed to update table schema | backupJobId:${backupJobId} objectName:${objectName} err:${err?.message ?? err}`
-        )
-      );
-
       logger.info(
         `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
       );
     }
-
-    registerBackupJobPartition({
-      crmId,
-      crmName,
-      backupConfigId,
-      objectName,
-      backupJobId,
-      type: 'backup',
-      destConfig,
-    }).catch((err) =>
-      logger.error(
-        `[glue] failed to register partition | backupJobId:${backupJobId} objectName:${objectName} err:${err?.message ?? err}`
-      )
-    );
 
     logger.info(
       `Object incremental backup complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`

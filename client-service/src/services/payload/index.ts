@@ -423,11 +423,14 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             // Dynamic Allocation
             // executor.instances must be set explicitly — EMR Serverless defaults it to 3,
             // which fails validation once it exceeds maxExecutors.
+            // Capped at 1 executor: driver(4vCPU/16GB) + 1 executor(4vCPU/16GB) = 8vCPU/32GB
+            // peak, leaving headroom under the 12vCPU/50GB application maximumCapacity
+            // (pre-init capacity alone already reserves 12vCPU/48GB at 2 executors).
             '--conf spark.executor.instances=1',
             '--conf spark.dynamicAllocation.enabled=true',
             '--conf spark.dynamicAllocation.minExecutors=1',
-            '--conf spark.dynamicAllocation.initialExecutors=2',
-            '--conf spark.dynamicAllocation.maxExecutors=2',
+            '--conf spark.dynamicAllocation.initialExecutors=1',
+            '--conf spark.dynamicAllocation.maxExecutors=1',
             '--conf spark.dynamicAllocation.executorIdleTimeout=60s',
             '--conf spark.dynamicAllocation.schedulerBacklogTimeout=1s',
             '--conf spark.dynamicAllocation.sustainedSchedulerBacklogTimeout=1s',
@@ -475,6 +478,7 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.speculation=false',
         ].join(' ');
 
+        console.log('NODE ENV:', NODE_ENV_URL);
         const command = new StartJobRunCommand({
             applicationId: AWS_EMR_APPLICATION_ID,
             executionRoleArn: AWS_EMR_EXECUTION_ROLE_ARN,
@@ -491,20 +495,21 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                         classification: "spark-defaults",
                         properties: {
                             "spark.executorEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
-                            "spark.yarn.appMasterEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
-                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY}`,
-                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY}`,
+                            "spark.emr-serverless.driverEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
+                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL}`,
+                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL}`,
                             "spark.executorEnv.NODE_SERVER_URL": NODE_ENV_URL,
-                            "spark.yarn.appMasterEnv.NODE_SERVER_URL": NODE_ENV_URL,
+                            "spark.emr-serverless.driverEnv.NODE_SERVER_URL": NODE_ENV_URL,
                         },
                     },
                 ],
                 monitoringConfiguration: {
-                    managedPersistenceMonitoringConfiguration: { enabled: true },
-                    cloudWatchLoggingConfiguration: {
-                        enabled: true,
-                        logGroupName: "/aws/emr-serverless",
+                    managedPersistenceMonitoringConfiguration: {
+                        enabled: true
                     },
+                    s3MonitoringConfiguration: {
+                        logUri: "s3://qa-data-vault-logs"
+                    }
                 },
             },
         });

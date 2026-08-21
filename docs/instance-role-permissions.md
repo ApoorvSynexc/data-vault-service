@@ -53,7 +53,7 @@ glue:GetTable
 glue:GetTables
 glue:GetPartitions
 ```
-Resources: `catalog`, `database/datavault*`, `table/datavault*/*`
+Resources: `catalog`, `database/*`, `table/*/*` — one Glue database per `backupConfigId` (named `<backupConfigId>` directly, no shared prefix), so these can no longer be scoped with a single `datavault*` wildcard.
 
 ### EMR Serverless
 ```
@@ -161,7 +161,7 @@ glue:GetTable
 glue:UpdateTable
 glue:BatchCreatePartition
 ```
-Resources: `catalog`, `database/datavault*`, `table/datavault*/*`
+Resources: `catalog`, `database/*`, `table/*/*` — one Glue database per `backupConfigId` (named `<backupConfigId>` directly, no shared prefix), so these can no longer be scoped with a single `datavault*` wildcard.
 
 ### DynamoDB
 ```

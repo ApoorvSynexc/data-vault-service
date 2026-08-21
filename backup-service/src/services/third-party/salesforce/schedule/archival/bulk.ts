@@ -30,11 +30,6 @@ import { uploadObjectChilds } from '../../child';
 import { uploadToS3 } from '../../../../destination';
 import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
-import {
-  createCsvGlueTable,
-  registerBackupJobPartition,
-  updateGlueTableSchema,
-} from '../../../glue';
 import { randomUUID } from 'crypto';
 
 // Builds a unique S3 key for one archival CSV file within the object's folder.
@@ -373,9 +368,6 @@ async function uploadSingleObject(
   let salesforceApiCount = 0;
   let completedRecordCount = 0;
   let totalSizeInBytes = 0;
-  // Track whether we've registered the Glue partition for this job+object yet.
-  // The partition only needs one registration regardless of how many CSV pages exist.
-  let gluePartitionRegistered = false;
 
   try {
     await updateArchivalObject({
@@ -421,19 +413,9 @@ async function uploadSingleObject(
         `[archival:child] no records — skipping upload | backupJobId:${backupJobId} objectName:${object.name}`
       );
 
-      // Even with zero records we still persist the object schema (and create its
-      // Glue table) so restore-retrieve's fetch-object-fields works for archived-
-      // but-empty objects. The schema write is unconditional; the read only decides
-      // whether this is the object's first schema and therefore needs a Glue table.
+      // Even with zero records we still persist the object schema so
+      // restore-retrieve's fetch-object-fields works for archived-but-empty objects.
       try {
-        const stored = await readLatestSchema(ctx.destConfig, {
-          crmId: ctx.crmId,
-          crmName: ctx.crmName,
-          backupConfigId: ctx.backupConfigId,
-          objectName: object.name,
-          type: 'archival',
-        });
-
         await writeSchemaFile(
           ctx.destConfig,
           {
@@ -447,25 +429,9 @@ async function uploadSingleObject(
           },
           schema
         );
-
-        if (!stored) {
-          await createCsvGlueTable({
-            crmId: ctx.crmId,
-            crmName: ctx.crmName,
-            backupConfigId: ctx.backupConfigId,
-            objectName: object.name,
-            type: 'archival',
-            destConfig: ctx.destConfig,
-            columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
-          }).catch((err) =>
-            logger.error(
-              `[glue] failed to create table | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
-            )
-          );
-          logger.info(
-            `[archival:child] schema persisted for empty object | backupJobId:${backupJobId} objectName:${object.name}`
-          );
-        }
+        logger.info(
+          `[archival:child] schema persisted for empty object | backupJobId:${backupJobId} objectName:${object.name}`
+        );
       } catch (err: any) {
         logger.error(
           `[archival:child] failed to persist schema for empty object | backupJobId:${backupJobId} objectName:${object.name} error:${err?.message ?? err}`
@@ -531,23 +497,6 @@ async function uploadSingleObject(
       await incrementBackupConfigCounters(ctx.backupConfigId, {
         sizeInBytes: csvBuffer.byteLength,
       });
-
-      if (!gluePartitionRegistered) {
-        gluePartitionRegistered = true;
-        await registerBackupJobPartition({
-          crmId: ctx.crmId,
-          crmName: ctx.crmName,
-          backupConfigId: ctx.backupConfigId,
-          objectName: object.name,
-          backupJobId,
-          type: 'archival',
-          destConfig: ctx.destConfig,
-        }).catch((err) =>
-          logger.error(
-            `[glue] failed to register partition | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
-          )
-        );
-      }
 
       const existingKeys = s3UrlsMap.get(object.name) ?? [];
       existingKeys.push(s3Key);
@@ -616,19 +565,6 @@ async function uploadSingleObject(
         logger.info(
           `[archival:child] schema uploaded (first time) | backupJobId:${backupJobId} objectName:${object.name}`
         );
-        await createCsvGlueTable({
-          crmId: ctx.crmId,
-          crmName: ctx.crmName,
-          backupConfigId: ctx.backupConfigId,
-          objectName: object.name,
-          type: 'archival',
-          destConfig: ctx.destConfig,
-          columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
-        }).catch((err) =>
-          logger.error(
-            `[glue] failed to create table | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
-          )
-        );
       } else if (!schemasAreEqual(stored, schema)) {
         logger.info(
           `[archival:child] schema change detected | backupJobId:${backupJobId} objectName:${object.name}`
@@ -637,16 +573,6 @@ async function uploadSingleObject(
           backupJobId,
           object: { id: object.id, schemaChange: true },
         });
-        await updateGlueTableSchema({
-          crmId: ctx.crmId,
-          backupConfigId: ctx.backupConfigId,
-          objectName: object.name,
-          columns: schema.map((f: { apiName: string }) => ({ name: f.apiName, type: 'string' })),
-        }).catch((err) =>
-          logger.error(
-            `[glue] failed to update table schema | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
-          )
-        );
       } else {
         logger.info(
           `[archival:child] schema unchanged | backupJobId:${backupJobId} objectName:${object.name}`
@@ -739,7 +665,6 @@ const uploadBulkResultsByPageArchival = async (
   let salesforceApiCount = 0;
   let completedRecordCount = startCompletedRecordCount;
   let totalSizeInBytes = 0;
-  let gluePartitionRegistered = false;
 
   // null = fetch the first page; a string = resume from a specific locator.
   let locator: string | null = startLocator;
@@ -796,23 +721,6 @@ const uploadBulkResultsByPageArchival = async (
       await incrementBackupConfigCounters(backupConfigId, {
         sizeInBytes: csvBuffer.byteLength,
       });
-
-      if (!gluePartitionRegistered) {
-        gluePartitionRegistered = true;
-        await registerBackupJobPartition({
-          crmId,
-          crmName,
-          backupConfigId,
-          objectName: object.name,
-          backupJobId,
-          type: 'archival',
-          destConfig,
-        }).catch((err) =>
-          logger.error(
-            `[glue] failed to register partition | backupJobId:${backupJobId} objectName:${object.name} err:${err?.message ?? err}`
-          )
-        );
-      }
 
       const parentKeys = s3UrlsPerObject.get(object.name) ?? [];
       parentKeys.push(parentS3Key);
