@@ -535,18 +535,18 @@ const getLastNBackupConfigByCrm = async (
   return (result.Items as IBackupConfig[] | undefined) ?? [];
 };
 
-const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup: { sizeInBytes: number, uploadedRecords: number }, archival: { sizeInBytes: number, uploadedRecords: number } }> => {
+const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup: { sizeInBytes: number, completedRecordCount: number }, archival: { sizeInBytes: number, completedRecordCount: number } }> => {
   let lastEvaluatedKey: Record<string, any> | undefined;
   const batchSize = 100;
 
   const response = {
     backup: {
       sizeInBytes: 0,
-      uploadedRecords: 0
+      completedRecordCount: 0
     },
     archival: {
       sizeInBytes: 0,
-      uploadedRecords: 0
+      completedRecordCount: 0
     }
   }
 
@@ -566,10 +566,10 @@ const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup
     items.forEach((config) => {
       if (config.type === 'ARCHIVAL') {
         response.archival.sizeInBytes += config.sizeInBytes ?? 0;
-        response.archival.uploadedRecords += config.uploadedRecords ?? 0;
+        response.archival.completedRecordCount += config.completedRecordCount ?? 0;
       } else {
         response.backup.sizeInBytes += config.sizeInBytes ?? 0;
-        response.backup.uploadedRecords += config.uploadedRecords ?? 0;
+        response.backup.completedRecordCount += config.completedRecordCount ?? 0;
       }
     });
 
