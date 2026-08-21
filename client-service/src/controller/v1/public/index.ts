@@ -3,6 +3,7 @@ import { wrapController } from '../../../utils/helper';
 import {
   updateBackupConfig,
   getBackupConfigsByCrm,
+  getBackupConfigById,
 } from '../../../services/backup-config';
 import {
   getDestinationById,
@@ -19,6 +20,7 @@ import {
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
+import { getUser, triggerBackupJob } from '../../../services';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -153,10 +155,21 @@ const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise
 };
 
 const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  console.log('GEETING HIT FROM EVENT BRIDGE');
   try {
     const event = req.body;
-    console.log('Event Bridge: ', JSON.stringify({ event }));
+    const { backupConfigId, userId } = event.detail as { backupConfigId: string, userId: string };
+
+    const config = await getBackupConfigById(backupConfigId);
+    if (!config) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    const user = await getUser({ userId });
+    if (!user) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival' });
     makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
     logger.error('realtime webhook processing error:', error);
