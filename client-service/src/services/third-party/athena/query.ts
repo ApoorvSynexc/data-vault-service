@@ -48,11 +48,6 @@ const POLL_FIRST_MS = 2000;
 const POLL_INITIAL_MS = 250;
 const POLL_MAX_MS = 2000;
 
-// Serve byte-identical repeat queries from Athena's result cache instead of
-// re-scanning S3. Backup data only changes when a job/compression run lands,
-// so a short reuse window is safe and turns repeat fetches into ~instant.
-const RESULT_REUSE_MINUTES = 5;
-
 // Maximum total time to wait for a query to finish before giving up (ms).
 // Bulk-restore scans (delta chain over hundreds of jobs) can legitimately run
 // past a minute; polling backs off to 2s so the extra headroom costs nothing
@@ -71,24 +66,18 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
 // have to own, secure, and keep in the workgroup's region. We only ever read
 // results back through GetQueryResults, never touch the underlying files
 // directly, so managed storage is a strict improvement here.
+//
+// No ResultReuseConfiguration either — AWS does not support query result
+// reuse on workgroups with managed query results enabled ("Query Result Reuse
+// is not supported in workgroups with ManagedQueryResultsConfiguration
+// enabled"), so the two features are mutually exclusive here.
 const startQuery = async (sql: string, database: string): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ResultReuseConfiguration: {
-      ResultReuseByAgeConfiguration: { Enabled: true, MaxAgeInMinutes: RESULT_REUSE_MINUTES },
-    },
   };
 
-  let response;
-  try {
-    response = await athena.send(new StartQueryExecutionCommand(input));
-  } catch (e) {
-    // Engine v2 workgroups reject ResultReuseConfiguration — retry without it.
-    if (!/ResultReuse/i.test(String((e as Error).message))) throw e;
-    delete input.ResultReuseConfiguration;
-    response = await athena.send(new StartQueryExecutionCommand(input));
-  }
+  const response = await athena.send(new StartQueryExecutionCommand(input));
 
   if (!response.QueryExecutionId) {
     throw new Error('[athena] StartQueryExecution returned no QueryExecutionId');
