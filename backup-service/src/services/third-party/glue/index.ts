@@ -129,7 +129,7 @@ export interface IGlueColumnDef {
 //
 // Layout (backup pipeline only — archival is a separate workflow):
 //   Hudi : <crmName>/<crmId>/backup/<cfg>/main_backup_files/<Object>/
-//   Delta: <crmName>/<crmId>/backup/<cfg>/delta/<Object>/
+//   Delta: <crmName>/<crmId>/backup/<cfg>/deltas/<Object>/
 
 // Hudi CoW read format for Athena — parquet data read through Hudi's input format.
 const HUDI_STORAGE_DESCRIPTOR_BASE = {
@@ -148,6 +148,14 @@ const buildHudiTableName = (backupConfigId: string, objectName: string): string 
 const buildDeltaTableName = (backupConfigId: string, objectName: string): string =>
   `${buildGlueTableName(backupConfigId, objectName)}_delta`;
 
+// S3 folder Spark actually writes each dataset to — the delta folder is plural
+// ("deltas") even though the `dataset` discriminator used elsewhere (labels, table
+// naming) stays singular ("delta").
+const DATASET_S3_FOLDER: Record<'main_backup_files' | 'delta', string> = {
+  main_backup_files: 'main_backup_files',
+  delta: 'deltas',
+};
+
 // S3 key prefix (no bucket) of a compression-output table root.
 const buildCompressionRootKey = (
   crmName: string,
@@ -155,7 +163,8 @@ const buildCompressionRootKey = (
   backupConfigId: string,
   objectName: string,
   dataset: 'main_backup_files' | 'delta'
-): string => `${crmName}/${crmId}/backup/${backupConfigId}/${dataset}/${objectName}/`;
+): string =>
+  `${crmName}/${crmId}/backup/${backupConfigId}/${DATASET_S3_FOLDER[dataset]}/${objectName}/`;
 
 export interface IEnsureCompressionTableParams {
   crmId: string;
