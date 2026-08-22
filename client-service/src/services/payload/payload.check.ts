@@ -10,7 +10,7 @@
 import assert from 'assert';
 import { processObjectOperations, isCompressible, mapRestoreSource, mapRestoreScope } from './index';
 import { isBackupCompleted } from '../backup-job';
-import { COMPRESSION_STATUS, JOB_STATUS } from '../../constant';
+import { BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS } from '../../constant';
 import { IBackupJob, IRestoreScope, IRestoreSource } from '../../models';
 
 const job = (backupJobId: string, status: string, object: any[] = []): IBackupJob =>
@@ -42,14 +42,16 @@ assert.deepStrictEqual(processObjectOperations([jobA, jobB]), {
   Account: ['inserts'],
 });
 
-// ─── 2. Only successful, not-yet-compressing backups are sent for compression ─
+// ─── 2. Finished (full or partial) backups not already mid-compression are sent ───
 // A job already in the lifecycle must never be re-sent: Spark holds it, and a second
-// send would double-compress. PENDING/RUNNING exclusion is what keeps compression from
-// overwriting an in-flight backup's status and breaking the hasActiveBackupJob dedup.
+// send would double-compress — except COMPRESSION_JOB_FAILED, which gets retried.
+// PENDING/RUNNING exclusion is what keeps compression from overwriting an in-flight
+// backup's status and breaking the hasActiveBackupJob dedup.
 assert.strictEqual(isCompressible(job('j', JOB_STATUS.success)), true);
+assert.strictEqual(isCompressible(job('j', BACKUP_STATUS.partialFailure)), true);
+assert.strictEqual(isCompressible(job('j', COMPRESSION_STATUS.failed)), true);
 assert.strictEqual(isCompressible(job('j', COMPRESSION_STATUS.compressed)), false);
 assert.strictEqual(isCompressible(job('j', COMPRESSION_STATUS.inProgress)), false);
-assert.strictEqual(isCompressible(job('j', COMPRESSION_STATUS.failed)), false);
 assert.strictEqual(isCompressible(job('j', JOB_STATUS.running)), false);
 assert.strictEqual(isCompressible(job('j', JOB_STATUS.pending)), false);
 assert.strictEqual(isCompressible(job('j', JOB_STATUS.failed)), false);
