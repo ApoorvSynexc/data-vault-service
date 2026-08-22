@@ -19,6 +19,7 @@ import {
   RetrieveType,
   FilterError,
   validateColumns,
+  OPERATION_FIELD,
   fetchPicklistValues,
   createRestoreJob,
   tiggerRestoreJob,
@@ -292,6 +293,13 @@ const parseRetrieveParams = (
 
   const columns = toStringList(columnNames);
   if (!columns?.length) return { ok: false, error: 'column_names_required' };
+  // OPERATION is a value the backend computes per row (see athena-fetch's
+  // dv_operation) — it has no matching column in the underlying Glue table, so
+  // a caller requesting it as an input column fails as a confusing Athena
+  // COLUMN_NOT_FOUND rather than a clear 400.
+  if (columns.some((c) => c.toLowerCase() === OPERATION_FIELD.toLowerCase())) {
+    return { ok: false, error: 'invalid_column_name' };
+  }
   // Field API names land in quoted identifiers and JSON paths, so a bad one is a
   // 400 here rather than an Athena failure mid-query.
   try {
