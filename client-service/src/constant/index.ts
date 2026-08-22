@@ -36,6 +36,9 @@ const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN).trim();
 // Dedicated IAM credentials scoped to Athena (separate from the default AWS creds).
 const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
 const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
+// When true, wires the AWS SDK's own request/response logger into the Athena
+// client (same info the CLI's --debug flag prints) and logs every poll step.
+const AWS_ATHENA_DEBUG = String(process.env.AWS_ATHENA_DEBUG).toLowerCase() === 'true';
 
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET);
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET);
@@ -258,6 +261,7 @@ export {
   AWS_ATHENA_ROLE_ARN,
   AWS_ATHENA_ACCESS_KEY,
   AWS_ATHENA_SECRET_KEY,
+  AWS_ATHENA_DEBUG,
 
   // JWT Config
   JWT_ACCESS_SECRET,
