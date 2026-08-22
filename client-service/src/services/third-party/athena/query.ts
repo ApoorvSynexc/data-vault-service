@@ -7,8 +7,20 @@ import {
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
 import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN, AWS_ATHENA_DEBUG } from '../../../constant';
 import { logger } from '../../../middlewares';
+
+// AWS SDK clients accept a `logger` with this shape and call it internally
+// around every request/response — this is the SDK-level equivalent of the
+// CLI's --debug flag. Routed through `logger.info` (not `.debug`) so it
+// actually prints regardless of winston's configured level, since the point
+// of AWS_ATHENA_DEBUG is "make it show up".
+const athenaSdkLogger = {
+  debug: (...args: unknown[]) => logger.info('[athena-sdk]', ...args),
+  info: (...args: unknown[]) => logger.info('[athena-sdk]', ...args),
+  warn: (...args: unknown[]) => logger.warn('[athena-sdk]', ...args),
+  error: (...args: unknown[]) => logger.error('[athena-sdk]', ...args),
+};
 
 // Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
 // Principal) — only a caller that has actually assumed that role via STS can
@@ -39,6 +51,7 @@ const athena = new AthenaClient({
     masterCredentials,
     params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
   }),
+  ...(AWS_ATHENA_DEBUG ? { logger: athenaSdkLogger } : {}),
 });
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
@@ -53,6 +66,14 @@ const POLL_MAX_MS = 2000;
 // past a minute; polling backs off to 2s so the extra headroom costs nothing
 // when queries are fast.
 const QUERY_TIMEOUT_MS = 300_000;
+
+// Never logs secret keys — only whether static master credentials are
+// configured, so a misconfigured env var shows up without leaking anything.
+logger.info(
+  `[athena] settings | region:${AWS_REGION} roleArn:${AWS_ATHENA_ROLE_ARN} sessionName:datavault-athena ` +
+  `usingStaticMasterCredentials:${Boolean(masterCredentials)} debug:${AWS_ATHENA_DEBUG} ` +
+  `pollFirstMs:${POLL_FIRST_MS} pollInitialMs:${POLL_INITIAL_MS} pollMaxMs:${POLL_MAX_MS} queryTimeoutMs:${QUERY_TIMEOUT_MS}`
+);
 
 const TERMINAL_STATES = new Set<QueryExecutionState>([
   QueryExecutionState.SUCCEEDED,
@@ -77,7 +98,14 @@ const startQuery = async (sql: string, database: string): Promise<string> => {
     QueryExecutionContext: { Database: database },
   };
 
+  logger.info(`[athena] StartQueryExecution request | ${JSON.stringify(input)}`);
+
   const response = await athena.send(new StartQueryExecutionCommand(input));
+
+  logger.info(
+    `[athena] StartQueryExecution response | queryExecutionId:${response.QueryExecutionId} ` +
+    `requestId:${response.$metadata.requestId} httpStatusCode:${response.$metadata.httpStatusCode}`
+  );
 
   if (!response.QueryExecutionId) {
     throw new Error('[athena] StartQueryExecution returned no QueryExecutionId');
@@ -89,18 +117,26 @@ const startQuery = async (sql: string, database: string): Promise<string> => {
 // Polls Athena until the query reaches a terminal state or the timeout is exceeded.
 // Throws if the query fails, is cancelled, or times out.
 const waitForQuery = async (queryExecutionId: string): Promise<void> => {
-  const deadline = Date.now() + QUERY_TIMEOUT_MS;
+  const started = Date.now();
+  const deadline = started + QUERY_TIMEOUT_MS;
   let interval = POLL_INITIAL_MS;
+  let poll = 0;
 
   // Initial settle wait before the first status check.
   await new Promise((resolve) => setTimeout(resolve, POLL_FIRST_MS));
 
   while (Date.now() < deadline) {
+    poll += 1;
     const { QueryExecution } = await athena.send(
       new GetQueryExecutionCommand({ QueryExecutionId: queryExecutionId })
     );
 
     const state = QueryExecution?.Status?.State;
+
+    logger.info(
+      `[athena] GetQueryExecution poll #${poll} | queryExecutionId:${queryExecutionId} ` +
+      `state:${state} elapsedMs:${Date.now() - started}`
+    );
 
     if (!state) {
       throw new Error('[athena] GetQueryExecution returned no state');
@@ -140,9 +176,11 @@ const fetchQueryResults = async (
   const rows: Record<string, string>[] = [];
   let nextToken: string | undefined;
   let isFirstPage = true;
+  let page = 0;
 
   do {
-    const { ResultSet, NextToken } = await athena.send(
+    page += 1;
+    const { ResultSet, NextToken, $metadata } = await athena.send(
       new GetQueryResultsCommand({
         QueryExecutionId: queryExecutionId,
         NextToken: nextToken,
@@ -150,6 +188,12 @@ const fetchQueryResults = async (
     );
 
     const resultRows = ResultSet?.Rows ?? [];
+
+    logger.info(
+      `[athena] GetQueryResults page ${page} | queryExecutionId:${queryExecutionId} ` +
+      `rowsInPage:${resultRows.length} rowsSoFar:${rows.length} hasNextToken:${Boolean(NextToken)} ` +
+      `requestId:${$metadata.requestId} httpStatusCode:${$metadata.httpStatusCode}`
+    );
 
     if (isFirstPage) {
       // First row of the first page is always the header row.
