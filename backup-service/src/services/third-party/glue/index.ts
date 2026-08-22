@@ -50,19 +50,47 @@ const buildGlueDatabaseName = (backupConfigId: string): string => toGlueIdentifi
 const buildGlueTableName = (backupConfigId: string, objectName: string): string =>
   `cfg_${toGlueIdentifier(backupConfigId)}_${toGlueIdentifier(objectName)}`;
 
-// Ensures the Glue database exists. Creates it if not — idempotent.
+// In-flight CreateDatabaseCommand calls, keyed by databaseName. ensureHudiFormatTable
+// calls ensureGlueDatabase once per object per format (hudi + delta), so a single
+// ensure-compression-tables run already fans out into 2×objectNames.length concurrent
+// callers for the SAME not-yet-existing database. AWS Glue does not reliably turn the
+// losers of that race into a clean AlreadyExistsException — it can surface
+// ConcurrentModificationException instead, which is a real (rethrown) error here, not
+// idempotency. Memoizing the in-flight promise per databaseName collapses that fan-out
+// into exactly one CreateDatabaseCommand call; every other caller just awaits it.
+const inFlightDatabaseCreate = new Map<string, Promise<void>>();
+
+// Ensures the Glue database exists. Creates it if not — idempotent, and safe under
+// any amount of same-process concurrency for the same databaseName (see map above).
 const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
-  try {
-    await glue.send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
-    logger.info(`[glue] created database | db:${databaseName}`);
-  } catch (err: any) {
-    if (err.name !== 'AlreadyExistsException') {
-      logger.error(
-        `[glue] ensureGlueDatabase failed | db:${databaseName} err:${err.name}: ${err.message}`
-      );
-      throw err;
+  const existing = inFlightDatabaseCreate.get(databaseName);
+  if (existing) {
+    logger.info(`[glue] ensureGlueDatabase duplicate | db:${databaseName} awaiting in-progress create`);
+    return existing;
+  }
+
+  logger.info(`[glue] ensureGlueDatabase start | db:${databaseName}`);
+  const create = (async () => {
+    try {
+      await glue.send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
+      logger.info(`[glue] created database | db:${databaseName}`);
+    } catch (err: any) {
+      if (err.name !== 'AlreadyExistsException') {
+        logger.error(
+          `[glue] ensureGlueDatabase failed | db:${databaseName} err:${err.name}: ${err.message}`
+        );
+        throw err;
+      }
+      logger.info(`[glue] database already exists | db:${databaseName}`);
     }
-    logger.info(`[glue] database already exists | db:${databaseName}`);
+  })();
+  inFlightDatabaseCreate.set(databaseName, create);
+
+  try {
+    await create;
+    logger.info(`[glue] ensureGlueDatabase complete | db:${databaseName}`);
+  } finally {
+    inFlightDatabaseCreate.delete(databaseName);
   }
 };
 
