@@ -23,9 +23,9 @@ const buildEmptyBucketPolicy = (): BucketPolicy => ({
   Statement: [],
 });
 
-// Client buckets are read-only source data for Athena — query results write
-// to our own AWS_ATHENA_OUTPUT_LOCATION bucket instead (see athena/query.ts),
-// so no client bucket policy needs write-side actions.
+// Client buckets are read-only source data for Athena — query results land in
+// Athena-owned managed storage instead (see athena/query.ts), so no client
+// bucket policy needs write-side actions.
 //   s3:GetObject  — read individual objects (Athena query execution)
 //   s3:ListBucket — list prefixes (Athena partition discovery)
 const REQUIRED_ATHENA_ACTIONS = ['s3:GetObject', 's3:ListBucket'];

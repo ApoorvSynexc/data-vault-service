@@ -7,7 +7,7 @@ import {
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
 import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN, AWS_ATHENA_OUTPUT_LOCATION } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 // Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
@@ -66,11 +66,15 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
 ]);
 
 // Submits a query to Athena and returns the queryExecutionId.
+// No ResultConfiguration.OutputLocation — omitting it makes Athena store
+// results in Athena-owned managed storage (engine v3+) instead of a bucket we
+// have to own, secure, and keep in the workgroup's region. We only ever read
+// results back through GetQueryResults, never touch the underlying files
+// directly, so managed storage is a strict improvement here.
 const startQuery = async (sql: string, database: string): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ResultConfiguration: { OutputLocation: AWS_ATHENA_OUTPUT_LOCATION },
     ResultReuseConfiguration: {
       ResultReuseByAgeConfiguration: { Enabled: true, MaxAgeInMinutes: RESULT_REUSE_MINUTES },
     },
@@ -206,9 +210,8 @@ export const fetchStoredResults = async (
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
 // database must be a Glue Catalog database name (e.g. the backupConfigId).
-// Results are written to AWS_ATHENA_OUTPUT_LOCATION (our own bucket — Athena
-// requires the output bucket to be in the same region as the workgroup, which
-// rules out a per-client bucket).
+// Results land in Athena-owned managed storage (see startQuery) — nothing to
+// configure or own on our side.
 // `maxRows` caps how many rows are pulled back; the returned queryExecutionId
 // lets a later request replay the same rows via fetchStoredResults.
 export const runAthenaQuery = async (
