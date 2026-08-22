@@ -2,9 +2,9 @@ import { EMRServerlessClient, StartJobRunCommand, StartJobRunCommandOutput } fro
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
-import { getBackupJobsByConfig } from '../backup-job';
+import { getBackupJobsByConfig, getBackupJobsByConfigAndStatuses } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, JOB_STATUS, SCHEDULE_MODE, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL } from '../../constant';
+import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS, SCHEDULE_MODE, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL } from '../../constant';
 import { runRealtimeSchemaSync } from './schema-sync';
 import { logger } from '../../middlewares';
 import { IAwsCredentials, IBackupConfig, IBackupJob, IRestoreScope, IRestoreSource } from '../../models';
@@ -164,26 +164,51 @@ async function fetchAllBackupJobs(backupConfigId: string) {
     return allJobs;
 }
 
-// Only successful backups that haven't entered the compression lifecycle.
-// Excludes COMPRESSED (done), COMPRESSION_JOB_IN_PROGRESS (Spark already has it),
-// COMPRESSION_JOB_FAILED (no auto-retry), and PENDING/RUNNING/FAILED backups.
-// ponytail: no retry path — a COMPRESSION_JOB_FAILED job, or one stranded in
-// COMPRESSION_JOB_IN_PROGRESS by a crashed Spark run, never re-enters the trigger and
-// can't return to SUCCESS on its own, because compression overwrote `status`. Retry
-// needs the separate `compressionStatus` field (see COMPRESSION_STATUS in constant/),
-// which would leave `status` on SUCCESS and make the filter
-// `compressionStatus IN (null, COMPRESSION_JOB_FAILED)`. Until then, stuck jobs are
-// found by age via lastUpdatedAt, which setCompressionStatus already writes.
-const isCompressible = (job: IBackupJob): boolean => job.status === JOB_STATUS.success;
+// Backups that finished (fully or partially) and aren't already mid-compression or
+// done. Includes SUCCESS, PARTIAL_FAILURE (some objects failed, the rest still ships),
+// and COMPRESSION_JOB_FAILED (retry — Spark gets another attempt). Excludes COMPRESSED
+// (done), COMPRESSION_JOB_IN_PROGRESS (Spark already has it), and PENDING/RUNNING/FAILED
+// backups.
+// ponytail: COMPRESSION_JOB_FAILED retries every time this runs, with no backoff or
+// retry cap — a job that deterministically fails compression will loop forever. Add a
+// retry count/cap if that shows up in practice.
+//
+// Single source of truth for both the DB-level filter (getBackupJobsByConfigAndStatuses,
+// via fetchCompressibleBackupJobs) and the in-memory predicate (isCompressible, kept for
+// payload.check.ts and any caller that already has a job in hand).
+const COMPRESSIBLE_STATUSES: string[] = [
+    JOB_STATUS.success,
+    BACKUP_STATUS.partialFailure,
+    COMPRESSION_STATUS.failed,
+];
+const isCompressible = (job: IBackupJob): boolean => COMPRESSIBLE_STATUSES.includes(job.status);
+
+// ─── Fetch only compression-eligible backup jobs, filtered at the query layer ──
+// Payload-only counterpart to fetchAllBackupJobs above: buildPayload is the sole
+// caller, so filtering happens here rather than on fetchAllBackupJobs itself, which
+// initalizePayloadTransform also uses (unfiltered) just to confirm the config has run
+// at all.
+async function fetchCompressibleBackupJobs(backupConfigId: string) {
+    const allJobs = [];
+    let cursor: string | undefined;
+
+    do {
+        const result = await getBackupJobsByConfigAndStatuses(backupConfigId, COMPRESSIBLE_STATUSES, { limit: 100, cursor });
+        allJobs.push(...result.items);
+        cursor = result.nextCursor;
+    } while (cursor);
+
+    return allJobs;
+}
 
 // ─── Build EMR payload from a backupConfigId ──────────────────────────────────
 // Pure builder: resolves config/crm/destination/jobs and shapes the payload Spark
 // reads. objectOperations is keyed by backupJobId so Spark can compress each job's
 // output independently; a job with no operations maps to {}.
 //
-// The job set is resolved here, not by the caller: every job on the config that
-// isCompressible admits (status SUCCESS — excludes failed backups and all
-// compression states, which overwrite `status`).
+// The job set is resolved here, not by the caller: fetchCompressibleBackupJobs pulls
+// only jobs whose status is SUCCESS, PARTIAL_FAILURE, or COMPRESSION_JOB_FAILED —
+// excludes FAILED backups and the remaining compression states, which overwrite `status`.
 //
 // Shape matches Spark's parser exactly (JsonUtils.java): everything but jobType and
 // backupConfigId nests under `details`, creds under details.destinationConfigs.
@@ -208,12 +233,10 @@ async function buildPayload(backupConfigId: string) {
         throw new Error('destination_not_found');
     }
 
-    const allBackupJobs = await fetchAllBackupJobs(backupConfigId);
-    if (!allBackupJobs.length) {
+    const jobs = await fetchCompressibleBackupJobs(backupConfigId);
+    if (!jobs.length) {
         throw new Error('No backup jobs found');
     }
-
-    const jobs = allBackupJobs.filter(isCompressible);
 
     // processObjectOperations already takes a job array, so a single-job array gives that
     // job's operations with no change to the merge logic itself.
