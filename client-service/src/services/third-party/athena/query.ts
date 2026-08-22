@@ -47,10 +47,10 @@ const masterCredentials =
 
 const athena = new AthenaClient({
   region: AWS_REGION,
-  credentials: fromTemporaryCredentials({
-    masterCredentials,
-    params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
-  }),
+  // credentials: fromTemporaryCredentials({
+  //   masterCredentials,
+  //   params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
+  // }),
   ...(AWS_ATHENA_DEBUG ? { logger: athenaSdkLogger } : {}),
 });
 
