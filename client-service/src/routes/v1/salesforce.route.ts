@@ -16,14 +16,6 @@ router.post('/role/create', attachDecryptedSalesforceRequest('body'), createRole
 router.put('/role/update', attachDecryptedSalesforceRequest('body'), updateRoleValidation, salesofrceController.updateRoleHandler);
 router.delete('/role/delete', attachDecryptedSalesforceRequest('query'), salesofrceController.deleteRoleHandler);
 
-// Post-install provisioning — creates the ECA permission set (idempotent) and
-// wires it into the '360 Data Vault' External Client App's OAuth policy.
-router.post(
-  '/create-permission-set-and-assign-to-eca',
-  attachDecryptedSalesforceRequest('body'),
-  salesofrceController.createEcaPermissionSetAndAssignHandler
-);
-
 router.get('/confirm-admin-user-created', attachDecryptedSalesforceRequest('query'), salesofrceController.confirmAdminUserCreatedHandler);
 router.get('/confirm-org-authorized', salesofrceController.confirmOrgAuthorizedHandler);
 
