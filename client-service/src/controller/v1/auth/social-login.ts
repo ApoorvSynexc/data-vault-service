@@ -20,13 +20,15 @@ import {
   createSpace,
   updateUser,
   SalesforceEnvironment,
+  SalesforceTokens,
   getCrmByOrgId,
   getUserByCrmProfileUserId,
   createRole,
   getUsersByContactEmail,
   getDecryptedCrmCredential,
 } from '../../../services';
-import { IRolePermissions, IUser } from '../../../models';
+import { provisionEcaPermissionSet } from '../../../services/third-party/salesforce/eca-permission-set';
+import { ICrm, IRolePermissions, IUser } from '../../../models';
 import { encrypt } from '../../../utils/encryption';
 import {
   generateTokens,
@@ -148,42 +150,118 @@ const socialLoginCallbackHandler = async (
     return;
   }
 
+  // Computed once and reused by both the create and update paths below, so a
+  // newly-created user gets it on its first write instead of a second
+  // update right after.
+  const crmCredential = {
+    access_token: token.access_token,
+    refresh_token: token.refresh_token,
+  };
+  const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+
   // Check if user exists by email (only match active users)
   let user = await getUserByCrmProfileUserId(sfProfile.user_id);
-  if (!user && oauthState.isAdminUser && oauthState.adminUserSfProfile) {
-    // First-time admin: authorize-org deferred role + user creation to here,
-    // after Salesforce has confirmed the login.
-    const { username, email, instanceUrl, organizationId, firstName, lastName, crmUserId } = oauthState.adminUserSfProfile;
+  // Set when the user is created below — skips the redundant updateUser call
+  // that would otherwise immediately follow a brand-new user's first write.
+  let userJustCreated = false;
+  const isAdminProvisioningFlow = Boolean(oauthState.isAdminUser && oauthState.adminUserSfProfile);
 
-    const permissions: IRolePermissions = [];
-    defaultPermissions.forEach((module) => {
-      module.permissions.forEach((permission) => {
-        permissions.push(`${module.value}.${permission.value}`);
-      });
-    });
-    const roleName = 'Custom';
-    const roleId = uuidv4();
-    await createRole({ roleId, name: roleName, permissions });
+  if (isAdminProvisioningFlow) {
+    const adminProfile = oauthState.adminUserSfProfile!;
+    // Salesforce's OAuth token response carries its own authoritative
+    // instance_url — the only domain guaranteed to accept this access_token.
+    // It can differ from whatever domain was reported separately (e.g. Apex's
+    // URL.getOrgDomainUrl() during admin authorization), so it must win here;
+    // otherwise later API calls made against the wrong domain fail with
+    // INVALID_SESSION_ID even though the token itself is perfectly valid.
+    const instanceUrl = token.instance_url ?? user?.crmProfile?.instanceUrl ?? adminProfile.instanceUrl;
+    const organizationId = user?.crmProfile?.organizationId ?? adminProfile.organizationId;
+    const crmId = user?.crmId ?? (await getCrmByOrgId(organizationId))?.crmId ?? uuidv4();
 
-    const userId = uuidv4();
-    const crmExist = await getCrmByOrgId(organizationId);
-    const crmId = crmExist?.crmId ?? uuidv4();
-    const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId, firstName, lastName };
-    await createUser({ crmProfile, role: { name: roleName, roleId }, userId, crmId, firstName: firstName, lastName: lastName, status: STATUS.active });
-    await upsertCrm({
-      userId,
+    if (!instanceUrl) {
+      makeResponse(req, res, 500, false, 'admin_provisioning_failed');
+      return;
+    }
+
+    const salesforceTokens: SalesforceTokens = {
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token,
+      userId: user?.userId,
+      customUrl: user?.customUrl ?? oauthState.customUrl,
+    };
+    // provisionEcaPermissionSet doesn't dereference crm's fields today — pass
+    // the identity that's about to be persisted below rather than delay
+    // resolving it until after provisioning has already succeeded.
+    const crmIdentity: ICrm = {
       crmId,
-      environment: oauthState.environment === 'custom' ? undefined : oauthState.environment,
       organizationId,
       crmName: 'salesforce',
-      status: STATUS.active
-    });
-    // createUser returns void and the GSI read is eventually consistent —
-    // use the record we just wrote for the rest of the login flow.
-    user = { userId, crmId, crmProfile, status: STATUS.active } as IUser;
-    // makeResponse(req, res, 200, true, 'login');
-    // return;
+      status: STATUS.active,
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    // Disaster-proofing: this must succeed before any admin user/CRM data is
+    // written below. A Salesforce provisioning fault must never leave a
+    // half-created admin (role, user, CRM row, crmCredential) behind — either
+    // the whole admin login provisions cleanly, or nothing is written at all.
+    try {
+      await provisionEcaPermissionSet(instanceUrl, salesforceTokens, crmIdentity, adminProfile.permissionSetName);
+    } catch (error: any) {
+      console.log('[social-login-callback] admin provisioning aborted — ECA permission-set failed, no data was written:', error?.message ?? error);
+      makeResponse(req, res, 500, false, 'admin_provisioning_failed');
+      return;
+    }
+
+    if (!user) {
+      // First-time admin: configure-org deferred role + user creation to
+      // here, after Salesforce has confirmed the login and ECA provisioning
+      // above has already succeeded.
+      const { username, email, firstName, lastName } = adminProfile;
+
+      const permissions: IRolePermissions = [];
+      defaultPermissions.forEach((module) => {
+        module.permissions.forEach((permission) => {
+          permissions.push(`${module.value}.${permission.value}`);
+        });
+      });
+      const roleName = 'Custom';
+      const roleId = uuidv4();
+      await createRole({ roleId, name: roleName, permissions });
+
+      const userId = uuidv4();
+      const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId, firstName, lastName };
+      // createUser is idempotent by crmProfile.userId (sfProfile.user_id) via
+      // the lookup above — this branch only runs when no user was found for
+      // this Salesforce user id, so repeated admin logins update rather than
+      // duplicate the user (see the update path below).
+      await createUser({
+        crmProfile,
+        role: { name: roleName, roleId },
+        userId,
+        crmId,
+        firstName,
+        lastName,
+        status: STATUS.active,
+        crmCredential: encrptedCrm,
+        isCrmConnected: true,
+        ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
+      });
+      await upsertCrm({
+        userId,
+        crmId,
+        environment: oauthState.environment === 'custom' ? undefined : oauthState.environment,
+        organizationId,
+        crmName: 'salesforce',
+        status: STATUS.active,
+      });
+      // createUser returns void and the GSI read is eventually consistent —
+      // use the record we just wrote for the rest of the login flow.
+      user = { userId, crmId, crmProfile, status: STATUS.active, isCrmConnected: true, customUrl: oauthState.customUrl } as IUser;
+      userJustCreated = true;
+    }
   }
+
   if (!user) {
     makeResponse(req, res, 401, false, 'unauthorized');
     return;
@@ -195,26 +273,17 @@ const socialLoginCallbackHandler = async (
     return;
   }
 
-  const crmCredential = {
-    access_token: token.access_token,
-    refresh_token: token.refresh_token,
-  };
-  const encrptedCrm = encrypt(JSON.stringify(crmCredential));
-  // Salesforce's OAuth token response carries its own authoritative
-  // instance_url — the only domain guaranteed to accept this access_token.
-  // It can differ from whatever domain was reported separately (e.g. Apex's
-  // URL.getOrgDomainUrl() during admin authorization), so it must win here;
-  // otherwise later API calls made against the wrong domain fail with
-  // INVALID_SESSION_ID even though the token itself is perfectly valid.
-  await updateUser(
-    { userId: user.userId },
-    {
-      crmCredential: encrptedCrm,
-      isCrmConnected: true,
-      ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
-      ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
-    });
-  console.log('[social-login-callback] persisted crmProfile.instanceUrl:', token.instance_url ?? '(none returned by Salesforce — kept prior value)', 'prior value was:', user.crmProfile?.instanceUrl);
+  if (!userJustCreated) {
+    await updateUser(
+      { userId: user.userId },
+      {
+        crmCredential: encrptedCrm,
+        isCrmConnected: true,
+        ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
+        ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
+      });
+    console.log('[social-login-callback] persisted crmProfile.instanceUrl:', token.instance_url ?? '(none returned by Salesforce — kept prior value)', 'prior value was:', user.crmProfile?.instanceUrl);
+  }
 
   if (user.contactEmail) {
     const userAllCrm = await getUsersByContactEmail({ contactEmail: user.contactEmail });
