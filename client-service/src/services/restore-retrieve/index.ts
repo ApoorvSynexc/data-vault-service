@@ -7,7 +7,7 @@ import { IBackupJob, IObject } from '../../models';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
-import { runAthenaQuery, fetchStoredResults, ensureNativeHudiConnector, IQueryResult } from '../third-party/athena/query';
+import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
@@ -523,17 +523,6 @@ const retrieveRecords = async (
     cursor: page.cursor,
   };
   const windowSql = { ...sql, startDate: startDate!, endDate: endDate! };
-
-  // Athena's legacy Hudi SerDe can 403 reading a table's .hoodie metadata even
-  // with fully correct IAM/bucket policies — switch to the native connector
-  // before querying. Memoized (see ensureNativeHudiConnector), so this is a
-  // no-op after the first call per table. The table may not exist yet (no
-  // compression run has landed) — tolerate that the same way `run` does below.
-  try {
-    await ensureNativeHudiConnector(databaseName, hudiTable);
-  } catch (e: unknown) {
-    if (!/TABLE_NOT_FOUND|does not exist/i.test(String((e as Error).message))) throw e;
-  }
 
   const [main, deleted] = await Promise.all([
     run('main', () =>
