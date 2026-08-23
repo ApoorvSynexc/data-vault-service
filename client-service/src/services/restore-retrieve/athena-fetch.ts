@@ -153,21 +153,34 @@ const CREATED = 'CreatedDate';
 /**
  * Parses a stored timestamp column to a real instant.
  *
- * Necessary because these columns are strings whose spelling is not agreed
- * across writers: `change_time` arrives as epoch millis on some Spark paths and
- * as an ISO timestamp on others (restore-reconstruct's `toTime` accepts both),
- * and Salesforce writes `+0000` where this service canonicalises to `Z`.
- * Compared as varchar against an ISO bound, each of those silently shifts the
- * window — `...+0000` sorts BELOW `...Z`, so a record on the lower bound drops
- * out — which is exactly the class of bug a restore must not have.
+ * Necessary because these columns' spelling is not agreed across writers, AND
+ * — since a Glue crawler infers the column type from what Spark actually wrote
+ * — not even their Athena type is agreed: `change_time`/`CreatedDate` shows up
+ * as a native `timestamp` on some tables and as a varchar (epoch millis on some
+ * Spark paths, an ISO timestamp on others — restore-reconstruct's `toTime`
+ * accepts both) on others. Salesforce also writes `+0000` where this service
+ * canonicalises to `Z`; compared as varchar against an ISO bound that silently
+ * shifts the window (`...+0000` sorts BELOW `...Z`, so a record on the lower
+ * bound drops out) — exactly the class of bug a restore must not have.
  *
- * ISO is tried first because it is the common case; the epoch branch only runs
- * when the ISO parse fails. Unparseable values yield NULL, which the callers
- * treat as "outside the window" rather than letting it swallow the row.
+ * Three parses, tried in order, each feeding the next only on failure:
+ *   1. Direct `CAST(expr AS timestamp)` — a no-op when expr is already a
+ *      timestamp column, and Trino defines this cast for varchar too.
+ *   2. `from_iso8601_timestamp`, for the ISO varchar shape (1) doesn't cover.
+ *   3. Epoch millis, cast through varchar first rather than straight from expr
+ *      — casting a native timestamp directly to bigint has no defined
+ *      conversion in Trino, so unlike a bad *value* (what TRY guards against),
+ *      it fails query analysis before any row is read and TRY never runs.
+ *      Going through varchar first keeps every branch statically valid no
+ *      matter which of the two Athena types the column actually has.
+ *
+ * Unparseable values yield NULL, which the callers treat as "outside the
+ * window" rather than letting it swallow the row.
  */
 const asInstant = (expr: string): string =>
-  `COALESCE(TRY(from_iso8601_timestamp(CAST(${expr} AS varchar))), ` +
-  `TRY(from_unixtime(CAST(${expr} AS bigint) / 1000, 'UTC')))`;
+  `COALESCE(TRY(CAST(${expr} AS timestamp)), ` +
+  `TRY(from_iso8601_timestamp(CAST(${expr} AS varchar))), ` +
+  `TRY(from_unixtime(CAST(CAST(${expr} AS varchar) AS bigint) / 1000, 'UTC')))`;
 
 const inWindow = (expr: string, from: string, to: string): string =>
   `${asInstant(expr)} BETWEEN from_iso8601_timestamp(${lit(from)}) ` +
@@ -481,7 +494,7 @@ if (require.main === module) {
   // ── CHANGED_BETWEEN: one Hudi query, two groups, created wins the tie ──────
   const changedSql = buildHudiChangedSql('t_hudi', 't_delta', win);
   assert.ok(
-    changedSql.includes(`CASE WHEN COALESCE(TRY(from_iso8601_timestamp(CAST("CreatedDate" AS varchar))), TRY(from_unixtime(CAST("CreatedDate" AS bigint) / 1000, 'UTC'))) BETWEEN from_iso8601_timestamp('${START}') AND from_iso8601_timestamp('${END}') THEN 'DELETE' ELSE 'UPDATE' END AS "dv_operation"`),
+    changedSql.includes(`CASE WHEN COALESCE(TRY(CAST("CreatedDate" AS timestamp)), TRY(from_iso8601_timestamp(CAST("CreatedDate" AS varchar))), TRY(from_unixtime(CAST(CAST("CreatedDate" AS varchar) AS bigint) / 1000, 'UTC'))) BETWEEN from_iso8601_timestamp('${START}') AND from_iso8601_timestamp('${END}') THEN 'DELETE' ELSE 'UPDATE' END AS "dv_operation"`),
     'created-in-window is tagged DELETE, everything else UPDATE'
   );
   // Timestamps are PARSED, never string-compared: Salesforce writes `+0000`
@@ -503,7 +516,7 @@ if (require.main === module) {
   assert.ok(deleted.includes(`) t WHERE rn = 1 AND change_type = 'DELETE'`), 'deleted-then-recreated is not deleted');
   // Created AND deleted inside the window nets out to nothing — and an
   // unparseable CreatedDate keeps the record rather than losing it.
-  assert.ok(deleted.includes(`NOT COALESCE(COALESCE(TRY(from_iso8601_timestamp(CAST("dv_created" AS varchar)))`));
+  assert.ok(deleted.includes(`NOT COALESCE(COALESCE(TRY(CAST("dv_created" AS timestamp)), TRY(from_iso8601_timestamp(CAST("dv_created" AS varchar)))`));
   assert.ok(deleted.includes(`, false)`));
   // CreatedDate rides under an alias, so it can never reach the projection.
   assert.ok(deleted.includes(`'$["CreatedDate"]') AS "dv_created"`));
