@@ -431,6 +431,8 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
         // EMR receives the joined single-line string at submit time.
         const sparkSubmitParameters = [
             '--class com.example.Main',
+            '--conf spark.driver.userClassPathFirst=true',
+            '--conf spark.executor.userClassPathFirst=true',
 
             // Driver
             '--conf spark.driver.cores=4',
