@@ -142,6 +142,15 @@ const HUDI_STORAGE_DESCRIPTOR_BASE = {
   NumberOfBuckets: -1,
 } as const;
 
+// Set only on the Hudi-format ("main_backup_files") table, never on delta —
+// works around a known Athena limitation where its legacy Hudi SerDe throws
+// spurious S3 403s reading `.hoodie` metadata even with fully correct IAM /
+// bucket policies; the documented fix is this Glue table property, which
+// switches Athena to its native Hudi connector. Set here, at table
+// creation/sync time (this service already holds Glue write access), so the
+// read path never has to ALTER TABLE itself or need glue:UpdateTable.
+const NATIVE_HUDI_CONNECTOR_PARAM = 'athena_enable_native_hudi_connector_implementation';
+
 const buildHudiTableName = (backupConfigId: string, objectName: string): string =>
   `${buildGlueTableName(backupConfigId, objectName)}_hudi`;
 
@@ -288,7 +297,8 @@ const syncHudiTableSchema = async (
   databaseName: string,
   tableName: string,
   destConfig: IDestinationConfig,
-  rootKey: string
+  rootKey: string,
+  dataset: 'main_backup_files' | 'delta'
 ): Promise<void> => {
   const { glueColumns } = await resolveHudiTableShape(destConfig, rootKey);
   const { Table } = await glue.send(
@@ -297,7 +307,13 @@ const syncHudiTableSchema = async (
 
   const signature = (cols: Column[] = []): string =>
     cols.map((c) => `${c.Name}:${c.Type}`).join(',');
-  if (signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns)) {
+  const columnsMatch = signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns);
+  // Only the Hudi table wants the native-connector property — a pre-existing
+  // table created before this switch was added won't carry it yet, so a plain
+  // column-signature check would keep skipping it forever.
+  const wantsNativeConnector = dataset === 'main_backup_files';
+  const hasNativeConnector = Table?.Parameters?.[NATIVE_HUDI_CONNECTOR_PARAM] === 'true';
+  if (columnsMatch && (!wantsNativeConnector || hasNativeConnector)) {
     return;
   }
 
@@ -312,7 +328,10 @@ const syncHudiTableSchema = async (
           Columns: glueColumns,
           Location: Table?.StorageDescriptor?.Location ?? '',
         },
-        Parameters: { ...(Table?.Parameters ?? {}) },
+        Parameters: {
+          ...(Table?.Parameters ?? {}),
+          ...(wantsNativeConnector ? { [NATIVE_HUDI_CONNECTOR_PARAM]: 'true' } : {}),
+        },
         TableType: Table?.TableType ?? 'EXTERNAL_TABLE',
       },
     })
@@ -362,7 +381,7 @@ const ensureHudiFormatTable = async (
       `[glue] ${label} table already exists, syncing schema + partitions | db:${databaseName} table:${tableName}`
     );
     // Best-effort, same reason as the partition sync below.
-    await syncHudiTableSchema(databaseName, tableName, destConfig, rootKey).catch((err: any) => {
+    await syncHudiTableSchema(databaseName, tableName, destConfig, rootKey, dataset).catch((err: any) => {
       logger.warn(`[glue] schema sync failed | table:${tableName} err:${err.name}: ${err.message}`);
     });
     await syncPartitions();
@@ -390,6 +409,7 @@ const ensureHudiFormatTable = async (
             // ADD PARTITION step. No-op unless Spark wrote with the metadata table
             // enabled; harmless either way.
             'hudi.metadata-listing-enabled': 'TRUE',
+            ...(dataset === 'main_backup_files' ? { [NATIVE_HUDI_CONNECTOR_PARAM]: 'true' } : {}),
           },
           TableType: 'EXTERNAL_TABLE',
         },

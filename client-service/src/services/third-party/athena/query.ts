@@ -273,29 +273,3 @@ export const runAthenaQuery = async (
 
   return result;
 };
-
-// Tables already switched to the native Hudi connector this process — an
-// in-memory guard so a table isn't ALTERed again on every fetch-records call.
-// The table property persists in the Glue Catalog once set, so this only
-// needs to run once per table, ever, not once per query.
-const nativeHudiTables = new Set<string>();
-
-/**
- * Switches a Hudi table over to Athena's native Hudi connector.
- *
- * Athena's legacy Hudi SerDe can throw S3 403s reading a table's `.hoodie`
- * metadata even when IAM and bucket policies are fully correct — this is a
- * known AWS limitation, and the documented fix is this per-table Glue
- * property, not a wider S3 grant. Only Hudi-format tables (the `_hudi`
- * suffix) need this; the delta/CDC table is plain Parquet.
- */
-export const ensureNativeHudiConnector = async (database: string, hudiTable: string): Promise<void> => {
-  const key = `${database}.${hudiTable}`;
-  if (nativeHudiTables.has(key)) return;
-
-  await runAthenaQuery(
-    `ALTER TABLE ${hudiTable} SET TBLPROPERTIES ('athena_enable_native_hudi_connector_implementation' = 'true')`,
-    database
-  );
-  nativeHudiTables.add(key);
-};
