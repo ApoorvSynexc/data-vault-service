@@ -152,6 +152,12 @@ const HUDI_STORAGE_DESCRIPTOR_BASE = {
 // or need glue:UpdateTable.
 const NATIVE_HUDI_CONNECTOR_PARAM = 'athena_enable_native_hudi_connector_implementation';
 
+// Lets Athena use Hudi's file-listing index for partition discovery instead of
+// a full S3 listing. Set alongside the native connector param at both create
+// and sync time, for the same reason: a table created before this property
+// existed must not be stuck without it forever.
+const HUDI_METADATA_LISTING_PARAM = 'hudi.metadata-listing-enabled';
+
 const buildHudiTableName = (backupConfigId: string, objectName: string): string =>
   `${buildGlueTableName(backupConfigId, objectName)}_hudi`;
 
@@ -308,11 +314,12 @@ const syncHudiTableSchema = async (
   const signature = (cols: Column[] = []): string =>
     cols.map((c) => `${c.Name}:${c.Type}`).join(',');
   const columnsMatch = signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns);
-  // Both Hudi + Delta tables want the native-connector property — a
-  // pre-existing table created before this switch was added won't carry it
-  // yet, so a plain column-signature check would keep skipping it forever.
+  // Both Hudi + Delta tables want these two properties — a pre-existing table
+  // created before either was added won't carry them yet, so a plain
+  // column-signature check would keep skipping them forever.
   const hasNativeConnector = Table?.Parameters?.[NATIVE_HUDI_CONNECTOR_PARAM] === 'true';
-  if (columnsMatch && hasNativeConnector) {
+  const hasMetadataListing = Table?.Parameters?.[HUDI_METADATA_LISTING_PARAM] === 'TRUE';
+  if (columnsMatch && hasNativeConnector && hasMetadataListing) {
     return;
   }
 
@@ -330,6 +337,7 @@ const syncHudiTableSchema = async (
         Parameters: {
           ...(Table?.Parameters ?? {}),
           [NATIVE_HUDI_CONNECTOR_PARAM]: 'true',
+          [HUDI_METADATA_LISTING_PARAM]: 'TRUE',
         },
         TableType: Table?.TableType ?? 'EXTERNAL_TABLE',
       },
@@ -407,7 +415,7 @@ const ensureHudiFormatTable = async (
             // partitioned table (e.g. delta) is queryable without a separate
             // ADD PARTITION step. No-op unless Spark wrote with the metadata table
             // enabled; harmless either way.
-            'hudi.metadata-listing-enabled': 'TRUE',
+            [HUDI_METADATA_LISTING_PARAM]: 'TRUE',
             [NATIVE_HUDI_CONNECTOR_PARAM]: 'true',
           },
           TableType: 'EXTERNAL_TABLE',
