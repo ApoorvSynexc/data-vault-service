@@ -364,7 +364,7 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
             const childObject = payload.object.children[index];
             try {
                 await exportWithRetryArchivalV2({
-                        type: 'backup',
+                        type: 'delete',
                         backupConfig,
                         backupJobId,
                         source,
