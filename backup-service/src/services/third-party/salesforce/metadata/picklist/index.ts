@@ -34,7 +34,8 @@ export interface IPicklistFieldResult extends IPicklistDiff {
   storedEntries: IStoredPicklistEntry[];
 }
 
-const picklistValueKey = (value: ISalesforcePicklistValue): string => value.value ?? value.label ?? '';
+const picklistValueKey = (value: ISalesforcePicklistValue): string =>
+  value.value ?? value.label ?? '';
 
 // Value-by-value, object-level diff of two picklist snapshots — see diffEntities
 // in ../common for the shared, order-independent, non-stringify comparison.
@@ -97,7 +98,9 @@ export const picklistHandler = async (
   params: ISalesforceMetadataHandler,
   fields: ISalesforceFieldDescribe[]
 ) => {
-  const { backupConfigId, backupJobId, objectName } = params;
+  const { backupConfig, backupJobId, object } = params;
+  const backupConfigId = backupConfig.backupConfigId;
+  const objectName = object.name;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
     const results = await picklistComparison({ ...params, destConfig }, fields);
