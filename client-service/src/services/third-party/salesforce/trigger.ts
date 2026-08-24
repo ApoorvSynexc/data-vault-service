@@ -9,6 +9,7 @@ import { timer } from '../../../utils/helper';
 import { getMasterChildApiNames } from './apex';
 import { withNamespace } from '../../../utils/salesforce-namespace';
 import { SALESFORCE_NAMESPACE } from '../../../constant';
+import { logger } from '../../../middlewares';
 
 const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
 const API_VERSION = '66.0';
@@ -174,6 +175,10 @@ const buildRecordTriggeredFlow = (
 ): string => {
   const actionName = withNamespace(HANDLER_CLASS_NAME);
   const label = flowName.replace(/_/g, ' ');
+  // Only the create/update Flow has a meaningful $Record__Prior — a before-delete
+  // Flow has no "prior" value, and the handler's delta logic only reads
+  // recordsPrior when operation is UPDATE anyway, so Delete doesn't need it wired.
+  const isUpsert = !!event.operationFormula;
 
   return (
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
@@ -206,6 +211,14 @@ const buildRecordTriggeredFlow = (
     `                <elementReference>recordCollection</elementReference>\n` +
     `            </value>\n` +
     `        </inputParameters>\n` +
+    (isUpsert
+      ? `        <inputParameters>\n` +
+        `            <name>recordsPrior</name>\n` +
+        `            <value>\n` +
+        `                <elementReference>priorRecordCollection</elementReference>\n` +
+        `            </value>\n` +
+        `        </inputParameters>\n`
+      : '') +
     `        <inputParameters>\n` +
     `            <name>operation</name>\n` +
     `            <value>\n` +
@@ -229,9 +242,54 @@ const buildRecordTriggeredFlow = (
     `            </value>\n` +
     `        </assignmentItems>\n` +
     `        <connector>\n` +
-    `            <targetReference>Enqueue_Record_Sync</targetReference>\n` +
+    `            <targetReference>${isUpsert ? 'Check_Has_Prior' : 'Enqueue_Record_Sync'}</targetReference>\n` +
     `        </connector>\n` +
     `    </assignments>\n` +
+    (isUpsert
+      ? `    <assignments>\n` +
+        `        <name>Collect_Prior_Record</name>\n` +
+        `        <label>Collect Prior Record</label>\n` +
+        `        <locationX>176</locationX>\n` +
+        `        <locationY>347</locationY>\n` +
+        `        <assignmentItems>\n` +
+        `            <assignToReference>priorRecordCollection</assignToReference>\n` +
+        `            <operator>Add</operator>\n` +
+        `            <value>\n` +
+        `                <elementReference>$Record__Prior</elementReference>\n` +
+        `            </value>\n` +
+        `        </assignmentItems>\n` +
+        `        <connector>\n` +
+        `            <targetReference>Enqueue_Record_Sync</targetReference>\n` +
+        `        </connector>\n` +
+        `    </assignments>\n` +
+        // $Record__Prior is blank on create, so recordsPrior must only collect it
+        // on update — Sync_Operation already carries that exact distinction.
+        `    <decisions>\n` +
+        `        <name>Check_Has_Prior</name>\n` +
+        `        <label>Check Has Prior</label>\n` +
+        `        <locationX>176</locationX>\n` +
+        `        <locationY>227</locationY>\n` +
+        `        <defaultConnector>\n` +
+        `            <targetReference>Enqueue_Record_Sync</targetReference>\n` +
+        `        </defaultConnector>\n` +
+        `        <defaultConnectorLabel>Create (no prior)</defaultConnectorLabel>\n` +
+        `        <rules>\n` +
+        `            <name>Has_Prior</name>\n` +
+        `            <conditionLogic>and</conditionLogic>\n` +
+        `            <conditions>\n` +
+        `                <leftValueReference>${OPERATION_FORMULA_NAME}</leftValueReference>\n` +
+        `                <operator>EqualTo</operator>\n` +
+        `                <rightValue>\n` +
+        `                    <stringValue>AFTER_UPDATE</stringValue>\n` +
+        `                </rightValue>\n` +
+        `            </conditions>\n` +
+        `            <connector>\n` +
+        `                <targetReference>Collect_Prior_Record</targetReference>\n` +
+        `            </connector>\n` +
+        `            <label>Update (has prior)</label>\n` +
+        `        </rules>\n` +
+        `    </decisions>\n`
+      : '') +
     `    <environments>Default</environments>\n` +
     (event.operationFormula
       ? `    <formulas>\n` +
@@ -262,6 +320,16 @@ const buildRecordTriggeredFlow = (
     `        <isOutput>false</isOutput>\n` +
     `        <objectType>${objectApiName}</objectType>\n` +
     `    </variables>\n` +
+    (isUpsert
+      ? `    <variables>\n` +
+        `        <name>priorRecordCollection</name>\n` +
+        `        <dataType>SObject</dataType>\n` +
+        `        <isCollection>true</isCollection>\n` +
+        `        <isInput>false</isInput>\n` +
+        `        <isOutput>false</isOutput>\n` +
+        `        <objectType>${objectApiName}</objectType>\n` +
+        `    </variables>\n`
+      : '') +
     `</Flow>`
   );
 };
@@ -982,54 +1050,113 @@ const deleteTriggers = async (
   tokens: SalesforceTokens,
   config: IBackupConfig
 ): Promise<ITriggerResult[]> => {
-  if (!config.triggerResults?.length) {
+  // triggerResults is bookkeeping, not the source of truth — it can be empty or
+  // stale (e.g. the post-response write that persists it after creation never
+  // landed) while the org still has live flows. Fall back to objectNames, whose
+  // flow names are always derivable, so cleanup isn't skipped just because the
+  // tracking record is missing.
+  const triggerResults: ITriggerResult[] = config.triggerResults?.length
+    ? config.triggerResults
+    : (config.objectNames ?? []).map((objectApiName) => ({
+        objectApiName,
+        flowNames: flowNamesFor(objectApiName),
+        status: 'CREATED' as const,
+      }));
+
+  if (!triggerResults.length) {
     return [{ objectApiName: 'N/A', flowNames: [], status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
-  const triggerResults = config.triggerResults;
-  for (let i = 0; i < triggerResults.length; i++) {
-    const triggerResult = triggerResults[i];
-    const objectApiName = objectApiNameOf(config, triggerResult);
-    const status = triggerResult.status;
+  // Phase 1 — resolve what each object actually has in the org, and deactivate
+  // every active flow across every object in ONE deploy. Batching it this way
+  // (rather than deactivate-then-delete per object) gives Salesforce a full
+  // deploy round-trip of real work to propagate the inactive state before any
+  // destructive delete runs — interleaving the two per object was racing that
+  // propagation and surfacing as "insufficient access rights on cross-reference
+  // id" on the delete.
+  const perObject: { triggerResult: ITriggerResult; objectApiName: string; present: string[] }[] = [];
+  const allActiveFlowNames = new Set<string>();
 
+  for (const triggerResult of triggerResults) {
+    const objectApiName = objectApiNameOf(config, triggerResult);
     triggerResult.objectApiName = objectApiName;
     delete triggerResult.triggerName;
 
-    if (!['CREATED', 'INACTIVE', 'EXIST'].includes(status)) continue;
+    // Union of what this config recorded, what the current naming produces and
+    // the retired three-flow names — an over-wide list costs nothing and an
+    // under-wide one strands an active flow that keeps syncing a deleted config.
+    const flowNames = Array.from(new Set([
+      ...(triggerResult.flowNames ?? []),
+      ...flowNamesFor(objectApiName),
+      ...legacyFlowNamesFor(objectApiName),
+    ]));
+    triggerResult.flowNames = flowNames;
+
     try {
-      // Union of what this config recorded, what the current naming produces and
-      // the retired three-flow names — deleteFlows filters to what the org
-      // actually has, so an over-wide list costs nothing and an under-wide one
-      // strands an active flow that keeps syncing a deleted config.
-      const flowNames = Array.from(new Set([
-        ...(triggerResult.flowNames ?? []),
-        ...flowNamesFor(objectApiName),
-        ...legacyFlowNamesFor(objectApiName),
-      ]));
-      triggerResult.flowNames = flowNames;
       const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
-      const legacyRemoved = await removeLegacyApexTrigger(instanceUrl, tokens, triggerNameFor(objectApiName));
-
-      if (states.size === 0) {
-        triggerResult.status = legacyRemoved ? 'DELETED' : 'NOT_FOUND';
-        continue;
-      }
-
-      await deleteFlows(instanceUrl, tokens, flowNames);
-
-      triggerResult.status = 'DELETED';
+      const present = flowNames.filter((name) => states.has(name));
+      present.filter((name) => states.get(name)).forEach((name) => allActiveFlowNames.add(name));
+      perObject.push({ triggerResult, objectApiName, present });
     } catch (err) {
       triggerResult.status = 'DELETE_FAILED';
       triggerResult.error = err instanceof Error ? err.message : String(err);
+      logger.error(`[trigger-delete] ${objectApiName}: failed to read flow state — ${triggerResult.error}`);
+    }
+  }
+
+  if (allActiveFlowNames.size) {
+    try {
+      await deactivateFlows(instanceUrl, tokens, Array.from(allActiveFlowNames));
+      logger.info(`[trigger-delete] deactivated ${allActiveFlowNames.size} flow(s): [${Array.from(allActiveFlowNames).join(', ')}]`);
+    } catch (err) {
+      logger.error(`[trigger-delete] failed to deactivate flows: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Phase 2 — every flow that needed deactivating already is, so delete them.
+  for (const { triggerResult, objectApiName, present } of perObject) {
+    // No status gate: an empty `present` list is already a no-op, so attempting
+    // delete regardless of the last recorded status is what catches the case
+    // that status has drifted from what's actually deployed.
+    try {
+      const legacyRemoved = await removeLegacyApexTrigger(instanceUrl, tokens, triggerNameFor(objectApiName));
+
+      if (!present.length) {
+        triggerResult.status = legacyRemoved ? 'DELETED' : 'NOT_FOUND';
+        logger.info(`[trigger-delete] ${objectApiName}: no flows found in org (status=${triggerResult.status}${legacyRemoved ? ', legacy Apex trigger removed' : ''})`);
+        continue;
+      }
+
+      await destructiveDeploy(
+        instanceUrl,
+        tokens,
+        present.map((name) => ({ type: 'Flow', name })),
+        `Flow delete: ${present.join(', ')}`
+      );
+
+      triggerResult.status = 'DELETED';
+      logger.info(`[trigger-delete] ${objectApiName}: deleted flows [${present.join(', ')}]`);
+    } catch (err) {
+      triggerResult.status = 'DELETE_FAILED';
+      triggerResult.error = err instanceof Error ? err.message : String(err);
+      logger.error(`[trigger-delete] ${objectApiName}: failed — ${triggerResult.error}`);
     }
   }
 
   // Delete the permission set after all flows are removed.
   try {
     await deletePermissionSet(instanceUrl, tokens);
+    logger.info(`[trigger-delete] permission set '${PERMISSION_SET_NAME}' deleted`);
   } catch (err) {
-    console.log('Error deleting permission set:', err);
+    logger.error(`[trigger-delete] failed to delete permission set: ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  const deleted = triggerResults.filter((r) => r.status === 'DELETED').length;
+  const failed = triggerResults.filter((r) => r.status === 'DELETE_FAILED').length;
+  logger.info(
+    `[trigger-delete] backupConfigId=${config.backupConfigId} done: ${deleted}/${triggerResults.length} deleted, ${failed} failed — ` +
+    triggerResults.map((r) => `${r.objectApiName}=${r.status}`).join(', ')
+  );
 
   return triggerResults;
 };
