@@ -175,6 +175,10 @@ const buildRecordTriggeredFlow = (
 ): string => {
   const actionName = withNamespace(HANDLER_CLASS_NAME);
   const label = flowName.replace(/_/g, ' ');
+  // Only the create/update Flow has a meaningful $Record__Prior — a before-delete
+  // Flow has no "prior" value, and the handler's delta logic only reads
+  // recordsPrior when operation is UPDATE anyway, so Delete doesn't need it wired.
+  const isUpsert = !!event.operationFormula;
 
   return (
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
@@ -207,6 +211,14 @@ const buildRecordTriggeredFlow = (
     `                <elementReference>recordCollection</elementReference>\n` +
     `            </value>\n` +
     `        </inputParameters>\n` +
+    (isUpsert
+      ? `        <inputParameters>\n` +
+        `            <name>recordsPrior</name>\n` +
+        `            <value>\n` +
+        `                <elementReference>priorRecordCollection</elementReference>\n` +
+        `            </value>\n` +
+        `        </inputParameters>\n`
+      : '') +
     `        <inputParameters>\n` +
     `            <name>operation</name>\n` +
     `            <value>\n` +
@@ -230,9 +242,54 @@ const buildRecordTriggeredFlow = (
     `            </value>\n` +
     `        </assignmentItems>\n` +
     `        <connector>\n` +
-    `            <targetReference>Enqueue_Record_Sync</targetReference>\n` +
+    `            <targetReference>${isUpsert ? 'Check_Has_Prior' : 'Enqueue_Record_Sync'}</targetReference>\n` +
     `        </connector>\n` +
     `    </assignments>\n` +
+    (isUpsert
+      ? `    <assignments>\n` +
+        `        <name>Collect_Prior_Record</name>\n` +
+        `        <label>Collect Prior Record</label>\n` +
+        `        <locationX>176</locationX>\n` +
+        `        <locationY>347</locationY>\n` +
+        `        <assignmentItems>\n` +
+        `            <assignToReference>priorRecordCollection</assignToReference>\n` +
+        `            <operator>Add</operator>\n` +
+        `            <value>\n` +
+        `                <elementReference>$Record__Prior</elementReference>\n` +
+        `            </value>\n` +
+        `        </assignmentItems>\n` +
+        `        <connector>\n` +
+        `            <targetReference>Enqueue_Record_Sync</targetReference>\n` +
+        `        </connector>\n` +
+        `    </assignments>\n` +
+        // $Record__Prior is blank on create, so recordsPrior must only collect it
+        // on update — Sync_Operation already carries that exact distinction.
+        `    <decisions>\n` +
+        `        <name>Check_Has_Prior</name>\n` +
+        `        <label>Check Has Prior</label>\n` +
+        `        <locationX>176</locationX>\n` +
+        `        <locationY>227</locationY>\n` +
+        `        <defaultConnector>\n` +
+        `            <targetReference>Enqueue_Record_Sync</targetReference>\n` +
+        `        </defaultConnector>\n` +
+        `        <defaultConnectorLabel>Create (no prior)</defaultConnectorLabel>\n` +
+        `        <rules>\n` +
+        `            <name>Has_Prior</name>\n` +
+        `            <conditionLogic>and</conditionLogic>\n` +
+        `            <conditions>\n` +
+        `                <leftValueReference>${OPERATION_FORMULA_NAME}</leftValueReference>\n` +
+        `                <operator>EqualTo</operator>\n` +
+        `                <rightValue>\n` +
+        `                    <stringValue>AFTER_UPDATE</stringValue>\n` +
+        `                </rightValue>\n` +
+        `            </conditions>\n` +
+        `            <connector>\n` +
+        `                <targetReference>Collect_Prior_Record</targetReference>\n` +
+        `            </connector>\n` +
+        `            <label>Update (has prior)</label>\n` +
+        `        </rules>\n` +
+        `    </decisions>\n`
+      : '') +
     `    <environments>Default</environments>\n` +
     (event.operationFormula
       ? `    <formulas>\n` +
@@ -263,6 +320,16 @@ const buildRecordTriggeredFlow = (
     `        <isOutput>false</isOutput>\n` +
     `        <objectType>${objectApiName}</objectType>\n` +
     `    </variables>\n` +
+    (isUpsert
+      ? `    <variables>\n` +
+        `        <name>priorRecordCollection</name>\n` +
+        `        <dataType>SObject</dataType>\n` +
+        `        <isCollection>true</isCollection>\n` +
+        `        <isInput>false</isInput>\n` +
+        `        <isOutput>false</isOutput>\n` +
+        `        <objectType>${objectApiName}</objectType>\n` +
+        `    </variables>\n`
+      : '') +
     `</Flow>`
   );
 };
