@@ -201,7 +201,7 @@ const archiveObject = async (payload: IArchiveObject) => {
     backupConfigId,
   };
   const objectName = object.name;
-  let jobId = backupJobId || '';
+  let jobId: string;
   let salesforceApiCount = 0;
   let totalRecordCount = 0;
   let parentWhereClause = payload.parentWhereClause || '';
