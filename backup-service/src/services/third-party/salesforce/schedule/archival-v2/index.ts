@@ -1,7 +1,7 @@
 import { OBJECT_STATUS } from "../../../../../constant";
 import { logger } from "../../../../../middlewares";
 import { IBackupField, IBackupObject, IDestinationConfig, IS3ObjectKey, ISource } from "../../../../../models";
-import { buildS3KeyPrefix, formatFieldValuesForSOQL, formatValueByDataType } from "../../../../../utils/helper";
+import { buildS3KeyPrefix, formatFieldValuesForSOQL, formatValueByDataType, recursivelyFlatten } from "../../../../../utils/helper";
 import { updateArchivalObject } from "../../../../backup-job";
 import { createBulkQueryJob, SalesforceTokens } from "../../api-request";
 import { salesforceMetadataHandler } from "../../metadata";
@@ -23,29 +23,29 @@ const MAX_RETRIES = 3;
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
 const DATE_LITERALS = new Set([
-  'TODAY',
-  'YESTERDAY',
-  'TOMORROW',
-  'LAST_WEEK',
-  'THIS_WEEK',
-  'NEXT_WEEK',
-  'LAST_MONTH',
-  'THIS_MONTH',
-  'NEXT_MONTH',
-  'LAST_90_DAYS',
-  'NEXT_90_DAYS',
-  'LAST_QUARTER',
-  'THIS_QUARTER',
-  'NEXT_QUARTER',
-  'LAST_YEAR',
-  'THIS_YEAR',
-  'NEXT_YEAR',
-  'LAST_FISCAL_QUARTER',
-  'THIS_FISCAL_QUARTER',
-  'NEXT_FISCAL_QUARTER',
-  'LAST_FISCAL_YEAR',
-  'THIS_FISCAL_YEAR',
-  'NEXT_FISCAL_YEAR',
+    'TODAY',
+    'YESTERDAY',
+    'TOMORROW',
+    'LAST_WEEK',
+    'THIS_WEEK',
+    'NEXT_WEEK',
+    'LAST_MONTH',
+    'THIS_MONTH',
+    'NEXT_MONTH',
+    'LAST_90_DAYS',
+    'NEXT_90_DAYS',
+    'LAST_QUARTER',
+    'THIS_QUARTER',
+    'NEXT_QUARTER',
+    'LAST_YEAR',
+    'THIS_YEAR',
+    'NEXT_YEAR',
+    'LAST_FISCAL_QUARTER',
+    'THIS_FISCAL_QUARTER',
+    'NEXT_FISCAL_QUARTER',
+    'LAST_FISCAL_YEAR',
+    'THIS_FISCAL_YEAR',
+    'NEXT_FISCAL_YEAR',
 ]);
 
 const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
@@ -54,101 +54,101 @@ const isQueryableField = (f: { name: string; type: string }): boolean =>
     !EXCLUDED_FIELD_NAMES.has(f.name) && !EXCLUDED_FIELD_TYPES.has(f.type);
 
 const isDateLiteral = (value: string): boolean =>
-  DATE_LITERALS.has(value.toUpperCase()) ||
-  /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(
-    value
-  );
+    DATE_LITERALS.has(value.toUpperCase()) ||
+    /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(
+        value
+    );
 
 const buildFilterCondition = (
-  f: IBackupField & { filter: NonNullable<IBackupField['filter']> },
-  preformattedValue: string
+    f: IBackupField & { filter: NonNullable<IBackupField['filter']> },
+    preformattedValue: string
 ): string => {
-  const { name, dataType } = f;
-  const { value: rawValue, operator } = f.filter;
+    const { name, dataType } = f;
+    const { value: rawValue, operator } = f.filter;
 
-  if (!SAFE_FIELD_NAME_RE.test(name)) {
-    throw new Error(`Invalid SOQL field name: "${name}"`);
-  }
-  if (!ALLOWED_OPERATORS.has(operator)) {
-    throw new Error(`Disallowed SOQL operator: "${operator}"`);
-  }
+    if (!SAFE_FIELD_NAME_RE.test(name)) {
+        throw new Error(`Invalid SOQL field name: "${name}"`);
+    }
+    if (!ALLOWED_OPERATORS.has(operator)) {
+        throw new Error(`Disallowed SOQL operator: "${operator}"`);
+    }
 
-  if (operator === 'LIKE') {
-    const escaped = rawValue.replace(/'/g, "''");
-    const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
-    return `${name} LIKE '${wrapped}'`;
-  }
+    if (operator === 'LIKE') {
+        const escaped = rawValue.replace(/'/g, "''");
+        const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
+        return `${name} LIKE '${wrapped}'`;
+    }
 
-  if (operator === 'IN' || operator === 'NOT IN') {
-    const parts = rawValue
-      .split(',')
-      .map((v) => v.trim())
-      .filter(Boolean);
-    return `${name} ${operator} (${parts.map((v) => formatValueByDataType(v, dataType)).join(', ')})`;
-  }
+    if (operator === 'IN' || operator === 'NOT IN') {
+        const parts = rawValue
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean);
+        return `${name} ${operator} (${parts.map((v) => formatValueByDataType(v, dataType)).join(', ')})`;
+    }
 
-  const ldt = dataType.toLowerCase();
-  if ((ldt === 'date' || ldt === 'datetime') && isDateLiteral(rawValue)) {
-    return `${name} ${operator} ${rawValue}`;
-  }
+    const ldt = dataType.toLowerCase();
+    if ((ldt === 'date' || ldt === 'datetime') && isDateLiteral(rawValue)) {
+        return `${name} ${operator} ${rawValue}`;
+    }
 
-  return `${name} ${operator} ${preformattedValue}`;
+    return `${name} ${operator} ${preformattedValue}`;
 };
 
 const buildWhereClause = (object: IBackupObject): string => {
-  const { field, condition } = object;
-  if (!condition) {
-    return '';
-  }
-
-  if ((condition as any).type === 'SOQL') {
-    const soqlQuery: string = (condition as any).soqlQuery ?? '';
-    const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
-    return body ? `WHERE ${body}` : '';
-  }
-
-  if (!field?.length) {
-    return '';
-  }
-
-  const formattedFields = formatFieldValuesForSOQL(field);
-
-  const filterMap = new Map<number, string>();
-  field.forEach((f, idx) => {
-    if (f.filter) {
-      const preformattedValue =
-        (formattedFields[idx] as typeof f)?.filter?.value ??
-        formatValueByDataType(f.filter.value, f.dataType);
-      filterMap.set(
-        idx + 1,
-        buildFilterCondition(
-          f as IBackupField & { filter: NonNullable<IBackupField['filter']> },
-          preformattedValue
-        )
-      );
-    }
-  });
-
-  if (filterMap.size === 0) {
-    return '';
-  }
-
-  if (condition.type === 'CUSTOM' && condition.expression) {
-    const stripped = condition.expression.replace(/\b(AND|OR|NOT)\b/gi, ' ');
-    if (!/^[\d\s()]+$/.test(stripped)) {
-      throw new Error(`Invalid SOQL custom expression: "${condition.expression}"`);
+    const { field, condition } = object;
+    if (!condition) {
+        return '';
     }
 
-    let expr = condition.expression;
-    const sorted = Array.from(filterMap.entries()).sort((a, b) => b[0] - a[0]);
-    for (const [idx, cond] of sorted) {
-      expr = expr.replace(new RegExp(`\\b${idx}\\b`, 'g'), cond);
+    if ((condition as any).type === 'SOQL') {
+        const soqlQuery: string = (condition as any).soqlQuery ?? '';
+        const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
+        return body ? `WHERE ${body}` : '';
     }
-    return `WHERE ${expr}`;
-  }
 
-  const separator = condition.type === 'OR' ? ' OR ' : ' AND ';
-  return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
+    if (!field?.length) {
+        return '';
+    }
+
+    const formattedFields = formatFieldValuesForSOQL(field);
+
+    const filterMap = new Map<number, string>();
+    field.forEach((f, idx) => {
+        if (f.filter) {
+            const preformattedValue =
+                (formattedFields[idx] as typeof f)?.filter?.value ??
+                formatValueByDataType(f.filter.value, f.dataType);
+            filterMap.set(
+                idx + 1,
+                buildFilterCondition(
+                    f as IBackupField & { filter: NonNullable<IBackupField['filter']> },
+                    preformattedValue
+                )
+            );
+        }
+    });
+
+    if (filterMap.size === 0) {
+        return '';
+    }
+
+    if (condition.type === 'CUSTOM' && condition.expression) {
+        const stripped = condition.expression.replace(/\b(AND|OR|NOT)\b/gi, ' ');
+        if (!/^[\d\s()]+$/.test(stripped)) {
+            throw new Error(`Invalid SOQL custom expression: "${condition.expression}"`);
+        }
+
+        let expr = condition.expression;
+        const sorted = Array.from(filterMap.entries()).sort((a, b) => b[0] - a[0]);
+        for (const [idx, cond] of sorted) {
+            expr = expr.replace(new RegExp(`\\b${idx}\\b`, 'g'), cond);
+        }
+        return `WHERE ${expr}`;
+    }
+
+    const separator = condition.type === 'OR' ? ' OR ' : ' AND ';
+    return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
 };
 
 function fkToRelationshipName(fieldApiName: string): string {
@@ -199,7 +199,7 @@ const archiveObject = async (
     try {
         const fieldsMetadata = await salesforceMetadataHandler({
             metadataType: 'fields',
-            policyConfigType: 'backup',
+            policyConfigType: 'archival',
             backupConfigId,
             backupJobId,
             crmId,
@@ -207,6 +207,38 @@ const archiveObject = async (
             objectName,
             isInitialBackup: true,
         }, { instanceUrl, tokens });
+
+        await salesforceMetadataHandler({
+            metadataType: 'childs',
+            policyConfigType: 'archival',
+            backupConfigId,
+            backupJobId,
+            crmId,
+            crmName,
+            objectName,
+            isInitialBackup: true,
+        }, { instanceUrl, tokens });
+        await salesforceMetadataHandler({
+            metadataType: 'picklist',
+            policyConfigType: 'archival',
+            backupConfigId,
+            backupJobId,
+            crmId,
+            crmName,
+            objectName,
+            isInitialBackup: true,
+        }, { instanceUrl, tokens });
+        await salesforceMetadataHandler({
+            metadataType: 'recordTypes',
+            policyConfigType: 'archival',
+            backupConfigId,
+            backupJobId,
+            crmId,
+            crmName,
+            objectName,
+            isInitialBackup: true,
+        }, { instanceUrl, tokens });
+
         const allFieldNames =
             fieldsMetadata?.metadataType === 'fields'
                 ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
@@ -228,13 +260,15 @@ const archiveObject = async (
 
             const whereClause = buildWhereClause(object);
             if (parentWhereClause) {
-                const transformedWhere = transformWhereBodyForChild(whereClause, (object as any).fieldApiName);
-                parentWhereClause += ` AND ${transformedWhere}`
+                const transformedWhere = transformWhereBodyForChild(parentWhereClause, (object as any).fieldApiName);
+                parentWhereClause = transformedWhere
             } else {
                 parentWhereClause = whereClause;
             }
 
-            const whereBody = whereClause.replace(/^WHERE\s+/i, '').trim();
+            console.log('---------------parentWhereClause--------------- ', parentWhereClause);
+
+            const whereBody = parentWhereClause.replace(/^WHERE\s+/i, '').trim();
             const archivalWhere = whereBody
                 ? `WHERE IsDeleted = false AND (${whereBody})`
                 : 'WHERE IsDeleted = false';
@@ -317,17 +351,21 @@ const archiveObject = async (
         if (object.children?.length) {
             for (let index = 0; index < object.children.length; index++) {
                 const childObject = object.children[index];
-                await exportWithRetryArchivalV2({
-                    type: 'backup',
-                    backupConfigId,
-                    backupJobId,
-                    source,
-                    destinationType,
-                    destConfig,
-                    object: childObject,
-                    parentWhereClause,
-                    s3Keys,
-                });
+                try {
+                    await exportWithRetryArchivalV2({
+                        type: 'backup',
+                        backupConfigId,
+                        backupJobId,
+                        source,
+                        destinationType,
+                        destConfig,
+                        object: childObject,
+                        parentWhereClause,
+                        s3Keys,
+                    });
+                } catch (error: any) {
+                    logger.error(`Archival job ${backupJobId}: failed to export child object ${childObject.name} of parent ${objectName} - ${error?.message}`);
+                }
             }
         }
     } catch (error: any) {
@@ -340,6 +378,20 @@ const archiveObject = async (
                 errorMessage: error?.message,
             },
         });
+        if (object.children?.length) {
+            const flattenedChildren = recursivelyFlatten(object.children);
+            for (let index = 0; index < flattenedChildren.length; index++) {
+                const childObject = flattenedChildren[index];
+                await updateArchivalObject({
+                    backupJobId,
+                    object: {
+                        id: childObject.id,
+                        status: OBJECT_STATUS.failed,
+                        errorMessage: 'Parent object ' + object.name + ' failed',
+                    },
+                });
+            }
+        }
         throw error;
     }
 };
