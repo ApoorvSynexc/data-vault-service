@@ -1,6 +1,6 @@
 import { OBJECT_STATUS } from "../../../../../constant";
 import { logger } from "../../../../../middlewares";
-import { IBackupField, IBackupObject, IDestinationConfig, IS3ObjectKey, ISource } from "../../../../../models";
+import { IBackupConfig, IBackupField, IBackupObject, IDestinationConfig, IS3ObjectKey, ISource } from "../../../../../models";
 import { buildS3KeyPrefix, formatFieldValuesForSOQL, formatValueByDataType } from "../../../../../utils/helper";
 import { updateArchivalObject } from "../../../../backup-job";
 import { createBulkQueryJob, SalesforceTokens } from "../../api-request";
@@ -9,7 +9,7 @@ import { bulkDeleteRecords } from "../archival/delete-bulk";
 import { pollBulkJobArchival, uploadBulkResultsByPage } from "./bulk";
 
 interface IArchiveObject {
-    backupConfigId: string,
+    backupConfig: IBackupConfig,
     backupJobId: string,
     source: ISource,
     destinationType: string,
@@ -182,8 +182,9 @@ function transformWhereBodyForChild(whereBody: string, fkFieldName: string): str
 const archiveObject = async (
     payload: IArchiveObject
 ) => {
-    const { backupConfigId, backupJobId, source, destinationType, destConfig, object, s3Keys } = payload;
+    const { backupConfig, backupJobId, source, destinationType, destConfig, object, s3Keys } = payload;
     const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
+    const backupConfigId = backupConfig.backupConfigId;
     const tokens: SalesforceTokens = {
         accessToken: access_token,
         refreshToken: refresh_token,
@@ -200,7 +201,7 @@ const archiveObject = async (
         const fieldsMetadata = await salesforceMetadataHandler({
             metadataType: 'fields',
             policyConfigType: 'backup',
-            backupConfigId,
+            backupConfig,
             backupJobId,
             crmId,
             crmName,
@@ -320,7 +321,7 @@ const archiveObject = async (
                 const childObject = object.children[index];
                 await exportWithRetryArchivalV2({
                     type: 'backup',
-                    backupConfigId,
+                    backupConfig,
                     backupJobId,
                     source,
                     destinationType,
@@ -346,7 +347,8 @@ const archiveObject = async (
 };
 
 const deleteObject = async (payload: IArchiveObject) => {
-    const { backupConfigId, backupJobId, source, destConfig, object, s3Keys } = payload;
+    const { backupConfig, backupJobId, source, destConfig, object, s3Keys } = payload;
+    const backupConfigId = backupConfig.backupConfigId;
     const tokens: SalesforceTokens = {
         accessToken: source.access_token,
         refreshToken: source.refresh_token,
@@ -401,7 +403,7 @@ const exportWithRetryArchivalV2 = async (
     data:
         {
             type: 'backup' | 'delete'
-            backupConfigId: string,
+            backupConfig: IBackupConfig,
             backupJobId: string,
             source: ISource,
             destinationType: string,
