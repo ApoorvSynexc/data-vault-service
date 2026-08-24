@@ -560,16 +560,16 @@ async function initalizePayloadTransform(
     // Schema-Sync backup job runs first and compression resumes via the
     // 'schema.sync.completed' callback (skipRealtimeSync bypasses this gate on that
     // resume so a still-changing metadata read can't loop it).
-    if (!opts.skipRealtimeSync) {
-        const backupConfig = await getBackupConfigById(backupConfigId);
-        if (backupConfig?.schedule === SCHEDULE_MODE.realtime) {
-            const deferred = await runRealtimeSchemaSync(backupConfig);
-            if (deferred) {
-                logger.info(`Deferred EMR for backupConfigId: ${backupConfigId} — Schema-Sync backup in progress`);
-                return;
-            }
-        }
-    }
+    // if (!opts.skipRealtimeSync) {
+    //     const backupConfig = await getBackupConfigById(backupConfigId);
+    //     if (backupConfig?.schedule === SCHEDULE_MODE.realtime) {
+    //         const deferred = await runRealtimeSchemaSync(backupConfig);
+    //         if (deferred) {
+    //             logger.info(`Deferred EMR for backupConfigId: ${backupConfigId} — Schema-Sync backup in progress`);
+    //             return;
+    //         }
+    //     }
+    // }
 
     const backupJobs = await fetchAllBackupJobs(backupConfigId);
     if (!backupJobs.length) {

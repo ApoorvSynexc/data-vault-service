@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { defaultPermissions } from '../../../assets';
+import { fullAccessPermissions } from '../../../assets';
 import {
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
@@ -28,7 +28,7 @@ import {
   getDecryptedCrmCredential,
 } from '../../../services';
 import { provisionEcaPermissionSet } from '../../../services/third-party/salesforce/eca-permission-set';
-import { ICrm, IRolePermissions, IUser } from '../../../models';
+import { ICrm, IUser } from '../../../models';
 import { encrypt } from '../../../utils/encryption';
 import {
   generateTokens,
@@ -219,15 +219,9 @@ const socialLoginCallbackHandler = async (
       // above has already succeeded.
       const { username, email, firstName, lastName } = adminProfile;
 
-      const permissions: IRolePermissions = [];
-      defaultPermissions.forEach((module) => {
-        module.permissions.forEach((permission) => {
-          permissions.push(`${module.value}.${permission.value}`);
-        });
-      });
       const roleName = 'Custom';
       const roleId = uuidv4();
-      await createRole({ roleId, name: roleName, permissions });
+      await createRole({ roleId, name: roleName, permissions: fullAccessPermissions });
 
       const userId = uuidv4();
       const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId, firstName, lastName };

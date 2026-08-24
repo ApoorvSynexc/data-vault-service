@@ -7,7 +7,8 @@ import { COMPRESSION_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, tiggerRestoreJob, updateRestoreJob } from '../../../services';
+import { getRestoreById, getRestoreJobById, tiggerRestoreJob, updateRestoreJob, getUsersByCrmId } from '../../../services';
+import { getInactiveOwnerIds } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 
 // Decrypts a request, or returns null if it isn't decryptable. Accepts both shapes
@@ -237,4 +238,29 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
   }
 };
 
-export const sparkJobController = wrapController({ buildPayloadHandler, updateSparkJobStatusHandler });
+/**
+ * GET /spark-job/get-inactive-owner-ids?crmId=<uuid>&includeManagers=<boolean>
+ * Resolves the Salesforce tokens for the given crmId (the internal user record
+ * that connected the org), then queries the standard Data REST API
+ * (SELECT Id[, ManagerId] FROM User WHERE IsActive = false). includeManagers=true
+ * additionally returns the distinct set of ManagerId values off those records.
+ */
+const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { crmId, includeManagers } = req.query;
+
+  if (!crmId || typeof crmId !== 'string') {
+    return makeResponse(req, res, 400, false, 'crm_id_required');
+  }
+
+  const crmUsers = await getUsersByCrmId(crmId);
+  const crmUser = crmUsers.find((u) => u.crmCredential && u.crmProfile?.instanceUrl);
+  if (!crmUser) {
+    return makeResponse(req, res, 400, false, 'crm_not_connected');
+  }
+
+  const data = await getInactiveOwnerIds({ user: crmUser, includeManagers: includeManagers === 'true' });
+
+  return makeResponse(req, res, 200, true, 'fetch', data);
+};
+
+export const sparkJobController = wrapController({ buildPayloadHandler, updateSparkJobStatusHandler, getInactiveOwnerIdsHandler });
