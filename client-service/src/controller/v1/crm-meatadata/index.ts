@@ -98,7 +98,11 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
   const children = objectDescription.childRelationships
     .filter((child) => filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName && child.cascadeDelete)
-    .map((child) => ({ name: child.childSObject }));
+    .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete }));
+  
+    const fields = objectDescription.fields
+    .filter((field) => field.type === 'reference')
+    .map((field) => ({ name: field.name, nillable: field.nillable, cascadeDelete: field.cascadeDelete }));
 
   // const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
   // const parent: { [key: string]: string | boolean }[] = [];
@@ -109,7 +113,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   //     }
   //   })
   // })
-  return makeResponse(req, res, 200, true, 'fetch', { children });
+  return makeResponse(req, res, 200, true, 'fetch', { children, fields });
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
