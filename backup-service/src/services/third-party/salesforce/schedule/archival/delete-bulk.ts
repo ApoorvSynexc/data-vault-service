@@ -497,7 +497,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
             ...(jobResults.successCount
               ? { deletedSuccessRecordCount: jobResults.successCount }
               : {}),
-            ...(jobResults.failedCount ? { deletedfailedRecordCount: jobResults.failedCount } : {}),
+            ...(jobResults.failedCount ? { deletedfailedRecordCount: jobResults.failedCount, status: OBJECT_STATUS.deletionJobFailed } : {}),
             salesforceApiCount: 3,
           },
         });
