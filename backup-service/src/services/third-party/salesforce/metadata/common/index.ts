@@ -1,4 +1,4 @@
-import { IDestinationConfig } from '../../../../../models';
+import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { decrypt } from '../../../../../utils/encryption';
 import { SCHEMA_KIND_FILE } from '../../../../../utils/helper';
 import { getBackupJob } from '../../../../backup-job';
@@ -11,7 +11,7 @@ export interface ISalesforceMetadataHandler {
   crmId: string;
   backupConfigId: string;
   objectNames?: string[];
-  objectName: string;
+  object: IBackupObject,
   backupJobId: string;
   isInitialBackup: boolean;
 }
@@ -75,10 +75,11 @@ export const buildS3Key = (params: IBuildKeyParams) => {
     crmId,
     crmName,
     backupConfigId,
-    objectName,
+    object,
     policyConfigType,
     fieldApiName,
   } = params;
+  const objectName = object.name;
   const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;
   return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${objectName}/${tail}/${SCHEMA_KIND_FILE[metadataType]}`;
 };

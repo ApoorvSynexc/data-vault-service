@@ -129,7 +129,7 @@ export const exportFirstTime = async (
       crmId,
       crmName,
       objectNames,
-      objectName,
+      object,
       isInitialBackup: true,
     }, { instanceUrl, tokens });
     const allFieldNames =
@@ -144,7 +144,7 @@ export const exportFirstTime = async (
       crmId,
       crmName,
       objectNames,
-      objectName,
+      object,
       isInitialBackup: true,
     }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
@@ -155,7 +155,7 @@ export const exportFirstTime = async (
       crmId,
       crmName,
       objectNames,
-      objectName,
+      object,
       isInitialBackup: true,
     }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
@@ -166,7 +166,7 @@ export const exportFirstTime = async (
       crmId,
       crmName,
       objectNames,
-      objectName,
+      object,
       isInitialBackup: true,
     }, { instanceUrl, tokens });
     // await uploadPicklistValues({
@@ -336,7 +336,7 @@ export const exportIncremental = async (
       crmId,
       crmName,
       objectNames,
-      objectName,
+      object,
       isInitialBackup: false,
     }, { instanceUrl, tokens });
     const allFieldNames =
@@ -507,7 +507,7 @@ export const exportIncremental = async (
       crmId,
       crmName,
       objectNames,
-      objectName,
+      object,
       isInitialBackup: false,
     }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
@@ -518,7 +518,7 @@ export const exportIncremental = async (
       crmId,
       crmName,
       objectNames,
-      objectName,
+      object,
       isInitialBackup: false,
     }, { instanceUrl, tokens });
     await salesforceMetadataHandler({
@@ -529,7 +529,7 @@ export const exportIncremental = async (
       crmId,
       objectNames,
       crmName,
-      objectName,
+      object,
       isInitialBackup: false,
     }, { instanceUrl, tokens });
     // const storedSchema = await readLatestSchema(destConfig, {
