@@ -262,10 +262,9 @@ const salesforceHandler: ICrmBackupHandler = {
       return 'SUCCESS';
     }
 
-    const allObjects = recursivelyFlatten(object);
     const s3Keys: IS3ObjectKey[] = [];
-    for (let index = 0; index < allObjects.length; index++) {
-      const objectDetail = allObjects[index];
+    for (let index = 0; index < object.length; index++) {
+      const objectDetail = object[index];
       await exportWithRetryArchivalV2({
         type: 'backup',
         backupConfigId,
