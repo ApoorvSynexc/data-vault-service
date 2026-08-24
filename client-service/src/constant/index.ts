@@ -1,4 +1,4 @@
-﻿const NODE_ENV =  String(process.env.NODE_ENV);
+﻿const NODE_ENV = String(process.env.NODE_ENV);
 const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 const NODE_ENV_URL = String(process.env.NODE_ENV_URL);
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
@@ -136,7 +136,7 @@ const FILTER_OPERATOR = {
 };
 
 const STATUS = {
-   draft: 'DRAFT',
+  draft: 'DRAFT',
   paused: 'PAUSED',
   resumed: 'RESUMED',
   active: 'ACTIVE',
@@ -226,6 +226,28 @@ const SESSION_STATUS = {
   active: 'ACTIVE',
   revoked: 'REVOKED',
 };
+
+const STANDARD_OBJECT_LIST = [
+  'Account',
+  'Contact',
+  'Lead',
+  'Opportunity',
+  'Case',
+  'WorkOrder',
+  'Asset',
+  'Contract',
+  'Product2',
+  'Pricebook2',
+  'Asset',
+  'OpportunityLineItem',
+  'Quote',
+  'QuoteLineItem',
+  'Order',
+  'OrderItem',
+  'PricebookEntry',
+  'Task',
+  'EmailMessage'
+];
 
 export {
   NODE_ENV,
@@ -321,4 +343,5 @@ export {
   OBJECT_TYPE,
   BACKUP_TYPE,
   ENVIRONMENT_TYPE,
+  STANDARD_OBJECT_LIST
 };
