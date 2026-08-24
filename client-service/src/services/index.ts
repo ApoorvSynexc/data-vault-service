@@ -12,6 +12,7 @@ export * from './payload';
 export * from './role';
 export * from './schema';
 export * from './session';
+export * from './settings';
 export * from './space';
 export * from './third-party';
 export * from './user';
