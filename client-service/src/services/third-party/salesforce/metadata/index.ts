@@ -410,3 +410,51 @@ export const salesforceObjectDescribe = async (params: ISalesforceObjectDescribe
         throw error;
     }
 }
+
+interface ISalesforceUserQueryRecord {
+    Id: string;
+    ManagerId?: string | null;
+}
+
+export interface IInactiveOwnerIdsResult {
+    ownerIds: string[];
+    managerIds?: string[];
+}
+
+// Standard Data REST query (not a custom Apex endpoint) — ManagerId is a
+// direct field on User, so includeManagers is answered by the same query.
+export const getInactiveOwnerIds = async ({ user, includeManagers }: { user: IUser; includeManagers?: boolean }): Promise<IInactiveOwnerIdsResult> => {
+    const crm = await getCrmById(user.crmId!);
+    if (!crm) {
+        throw new Error('CRM not found');
+    }
+
+    const instanceUrl = user.crmProfile?.instanceUrl;
+    if (!instanceUrl) {
+        throw new Error('Instance URL not found');
+    }
+
+    const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+    const tokens = {
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        userId: user.userId,
+        environment: crm.environment,
+        customUrl: user.customUrl,
+    };
+
+    const fields = includeManagers ? 'Id, ManagerId' : 'Id';
+    const soql = `SELECT ${fields} FROM User WHERE IsActive = false`;
+    const url = `${instanceUrl}/services/data/v66.0/query?q=${encodeURIComponent(soql)}`;
+
+    const result = await salesforceRequest<{ records: ISalesforceUserQueryRecord[] }>({ url, method: 'GET' }, tokens);
+    const records = result.data.records ?? [];
+    const ownerIds = records.map((record) => record.Id);
+
+    if (!includeManagers) {
+        return { ownerIds };
+    }
+
+    const managerIds = [...new Set(records.map((record) => record.ManagerId).filter((id): id is string => !!id))];
+    return { ownerIds, managerIds };
+};

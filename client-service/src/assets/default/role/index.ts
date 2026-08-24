@@ -5,7 +5,7 @@ import { IRolePermissions } from "../../../models/role";
 // a full grant, not just a flat list of module keys (Admin must have every
 // action, not just "access"). This is the shape aclGateway checks against with
 // permissions.includes('backup.read'), and the same shape authorize.ts builds.
-const fullAccessPermissions: IRolePermissions = defaultPermissions.flatMap((module) =>
+export const fullAccessPermissions: IRolePermissions = defaultPermissions.flatMap((module) =>
   module.permissions.map((action) => `${module.value}.${action.value}`)
 );
 
