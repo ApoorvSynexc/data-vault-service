@@ -94,7 +94,9 @@ export const recordTypeHandler = async (
   params: ISalesforceMetadataHandler,
   recordTypeInfos: ISalesforceRecordTypeInfo[]
 ) => {
-  const { backupConfigId, backupJobId, objectName } = params;
+  const { backupConfig, backupJobId, object } = params;
+  const backupConfigId = backupConfig.backupConfigId;
+  const objectName = object.name;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
     const diff = await recordTypeComparison({
