@@ -125,12 +125,12 @@ const edgeCaseFieldMappingSchema = Joi.object({
 
 const missingFieldInDestinationSchema = Joi.object({
   type: Joi.string().required(),
-  sourceDestinationMapping: Joi.array().items(edgeCaseFieldMappingSchema).required(),
+  sourceDestinationMapping: Joi.array().items(edgeCaseFieldMappingSchema).optional(),
 });
 
 const ownerInactiveSchema = Joi.object({
   type: Joi.string().required(),
-  fallbackValue: Joi.string().allow('').required(),
+  fallbackValue: Joi.string().allow('').optional(),
 });
 
 const recordTypeIdMappingSchema = Joi.object({
@@ -145,7 +145,7 @@ const recordTypeObjectMappingSchema = Joi.object({
 
 const recordTypeMissingSchema = Joi.object({
   type: Joi.string().required(),
-  objects: Joi.array().items(recordTypeObjectMappingSchema).required(),
+  objects: Joi.array().items(recordTypeObjectMappingSchema).optional(),
 });
 
 const missingRequiredFieldSchema = Joi.object({
@@ -161,7 +161,7 @@ const missingRequiredFieldMappingSchema = Joi.object({
 
 const missingRequiredFieldValueSchema = Joi.object({
   type: Joi.string().required(),
-  mapping: Joi.array().items(missingRequiredFieldMappingSchema).min(1).required(),
+  mapping: Joi.array().items(missingRequiredFieldMappingSchema).min(1).optional(),
 });
 
 const edgeCasesSchema = Joi.object({
