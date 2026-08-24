@@ -982,20 +982,34 @@ const deleteTriggers = async (
   tokens: SalesforceTokens,
   config: IBackupConfig
 ): Promise<ITriggerResult[]> => {
-  if (!config.triggerResults?.length) {
+  // triggerResults is bookkeeping, not the source of truth — it can be empty or
+  // stale (e.g. the post-response write that persists it after creation never
+  // landed) while the org still has live flows. Fall back to objectNames, whose
+  // flow names are always derivable, so cleanup isn't skipped just because the
+  // tracking record is missing.
+  const triggerResults: ITriggerResult[] = config.triggerResults?.length
+    ? config.triggerResults
+    : (config.objectNames ?? []).map((objectApiName) => ({
+        objectApiName,
+        flowNames: flowNamesFor(objectApiName),
+        status: 'CREATED' as const,
+      }));
+
+  if (!triggerResults.length) {
     return [{ objectApiName: 'N/A', flowNames: [], status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
-  const triggerResults = config.triggerResults;
   for (let i = 0; i < triggerResults.length; i++) {
     const triggerResult = triggerResults[i];
     const objectApiName = objectApiNameOf(config, triggerResult);
-    const status = triggerResult.status;
 
     triggerResult.objectApiName = objectApiName;
     delete triggerResult.triggerName;
 
-    if (!['CREATED', 'INACTIVE', 'EXIST'].includes(status)) continue;
+    // No status gate: fetchFlowStates + deleteFlows are already no-ops when the
+    // org has nothing under these names, so attempting delete regardless of the
+    // last recorded status is what catches the case that status has drifted
+    // from what's actually deployed.
     try {
       // Union of what this config recorded, what the current naming produces and
       // the retired three-flow names — deleteFlows filters to what the org
