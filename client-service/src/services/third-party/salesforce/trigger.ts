@@ -598,14 +598,24 @@ const deleteFlows = async (
   const active = present.filter((name) => states.get(name));
   if (active.length) {
     await deactivateFlows(instanceUrl, tokens, active);
+    // The deactivation deploy can report done before the FlowVersion's inactive
+    // state is visible org-wide, which surfaces on the very next deploy as
+    // "insufficient access rights on cross-reference id" rather than any real
+    // permission problem. A short pause avoids racing that propagation.
+    await timer(2000);
   }
 
-  await destructiveDeploy(
-    instanceUrl,
-    tokens,
-    present.map((name) => ({ type: 'Flow', name })),
-    `Flow delete: ${present.join(', ')}`
-  );
+  const members = present.map((name) => ({ type: 'Flow', name }));
+  try {
+    await destructiveDeploy(instanceUrl, tokens, members, `Flow delete: ${present.join(', ')}`);
+  } catch (err) {
+    if (!(err instanceof Error) || !/insufficient access rights on cross-reference id/i.test(err.message)) {
+      throw err;
+    }
+    logger.info(`[trigger-delete] retrying delete after propagation delay: ${present.join(', ')}`);
+    await timer(5000);
+    await destructiveDeploy(instanceUrl, tokens, members, `Flow delete (retry): ${present.join(', ')}`);
+  }
 };
 
 // ---------------------------------------------------------------------------
