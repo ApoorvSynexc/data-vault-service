@@ -266,8 +266,6 @@ const archiveObject = async (
                 parentWhereClause = whereClause;
             }
 
-            console.log('---------------parentWhereClause--------------- ', parentWhereClause);
-
             const whereBody = parentWhereClause.replace(/^WHERE\s+/i, '').trim();
             const archivalWhere = whereBody
                 ? `WHERE IsDeleted = false AND (${whereBody})`
