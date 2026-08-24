@@ -464,8 +464,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
             // (and its triggerResults) is still around, and running it here — awaited,
             // pre-response — means it actually executes as part of the request instead
             // of racing a response that's already gone out.
-            const triggerResults = await realTimeTriggerManagement('delete', config);
-            console.log({ triggerResults });
+            await realTimeTriggerManagement('delete', config);
         } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
             // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
         }

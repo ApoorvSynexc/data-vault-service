@@ -9,6 +9,7 @@ import { timer } from '../../../utils/helper';
 import { getMasterChildApiNames } from './apex';
 import { withNamespace } from '../../../utils/salesforce-namespace';
 import { SALESFORCE_NAMESPACE } from '../../../constant';
+import { logger } from '../../../middlewares';
 
 const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
 const API_VERSION = '66.0';
@@ -1026,24 +1027,35 @@ const deleteTriggers = async (
 
       if (states.size === 0) {
         triggerResult.status = legacyRemoved ? 'DELETED' : 'NOT_FOUND';
+        logger.info(`[trigger-delete] ${objectApiName}: no flows found in org (status=${triggerResult.status}${legacyRemoved ? ', legacy Apex trigger removed' : ''})`);
         continue;
       }
 
       await deleteFlows(instanceUrl, tokens, flowNames);
 
       triggerResult.status = 'DELETED';
+      logger.info(`[trigger-delete] ${objectApiName}: deleted flows [${flowNames.join(', ')}]`);
     } catch (err) {
       triggerResult.status = 'DELETE_FAILED';
       triggerResult.error = err instanceof Error ? err.message : String(err);
+      logger.error(`[trigger-delete] ${objectApiName}: failed — ${triggerResult.error}`);
     }
   }
 
   // Delete the permission set after all flows are removed.
   try {
     await deletePermissionSet(instanceUrl, tokens);
+    logger.info(`[trigger-delete] permission set '${PERMISSION_SET_NAME}' deleted`);
   } catch (err) {
-    console.log('Error deleting permission set:', err);
+    logger.error(`[trigger-delete] failed to delete permission set: ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  const deleted = triggerResults.filter((r) => r.status === 'DELETED').length;
+  const failed = triggerResults.filter((r) => r.status === 'DELETE_FAILED').length;
+  logger.info(
+    `[trigger-delete] backupConfigId=${config.backupConfigId} done: ${deleted}/${triggerResults.length} deleted, ${failed} failed — ` +
+    triggerResults.map((r) => `${r.objectApiName}=${r.status}`).join(', ')
+  );
 
   return triggerResults;
 };
