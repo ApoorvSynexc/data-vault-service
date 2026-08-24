@@ -98,7 +98,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
   const children = objectDescription.childRelationships
     .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && (filteredObjectNames.includes(child.childSObject) && child.cascadeDelete))))
-    .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete }));
+    .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete ,field: child.field}));
 
   const fields = objectDescription.fields
     .filter((field) => field.type === 'reference')
