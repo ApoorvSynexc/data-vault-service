@@ -22,6 +22,7 @@ import {
   SESSION_TABLE,
   USER_TABLE,
   SPACE_TABLE,
+  SETTINGS_TABLE,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
   NODE_ENV,
@@ -373,6 +374,28 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     BillingMode: 'PAY_PER_REQUEST',
     AttributeDefinitions: [{ AttributeName: 'spaceId', AttributeType: 'S' }],
     KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
+  },
+  {
+    TableName: SETTINGS_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'settingId', AttributeType: 'S' },
+      { AttributeName: 'userId', AttributeType: 'S' },
+      { AttributeName: 'crmId', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'settingId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'userId-index',
+        KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'crmId-index',
+        KeySchema: [{ AttributeName: 'crmId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
   },
 ];
 
