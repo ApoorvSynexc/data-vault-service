@@ -97,10 +97,10 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
   const children = objectDescription.childRelationships
-    .filter((child) => filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName && child.cascadeDelete)
+    .filter((child) => apexMode === 'backup' && (filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName && child.cascadeDelete))
     .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete }));
-  
-    const fields = objectDescription.fields
+
+  const fields = objectDescription.fields
     .filter((field) => field.type === 'reference')
     .map((field) => ({ name: field.name, nillable: field.nillable, cascadeDelete: field.cascadeDelete }));
 
