@@ -4,6 +4,7 @@ import {
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
   SALESFORCE_LOGIN_REDIRECT_URI,
+  STANDARD_OBJECT_LIST,
   STATUS,
 } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
@@ -35,6 +36,7 @@ import {
   parseExpiryToSeconds,
   wrapController,
 } from '../../../utils/helper';
+import { getSettingsByUserAndCrm, upsertSettings } from '../../../services/settings';
 
 const parseSalesforceError = (error: any): string | null => {
   try {
@@ -253,6 +255,15 @@ const socialLoginCallbackHandler = async (
       // use the record we just wrote for the rest of the login flow.
       user = { userId, crmId, crmProfile, status: STATUS.active, isCrmConnected: true, customUrl: oauthState.customUrl } as IUser;
       userJustCreated = true;
+    }
+
+    const settingsExist = await getSettingsByUserAndCrm(user.userId);
+    if (!settingsExist) {
+      await upsertSettings({
+        userId: user.userId,
+        crmId: user.crmId,
+        standardObjects: STANDARD_OBJECT_LIST
+      });
     }
   }
 

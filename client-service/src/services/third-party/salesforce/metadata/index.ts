@@ -1,4 +1,5 @@
 import { salesforceRequest } from "..";
+import { STANDARD_OBJECT_LIST } from "../../../../constant";
 import { logger } from "../../../../middlewares";
 import { IUser } from "../../../../models";
 import { getCrmById } from "../../../crm";
@@ -136,27 +137,6 @@ export const salesforceObjectFilteredList = async (params: ISalesforceObjectList
     const { user, apexMode, apexType } = params;
     try {
         const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
-        const STANDARD_OBJECT_LIST = [
-            'Account',
-            'Contact',
-            'Lead',
-            'Opportunity',
-            'Case',
-            'WorkOrder',
-            'Asset',
-            'Contract',
-            'Product2',
-            'Pricebook2',
-            'Asset',
-            'OpportunityLineItem',
-            'Quote',
-            'QuoteLineItem',
-            'Order',
-            'OrderItem',
-            'PricebookEntry',
-            'Task',
-            'EmailMessage'
-        ];
         const objectsList = await salesforceObjectList({ user });
         let filteredObjects = objectsList.filter((obj) =>
             obj.deprecatedAndHidden === false &&
