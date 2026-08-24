@@ -42,7 +42,10 @@ export const salesforceMetadataHandler = async (
         return { diff, metadataType, fields };
       }
       case 'childs': {
-        const children = describedObject.childRelationships.filter(ch => objectNames.includes(ch.childSObject));
+        let children = describedObject.childRelationships;
+        if (objectNames) {
+          children = describedObject.childRelationships.filter(ch => objectNames.includes(ch.childSObject));
+        }
         const diff = await childHandler(params, children);
         return { diff, metadataType };
       }

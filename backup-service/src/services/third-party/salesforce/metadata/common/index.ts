@@ -10,7 +10,7 @@ export interface ISalesforceMetadataHandler {
   crmName: string;
   crmId: string;
   backupConfigId: string;
-  objectNames: string[];
+  objectNames?: string[];
   objectName: string;
   backupJobId: string;
   isInitialBackup: boolean;

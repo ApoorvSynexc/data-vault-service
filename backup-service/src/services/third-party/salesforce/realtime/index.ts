@@ -95,7 +95,17 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     destConfig: IDestinationConfig,
     payload: IRealtimePayload
   ) {
-    const { records, operation, objectApiName } = payload;
+    let { records } = payload;
+    const { operation, objectApiName } = payload;
+
+    if (records.length) {
+      records = records.map(record => {
+        if (record.records) {
+          return record.records;
+        }
+        return record
+      })
+    }
 
     // Column source, in order of authority:
     //   1. the schema stored in S3 (org-wide, written by the scheduled backup)
