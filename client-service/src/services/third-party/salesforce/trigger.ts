@@ -598,24 +598,14 @@ const deleteFlows = async (
   const active = present.filter((name) => states.get(name));
   if (active.length) {
     await deactivateFlows(instanceUrl, tokens, active);
-    // The deactivation deploy can report done before the FlowVersion's inactive
-    // state is visible org-wide, which surfaces on the very next deploy as
-    // "insufficient access rights on cross-reference id" rather than any real
-    // permission problem. A short pause avoids racing that propagation.
-    await timer(2000);
   }
 
-  const members = present.map((name) => ({ type: 'Flow', name }));
-  try {
-    await destructiveDeploy(instanceUrl, tokens, members, `Flow delete: ${present.join(', ')}`);
-  } catch (err) {
-    if (!(err instanceof Error) || !/insufficient access rights on cross-reference id/i.test(err.message)) {
-      throw err;
-    }
-    logger.info(`[trigger-delete] retrying delete after propagation delay: ${present.join(', ')}`);
-    await timer(5000);
-    await destructiveDeploy(instanceUrl, tokens, members, `Flow delete (retry): ${present.join(', ')}`);
-  }
+  await destructiveDeploy(
+    instanceUrl,
+    tokens,
+    present.map((name) => ({ type: 'Flow', name })),
+    `Flow delete: ${present.join(', ')}`
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -1010,41 +1000,75 @@ const deleteTriggers = async (
     return [{ objectApiName: 'N/A', flowNames: [], status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
-  for (let i = 0; i < triggerResults.length; i++) {
-    const triggerResult = triggerResults[i];
-    const objectApiName = objectApiNameOf(config, triggerResult);
+  // Phase 1 — resolve what each object actually has in the org, and deactivate
+  // every active flow across every object in ONE deploy. Batching it this way
+  // (rather than deactivate-then-delete per object) gives Salesforce a full
+  // deploy round-trip of real work to propagate the inactive state before any
+  // destructive delete runs — interleaving the two per object was racing that
+  // propagation and surfacing as "insufficient access rights on cross-reference
+  // id" on the delete.
+  const perObject: { triggerResult: ITriggerResult; objectApiName: string; present: string[] }[] = [];
+  const allActiveFlowNames = new Set<string>();
 
+  for (const triggerResult of triggerResults) {
+    const objectApiName = objectApiNameOf(config, triggerResult);
     triggerResult.objectApiName = objectApiName;
     delete triggerResult.triggerName;
 
-    // No status gate: fetchFlowStates + deleteFlows are already no-ops when the
-    // org has nothing under these names, so attempting delete regardless of the
-    // last recorded status is what catches the case that status has drifted
-    // from what's actually deployed.
+    // Union of what this config recorded, what the current naming produces and
+    // the retired three-flow names — an over-wide list costs nothing and an
+    // under-wide one strands an active flow that keeps syncing a deleted config.
+    const flowNames = Array.from(new Set([
+      ...(triggerResult.flowNames ?? []),
+      ...flowNamesFor(objectApiName),
+      ...legacyFlowNamesFor(objectApiName),
+    ]));
+    triggerResult.flowNames = flowNames;
+
     try {
-      // Union of what this config recorded, what the current naming produces and
-      // the retired three-flow names — deleteFlows filters to what the org
-      // actually has, so an over-wide list costs nothing and an under-wide one
-      // strands an active flow that keeps syncing a deleted config.
-      const flowNames = Array.from(new Set([
-        ...(triggerResult.flowNames ?? []),
-        ...flowNamesFor(objectApiName),
-        ...legacyFlowNamesFor(objectApiName),
-      ]));
-      triggerResult.flowNames = flowNames;
       const states = await fetchFlowStates(instanceUrl, tokens, flowNames);
+      const present = flowNames.filter((name) => states.has(name));
+      present.filter((name) => states.get(name)).forEach((name) => allActiveFlowNames.add(name));
+      perObject.push({ triggerResult, objectApiName, present });
+    } catch (err) {
+      triggerResult.status = 'DELETE_FAILED';
+      triggerResult.error = err instanceof Error ? err.message : String(err);
+      logger.error(`[trigger-delete] ${objectApiName}: failed to read flow state — ${triggerResult.error}`);
+    }
+  }
+
+  if (allActiveFlowNames.size) {
+    try {
+      await deactivateFlows(instanceUrl, tokens, Array.from(allActiveFlowNames));
+      logger.info(`[trigger-delete] deactivated ${allActiveFlowNames.size} flow(s): [${Array.from(allActiveFlowNames).join(', ')}]`);
+    } catch (err) {
+      logger.error(`[trigger-delete] failed to deactivate flows: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Phase 2 — every flow that needed deactivating already is, so delete them.
+  for (const { triggerResult, objectApiName, present } of perObject) {
+    // No status gate: an empty `present` list is already a no-op, so attempting
+    // delete regardless of the last recorded status is what catches the case
+    // that status has drifted from what's actually deployed.
+    try {
       const legacyRemoved = await removeLegacyApexTrigger(instanceUrl, tokens, triggerNameFor(objectApiName));
 
-      if (states.size === 0) {
+      if (!present.length) {
         triggerResult.status = legacyRemoved ? 'DELETED' : 'NOT_FOUND';
         logger.info(`[trigger-delete] ${objectApiName}: no flows found in org (status=${triggerResult.status}${legacyRemoved ? ', legacy Apex trigger removed' : ''})`);
         continue;
       }
 
-      await deleteFlows(instanceUrl, tokens, flowNames);
+      await destructiveDeploy(
+        instanceUrl,
+        tokens,
+        present.map((name) => ({ type: 'Flow', name })),
+        `Flow delete: ${present.join(', ')}`
+      );
 
       triggerResult.status = 'DELETED';
-      logger.info(`[trigger-delete] ${objectApiName}: deleted flows [${flowNames.join(', ')}]`);
+      logger.info(`[trigger-delete] ${objectApiName}: deleted flows [${present.join(', ')}]`);
     } catch (err) {
       triggerResult.status = 'DELETE_FAILED';
       triggerResult.error = err instanceof Error ? err.message : String(err);
