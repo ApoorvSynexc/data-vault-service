@@ -2,6 +2,7 @@ import { OBJECT_STATUS } from "../../../../../constant";
 import { logger } from "../../../../../middlewares";
 import { IBackupConfig, IBackupField, IBackupObject, IDestinationConfig, IS3ObjectKey, ISource } from "../../../../../models";
 import { buildS3KeyPrefix, formatFieldValuesForSOQL, formatValueByDataType } from "../../../../../utils/helper";
+import { updateArchivalConfigObject } from "../../../../backup-config";
 import { updateArchivalObject } from "../../../../backup-job";
 import { createBulkQueryJob, SalesforceTokens } from "../../api-request";
 import { salesforceMetadataHandler } from "../../metadata";
@@ -300,7 +301,7 @@ const archiveObject = async (
                 type: 'archival',
             });
 
-            await uploadBulkResultsByPage({
+            const { sizeInBytes, completedRecordCount } = await uploadBulkResultsByPage({
                 instanceUrl,
                 tokens,
                 jobId,
@@ -312,6 +313,15 @@ const archiveObject = async (
                 s3Keys,
                 startLocator: object.currentLocator,
                 startCompletedRecordCount: object.completedRecordCount ?? 0,
+            });
+
+            await updateArchivalConfigObject({
+                backupConfigId,
+                object: {
+                    id: object.id,
+                    completedRecordCount,
+                    sizeInBytes,
+                },
             });
         }
 
@@ -364,14 +374,14 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
             const childObject = payload.object.children[index];
             try {
                 await exportWithRetryArchivalV2({
-                        type: 'delete',
-                        backupConfig,
-                        backupJobId,
-                        source,
-                        destConfig,
-                        object: childObject,
-                        s3Keys,
-                    });
+                    type: 'delete',
+                    backupConfig,
+                    backupJobId,
+                    source,
+                    destConfig,
+                    object: childObject,
+                    s3Keys,
+                });
             } catch (error: any) {
                 logger.error(`Archival job ${payload.backupJobId}: failed to delete ${childObject.name} - ${error?.message}`);
                 await updateArchivalObject({
