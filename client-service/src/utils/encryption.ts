@@ -62,10 +62,10 @@ const deriveKey = (userId: string): string =>
   ).toString('base64');
 
 // ---------------------------------------------------------------------------
-// Per-org key generation (Salesforce authorize-org flow)
+// Per-org key generation (Salesforce configure-org flow)
 // Generates a unique 256-bit key per Salesforce org, stored on the CRM record
 // and returned to Salesforce once. Not derived from ENCRYPTION_KEY — Salesforce
-// currently still encrypts authorize-org/authorize-admin requests with the
+// currently still encrypts configure-org/authorize-admin requests with the
 // shared master key, so this key isn't used to decrypt inbound requests yet.
 // ---------------------------------------------------------------------------
 

@@ -7,8 +7,8 @@ export interface ICrm {
   name?: string;
   environment?: 'production' | 'sandbox';
   status: string;
-  instanceUrl?: string; // Salesforce instance URL, set via the authorize-org flow
-  encryptionKey?: string; // base64-encoded per-org AES-256 key, set via the authorize-org flow
+  instanceUrl?: string; // Salesforce instance URL, set via the configure-org flow
+  encryptionKey?: string; // base64-encoded per-org AES-256 key, set via the configure-org flow
   updatedAt: string;
   createdAt: string;
   

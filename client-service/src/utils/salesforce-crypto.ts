@@ -19,7 +19,7 @@ interface DecryptedSalesforceRequest {
  * failure, or an orgId with no registered CRM/key — callers should treat any
  * thrown error as unauthorized.
  *
- * Not used by authorize-org: that endpoint registers the org and has no org
+ * Not used by configure-org: that endpoint registers the org and has no org
  * key yet, so it stays single-layer (decrypt directly with the Bootstrap Key).
  */
 const decryptSalesforceRequest = async (raw: any): Promise<DecryptedSalesforceRequest> => {

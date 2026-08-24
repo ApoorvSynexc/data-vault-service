@@ -96,9 +96,10 @@ const resolveEcaDeveloperName = async (
 // Returns true if the Permission Set already exists (by developer/API name).
 const permissionSetExists = async (
   instanceUrl: string,
-  tokens: SalesforceTokens
+  tokens: SalesforceTokens,
+  permissionSetName: string
 ): Promise<boolean> => {
-  const soql = `SELECT Id FROM PermissionSet WHERE Name = '${ECA_PERMISSION_SET_NAME}' LIMIT 1`;
+  const soql = `SELECT Id FROM PermissionSet WHERE Name = '${permissionSetName}' LIMIT 1`;
   const { data } = await salesforceRequest<{ totalSize: number }>(
     {
       url: `${instanceUrl}/services/data/v${METADATA_API_VERSION}/query?q=${encodeURIComponent(soql)}`,
@@ -202,7 +203,8 @@ const fetchExistingPermittedPermissionSets = async (
 // this call to pass beyond which Permission Set was just created.
 const assignUserToEcaViaApex = async (
   instanceUrl: string,
-  tokens: SalesforceTokens
+  tokens: SalesforceTokens,
+  permissionSetName: string
 ): Promise<void> => {
   const response = await callApex<{
     success: boolean;
@@ -212,7 +214,7 @@ const assignUserToEcaViaApex = async (
   }>(tokens, {
     url: `${APEX_BASE(instanceUrl)}/assign-user-to-eca`,
     method: 'POST',
-    body: { permissionSetName: ECA_PERMISSION_SET_NAME },
+    body: { permissionSetName },
   });
 
   if (!response.success || !response.data?.assigned) {
@@ -337,17 +339,27 @@ const deployEcaOauthPolicy = async (
 export const provisionEcaPermissionSet = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  crm: ICrm
+  crm: ICrm,
+  permissionSetName?: string
 ): Promise<EcaProvisionResult> => {
+  // permissionSetName comes from oauthState (configure-org's permission_set_name)
+  // — an admin-supplied, already-existing Permission Set. When provided, it is
+  // never created here, only looked up and assigned; falls back to the
+  // packaged default only when the caller didn't supply one.
+  const usesExistingPermissionSet = Boolean(permissionSetName);
+  const effectivePermissionSetName = permissionSetName ?? ECA_PERMISSION_SET_NAME;
+
   console.log('[eca-permission-set] Checking org capabilities...');
   const { mode, developerName } = await resolveEcaDeveloperName(instanceUrl, tokens);
 
   console.log('[eca-permission-set] Checking permission set...');
-  const alreadyExists = await permissionSetExists(instanceUrl, tokens);
+  const alreadyExists = await permissionSetExists(instanceUrl, tokens, effectivePermissionSetName);
   if (alreadyExists) {
-    console.log('[eca-permission-set] Permission set already exists — skipping creation:', ECA_PERMISSION_SET_NAME);
+    console.log('[eca-permission-set] Permission set already exists — skipping creation:', effectivePermissionSetName);
+  } else if (usesExistingPermissionSet) {
+    throw new Error(`permission_set_not_found: Permission Set '${effectivePermissionSetName}' does not exist in this org`);
   } else {
-    console.log('[eca-permission-set] Permission set not found — creating:', ECA_PERMISSION_SET_NAME);
+    console.log('[eca-permission-set] Permission set not found — creating:', effectivePermissionSetName);
     await createPermissionSetViaMetadata(instanceUrl, tokens);
   }
 
@@ -367,7 +379,7 @@ export const provisionEcaPermissionSet = async (
 
   console.log('[eca-permission-set] Checking ECA permission-set assignment...');
   const existingPermittedPermissionSets = await fetchExistingPermittedPermissionSets(instanceUrl, tokens, developerName);
-  const alreadyAssigned = existingPermittedPermissionSets.includes(ECA_PERMISSION_SET_NAME);
+  const alreadyAssigned = existingPermittedPermissionSets.includes(effectivePermissionSetName);
 
   if (alreadyAssigned) {
     console.log('[eca-permission-set] Permission set already assigned to ECA OAuth policy — skipping deploy.');
@@ -381,7 +393,7 @@ export const provisionEcaPermissionSet = async (
     // failure already does, so the caller sees one clear failure instead of
     // a deploy error that doesn't explain the real, earlier cause.
     console.log('[eca-permission-set] Permission set not yet assigned to ECA OAuth policy — assigning to admin user first...');
-    await assignUserToEcaViaApex(instanceUrl, tokens);
+    await assignUserToEcaViaApex(instanceUrl, tokens, effectivePermissionSetName);
 
     console.log('[eca-permission-set] Resolving OAuth policy record...');
     // Salesforce auto-generates this record per-org when the ECA is created —
@@ -390,7 +402,7 @@ export const provisionEcaPermissionSet = async (
     // duplicate instead of updating the real one.
     const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${stripNamespace(developerName)}_oauthPlcy`;
     console.log('[eca-permission-set] Deploying ECA OAuth policy:', policyName);
-    const union = Array.from(new Set([...existingPermittedPermissionSets, ECA_PERMISSION_SET_NAME]));
+    const union = Array.from(new Set([...existingPermittedPermissionSets, effectivePermissionSetName]));
 
     try {
       await deployEcaOauthPolicy(instanceUrl, tokens, developerName, policyName, union);

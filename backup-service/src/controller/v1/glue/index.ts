@@ -26,27 +26,28 @@ import { wrapController } from '../../../utils/helper';
  * vs. which failed (e.g. `.hoodie` not written yet) without one failure blocking
  * the rest.
  */
-const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival } = req.body as {
-    crmId: string;
-    crmName: string;
-    backupConfigId: string;
-    objectNames: string[];
-    destConfig: any;
-    isArchival?: boolean;
-  };
+interface IEnsureCompressionTablesResult {
+  ensured: string[];
+  failed: { objectName: string; error: string }[];
+}
 
-  if (
-    !crmId ||
-    !crmName ||
-    !backupConfigId ||
-    !Array.isArray(objectNames) ||
-    objectNames.length === 0 ||
-    !destConfig
-  ) {
-    makeResponse(req, res, 400, false, 'params_required');
-    return;
-  }
+// One Glue creation flow per backupConfigId at a time. Spark can retry/duplicate its
+// completion callback, and every duplicate lands on this endpoint concurrently — without
+// this, each duplicate independently re-runs the full ensure flow (redundant S3 reads,
+// redundant Glue calls) at the same moment. Coalescing duplicates onto the same in-flight
+// promise, scoped by backupConfigId, keeps different configs fully independent and
+// guarantees exactly one flow per completion.
+const inFlightByConfig = new Map<string, Promise<IEnsureCompressionTablesResult>>();
+
+const runEnsureCompressionTables = async (params: {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  objectNames: string[];
+  destConfig: any;
+  isArchival?: boolean;
+}): Promise<IEnsureCompressionTablesResult> => {
+  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival } = params;
 
   const results = await Promise.allSettled(
     objectNames.map(async (objectName) => {
@@ -96,7 +97,58 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
     );
   }
 
-  makeResponse(req, res, 200, true, 'create', { ensured, failed });
+  return { ensured, failed };
+};
+
+const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival } = req.body as {
+    crmId: string;
+    crmName: string;
+    backupConfigId: string;
+    objectNames: string[];
+    destConfig: any;
+    isArchival?: boolean;
+  };
+
+  if (
+    !crmId ||
+    !crmName ||
+    !backupConfigId ||
+    !Array.isArray(objectNames) ||
+    objectNames.length === 0 ||
+    !destConfig
+  ) {
+    makeResponse(req, res, 400, false, 'params_required');
+    return;
+  }
+
+  logger.info(
+    `[glue] ensure-compression-tables received | cfg:${backupConfigId} objects:${objectNames.length}`
+  );
+
+  let result: IEnsureCompressionTablesResult;
+  const inFlight = inFlightByConfig.get(backupConfigId);
+  if (inFlight) {
+    logger.info(
+      `[glue] ensure-compression-tables duplicate | cfg:${backupConfigId} already in progress, awaiting existing run`
+    );
+    result = await inFlight;
+  } else {
+    logger.info(`[glue] ensure-compression-tables processing start | cfg:${backupConfigId}`);
+    const run = runEnsureCompressionTables({
+      crmId,
+      crmName,
+      backupConfigId,
+      objectNames,
+      destConfig,
+      isArchival,
+    }).finally(() => inFlightByConfig.delete(backupConfigId));
+    inFlightByConfig.set(backupConfigId, run);
+    result = await run;
+    logger.info(`[glue] ensure-compression-tables processing complete | cfg:${backupConfigId}`);
+  }
+
+  makeResponse(req, res, 200, true, 'create', result);
 };
 
 export const glueController = wrapController({ ensureCompressionTablesHandler });
