@@ -167,9 +167,10 @@ const archiveObject = async (
 
             const whereClause = buildWhereClause(object);
             if (parentWhereClause) {
-                parentWhereClause += ` AND ${parentWhereClause}`
+                const transformedWhere = transformWhereBodyForChild(whereClause, (object as any).fieldApiName);
+                parentWhereClause += ` AND ${transformedWhere}`
             } else {
-                parentWhereClause = transformWhereBodyForChild(whereClause, (object as any).fieldApiName);
+                parentWhereClause = whereClause;
             }
 
             const whereBody = whereClause.replace(/^WHERE\s+/i, '').trim();
@@ -319,7 +320,7 @@ const deleteObject = async (payload: IArchiveObject) => {
                 status: OBJECT_STATUS.completed
             },
         });
-        
+
     } catch (error: any) {
         logger.error(`Archival job ${backupJobId}: failed to delete ${object.name} - ${error?.message}`);
         await updateArchivalObject({
