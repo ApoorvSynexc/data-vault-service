@@ -11,7 +11,7 @@ export interface ISalesforceMetadataHandler {
   crmId: string;
   backupConfig: IBackupConfig;
   objectNames?: string[];
-  object: IBackupObject,
+  object: IBackupObject;
   backupJobId: string;
   isInitialBackup: boolean;
 }
@@ -70,15 +70,8 @@ export const getChangedKeys = <T extends object>(before: T, after: T): string[] 
 // One fixed key per object/metadataType(/field) — the file at this key holds
 // the full history of stored snapshots for whatever it is tracking.
 export const buildS3Key = (params: IBuildKeyParams) => {
-  const {
-    metadataType,
-    crmId,
-    crmName,
-    backupConfig,
-    object,
-    policyConfigType,
-    fieldApiName,
-  } = params;
+  const { metadataType, crmId, crmName, backupConfig, object, policyConfigType, fieldApiName } =
+    params;
   const backupConfigId = backupConfig.backupConfigId;
   const objectName = object.name;
   const tail = metadataType === 'picklist' ? `picklist/${fieldApiName}` : metadataType;

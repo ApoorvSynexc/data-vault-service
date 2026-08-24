@@ -6,5 +6,7 @@ import { SALESFORCE_NAMESPACE } from '../constant';
 // (namespace unset) exposes them directly under /services/apexrest/v1/data-vault.
 // `namespace` defaults to the configured SALESFORCE_NAMESPACE — the param
 // exists so this stays a pure, directly testable function.
-export const apexRestBase = (instanceUrl: string, namespace: string = SALESFORCE_NAMESPACE): string =>
-  `${instanceUrl}/services/apexrest/${namespace ? `${namespace}/` : ''}v1/data-vault`;
+export const apexRestBase = (
+  instanceUrl: string,
+  namespace: string = SALESFORCE_NAMESPACE
+): string => `${instanceUrl}/services/apexrest/${namespace ? `${namespace}/` : ''}v1/data-vault`;

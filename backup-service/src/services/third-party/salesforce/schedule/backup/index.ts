@@ -118,55 +118,66 @@ export const exportFirstTime = async (
   let jobId: string;
 
   try {
-
-    const fieldsMetadata = await salesforceMetadataHandler({
-      metadataType: 'fields',
-      policyConfigType: 'backup',
-      backupConfig,
-      backupJobId,
-      crmId,
-      crmName,
-      objectNames,
-      object,
-      isInitialBackup: true,
-    }, { instanceUrl, tokens });
+    const fieldsMetadata = await salesforceMetadataHandler(
+      {
+        metadataType: 'fields',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
     const allFieldNames =
       fieldsMetadata?.metadataType === 'fields'
         ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
         : [];
-    await salesforceMetadataHandler({
-      metadataType: 'picklist',
-      policyConfigType: 'backup',
-      backupConfig,
-      backupJobId,
-      crmId,
-      crmName,
-      objectNames,
-      object,
-      isInitialBackup: true,
-    }, { instanceUrl, tokens });
-    await salesforceMetadataHandler({
-      metadataType: 'recordTypes',
-      policyConfigType: 'backup',
-      backupConfig,
-      backupJobId,
-      crmId,
-      crmName,
-      objectNames,
-      object,
-      isInitialBackup: true,
-    }, { instanceUrl, tokens });
-    await salesforceMetadataHandler({
-      metadataType: 'childs',
-      policyConfigType: 'backup',
-      backupConfig,
-      backupJobId,
-      crmId,
-      crmName,
-      objectNames,
-      object,
-      isInitialBackup: true,
-    }, { instanceUrl, tokens });
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'picklist',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'recordTypes',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'childs',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
     // await uploadPicklistValues({
     //   schema,
     //   destConfig,
@@ -229,7 +240,6 @@ export const exportFirstTime = async (
       });
     }
 
-
     if (totalRecordCount) {
       logger.info(
         `Object found records, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, Changes=${totalRecordCount}`
@@ -261,7 +271,7 @@ export const exportFirstTime = async (
         backupConfigId,
         objectName,
         sizeInBytes,
-        completedRecordCount
+        completedRecordCount,
       });
       // backupConfig = await getBackupConfigById(backupConfigId);
       // if (backupConfig?.objects) {
@@ -276,7 +286,6 @@ export const exportFirstTime = async (
         `Object changes not found, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
       );
     }
-
 
     // await writeSchemaFile(
     //   destConfig,
@@ -327,17 +336,20 @@ export const exportIncremental = async (
   // let backupConfig;
 
   try {
-    const fieldsMetadata = await salesforceMetadataHandler({
-      metadataType: 'fields',
-      policyConfigType: 'backup',
-      backupConfig,
-      backupJobId,
-      crmId,
-      crmName,
-      objectNames,
-      object,
-      isInitialBackup: false,
-    }, { instanceUrl, tokens });
+    const fieldsMetadata = await salesforceMetadataHandler(
+      {
+        metadataType: 'fields',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
     const allFieldNames =
       fieldsMetadata?.metadataType === 'fields'
         ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
@@ -480,7 +492,7 @@ export const exportIncremental = async (
         backupConfigId,
         objectName,
         sizeInBytes,
-        completedRecordCount: object.completedRecordCount
+        completedRecordCount: object.completedRecordCount,
       });
 
       logger.info(
@@ -498,39 +510,48 @@ export const exportIncremental = async (
     // operation key off that, and claiming a change every run would force a Hudi
     // rewrite on every job.
 
-    await salesforceMetadataHandler({
-      metadataType: 'picklist',
-      policyConfigType: 'backup',
-      backupConfig,
-      backupJobId,
-      crmId,
-      crmName,
-      objectNames,
-      object,
-      isInitialBackup: false,
-    }, { instanceUrl, tokens });
-    await salesforceMetadataHandler({
-      metadataType: 'recordTypes',
-      policyConfigType: 'backup',
-      backupConfig,
-      backupJobId,
-      crmId,
-      crmName,
-      objectNames,
-      object,
-      isInitialBackup: false,
-    }, { instanceUrl, tokens });
-    await salesforceMetadataHandler({
-      metadataType: 'childs',
-      policyConfigType: 'backup',
-      backupConfig,
-      backupJobId,
-      crmId,
-      objectNames,
-      crmName,
-      object,
-      isInitialBackup: false,
-    }, { instanceUrl, tokens });
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'picklist',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'recordTypes',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'childs',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        objectNames,
+        crmName,
+        object,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
     // const storedSchema = await readLatestSchema(destConfig, {
     //   crmId,
     //   crmName,
@@ -557,7 +578,7 @@ export const exportIncremental = async (
       await updateBackupConfigObject({
         backupConfigId,
         objectName,
-        schemaChange: true
+        schemaChange: true,
       });
 
       logger.info(

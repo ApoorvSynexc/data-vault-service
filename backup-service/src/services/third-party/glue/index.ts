@@ -9,12 +9,7 @@ import {
   Column,
   PartitionInput,
 } from '@aws-sdk/client-glue';
-import {
-  AWS_REGION,
-  AWS_GLUE_ACCESS_KEY,
-  AWS_GLUE_SECRET_KEY,
-  NODE_ENV
-} from '../../../constant';
+import { AWS_REGION, AWS_GLUE_ACCESS_KEY, AWS_GLUE_SECRET_KEY, NODE_ENV } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
 import { readHudiTableSchema } from './hudi-schema';
@@ -65,7 +60,9 @@ const inFlightDatabaseCreate = new Map<string, Promise<void>>();
 const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
   const existing = inFlightDatabaseCreate.get(databaseName);
   if (existing) {
-    logger.info(`[glue] ensureGlueDatabase duplicate | db:${databaseName} awaiting in-progress create`);
+    logger.info(
+      `[glue] ensureGlueDatabase duplicate | db:${databaseName} awaiting in-progress create`
+    );
     return existing;
   }
 

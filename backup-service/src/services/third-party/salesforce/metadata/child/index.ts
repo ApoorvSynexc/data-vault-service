@@ -55,7 +55,8 @@ export interface IChildComparisonParams extends ISchemaComparison {
 // childSObject alone isn't always unique — a parent can have more than one
 // relationship to the same child object type (e.g. two lookups to Contact) —
 // so the field (the FK field name on the child) disambiguates.
-const childKey = (child: ISalesforceChildRelationship): string => `${child.childSObject}:${child.field}`;
+const childKey = (child: ISalesforceChildRelationship): string =>
+  `${child.childSObject}:${child.field}`;
 
 // Child-by-child, object-level diff of two relationship-tree snapshots — see
 // diffEntities in ../common for the shared, order-independent, non-stringify comparison.
@@ -97,7 +98,9 @@ export const childHandler = async (
   params: ISalesforceMetadataHandler,
   children: ISalesforceChildRelationship[]
 ) => {
-  const { backupConfigId, backupJobId, objectName } = params;
+  const { backupConfig, backupJobId, object } = params;
+  const backupConfigId = backupConfig.backupConfigId;
+  const objectName = object.name;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
     const diff = await childComparison({ ...params, destConfig, latestChilds: children });
