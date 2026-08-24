@@ -12,7 +12,6 @@ import {
 } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
-import { getBackupJob } from '../../backup-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
@@ -36,7 +35,7 @@ const exportObjectToDestination = async (
   objectIndex: number,
   destinationType: string,
   destConfig: IDestinationConfig,
-  lastUpdatedAt?: string,
+  lastUpdatedAt?: string
 ): Promise<void> => {
   if (object.status === OBJECT_STATUS.completed) {
     return;
@@ -238,7 +237,7 @@ const salesforceHandler: ICrmBackupHandler = {
             i + batchIndex,
             destinationType,
             destConfig,
-            lastUpdatedAt,
+            lastUpdatedAt
           )
         )
       );
@@ -251,9 +250,13 @@ const salesforceHandler: ICrmBackupHandler = {
       latestBackupConfig.objects?.forEach((obj) => {
         sizeInBytes += obj.sizeInBytes ?? 0;
         completedRecordCount += obj.completedRecordCount ?? 0;
-      })
+      });
     }
-    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success, sizeInBytes, completedRecordCount });
+    await updateBackupConfig(backupConfigId, {
+      backupStatus: BACKUP_STATUS.success,
+      sizeInBytes,
+      completedRecordCount,
+    });
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
   },
   runArchival: async (
@@ -283,7 +286,7 @@ const salesforceHandler: ICrmBackupHandler = {
         source,
         destConfig,
         object: objectDetail,
-        s3Keys
+        s3Keys,
       });
     }
 
@@ -296,13 +299,14 @@ const salesforceHandler: ICrmBackupHandler = {
         source,
         destConfig,
         object: objectDetail,
-        s3Keys
+        s3Keys,
       });
     }
 
-
     backupConfig = await getBackupConfigById(backupConfigId);
-    if (backupConfig === null || backupConfig === undefined || !backupConfig.objects) return 'PARTIAL_FAILURE';
+    if (backupConfig === null || backupConfig === undefined || !backupConfig.objects) {
+      return 'PARTIAL_FAILURE';
+    }
 
     const objects = recursivelyFlatten(backupConfig.objects);
     let sizeInBytes = 0;
@@ -311,9 +315,13 @@ const salesforceHandler: ICrmBackupHandler = {
       objects?.forEach((obj) => {
         sizeInBytes += obj.sizeInBytes ?? 0;
         completedRecordCount += obj.completedRecordCount ?? 0;
-      })
+      });
     }
-    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success, sizeInBytes, completedRecordCount });
+    await updateBackupConfig(backupConfigId, {
+      backupStatus: BACKUP_STATUS.success,
+      sizeInBytes,
+      completedRecordCount,
+    });
 
     return 'SUCCESS';
     // for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {

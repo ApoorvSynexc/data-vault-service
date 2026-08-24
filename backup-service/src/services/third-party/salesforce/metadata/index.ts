@@ -45,7 +45,9 @@ export const salesforceMetadataHandler = async (
       case 'childs': {
         let children = describedObject.childRelationships;
         if (objectNames) {
-          children = describedObject.childRelationships.filter(ch => objectNames.includes(ch.childSObject));
+          children = describedObject.childRelationships.filter((ch) =>
+            objectNames.includes(ch.childSObject)
+          );
         }
         const diff = await childHandler(params, children);
         return { diff, metadataType };
@@ -121,7 +123,29 @@ export const salesforceObjectFilteredList = async (
   apexMode?: string,
   apexType?: string
 ): Promise<ISalesforceObjectResponse[]> => {
-  const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
+  const excludeObjectSuffix = [
+    '__x',
+    '__hd',
+    '__mdt',
+    '__share',
+    '__history',
+    '__feed',
+    '__tag',
+    '__tagset',
+    '__comment',
+    '__changeevent',
+    '__e',
+    '__et',
+    'share',
+    'history',
+    'feed',
+    'tag',
+    'tagset',
+    'comment',
+    'changeevent',
+    'e',
+    'et',
+  ];
   const STANDARD_OBJECT_LIST = [
     'Account',
     'Contact',
@@ -141,19 +165,20 @@ export const salesforceObjectFilteredList = async (
     'OrderItem',
     'PricebookEntry',
     'Task',
-    'EmailMessage'
+    'EmailMessage',
   ];
 
   const objectsList = await salesforceObjectList(instanceUrl, tokens);
-  let filteredObjects = objectsList.filter((obj) =>
-    obj.deprecatedAndHidden === false &&
-    obj.customSetting === false &&
-    obj.retrieveable === true &&
-    obj.replicateable === true &&
-    obj.keyPrefix !== null &&
-    obj.queryable === true &&
-    (obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name) || obj.custom === true) &&
-    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+  let filteredObjects = objectsList.filter(
+    (obj) =>
+      obj.deprecatedAndHidden === false &&
+      obj.customSetting === false &&
+      obj.retrieveable === true &&
+      obj.replicateable === true &&
+      obj.keyPrefix !== null &&
+      obj.queryable === true &&
+      ((obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name)) || obj.custom === true) &&
+      !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
   );
 
   if (apexMode === 'backup' && apexType === 'realtime') {
@@ -161,7 +186,9 @@ export const salesforceObjectFilteredList = async (
   } else if (apexMode === 'archival') {
     filteredObjects = filteredObjects.filter((obj) => obj.deletable === true);
   } else if (apexMode === 'restore') {
-    filteredObjects = filteredObjects.filter((obj) => obj.createable === true && obj.updateable === true);
+    filteredObjects = filteredObjects.filter(
+      (obj) => obj.createable === true && obj.updateable === true
+    );
   }
 
   return filteredObjects;
