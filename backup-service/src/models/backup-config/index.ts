@@ -25,7 +25,8 @@ export interface IBackupConfig {
   slug: string;
   name?: string;
   description?: string;
-  type: string;
+  type: "NORMAL" | "ARCHIVAL";
+  dataset: "ENTIRE" | "PARTIAL";
   objectNames: string[];
   schedule: string;
   scheduleConfig?: IScheduleConfig;

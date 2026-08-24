@@ -18,7 +18,8 @@ export const salesforceMetadataHandler = async (
   params: ISalesforceMetadataHandler,
   salesforceContext?: ISalesforceContext
 ) => {
-  const { metadataType, backupConfig, backupJobId, objectNames, object } = params;
+  const { metadataType, backupConfig, backupJobId, object } = params;
+  let objectNames  = params.objectNames || [];
   const backupConfigId = backupConfig.backupConfigId;
   const objectName = object.name;
   try {
@@ -35,6 +36,20 @@ export const salesforceMetadataHandler = async (
       salesforceContext?.tokens,
       objectName
     );
+
+    const mode = backupConfig.type;
+    const dataset = backupConfig.dataset;
+
+    const isEntireDataset = mode === 'NORMAL' && dataset === 'ENTIRE';
+    if (!isEntireDataset) {
+      const objects = await salesforceObjectFilteredList(
+        salesforceContext?.instanceUrl,
+        salesforceContext?.tokens,
+        mode === 'NORMAL' ? 'backup' : 'archival',
+        backupConfig.schedule === 'SCHEDULE' ? 'schedule' : 'realtime'
+      );
+      objectNames = objects.map((obj) => obj.name) || [];
+    }
 
     switch (metadataType) {
       case 'fields': {
