@@ -98,7 +98,9 @@ export const childHandler = async (
   params: ISalesforceMetadataHandler,
   children: ISalesforceChildRelationship[]
 ) => {
-  const { backupConfigId, backupJobId, objectName } = params;
+  const { backupConfig, backupJobId, object } = params;
+  const backupConfigId = backupConfig.backupConfigId;
+  const objectName = object.name;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
     const diff = await childComparison({ ...params, destConfig, latestChilds: children });

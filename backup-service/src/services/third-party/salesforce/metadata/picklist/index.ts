@@ -98,7 +98,9 @@ export const picklistHandler = async (
   params: ISalesforceMetadataHandler,
   fields: ISalesforceFieldDescribe[]
 ) => {
-  const { backupConfigId, backupJobId, objectName } = params;
+  const { backupConfig, backupJobId, object } = params;
+  const backupConfigId = backupConfig.backupConfigId;
+  const objectName = object.name;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
     const results = await picklistComparison({ ...params, destConfig }, fields);
