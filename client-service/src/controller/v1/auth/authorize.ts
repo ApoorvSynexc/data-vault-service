@@ -29,6 +29,7 @@ interface IAuthorizeUserPayload {
   user_last_name: string;
   instance_url: string;
   org_environment?: 'production' | 'sandbox';
+  permission_set_name: string; // existing Permission Set API name, used for ECA provisioning
 }
 
 
@@ -39,7 +40,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
     try {
       plaintext = decrypt(readEnvelope(req.body));
     } catch (error: any) {
-      console.log('[authorize-org] 401: decrypt/envelope failed:', error?.message ?? error);
+      console.log('[configure-org] 401: decrypt/envelope failed:', error?.message ?? error);
       makeResponse(req, res, 401, false, 'unauthorized');
       return;
     }
@@ -52,7 +53,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
     if (payload.user_details) {
       const crm = await getCrmByOrgId(payload.user_details.org_id);
       if (!crm) {
-        console.log('[authorize-org] 401: org not registered for user authorization:', payload.user_details.org_id);
+        console.log('[configure-org] 401: org not registered for user authorization:', payload.user_details.org_id);
         throw new Error('Org not registered for user authorization');
       }
       finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
@@ -80,7 +81,7 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
   // utils/salesforce-crypto.ts) once an org key exists.
   const { orgId, instanceUrl } = payload;
   if (!orgId || !instanceUrl) {
-    console.log('[authorize-org] 401: missing required field(s):', {
+    console.log('[configure-org] 401: missing required field(s):', {
       hasOrgId: !!orgId,
       hasInstanceUrl: !!instanceUrl,
     });
@@ -110,11 +111,12 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
   // userDetails arrives here already plaintext: authorizationHandler decrypts
   // the whole request body (org_details + user_details together) with the
   // Bootstrap Key alone — there's no separate org-key layer on this route.
-  const { user_id: crmUserId, org_id: orgId, user_email: userEmail, user_username: username, user_first_name: firstName, user_last_name: lastName, instance_url: instanceUrl, org_environment: environment } = userDetails;
+  const { user_id: crmUserId, org_id: orgId, user_email: userEmail, user_username: username, user_first_name: firstName, user_last_name: lastName, instance_url: instanceUrl, org_environment: environment, permission_set_name: permissionSetName } = userDetails;
   if (!crmUserId
     || !orgId
     || !instanceUrl
     || !userEmail || !username || !firstName || !lastName
+    || !permissionSetName
   ) {
     throw new Error('Missing required field(s) in authorizeUserHandler payload');;
   }
@@ -142,7 +144,7 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
     instanceUrl,
     firstName + ' ' + lastName,
     true,
-    { username, email: userEmail, instanceUrl, organizationId: orgId, firstName, lastName, crmUserId }
+    { username, email: userEmail, instanceUrl, organizationId: orgId, firstName, lastName, crmUserId, permissionSetName }
   );
 
   return { authorizationUrl: url };

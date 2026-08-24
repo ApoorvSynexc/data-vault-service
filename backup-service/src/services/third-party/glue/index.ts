@@ -50,19 +50,47 @@ const buildGlueDatabaseName = (backupConfigId: string): string => toGlueIdentifi
 const buildGlueTableName = (backupConfigId: string, objectName: string): string =>
   `cfg_${toGlueIdentifier(backupConfigId)}_${toGlueIdentifier(objectName)}`;
 
-// Ensures the Glue database exists. Creates it if not — idempotent.
+// In-flight CreateDatabaseCommand calls, keyed by databaseName. ensureHudiFormatTable
+// calls ensureGlueDatabase once per object per format (hudi + delta), so a single
+// ensure-compression-tables run already fans out into 2×objectNames.length concurrent
+// callers for the SAME not-yet-existing database. AWS Glue does not reliably turn the
+// losers of that race into a clean AlreadyExistsException — it can surface
+// ConcurrentModificationException instead, which is a real (rethrown) error here, not
+// idempotency. Memoizing the in-flight promise per databaseName collapses that fan-out
+// into exactly one CreateDatabaseCommand call; every other caller just awaits it.
+const inFlightDatabaseCreate = new Map<string, Promise<void>>();
+
+// Ensures the Glue database exists. Creates it if not — idempotent, and safe under
+// any amount of same-process concurrency for the same databaseName (see map above).
 const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
-  try {
-    await glue.send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
-    logger.info(`[glue] created database | db:${databaseName}`);
-  } catch (err: any) {
-    if (err.name !== 'AlreadyExistsException') {
-      logger.error(
-        `[glue] ensureGlueDatabase failed | db:${databaseName} err:${err.name}: ${err.message}`
-      );
-      throw err;
+  const existing = inFlightDatabaseCreate.get(databaseName);
+  if (existing) {
+    logger.info(`[glue] ensureGlueDatabase duplicate | db:${databaseName} awaiting in-progress create`);
+    return existing;
+  }
+
+  logger.info(`[glue] ensureGlueDatabase start | db:${databaseName}`);
+  const create = (async () => {
+    try {
+      await glue.send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
+      logger.info(`[glue] created database | db:${databaseName}`);
+    } catch (err: any) {
+      if (err.name !== 'AlreadyExistsException') {
+        logger.error(
+          `[glue] ensureGlueDatabase failed | db:${databaseName} err:${err.name}: ${err.message}`
+        );
+        throw err;
+      }
+      logger.info(`[glue] database already exists | db:${databaseName}`);
     }
-    logger.info(`[glue] database already exists | db:${databaseName}`);
+  })();
+  inFlightDatabaseCreate.set(databaseName, create);
+
+  try {
+    await create;
+    logger.info(`[glue] ensureGlueDatabase complete | db:${databaseName}`);
+  } finally {
+    inFlightDatabaseCreate.delete(databaseName);
   }
 };
 
@@ -101,7 +129,7 @@ export interface IGlueColumnDef {
 //
 // Layout (backup pipeline only — archival is a separate workflow):
 //   Hudi : <crmName>/<crmId>/backup/<cfg>/main_backup_files/<Object>/
-//   Delta: <crmName>/<crmId>/backup/<cfg>/delta/<Object>/
+//   Delta: <crmName>/<crmId>/backup/<cfg>/deltas/<Object>/
 
 // Hudi CoW read format for Athena — parquet data read through Hudi's input format.
 const HUDI_STORAGE_DESCRIPTOR_BASE = {
@@ -114,11 +142,35 @@ const HUDI_STORAGE_DESCRIPTOR_BASE = {
   NumberOfBuckets: -1,
 } as const;
 
+// Set on BOTH tables — Hudi (main_backup_files) and Delta both use
+// HUDI_STORAGE_DESCRIPTOR_BASE's HoodieParquetInputFormat, so both hit
+// Athena's known legacy-SerDe limitation: spurious S3 403s reading `.hoodie`
+// metadata even with fully correct IAM/bucket policies. The documented fix is
+// this Glue table property, which switches Athena to its native Hudi
+// connector. Set here, at table creation/sync time (this service already
+// holds Glue write access), so the read path never has to ALTER TABLE itself
+// or need glue:UpdateTable.
+const NATIVE_HUDI_CONNECTOR_PARAM = 'athena_enable_native_hudi_connector_implementation';
+
+// Lets Athena use Hudi's file-listing index for partition discovery instead of
+// a full S3 listing. Set alongside the native connector param at both create
+// and sync time, for the same reason: a table created before this property
+// existed must not be stuck without it forever.
+const HUDI_METADATA_LISTING_PARAM = 'hudi.metadata-listing-enabled';
+
 const buildHudiTableName = (backupConfigId: string, objectName: string): string =>
   `${buildGlueTableName(backupConfigId, objectName)}_hudi`;
 
 const buildDeltaTableName = (backupConfigId: string, objectName: string): string =>
   `${buildGlueTableName(backupConfigId, objectName)}_delta`;
+
+// S3 folder Spark actually writes each dataset to — the delta folder is plural
+// ("deltas") even though the `dataset` discriminator used elsewhere (labels, table
+// naming) stays singular ("delta").
+const DATASET_S3_FOLDER: Record<'main_backup_files' | 'delta', string> = {
+  main_backup_files: 'main_backup_files',
+  delta: 'deltas',
+};
 
 // S3 key prefix (no bucket) of a compression-output table root.
 const buildCompressionRootKey = (
@@ -127,7 +179,8 @@ const buildCompressionRootKey = (
   backupConfigId: string,
   objectName: string,
   dataset: 'main_backup_files' | 'delta'
-): string => `${crmName}/${crmId}/backup/${backupConfigId}/${dataset}/${objectName}/`;
+): string =>
+  `${crmName}/${crmId}/backup/${backupConfigId}/${DATASET_S3_FOLDER[dataset]}/${objectName}/`;
 
 export interface IEnsureCompressionTableParams {
   crmId: string;
@@ -260,7 +313,13 @@ const syncHudiTableSchema = async (
 
   const signature = (cols: Column[] = []): string =>
     cols.map((c) => `${c.Name}:${c.Type}`).join(',');
-  if (signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns)) {
+  const columnsMatch = signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns);
+  // Both Hudi + Delta tables want these two properties — a pre-existing table
+  // created before either was added won't carry them yet, so a plain
+  // column-signature check would keep skipping them forever.
+  const hasNativeConnector = Table?.Parameters?.[NATIVE_HUDI_CONNECTOR_PARAM] === 'true';
+  const hasMetadataListing = Table?.Parameters?.[HUDI_METADATA_LISTING_PARAM] === 'TRUE';
+  if (columnsMatch && hasNativeConnector && hasMetadataListing) {
     return;
   }
 
@@ -275,7 +334,11 @@ const syncHudiTableSchema = async (
           Columns: glueColumns,
           Location: Table?.StorageDescriptor?.Location ?? '',
         },
-        Parameters: { ...(Table?.Parameters ?? {}) },
+        Parameters: {
+          ...(Table?.Parameters ?? {}),
+          [NATIVE_HUDI_CONNECTOR_PARAM]: 'true',
+          [HUDI_METADATA_LISTING_PARAM]: 'TRUE',
+        },
         TableType: Table?.TableType ?? 'EXTERNAL_TABLE',
       },
     })
@@ -352,7 +415,8 @@ const ensureHudiFormatTable = async (
             // partitioned table (e.g. delta) is queryable without a separate
             // ADD PARTITION step. No-op unless Spark wrote with the metadata table
             // enabled; harmless either way.
-            'hudi.metadata-listing-enabled': 'TRUE',
+            [HUDI_METADATA_LISTING_PARAM]: 'TRUE',
+            [NATIVE_HUDI_CONNECTOR_PARAM]: 'true',
           },
           TableType: 'EXTERNAL_TABLE',
         },

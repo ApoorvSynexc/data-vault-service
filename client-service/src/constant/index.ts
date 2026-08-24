@@ -33,12 +33,12 @@ const AWS_EMR_S3_FILE_PATH = String(process.env.AWS_EMR_S3_FILE_PATH);
 // IAM Role ARN that Athena assumes when reading from client S3 buckets.
 // The client's bucket policy must grant this ARN s3:GetObject + s3:ListBucket.
 const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN).trim();
-// S3 location where Athena writes query result files (required by StartQueryExecution).
-// e.g. s3://datavault-athena-results/
-const AWS_ATHENA_OUTPUT_LOCATION = String(process.env.AWS_ATHENA_OUTPUT_LOCATION);
 // Dedicated IAM credentials scoped to Athena (separate from the default AWS creds).
 const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
 const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
+// When true, wires the AWS SDK's own request/response logger into the Athena
+// client (same info the CLI's --debug flag prints) and logs every poll step.
+const AWS_ATHENA_DEBUG = String(process.env.AWS_ATHENA_DEBUG).toLowerCase() === 'true';
 
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET);
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET);
@@ -260,9 +260,9 @@ export {
 
   // AWS Athena
   AWS_ATHENA_ROLE_ARN,
-  AWS_ATHENA_OUTPUT_LOCATION,
   AWS_ATHENA_ACCESS_KEY,
   AWS_ATHENA_SECRET_KEY,
+  AWS_ATHENA_DEBUG,
 
   // JWT Config
   JWT_ACCESS_SECRET,

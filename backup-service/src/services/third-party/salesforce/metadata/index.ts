@@ -39,7 +39,7 @@ export const salesforceMetadataHandler = async (
       case 'fields': {
         const fields = describedObject.fields;
         const diff = await schemaHandler(params, fields);
-        return { diff, metadataType };
+        return { diff, metadataType, fields };
       }
       case 'childs': {
         const children = describedObject.childRelationships.filter(ch => objectNames.includes(ch.childSObject));

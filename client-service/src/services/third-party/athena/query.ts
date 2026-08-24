@@ -6,22 +6,52 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_OUTPUT_LOCATION, NODE_ENV } from '../../../constant';
+import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN, AWS_ATHENA_DEBUG } from '../../../constant';
 import { logger } from '../../../middlewares';
 
-const shouldProvideCredentials = 
-  process.env.NODE_ENV === 'DEV' && 
-  Boolean(AWS_ATHENA_ACCESS_KEY) && 
-  Boolean(AWS_ATHENA_SECRET_KEY);
+// AWS SDK clients accept a `logger` with this shape and call it internally
+// around every request/response — this is the SDK-level equivalent of the
+// CLI's --debug flag. Routed through `logger.info` (not `.debug`) so it
+// actually prints regardless of winston's configured level, since the point
+// of AWS_ATHENA_DEBUG is "make it show up".
+const athenaSdkLogger = {
+  debug: (...args: unknown[]) => logger.info('[athena-sdk]', ...args),
+  info: (...args: unknown[]) => logger.info('[athena-sdk]', ...args),
+  warn: (...args: unknown[]) => logger.warn('[athena-sdk]', ...args),
+  error: (...args: unknown[]) => logger.error('[athena-sdk]', ...args),
+};
+
+// Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
+// Principal) — only a caller that has actually assumed that role via STS can
+// satisfy it. The EC2 instance role is a SEPARATE identity from this role
+// (confirmed manually: `aws sts assume-role` from the instance succeeds), so
+// this must always assume it — there is no environment where skipping the
+// assume step is correct.
+//
+// masterCredentials is the base identity used to do the assuming: explicit
+// static keys when configured (local/dev), otherwise omitted so
+// fromTemporaryCredentials falls back to ITS OWN default provider chain (the
+// EC2 instance role in a deployed environment) as the base.
+//
+// constant/index.ts builds these with String(process.env.X), so an unset var
+// reads back as the literal string "undefined" rather than undefined itself —
+// excluded here so a deployed environment without these set assumes from the
+// default chain instead of assuming with garbage keys.
+const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
+
+const masterCredentials =
+  isSet(AWS_ATHENA_ACCESS_KEY) && isSet(AWS_ATHENA_SECRET_KEY)
+    ? { accessKeyId: AWS_ATHENA_ACCESS_KEY, secretAccessKey: AWS_ATHENA_SECRET_KEY }
+    : undefined;
 
 const athena = new AthenaClient({
   region: AWS_REGION,
-  ...(shouldProvideCredentials && {
-    credentials: {
-      accessKeyId: AWS_ATHENA_ACCESS_KEY,
-      secretAccessKey: AWS_ATHENA_SECRET_KEY,
-    },
-  }),
+  // credentials: fromTemporaryCredentials({
+  //   masterCredentials,
+  //   params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
+  // }),
+  ...(AWS_ATHENA_DEBUG ? { logger: athenaSdkLogger } : {}),
 });
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
@@ -31,16 +61,24 @@ const POLL_FIRST_MS = 2000;
 const POLL_INITIAL_MS = 250;
 const POLL_MAX_MS = 2000;
 
-// Serve byte-identical repeat queries from Athena's result cache instead of
-// re-scanning S3. Backup data only changes when a job/compression run lands,
-// so a short reuse window is safe and turns repeat fetches into ~instant.
-const RESULT_REUSE_MINUTES = 5;
-
 // Maximum total time to wait for a query to finish before giving up (ms).
 // Bulk-restore scans (delta chain over hundreds of jobs) can legitimately run
 // past a minute; polling backs off to 2s so the extra headroom costs nothing
 // when queries are fast.
 const QUERY_TIMEOUT_MS = 300_000;
+
+// Never logs secret keys — only whether static master credentials are
+// configured, so a misconfigured env var shows up without leaking anything.
+// Deferred via setImmediate: `logger` comes through the middlewares barrel,
+// which has a circular import back to this module — logging synchronously at
+// the top level can run before that cycle resolves and crash on `undefined`.
+setImmediate(() => {
+  logger.info(
+    `[athena] settings | region:${AWS_REGION} roleArn:${AWS_ATHENA_ROLE_ARN} sessionName:datavault-athena ` +
+    `usingStaticMasterCredentials:${Boolean(masterCredentials)} debug:${AWS_ATHENA_DEBUG} ` +
+    `pollFirstMs:${POLL_FIRST_MS} pollInitialMs:${POLL_INITIAL_MS} pollMaxMs:${POLL_MAX_MS} queryTimeoutMs:${QUERY_TIMEOUT_MS}`
+  );
+});
 
 const TERMINAL_STATES = new Set<QueryExecutionState>([
   QueryExecutionState.SUCCEEDED,
@@ -49,25 +87,30 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
 ]);
 
 // Submits a query to Athena and returns the queryExecutionId.
+// No ResultConfiguration.OutputLocation — omitting it makes Athena store
+// results in Athena-owned managed storage (engine v3+) instead of a bucket we
+// have to own, secure, and keep in the workgroup's region. We only ever read
+// results back through GetQueryResults, never touch the underlying files
+// directly, so managed storage is a strict improvement here.
+//
+// No ResultReuseConfiguration either — AWS does not support query result
+// reuse on workgroups with managed query results enabled ("Query Result Reuse
+// is not supported in workgroups with ManagedQueryResultsConfiguration
+// enabled"), so the two features are mutually exclusive here.
 const startQuery = async (sql: string, database: string): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ResultConfiguration: { OutputLocation: AWS_ATHENA_OUTPUT_LOCATION },
-    ResultReuseConfiguration: {
-      ResultReuseByAgeConfiguration: { Enabled: true, MaxAgeInMinutes: RESULT_REUSE_MINUTES },
-    },
   };
 
-  let response;
-  try {
-    response = await athena.send(new StartQueryExecutionCommand(input));
-  } catch (e) {
-    // Engine v2 workgroups reject ResultReuseConfiguration — retry without it.
-    if (!/ResultReuse/i.test(String((e as Error).message))) throw e;
-    delete input.ResultReuseConfiguration;
-    response = await athena.send(new StartQueryExecutionCommand(input));
-  }
+  logger.info(`[athena] StartQueryExecution request | ${JSON.stringify(input)}`);
+
+  const response = await athena.send(new StartQueryExecutionCommand(input));
+
+  logger.info(
+    `[athena] StartQueryExecution response | queryExecutionId:${response.QueryExecutionId} ` +
+    `requestId:${response.$metadata.requestId} httpStatusCode:${response.$metadata.httpStatusCode}`
+  );
 
   if (!response.QueryExecutionId) {
     throw new Error('[athena] StartQueryExecution returned no QueryExecutionId');
@@ -79,18 +122,26 @@ const startQuery = async (sql: string, database: string): Promise<string> => {
 // Polls Athena until the query reaches a terminal state or the timeout is exceeded.
 // Throws if the query fails, is cancelled, or times out.
 const waitForQuery = async (queryExecutionId: string): Promise<void> => {
-  const deadline = Date.now() + QUERY_TIMEOUT_MS;
+  const started = Date.now();
+  const deadline = started + QUERY_TIMEOUT_MS;
   let interval = POLL_INITIAL_MS;
+  let poll = 0;
 
   // Initial settle wait before the first status check.
   await new Promise((resolve) => setTimeout(resolve, POLL_FIRST_MS));
 
   while (Date.now() < deadline) {
+    poll += 1;
     const { QueryExecution } = await athena.send(
       new GetQueryExecutionCommand({ QueryExecutionId: queryExecutionId })
     );
 
     const state = QueryExecution?.Status?.State;
+
+    logger.info(
+      `[athena] GetQueryExecution poll #${poll} | queryExecutionId:${queryExecutionId} ` +
+      `state:${state} elapsedMs:${Date.now() - started}`
+    );
 
     if (!state) {
       throw new Error('[athena] GetQueryExecution returned no state');
@@ -130,9 +181,11 @@ const fetchQueryResults = async (
   const rows: Record<string, string>[] = [];
   let nextToken: string | undefined;
   let isFirstPage = true;
+  let page = 0;
 
   do {
-    const { ResultSet, NextToken } = await athena.send(
+    page += 1;
+    const { ResultSet, NextToken, $metadata } = await athena.send(
       new GetQueryResultsCommand({
         QueryExecutionId: queryExecutionId,
         NextToken: nextToken,
@@ -140,6 +193,12 @@ const fetchQueryResults = async (
     );
 
     const resultRows = ResultSet?.Rows ?? [];
+
+    logger.info(
+      `[athena] GetQueryResults page ${page} | queryExecutionId:${queryExecutionId} ` +
+      `rowsInPage:${resultRows.length} rowsSoFar:${rows.length} hasNextToken:${Boolean(NextToken)} ` +
+      `requestId:${$metadata.requestId} httpStatusCode:${$metadata.httpStatusCode}`
+    );
 
     if (isFirstPage) {
       // First row of the first page is always the header row.
@@ -189,6 +248,8 @@ export const fetchStoredResults = async (
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
 // database must be a Glue Catalog database name (e.g. the backupConfigId).
+// Results land in Athena-owned managed storage (see startQuery) — nothing to
+// configure or own on our side.
 // `maxRows` caps how many rows are pulled back; the returned queryExecutionId
 // lets a later request replay the same rows via fetchStoredResults.
 export const runAthenaQuery = async (

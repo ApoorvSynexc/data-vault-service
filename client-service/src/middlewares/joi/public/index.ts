@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 
-// Both authorize-org and authorize-admin now send the encrypted envelope as
+// Both configure-org and authorize-admin now send the encrypted envelope as
 // the entire request body (DataVaultInstallHandler.registerOrg() and
 // DataVaultAdminAuthorizationService.requestAuthorizationUrl() both do
 // `req.body = encryptedPayload`), so they share one schema.

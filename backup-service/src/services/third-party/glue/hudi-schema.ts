@@ -1,3 +1,5 @@
+import avro from 'avsc';
+import { Readable } from 'stream';
 import { IDestinationConfig } from '../../../models';
 import { listS3Objects, downloadFromS3 } from '../../destination/s3';
 import { IGlueColumnDef } from './index';
@@ -120,6 +122,29 @@ const avroRecordToColumns = (avroSchema: any, partitionFieldSet: Set<string>): I
     .map((f) => ({ name: f.name, type: avroToHive(f.type) }));
 };
 
+// Hudi table version 8+ (timeline layout v2) serializes completed commit metadata as
+// a binary Avro Object Container File instead of the plain JSON older tables use —
+// e.g. a table written with hoodie.table.version=9 commits as
+// `.hoodie/timeline/<instant>_<completionTime>.commit`, OCF-encoded. OCF files start
+// with the fixed 4-byte magic "Obj\x01"; anything else is the legacy JSON format.
+const isAvroContainerFile = (buf: Buffer): boolean =>
+  buf.length >= 4 && buf[0] === 0x4f && buf[1] === 0x62 && buf[2] === 0x6a && buf[3] === 0x01;
+
+// Decodes an Avro OCF commit file's single HoodieCommitMetadata record. The writer
+// schema is read straight from the file's own header (avsc's BlockDecoder handles
+// that), so this works regardless of Hudi's exact record shape.
+const decodeAvroCommitMetadata = (buf: Buffer): Promise<any> =>
+  new Promise((resolve, reject) => {
+    let record: any;
+    const decoder = new avro.streams.BlockDecoder();
+    decoder.on('data', (data: any) => {
+      record = data;
+    });
+    decoder.on('end', () => resolve(record));
+    decoder.on('error', reject);
+    Readable.from(buf).pipe(decoder);
+  });
+
 // Reads and returns the committed schema for a Hudi table rooted at `tableRootKey`
 // (an S3 key prefix, no bucket, ending in '/'). Throws when no schema can be
 // found — the caller treats that as "table not ready / not written yet".
@@ -150,15 +175,20 @@ export const readHudiTableSchema = async (
     }
   }
 
-  // Latest completed CoW commit: `.hoodie/<numericInstant>.commit`. Keys sort
-  // ascending, so the last match is the newest instant.
-  const commitKeys = keys.filter((k) => /\/\d+\.commit$/.test(k));
+  // Latest completed CoW commit. Legacy tables (timeline layout v1) commit flat as
+  // `.hoodie/<instant>.commit`; timeline layout v2 (table version 8+) commits under
+  // `.hoodie/timeline/<instant>_<completionTime>.commit` — both are matched here since
+  // listS3Objects already lists recursively. Instants are fixed-width digit timestamps,
+  // so ascending key sort is also chronological order — the last match is the newest.
+  const commitKeys = keys.filter((k) => /\/[\d_]+\.commit$/.test(k));
   let avroSchemaRaw: string | undefined = createSchema;
   if (commitKeys.length > 0) {
     const latestCommitKey = commitKeys[commitKeys.length - 1];
     const buf = await downloadFromS3(destConfig, latestCommitKey);
     if (buf) {
-      const commit = JSON.parse(buf.toString('utf8'));
+      const commit = isAvroContainerFile(buf)
+        ? await decodeAvroCommitMetadata(buf)
+        : JSON.parse(buf.toString('utf8'));
       const schemaFromCommit = commit?.extraMetadata?.schema;
       if (schemaFromCommit) {
         avroSchemaRaw = schemaFromCommit;

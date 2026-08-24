@@ -382,6 +382,46 @@ const getBackupJobsByConfig = async (
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
+// Dedicated fetch for the Spark payload-build path (services/payload buildPayload):
+// filters on a status set at the query layer, via DynamoDB's IN operator, instead of
+// fetching every job on the config and discarding most of them in memory.
+// Standalone rather than a getBackupJobsByConfig option — that method backs
+// controllers, cron jobs and restore-retrieve too, each keyed on a single status (or
+// none), so a multi-status IN filter has no other caller to share it with, and adding
+// it there would risk those call sites for no benefit.
+const getBackupJobsByConfigAndStatuses = async (
+  backupConfigId: string,
+  statuses: string[],
+  options?: { limit?: number; cursor?: string }
+): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
+  const limit = options?.limit ?? 10;
+  const exclusiveStartKey = decodeCursor(options?.cursor);
+
+  const expressionValues: Record<string, any> = { ':backupConfigId': backupConfigId };
+  const statusKeys = statuses.map((status, index) => {
+    const key = `:status${index}`;
+    expressionValues[key] = status;
+    return key;
+  });
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: BACKUP_JOB_TABLE,
+      IndexName: 'backupConfigId-index',
+      KeyConditionExpression: 'backupConfigId = :backupConfigId',
+      FilterExpression: `#status IN (${statusKeys.join(', ')})`,
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: expressionValues,
+      Limit: limit,
+      ScanIndexForward: false,
+      ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+    })
+  );
+
+  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
+  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
+};
+
 const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
 
@@ -673,6 +713,7 @@ export {
   getBackupJobById,
   getBackupJobsByUser,
   getBackupJobsByConfig,
+  getBackupJobsByConfigAndStatuses,
   getLastBackupJobByCrm,
   deleteBackupJobsByConfig,
   isBackupCompleted,

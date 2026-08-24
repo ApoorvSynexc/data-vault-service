@@ -35,6 +35,6 @@ router.get(
   '/social-login/callback',
   socialLoginController.socialLoginCallbackHandler
 );
-router.post('/authorize-org', authorizeOrganizationValidation, authorizeController.authorizationHandler);
+router.post('/configure-org', authorizeOrganizationValidation, authorizeController.authorizationHandler);
 
 export const authRouter = router;

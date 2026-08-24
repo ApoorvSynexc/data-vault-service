@@ -4,7 +4,7 @@ import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
 import { buildS3KeyPrefix } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
-import { createBulkQueryJob, getObjectMetadata, SalesforceTokens } from '../../api-request';
+import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
 import { uploadRecordTypeMetadata } from '../../record-type';
 import { getBackupConfigById, updateBackupConfig, updateBackupConfigObject } from '../../../../backup-config';
 import { readLatestSchema, writeSchemaFile } from '../../../../schema';
@@ -21,6 +21,14 @@ import { salesforceMetadataHandler } from '../../metadata';
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
 const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
+
+// Compound/binary describe types (Schema.DisplayType: ADDRESS, LOCATION, BASE64)
+// aren't directly SELECT-able in SOQL — their sub-fields are queried individually
+// instead (e.g. MailingAddress -> MailingStreet, MailingCity, ...).
+const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
+const EXCLUDED_FIELD_NAMES = new Set(['InformalName']);
+const isQueryableField = (f: { name: string; type: string }): boolean =>
+  !EXCLUDED_FIELD_NAMES.has(f.name) && !EXCLUDED_FIELD_TYPES.has(f.type);
 
 const buildFilterCondition = (name: string, operator: string, value: string): string => {
   if (!SAFE_FIELD_NAME_RE.test(name)) {
@@ -112,11 +120,22 @@ export const exportFirstTime = async (
   let jobId: string;
 
   try {
-    const { fieldNames: allFieldNames } = await getObjectMetadata(
+    
+    const fieldsMetadata = await salesforceMetadataHandler({
+      metadataType: 'fields',
+      policyConfigType: 'backup',
       backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectNames,
       objectName,
-      'backup'
-    );
+      isInitialBackup: true,
+    }, { instanceUrl, tokens });
+    const allFieldNames =
+      fieldsMetadata?.metadataType === 'fields'
+        ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
+        : [];
     await salesforceMetadataHandler({
       metadataType: 'picklist',
       policyConfigType: 'backup',
@@ -261,18 +280,6 @@ export const exportFirstTime = async (
     }
 
 
-    await salesforceMetadataHandler({
-      metadataType: 'fields',
-      policyConfigType: 'backup',
-      backupConfigId,
-      backupJobId,
-      crmId,
-      crmName,
-      objectNames,
-      objectName,
-      isInitialBackup: true,
-    }, { instanceUrl, tokens });
-
     // await writeSchemaFile(
     //   destConfig,
     //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
@@ -321,11 +328,21 @@ export const exportIncremental = async (
   // let backupConfig;
 
   try {
-    const { fieldNames: allFieldNames } = await getObjectMetadata(
+    const fieldsMetadata = await salesforceMetadataHandler({
+      metadataType: 'fields',
+      policyConfigType: 'backup',
       backupConfigId,
+      backupJobId,
+      crmId,
+      crmName,
+      objectNames,
       objectName,
-      'backup'
-    );
+      isInitialBackup: false,
+    }, { instanceUrl, tokens });
+    const allFieldNames =
+      fieldsMetadata?.metadataType === 'fields'
+        ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
+        : [];
     // await uploadPicklistValues({
     //   schema: latestSchema,
     //   destConfig,
@@ -515,21 +532,6 @@ export const exportIncremental = async (
       objectName,
       isInitialBackup: false,
     }, { instanceUrl, tokens });
-    const schemaChanged = await salesforceMetadataHandler(
-      {
-        metadataType: 'fields',
-        policyConfigType: 'backup',
-        backupConfigId,
-        backupJobId,
-        crmId,
-        crmName,
-        objectNames,
-        objectName,
-        isInitialBackup: false,
-      },
-      { instanceUrl, tokens }
-    );
-
     // const storedSchema = await readLatestSchema(destConfig, {
     //   crmId,
     //   crmName,
@@ -545,7 +547,7 @@ export const exportIncremental = async (
     //   latestSchema
     // );
 
-    if (schemaChanged?.metadataType === 'fields' && schemaChanged?.diff.schemaChanged) {
+    if (fieldsMetadata?.metadataType === 'fields' && fieldsMetadata?.diff.schemaChanged) {
       // if (backupConfig?.objects) {
       //   const updatedObjects = backupConfig.objects.map((obj) =>
       //     obj.name === objectName ? { ...obj, schemaChange: true } : obj

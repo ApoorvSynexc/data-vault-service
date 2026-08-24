@@ -34,9 +34,10 @@ const decryptRequest = <T>(payload: unknown): T | null => {
  *           so any wrapper breaks it ("Illegal base64 character 7b"). Creds travel
  *           base64-only inside it — TLS is the transport protection.
  *
- * Decrypts the request, resolves the config's eligible jobs (status SUCCESS — i.e. not
- * failed, not compressed, not compression-in-progress), builds the EMR payload for them,
- * marks them COMPRESSION_JOB_IN_PROGRESS, and returns the payload.
+ * Decrypts the request, resolves the config's eligible jobs (status SUCCESS,
+ * PARTIAL_FAILURE, or COMPRESSION_JOB_FAILED — i.e. not still failed outright, not
+ * compressed, not compression-in-progress), builds the EMR payload for them, marks them
+ * COMPRESSION_JOB_IN_PROGRESS, and returns the payload.
  */
 const sendSparkPayload = (res: IResponse, built: unknown): void => {
   res.status(200).send(Buffer.from(JSON.stringify(built)).toString('base64'));
