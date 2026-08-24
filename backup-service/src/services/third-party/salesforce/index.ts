@@ -1,6 +1,7 @@
 import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import {
+  IBackupConfig,
   IBackupObject,
   IDestinationConfig,
   IRestoreConflict,
@@ -25,7 +26,7 @@ const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
 
 const exportObjectToDestination = async (
-  backupConfigId: string,
+  backupConfig: IBackupConfig,
   backupJobId: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -47,7 +48,7 @@ const exportObjectToDestination = async (
 
   if (!lastUpdatedAt) {
     await exportFirstTime(
-      backupConfigId,
+      backupConfig,
       backupJobId,
       instanceUrl,
       tokens,
@@ -59,7 +60,7 @@ const exportObjectToDestination = async (
     );
   } else {
     await exportIncremental(
-      backupConfigId,
+      backupConfig,
       backupJobId,
       instanceUrl,
       tokens,
@@ -205,6 +206,11 @@ const salesforceHandler: ICrmBackupHandler = {
       return;
     }
 
+    const backupConfig = await getBackupConfigById(backupConfigId);
+    if(backupConfig === null || backupConfig === undefined) {
+      return;
+    }
+
     const tokens: SalesforceTokens = {
       accessToken: access_token,
       refreshToken: refresh_token,
@@ -222,7 +228,7 @@ const salesforceHandler: ICrmBackupHandler = {
       await Promise.allSettled(
         batch.map((item, batchIndex) =>
           exportWithRetry(
-            backupConfigId,
+            backupConfig,
             backupJobId,
             instanceUrl,
             tokens,
@@ -238,7 +244,6 @@ const salesforceHandler: ICrmBackupHandler = {
       );
     }
 
-    const backupConfig = await getBackupConfigById(backupConfigId);
     let sizeInBytes = 0;
     let completedRecordCount = 0;
     if (backupConfig) {
@@ -262,12 +267,17 @@ const salesforceHandler: ICrmBackupHandler = {
       return 'SUCCESS';
     }
 
+    const backupConfig = await getBackupConfigById(backupConfigId);
+    if (backupConfig === null || backupConfig === undefined) {
+      return 'PARTIAL_FAILURE';
+    }
+
     const s3Keys: IS3ObjectKey[] = [];
     for (let index = 0; index < object.length; index++) {
       const objectDetail = object[index];
       await exportWithRetryArchivalV2({
         type: 'backup',
-        backupConfigId,
+        backupConfig,
         backupJobId,
         source,
         destinationType,

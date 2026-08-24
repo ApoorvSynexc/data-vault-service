@@ -18,7 +18,8 @@ export const salesforceMetadataHandler = async (
   params: ISalesforceMetadataHandler,
   salesforceContext?: ISalesforceContext
 ) => {
-  const { metadataType, backupConfigId, backupJobId, objectNames, object } = params;
+  const { metadataType, backupConfig, backupJobId, objectNames, object } = params;
+  const backupConfigId = backupConfig.backupConfigId;
   const objectName = object.name;
   try {
     logger.info(

@@ -1,13 +1,11 @@
 import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
-import { IBackupObject, IDestinationConfig } from '../../../../../models';
+import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
 import { buildS3KeyPrefix } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
-import { uploadRecordTypeMetadata } from '../../record-type';
-import { getBackupConfigById, updateBackupConfig, updateBackupConfigObject } from '../../../../backup-config';
-import { readLatestSchema, writeSchemaFile } from '../../../../schema';
+import { updateBackupConfigObject } from '../../../../backup-config';
 import { salesforceMetadataHandler } from '../../metadata';
 
 // SOQL injection guards.
@@ -102,7 +100,7 @@ const buildWhereClause = (object: IBackupObject): string => {
 
 // First-time backup: export all records into insert/ and schema into schema/
 export const exportFirstTime = async (
-  backupConfigId: string,
+  backupConfig: IBackupConfig,
   backupJobId: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -114,17 +112,17 @@ export const exportFirstTime = async (
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
-  let backupConfig;
+  const backupConfigId = backupConfig.backupConfigId;
   let salesforceApiCount: number = 0;
   let totalRecordCount: number = 0;
   let jobId: string;
 
   try {
-    
+
     const fieldsMetadata = await salesforceMetadataHandler({
       metadataType: 'fields',
       policyConfigType: 'backup',
-      backupConfigId,
+      backupConfig,
       backupJobId,
       crmId,
       crmName,
@@ -139,7 +137,7 @@ export const exportFirstTime = async (
     await salesforceMetadataHandler({
       metadataType: 'picklist',
       policyConfigType: 'backup',
-      backupConfigId,
+      backupConfig,
       backupJobId,
       crmId,
       crmName,
@@ -150,7 +148,7 @@ export const exportFirstTime = async (
     await salesforceMetadataHandler({
       metadataType: 'recordTypes',
       policyConfigType: 'backup',
-      backupConfigId,
+      backupConfig,
       backupJobId,
       crmId,
       crmName,
@@ -161,7 +159,7 @@ export const exportFirstTime = async (
     await salesforceMetadataHandler({
       metadataType: 'childs',
       policyConfigType: 'backup',
-      backupConfigId,
+      backupConfig,
       backupJobId,
       crmId,
       crmName,
@@ -311,7 +309,7 @@ export const exportFirstTime = async (
 //     >= lastUpdatedAt) → delete/ folder
 //  3. Compare schema — if changed, overwrite schema/ and call core service
 export const exportIncremental = async (
-  backupConfigId: string,
+  backupConfig: IBackupConfig,
   backupJobId: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -324,6 +322,7 @@ export const exportIncremental = async (
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
+  const backupConfigId = backupConfig.backupConfigId;
   let salesforceApiCount = 0;
   // let backupConfig;
 
@@ -331,7 +330,7 @@ export const exportIncremental = async (
     const fieldsMetadata = await salesforceMetadataHandler({
       metadataType: 'fields',
       policyConfigType: 'backup',
-      backupConfigId,
+      backupConfig,
       backupJobId,
       crmId,
       crmName,
@@ -502,7 +501,7 @@ export const exportIncremental = async (
     await salesforceMetadataHandler({
       metadataType: 'picklist',
       policyConfigType: 'backup',
-      backupConfigId,
+      backupConfig,
       backupJobId,
       crmId,
       crmName,
@@ -513,7 +512,7 @@ export const exportIncremental = async (
     await salesforceMetadataHandler({
       metadataType: 'recordTypes',
       policyConfigType: 'backup',
-      backupConfigId,
+      backupConfig,
       backupJobId,
       crmId,
       crmName,
@@ -524,7 +523,7 @@ export const exportIncremental = async (
     await salesforceMetadataHandler({
       metadataType: 'childs',
       policyConfigType: 'backup',
-      backupConfigId,
+      backupConfig,
       backupJobId,
       crmId,
       objectNames,
