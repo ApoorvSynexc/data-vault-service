@@ -1,5 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { logger } from '../middlewares';
+import { IBackupObject } from '../models';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -31,22 +32,22 @@ const parseExpiryToSeconds = (expiry: string): number => {
 
 const asyncHandler =
   (fn: IHandler): IHandler =>
-  async (req: IRequest, res: IResponse): Promise<void> => {
-    try {
-      await fn(req, res);
-    } catch (error: unknown) {
-      const statusCode = error instanceof HttpError ? error.statusCode : 500;
-      const message = error instanceof Error ? error.message : 'unknown_error';
-      logger.error(`[${statusCode}] ${req.method} ${req.originalUrl} : ${message}`);
-      makeResponse(
-        req,
-        res,
-        statusCode,
-        false,
-        (message || 'unknown_error') as Parameters<typeof makeResponse>[4]
-      );
-    }
-  };
+    async (req: IRequest, res: IResponse): Promise<void> => {
+      try {
+        await fn(req, res);
+      } catch (error: unknown) {
+        const statusCode = error instanceof HttpError ? error.statusCode : 500;
+        const message = error instanceof Error ? error.message : 'unknown_error';
+        logger.error(`[${statusCode}] ${req.method} ${req.originalUrl} : ${message}`);
+        makeResponse(
+          req,
+          res,
+          statusCode,
+          false,
+          (message || 'unknown_error') as Parameters<typeof makeResponse>[4]
+        );
+      }
+    };
 
 const wrapController = <T extends Record<string, IHandler>>(controller: T): T =>
   Object.fromEntries(Object.entries(controller).map(([key, fn]) => [key, asyncHandler(fn)])) as T;
@@ -358,6 +359,10 @@ const formatDateTime = (dateString: string): string => {
   return date.toISOString();
 };
 
+const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
+  return objects.flatMap(obj => [obj, ...(obj.children ? recursivelyFlatten(obj.children) : [])]);
+};
+
 export {
   randomNumber,
   parseExpiryToSeconds,
@@ -373,6 +378,7 @@ export {
   parseCSVLine,
   formatFieldValuesForSOQL,
   formatValueByDataType,
+  recursivelyFlatten,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
