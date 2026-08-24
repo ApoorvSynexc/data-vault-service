@@ -207,7 +207,7 @@ const salesforceHandler: ICrmBackupHandler = {
     }
 
     const backupConfig = await getBackupConfigById(backupConfigId);
-    if(backupConfig === null || backupConfig === undefined) {
+    if (backupConfig === null || backupConfig === undefined) {
       return;
     }
 
@@ -244,10 +244,11 @@ const salesforceHandler: ICrmBackupHandler = {
       );
     }
 
+    const latestBackupConfig = await getBackupConfigById(backupConfigId);
     let sizeInBytes = 0;
     let completedRecordCount = 0;
-    if (backupConfig) {
-      backupConfig.objects?.forEach((obj) => {
+    if (latestBackupConfig) {
+      latestBackupConfig.objects?.forEach((obj) => {
         sizeInBytes += obj.sizeInBytes ?? 0;
         completedRecordCount += obj.completedRecordCount ?? 0;
       })
@@ -267,7 +268,7 @@ const salesforceHandler: ICrmBackupHandler = {
       return 'SUCCESS';
     }
 
-    const backupConfig = await getBackupConfigById(backupConfigId);
+    let backupConfig = await getBackupConfigById(backupConfigId);
     if (backupConfig === null || backupConfig === undefined) {
       return 'PARTIAL_FAILURE';
     }
@@ -285,7 +286,7 @@ const salesforceHandler: ICrmBackupHandler = {
         s3Keys
       });
     }
-    
+
     for (let index = 0; index < object.length; index++) {
       const objectDetail = object[index];
       await exportWithRetryArchivalV2({
@@ -298,6 +299,21 @@ const salesforceHandler: ICrmBackupHandler = {
         s3Keys
       });
     }
+
+
+    backupConfig = await getBackupConfigById(backupConfigId);
+    if (backupConfig === null || backupConfig === undefined || !backupConfig.objects) return 'PARTIAL_FAILURE';
+
+    const objects = recursivelyFlatten(backupConfig.objects);
+    let sizeInBytes = 0;
+    let completedRecordCount = 0;
+    if (backupConfig) {
+      objects?.forEach((obj) => {
+        sizeInBytes += obj.sizeInBytes ?? 0;
+        completedRecordCount += obj.completedRecordCount ?? 0;
+      })
+    }
+    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success, sizeInBytes, completedRecordCount });
 
     return 'SUCCESS';
     // for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
