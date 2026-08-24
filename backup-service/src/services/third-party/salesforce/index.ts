@@ -289,7 +289,7 @@ const salesforceHandler: ICrmBackupHandler = {
     for (let index = 0; index < object.length; index++) {
       const objectDetail = object[index];
       await exportWithRetryArchivalV2({
-        type: 'backup',
+        type: 'delete',
         backupConfig,
         backupJobId,
         source,
