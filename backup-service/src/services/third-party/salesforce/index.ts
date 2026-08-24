@@ -280,7 +280,19 @@ const salesforceHandler: ICrmBackupHandler = {
         backupConfig,
         backupJobId,
         source,
-        destinationType,
+        destConfig,
+        object: objectDetail,
+        s3Keys
+      });
+    }
+    
+    for (let index = 0; index < object.length; index++) {
+      const objectDetail = object[index];
+      await exportWithRetryArchivalV2({
+        type: 'backup',
+        backupConfig,
+        backupJobId,
+        source,
         destConfig,
         object: objectDetail,
         s3Keys

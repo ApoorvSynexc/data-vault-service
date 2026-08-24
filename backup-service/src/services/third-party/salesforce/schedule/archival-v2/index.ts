@@ -12,7 +12,6 @@ interface IArchiveObject {
     backupConfig: IBackupConfig,
     backupJobId: string,
     source: ISource,
-    destinationType: string,
     destConfig: IDestinationConfig,
     object: IBackupObject,
     parentWhereClause?: string
@@ -23,29 +22,29 @@ const MAX_RETRIES = 3;
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
 const DATE_LITERALS = new Set([
-  'TODAY',
-  'YESTERDAY',
-  'TOMORROW',
-  'LAST_WEEK',
-  'THIS_WEEK',
-  'NEXT_WEEK',
-  'LAST_MONTH',
-  'THIS_MONTH',
-  'NEXT_MONTH',
-  'LAST_90_DAYS',
-  'NEXT_90_DAYS',
-  'LAST_QUARTER',
-  'THIS_QUARTER',
-  'NEXT_QUARTER',
-  'LAST_YEAR',
-  'THIS_YEAR',
-  'NEXT_YEAR',
-  'LAST_FISCAL_QUARTER',
-  'THIS_FISCAL_QUARTER',
-  'NEXT_FISCAL_QUARTER',
-  'LAST_FISCAL_YEAR',
-  'THIS_FISCAL_YEAR',
-  'NEXT_FISCAL_YEAR',
+    'TODAY',
+    'YESTERDAY',
+    'TOMORROW',
+    'LAST_WEEK',
+    'THIS_WEEK',
+    'NEXT_WEEK',
+    'LAST_MONTH',
+    'THIS_MONTH',
+    'NEXT_MONTH',
+    'LAST_90_DAYS',
+    'NEXT_90_DAYS',
+    'LAST_QUARTER',
+    'THIS_QUARTER',
+    'NEXT_QUARTER',
+    'LAST_YEAR',
+    'THIS_YEAR',
+    'NEXT_YEAR',
+    'LAST_FISCAL_QUARTER',
+    'THIS_FISCAL_QUARTER',
+    'NEXT_FISCAL_QUARTER',
+    'LAST_FISCAL_YEAR',
+    'THIS_FISCAL_YEAR',
+    'NEXT_FISCAL_YEAR',
 ]);
 
 const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
@@ -54,101 +53,101 @@ const isQueryableField = (f: { name: string; type: string }): boolean =>
     !EXCLUDED_FIELD_NAMES.has(f.name) && !EXCLUDED_FIELD_TYPES.has(f.type);
 
 const isDateLiteral = (value: string): boolean =>
-  DATE_LITERALS.has(value.toUpperCase()) ||
-  /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(
-    value
-  );
+    DATE_LITERALS.has(value.toUpperCase()) ||
+    /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(
+        value
+    );
 
 const buildFilterCondition = (
-  f: IBackupField & { filter: NonNullable<IBackupField['filter']> },
-  preformattedValue: string
+    f: IBackupField & { filter: NonNullable<IBackupField['filter']> },
+    preformattedValue: string
 ): string => {
-  const { name, dataType } = f;
-  const { value: rawValue, operator } = f.filter;
+    const { name, dataType } = f;
+    const { value: rawValue, operator } = f.filter;
 
-  if (!SAFE_FIELD_NAME_RE.test(name)) {
-    throw new Error(`Invalid SOQL field name: "${name}"`);
-  }
-  if (!ALLOWED_OPERATORS.has(operator)) {
-    throw new Error(`Disallowed SOQL operator: "${operator}"`);
-  }
+    if (!SAFE_FIELD_NAME_RE.test(name)) {
+        throw new Error(`Invalid SOQL field name: "${name}"`);
+    }
+    if (!ALLOWED_OPERATORS.has(operator)) {
+        throw new Error(`Disallowed SOQL operator: "${operator}"`);
+    }
 
-  if (operator === 'LIKE') {
-    const escaped = rawValue.replace(/'/g, "''");
-    const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
-    return `${name} LIKE '${wrapped}'`;
-  }
+    if (operator === 'LIKE') {
+        const escaped = rawValue.replace(/'/g, "''");
+        const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
+        return `${name} LIKE '${wrapped}'`;
+    }
 
-  if (operator === 'IN' || operator === 'NOT IN') {
-    const parts = rawValue
-      .split(',')
-      .map((v) => v.trim())
-      .filter(Boolean);
-    return `${name} ${operator} (${parts.map((v) => formatValueByDataType(v, dataType)).join(', ')})`;
-  }
+    if (operator === 'IN' || operator === 'NOT IN') {
+        const parts = rawValue
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean);
+        return `${name} ${operator} (${parts.map((v) => formatValueByDataType(v, dataType)).join(', ')})`;
+    }
 
-  const ldt = dataType.toLowerCase();
-  if ((ldt === 'date' || ldt === 'datetime') && isDateLiteral(rawValue)) {
-    return `${name} ${operator} ${rawValue}`;
-  }
+    const ldt = dataType.toLowerCase();
+    if ((ldt === 'date' || ldt === 'datetime') && isDateLiteral(rawValue)) {
+        return `${name} ${operator} ${rawValue}`;
+    }
 
-  return `${name} ${operator} ${preformattedValue}`;
+    return `${name} ${operator} ${preformattedValue}`;
 };
 
 const buildWhereClause = (object: IBackupObject): string => {
-  const { field, condition } = object;
-  if (!condition) {
-    return '';
-  }
-
-  if ((condition as any).type === 'SOQL') {
-    const soqlQuery: string = (condition as any).soqlQuery ?? '';
-    const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
-    return body ? `WHERE ${body}` : '';
-  }
-
-  if (!field?.length) {
-    return '';
-  }
-
-  const formattedFields = formatFieldValuesForSOQL(field);
-
-  const filterMap = new Map<number, string>();
-  field.forEach((f, idx) => {
-    if (f.filter) {
-      const preformattedValue =
-        (formattedFields[idx] as typeof f)?.filter?.value ??
-        formatValueByDataType(f.filter.value, f.dataType);
-      filterMap.set(
-        idx + 1,
-        buildFilterCondition(
-          f as IBackupField & { filter: NonNullable<IBackupField['filter']> },
-          preformattedValue
-        )
-      );
-    }
-  });
-
-  if (filterMap.size === 0) {
-    return '';
-  }
-
-  if (condition.type === 'CUSTOM' && condition.expression) {
-    const stripped = condition.expression.replace(/\b(AND|OR|NOT)\b/gi, ' ');
-    if (!/^[\d\s()]+$/.test(stripped)) {
-      throw new Error(`Invalid SOQL custom expression: "${condition.expression}"`);
+    const { field, condition } = object;
+    if (!condition) {
+        return '';
     }
 
-    let expr = condition.expression;
-    const sorted = Array.from(filterMap.entries()).sort((a, b) => b[0] - a[0]);
-    for (const [idx, cond] of sorted) {
-      expr = expr.replace(new RegExp(`\\b${idx}\\b`, 'g'), cond);
+    if ((condition as any).type === 'SOQL') {
+        const soqlQuery: string = (condition as any).soqlQuery ?? '';
+        const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
+        return body ? `WHERE ${body}` : '';
     }
-    return `WHERE ${expr}`;
-  }
 
-  const separator = condition.type === 'OR' ? ' OR ' : ' AND ';
-  return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
+    if (!field?.length) {
+        return '';
+    }
+
+    const formattedFields = formatFieldValuesForSOQL(field);
+
+    const filterMap = new Map<number, string>();
+    field.forEach((f, idx) => {
+        if (f.filter) {
+            const preformattedValue =
+                (formattedFields[idx] as typeof f)?.filter?.value ??
+                formatValueByDataType(f.filter.value, f.dataType);
+            filterMap.set(
+                idx + 1,
+                buildFilterCondition(
+                    f as IBackupField & { filter: NonNullable<IBackupField['filter']> },
+                    preformattedValue
+                )
+            );
+        }
+    });
+
+    if (filterMap.size === 0) {
+        return '';
+    }
+
+    if (condition.type === 'CUSTOM' && condition.expression) {
+        const stripped = condition.expression.replace(/\b(AND|OR|NOT)\b/gi, ' ');
+        if (!/^[\d\s()]+$/.test(stripped)) {
+            throw new Error(`Invalid SOQL custom expression: "${condition.expression}"`);
+        }
+
+        let expr = condition.expression;
+        const sorted = Array.from(filterMap.entries()).sort((a, b) => b[0] - a[0]);
+        for (const [idx, cond] of sorted) {
+            expr = expr.replace(new RegExp(`\\b${idx}\\b`, 'g'), cond);
+        }
+        return `WHERE ${expr}`;
+    }
+
+    const separator = condition.type === 'OR' ? ' OR ' : ' AND ';
+    return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
 };
 
 function fkToRelationshipName(fieldApiName: string): string {
@@ -182,7 +181,7 @@ function transformWhereBodyForChild(whereBody: string, fkFieldName: string): str
 const archiveObject = async (
     payload: IArchiveObject
 ) => {
-    const { backupConfig, backupJobId, source, destinationType, destConfig, object, s3Keys } = payload;
+    const { backupConfig, backupJobId, source, destConfig, object, s3Keys } = payload;
     const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
     const backupConfigId = backupConfig.backupConfigId;
     const tokens: SalesforceTokens = {
@@ -319,17 +318,28 @@ const archiveObject = async (
         if (object.children?.length) {
             for (let index = 0; index < object.children.length; index++) {
                 const childObject = object.children[index];
-                await exportWithRetryArchivalV2({
-                    type: 'backup',
-                    backupConfig,
-                    backupJobId,
-                    source,
-                    destinationType,
-                    destConfig,
-                    object: childObject,
-                    parentWhereClause,
-                    s3Keys,
-                });
+                try {
+                    await exportWithRetryArchivalV2({
+                        type: 'backup',
+                        backupConfig,
+                        backupJobId,
+                        source,
+                        destConfig,
+                        object: childObject,
+                        parentWhereClause,
+                        s3Keys,
+                    });
+                } catch (error: any) {
+                    logger.error(`Archival job ${backupJobId}: failed to export ${childObject.name} - ${error?.message}`);
+                    await updateArchivalObject({
+                        backupJobId,
+                        object: {
+                            id: childObject.id,
+                            status: OBJECT_STATUS.failed,
+                            errorMessage: `parent ${objectName} export failed: ${error?.message}`,
+                        },
+                    });
+                }
             }
         }
     } catch (error: any) {
@@ -346,8 +356,36 @@ const archiveObject = async (
     }
 };
 
-const deleteObject = async (payload: IArchiveObject) => {
+const deleteObjectRecords = async (payload: IArchiveObject) => {
     const { backupConfig, backupJobId, source, destConfig, object, s3Keys } = payload;
+
+    if (payload.object.children?.length) {
+        for (let index = 0; index < payload.object.children.length; index++) {
+            const childObject = payload.object.children[index];
+            try {
+                await exportWithRetryArchivalV2({
+                        type: 'backup',
+                        backupConfig,
+                        backupJobId,
+                        source,
+                        destConfig,
+                        object: childObject,
+                        s3Keys,
+                    });
+            } catch (error: any) {
+                logger.error(`Archival job ${payload.backupJobId}: failed to delete ${childObject.name} - ${error?.message}`);
+                await updateArchivalObject({
+                    backupJobId: payload.backupJobId,
+                    object: {
+                        id: childObject.id,
+                        status: OBJECT_STATUS.failed,
+                        errorMessage: `parent ${payload.object.name} delete failed: ${error?.message}`,
+                    },
+                });
+            }
+        }
+    }
+
     const backupConfigId = backupConfig.backupConfigId;
     const tokens: SalesforceTokens = {
         accessToken: source.access_token,
@@ -384,7 +422,6 @@ const deleteObject = async (payload: IArchiveObject) => {
                 status: OBJECT_STATUS.completed
             },
         });
-
     } catch (error: any) {
         logger.error(`Archival job ${backupJobId}: failed to delete ${object.name} - ${error?.message}`);
         await updateArchivalObject({
@@ -406,7 +443,6 @@ const exportWithRetryArchivalV2 = async (
             backupConfig: IBackupConfig,
             backupJobId: string,
             source: ISource,
-            destinationType: string,
             destConfig: IDestinationConfig,
             object: IBackupObject,
             parentWhereClause?: string
@@ -422,7 +458,7 @@ const exportWithRetryArchivalV2 = async (
             if (type === 'backup') {
                 await archiveObject(payload);
             } else {
-                await deleteObject(payload);
+                await deleteObjectRecords(payload);
             }
             return;
         } catch (err: any) {
