@@ -26,7 +26,7 @@ const chunkArray = <T>(items: T[], size: number): T[][] => {
 
 // Resolved once per dry-run, reused across every composite batch — not
 // re-fetched per object like v1's apexCountOne did.
-const resolveSalesforceTokens = async (
+export const resolveSalesforceTokens = async (
   user: IUser
 ): Promise<{ instanceUrl: string; tokens: SalesforceTokens }> => {
   if (!user || !user.crmId) {
