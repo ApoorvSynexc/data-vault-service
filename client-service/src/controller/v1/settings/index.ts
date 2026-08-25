@@ -4,7 +4,7 @@ import { wrapController } from '../../../utils/helper';
 
 const getSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
-  const crmId = req.query.crmId ? String(req.query.crmId) : undefined;
+  const crmId = req.user!.crmId || String(req.query.crmId);
 
   const settings = await getSettingsByUserAndCrm(userId, crmId);
   makeResponse(req, res, 200, true, 'fetch', settings);
