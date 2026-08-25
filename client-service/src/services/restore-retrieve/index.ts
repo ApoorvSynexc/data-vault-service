@@ -7,6 +7,8 @@ import { IBackupJob, IObject } from '../../models';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
+import { getUser } from '../user';
+import { salesforceObjectFilteredList } from '../third-party/salesforce/metadata/index';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
@@ -245,6 +247,29 @@ const getObjectListByConfigId = async (
   const allNames = flattenObjectNames((config.objects ?? []) as IObject[]);
   const uniqueNames = [...new Set(allNames)];
   return { objects: uniqueNames, found: true };
+};
+
+/**
+ * Same as getObjectListByConfigId, narrowed to objects a restore can actually
+ * write back to: the config's own objects, intersected with the org's
+ * restore-eligible set from the existing Object List API (salesforceObjectFilteredList,
+ * apexMode: 'restore' — already applies createable/updateable on top of its
+ * shared backup/archival filters, see that function).
+ */
+const getRestoreObjectListByConfigId = async (
+  backupConfigId: string,
+  configType: ConfigType,
+  userId: string
+): Promise<{ objects: string[]; found: boolean }> => {
+  const { objects, found } = await getObjectListByConfigId(backupConfigId, configType, userId);
+  if (!found) return { objects: [], found: false };
+
+  const user = await getUser({ userId });
+  if (!user) return { objects: [], found: false };
+
+  const restorable = await salesforceObjectFilteredList({ user, apexMode: 'restore' });
+  const restorableNames = new Set(restorable.map((obj) => obj.name));
+  return { objects: objects.filter((name) => restorableNames.has(name)), found: true };
 };
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
@@ -771,6 +796,7 @@ export {
   getRestoreRetrieveJobsByUser,
   getBackupJobIdsChangedBetween,
   getObjectListByConfigId,
+  getRestoreObjectListByConfigId,
   retrieveRecords,
   retrieveInactiveRecordTypes,
   retrieveMissingFields,
