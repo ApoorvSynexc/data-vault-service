@@ -160,6 +160,9 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<void> =
   }
 
   if (job && objects?.length) {
+    // objects[] lives at destination.objects, not at the item's top level —
+    // both segments need aliasing for the list-index SET path below.
+    expressionNames['#destination'] = 'destination';
     expressionNames['#objects'] = 'objects';
 
     // Value placeholders are suffixed by position (not objectIndex) so multiple
@@ -174,23 +177,23 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<void> =
       const currentObject = job.destination.objects[objectIndex];
 
       if (object.status !== undefined) {
-        setParts.push(`#objects[${objectIndex}].#objectStatus = :objectStatus${position}`);
+        setParts.push(`#destination.#objects[${objectIndex}].#objectStatus = :objectStatus${position}`);
         expressionNames['#objectStatus'] = 'status';
         expressionValues[`:objectStatus${position}`] = object.status;
       }
       if (object.errorMessage !== undefined) {
-        setParts.push(`#objects[${objectIndex}].#objectErrorMessage = :objectErrorMessage${position}`);
+        setParts.push(`#destination.#objects[${objectIndex}].#objectErrorMessage = :objectErrorMessage${position}`);
         expressionNames['#objectErrorMessage'] = 'errorMessage';
         expressionValues[`:objectErrorMessage${position}`] = object.errorMessage;
       }
       if (object.processedRecordCount) {
-        setParts.push(`#objects[${objectIndex}].#processedRecordCount = :processedRecordCount${position}`);
+        setParts.push(`#destination.#objects[${objectIndex}].#processedRecordCount = :processedRecordCount${position}`);
         expressionNames['#processedRecordCount'] = 'processedRecordCount';
         expressionValues[`:processedRecordCount${position}`] =
           (currentObject?.processedRecordCount ?? 0) + object.processedRecordCount;
       }
       if (object.failedRecordCount) {
-        setParts.push(`#objects[${objectIndex}].#failedRecordCount = :failedRecordCount${position}`);
+        setParts.push(`#destination.#objects[${objectIndex}].#failedRecordCount = :failedRecordCount${position}`);
         expressionNames['#failedRecordCount'] = 'failedRecordCount';
         expressionValues[`:failedRecordCount${position}`] =
           (currentObject?.failedRecordCount ?? 0) + object.failedRecordCount;
