@@ -1,7 +1,7 @@
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { logger } from '../middlewares';
 import { IBackupObject } from '../models';
-import { REQUIRED_BULK_FIELDS } from '../constant';
+import { SYSTEM_FIELDS } from '../constant';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -364,11 +364,12 @@ const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
   return objects.flatMap((obj) => [obj, ...(obj.children ? recursivelyFlatten(obj.children) : [])]);
 };
 
-// Ensures CreatedDate/LastModifiedDate/SystemModstamp are present in a field
-// list. Call once, right after fetching/filtering the schema — every SOQL
-// built from the result already carries them, no need to re-add per query.
-const withRequiredBulkFields = (fieldNames: string[]): string[] =>
-  Array.from(new Set([...fieldNames, ...REQUIRED_BULK_FIELDS]));
+// Ensures Salesforce's system fields are present in a field list — they're
+// always selected by default for backup/archival. Call once, right after
+// fetching/filtering the schema — every SOQL built from the result already
+// carries them, no need to re-add per query.
+const withSystemFields = (fieldNames: string[]): string[] =>
+  Array.from(new Set([...fieldNames, ...SYSTEM_FIELDS]));
 
 export {
   randomNumber,
@@ -386,7 +387,7 @@ export {
   formatFieldValuesForSOQL,
   formatValueByDataType,
   recursivelyFlatten,
-  withRequiredBulkFields,
+  withSystemFields,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
