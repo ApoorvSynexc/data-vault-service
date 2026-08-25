@@ -193,24 +193,6 @@ const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<v
     }
 
     const result = await previewRecords({ user, objectName: name, fieldNames, soql });
-    // let whereClause: string | undefined;
-
-    // if (parent) {
-    //     // Child object — derive WHERE clause by transforming the parent chain
-    //     const whereBody = buildWhereClauseFromParentChain(parent, referenceName);
-    //     if (whereBody) { whereClause = whereBody; }
-    // } else if (objectConfig) {
-    //     // Root object — build WHERE clause directly from its own condition/fields
-    //     const whereBody = buildOwnWhereBody(objectConfig as Parameters<typeof buildOwnWhereBody>[0]);
-    //     if (whereBody) { whereClause = whereBody; }
-    // }
-
-    // const apexResult = await getApexObjectRecords({ 
-    //     user, 
-    //     body: {apiName,
-    //     fields,
-    //     ...(whereClause && { whereClause }) }}
-    // );
     makeResponse(req, res, 200, true, 'fetch', result);
 };
 
