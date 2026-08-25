@@ -36,6 +36,7 @@ import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
+import { previewRecords } from "../../../services/third-party/salesforce/dryrun-v2/preview-records";
 
 // ── Parent chain types ────────────────────────────────────────────────────────
 
@@ -52,12 +53,10 @@ interface ParentNode {
 }
 
 interface ObjectRecordsBody {
-    crmId: string;
-    apiName: string;
-    fields: string[];
-    referenceName?: string;
-    parent?: ParentNode;
-    objectConfig?: object;
+    id: string;
+    name: string;
+    fieldNames: string[]
+    soql: string
 }
 
 // ── WHERE clause builder ──────────────────────────────────────────────────────
@@ -185,36 +184,33 @@ const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Pro
 };
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, apiName, fields, referenceName, parent, objectConfig } = req.body as ObjectRecordsBody;
+    const { name, fieldNames, soql } = req.body as ObjectRecordsBody;
 
     const user = req.user;
-    if (!crmId) {
-        return makeResponse(req, res, 400, false, 'crm_id_required');
+    if (!user) {
+        return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    if (!apiName) {
-        return makeResponse(req, res, 400, false, 'params_required');
-    }
+    const result = await previewRecords({ user, objectName: name, fieldNames, soql });
+    // let whereClause: string | undefined;
 
-    let whereClause: string | undefined;
+    // if (parent) {
+    //     // Child object — derive WHERE clause by transforming the parent chain
+    //     const whereBody = buildWhereClauseFromParentChain(parent, referenceName);
+    //     if (whereBody) { whereClause = whereBody; }
+    // } else if (objectConfig) {
+    //     // Root object — build WHERE clause directly from its own condition/fields
+    //     const whereBody = buildOwnWhereBody(objectConfig as Parameters<typeof buildOwnWhereBody>[0]);
+    //     if (whereBody) { whereClause = whereBody; }
+    // }
 
-    if (parent) {
-        // Child object — derive WHERE clause by transforming the parent chain
-        const whereBody = buildWhereClauseFromParentChain(parent, referenceName);
-        if (whereBody) { whereClause = whereBody; }
-    } else if (objectConfig) {
-        // Root object — build WHERE clause directly from its own condition/fields
-        const whereBody = buildOwnWhereBody(objectConfig as Parameters<typeof buildOwnWhereBody>[0]);
-        if (whereBody) { whereClause = whereBody; }
-    }
-
-    const apexResult = await getApexObjectRecords({ 
-        user, 
-        body: {apiName,
-        fields,
-        ...(whereClause && { whereClause }) }}
-    );
-    makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
+    // const apexResult = await getApexObjectRecords({ 
+    //     user, 
+    //     body: {apiName,
+    //     fields,
+    //     ...(whereClause && { whereClause }) }}
+    // );
+    makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 // Computes per-row aggregate stats (records archived, bytes archived) by
@@ -336,7 +332,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 const dryRunArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
     try {
-        const result = await dryRunV2({...req.body, user});
+        const result = await dryRunV2({ ...req.body, user });
         makeResponse(req, res, 201, true, 'create', result);
     } catch (error) {
         logger.error('Error running archival dry-run: ', error);
@@ -346,7 +342,7 @@ const dryRunArchivalHandler = async (req: IRequest, res: IResponse): Promise<voi
 
 const validateSoqlArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
-    const result = await validateSoql({...req.body, user});    makeResponse(req, res, 200, true, 'fetch', result);
+    const result = await validateSoql({ ...req.body, user }); makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 
@@ -427,7 +423,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         return makeResponse(req, res, 400, false, 'id_required');
     }
 
-    if(!user) {
+    if (!user) {
         return makeResponse(req, res, 400, false, 'not_exist');
     }
 
