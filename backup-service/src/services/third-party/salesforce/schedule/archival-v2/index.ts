@@ -62,8 +62,18 @@ const DATE_LITERALS = new Set([
 
 const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
 const EXCLUDED_FIELD_NAMES = new Set(['InformalName']);
-const isQueryableField = (f: { name: string; type: string }): boolean =>
-  !EXCLUDED_FIELD_NAMES.has(f.name) && !EXCLUDED_FIELD_TYPES.has(f.type);
+// calculated covers both formula and roll-up summary fields — neither is
+// writable/restorable and both are computed by Salesforce, not stored data.
+const isQueryableField = (f: {
+  name: string;
+  type: string;
+  calculated?: boolean;
+  autoNumber?: boolean;
+}): boolean =>
+  !EXCLUDED_FIELD_NAMES.has(f.name) &&
+  !EXCLUDED_FIELD_TYPES.has(f.type) &&
+  !f.calculated &&
+  !f.autoNumber;
 
 const isDateLiteral = (value: string): boolean =>
   DATE_LITERALS.has(value.toUpperCase()) ||
