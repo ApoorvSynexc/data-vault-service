@@ -33,7 +33,6 @@ import {
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
-import { IBackupConfig, IScheduleConfig } from '../../../models';
 import { salesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/index';
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
@@ -42,44 +41,7 @@ const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
   'picklist',
   'recordTypes',
 ];
-
-const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
-  const s = scheduleConfig.scheduling;
-
-  if (scheduleConfig.type === SCHEDULE_TYPE.oneTime) {
-    if (s?.frequency === DURATION_TYPE.once && s.startDate && s.startTime) {
-      return `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`;
-    }
-    throw new Error('ONE_TIME schedule requires scheduling.frequency=ONCE with startDate and startTime');
-  }
-
-  // INCREMENTAL — scheduling is always present for this type.
-  if (!s) {
-    throw new Error('INCREMENTAL schedule requires a scheduling object');
-  }
-
-  switch (s.frequency) {
-    case 'HOURLY': return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
-    case 'DAILY': return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
-    case 'WEEKLY': return `rate(${s.interval * 7} days)`;
-    case 'MONTHLY': return `cron(0 0 ${s.monthDate ?? 1} * ? *)`;
-    case 'CUSTOM':
-      if (s.startDate && s.startTime) {
-        return `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`;
-      }
-      throw new Error('CUSTOM schedule requires startDate and startTime');
-    default:
-      throw new Error(`Unsupported schedule frequency: ${s.frequency}`);
-  }
-};
-
-const buildEventScheduleInput = (config: IBackupConfig) => ({
-  name: `datavault-${config.backupConfigId}`,
-  scheduleExpression: toAwsCronExpression(config.scheduleConfig!),
-  timeZone: config.scheduleConfig!.timeZone,
-  payload: { backupConfigId: config.backupConfigId, userId: config.userId },
-});
-import { wrapController, isOwner } from '../../../utils/helper';
+import { wrapController, isOwner, buildEventScheduleInput } from '../../../utils/helper';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 
