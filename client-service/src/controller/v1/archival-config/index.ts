@@ -30,13 +30,14 @@ import {
     getDecryptedCrmCredential,
 } from "../../../services";
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
-import { validateSoql } from "../../../services/third-party/salesforce/dry-run";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
 import { previewRecords } from "../../../services/third-party/salesforce/dryrun-v2/preview-records";
+import { validateSoql } from "../../../services/third-party/salesforce/dryrun-v2/validate-soql";
+import { generateSoqlQueries } from "../../../services/third-party/salesforce/dryrun-v2/soql-generation";
 
 // ── Parent chain types ────────────────────────────────────────────────────────
 
@@ -342,7 +343,38 @@ const dryRunArchivalHandler = async (req: IRequest, res: IResponse): Promise<voi
 
 const validateSoqlArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
-    const result = await validateSoql({ ...req.body, user }); makeResponse(req, res, 200, true, 'fetch', result);
+    if (!user) {
+        return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    // Joi (validateSoqlSchema) guarantees the actual shape: { crmId, object: { name, condition?, field? }, isParent }
+    const { object, isParent } = req.body as {
+        object: { name: string; condition?: ICondition; field?: IFieldFilter[] };
+        isParent: boolean;
+    };
+
+    // Children cannot carry their own filter conditions.
+    if (!isParent) {
+        if (object.condition || object.field?.length) {
+            return makeResponse(req, res, 200, true, 'fetch', {
+                isValid: false,
+                error: 'Child objects cannot have filter conditions.',
+            });
+        }
+        return makeResponse(req, res, 200, true, 'fetch', { isValid: true });
+    }
+
+    // No filter configured at all — nothing to validate against Salesforce.
+    if (!object.condition) {
+        return makeResponse(req, res, 200, true, 'fetch', { isValid: true });
+    }
+
+    const [{ soql }] = generateSoqlQueries([
+        { id: object.name, name: object.name, type: 'STANDARD', condition: object.condition, field: object.field },
+    ]);
+
+    const result = await validateSoql({ user, soql });
+    makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 
