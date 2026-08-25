@@ -7,8 +7,8 @@ import { COMPRESSION_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, tiggerRestoreJob, updateRestoreJob, getUsersByCrmId } from '../../../services';
-import { getInactiveOwnerIds } from '../../../services/third-party/salesforce/metadata/index';
+import { getRestoreById, getRestoreJobById, tiggerRestoreJob, updateRestoreJob, getUsersByCrmId, getUser } from '../../../services';
+import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 
 // Decrypts a request, or returns null if it isn't decryptable. Accepts both shapes
@@ -263,4 +263,111 @@ const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promis
   return makeResponse(req, res, 200, true, 'fetch', data);
 };
 
-export const sparkJobController = wrapController({ buildPayloadHandler, updateSparkJobStatusHandler, getInactiveOwnerIdsHandler });
+/**
+ * GET /spark-job/restore-fields?restoreConfigId=<uuid>&objectApiName=<name>
+ * restoreConfigId is the RESTORE_JOB_TABLE PK — same id update-spark-job-status's
+ * RESTORE branch reads via getRestoreJobById. The job's own userId is the
+ * destination-org user (createRestoreJob resolves and stores it as
+ * destinationUser = getUser({ userId }), the same identity destination.encryptedTokens
+ * come from) — i.e. exactly whose org the restored CSV gets written into, so that's
+ * whose credentials/crmId describe must run against, not the source org.
+ *
+ * salesforceObjectDescribe is the same describe call the crm-metadata Fields API
+ * (getSalesforceFields) is built on, so describe-level behavior stays identical.
+ * Narrows the result to just the field API names Spark can write during a restore:
+ * fields with updateable = true, plus Id unconditionally (it's the match/upsert key
+ * and is never itself updateable).
+ */
+const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { restoreConfigId, objectApiName } = req.query;
+
+  if (!objectApiName || typeof objectApiName !== 'string') {
+    return makeResponse(req, res, 400, false, 'object_api_name_required');
+  }
+
+  if (!restoreConfigId || typeof restoreConfigId !== 'string') {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const restoreJob = await getRestoreJobById(restoreConfigId);
+  if (!restoreJob) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const user = await getUser({ userId: restoreJob.userId });
+  if (!user) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  if (!user.crmCredential || !user.crmProfile?.instanceUrl) {
+    return makeResponse(req, res, 400, false, 'crm_not_connected');
+  }
+
+  const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
+
+  const updateableFieldNames = described.fields
+    .filter((field) => field.updateable)
+    .map((field) => field.name);
+
+  const fieldNames = Array.from(new Set(['Id', ...updateableFieldNames]));
+
+  return makeResponse(req, res, 200, true, 'fetch', fieldNames);
+};
+
+/**
+ * GET /spark-job/restore-objects?restoreConfigId=<uuid>
+ * restoreConfigId is the RESTORE_JOB_TABLE PK (same id restore-fields and
+ * update-spark-job-status's RESTORE branch read via getRestoreJobById).
+ *
+ * crmId resolves off restore.destination, same SAME/DIFFERENT split
+ * createRestoreJob uses to pick the destination org: DIFFERENT names the
+ * target org directly on destination.crmId; SAME restores into the requesting
+ * user's own connected org, so crmId comes from that user's record instead.
+ * Credentials are then looked up by crmId (not by restore.userId) so a
+ * DIFFERENT-org restore runs against whoever actually connected that org.
+ *
+ * Reuses the same Object List API backup/archival and get-objectlist-by-configid
+ * are built on (salesforceObjectFilteredList), with apexMode: 'restore' — already
+ * applies createable/updateable on top of its shared filters. Returns just the
+ * object API names, no config-side intersection (Spark has no restoreConfig
+ * object list of its own to narrow against here).
+ */
+const getRestoreObjectsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { restoreConfigId } = req.query;
+
+  if (!restoreConfigId || typeof restoreConfigId !== 'string') {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const restoreJob = await getRestoreJobById(restoreConfigId);
+  if (!restoreJob) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const restore = await getRestoreById(restoreJob.restoreId);
+  if (!restore) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  let crmId = restore.destination?.crmId;
+  if (restore.destination?.type !== 'DIFFERENT') {
+    const restoreUser = await getUser({ userId: restore.userId });
+    crmId = restoreUser?.crmId;
+  }
+  if (!crmId) {
+    return makeResponse(req, res, 400, false, 'crm_not_connected');
+  }
+
+  const crmUsers = await getUsersByCrmId(crmId);
+  const crmUser = crmUsers.find((u) => u.crmCredential && u.crmProfile?.instanceUrl);
+  if (!crmUser) {
+    return makeResponse(req, res, 400, false, 'crm_not_connected');
+  }
+
+  const restorable = await salesforceObjectFilteredList({ user: crmUser, apexMode: 'restore' });
+  const objectNames = restorable.map((obj) => obj.name);
+
+  return makeResponse(req, res, 200, true, 'fetch', objectNames);
+};
+
+export const sparkJobController = wrapController({ buildPayloadHandler, updateSparkJobStatusHandler, getInactiveOwnerIdsHandler, getRestoreFieldsHandler, getRestoreObjectsHandler });
