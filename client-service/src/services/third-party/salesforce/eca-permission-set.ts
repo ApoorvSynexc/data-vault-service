@@ -3,7 +3,6 @@ import { salesforceRequest, SalesforceTokens, SalesforceAuthExpiredError } from 
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
 import { listMetadataSoap, readMetadataSoap } from './metadata-listing';
 import { callApex, APEX_BASE } from './apex';
-import { stripNamespace } from '../../../utils/salesforce-namespace';
 
 // Packaged API/developer name of the ECA shipped with the managed package
 // (force-app/internal/360DV/externalClientApps/Data_Vault_Connected_App.eca-meta.xml).
@@ -243,6 +242,26 @@ const assignUserToEcaViaApex = async (
 // itself. Deploying with a fullName that doesn't match the org's real
 // auto-generated one creates a second, colliding record instead of updating
 // the existing one — which is exactly what produced the duplicate-value error.
+// ExtlClntAppOauthConfigurablePolicies is explicitly NOT packageable (only
+// ExternalClientApplication and ExtlClntAppOauthSettings travel in a 2GP
+// package) — policy records are always owned directly by the subscriber
+// org's own namespace (i.e. no namespace at all), even when the ECA they
+// point at is namespace-prefixed in that same org. Confirmed live: a
+// subscriber org with ECA "SYX_DVV__Data_Vault_Connected_App" only ever
+// returns the unnamespaced policy record
+// "Data_Vault_Connected_App_oauth_defaultPolicy".
+//
+// Deliberately does NOT use stripNamespace()/SALESFORCE_NAMESPACE here —
+// that env var isn't guaranteed to be set in every deploy environment, and
+// when it's unset stripNamespace silently no-ops, leaving the namespace on
+// and reproducing "Cannot create a new component with the namespace: X"
+// (subscriber orgs can only update existing unnamespaced components, never
+// create new namespaced ones via the API). The namespace prefix is instead
+// parsed directly off ecaDeveloperName — the name Salesforce itself just
+// returned for this ECA — so this never depends on external config.
+const unnamespacedEcaName = (ecaDeveloperName: string): string =>
+  ecaDeveloperName.replace(/^\w+__/, '');
+
 const resolveEcaOauthPolicyName = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -273,9 +292,8 @@ const resolveEcaOauthPolicyName = async (
   // create new namespaced components via the API — only update ones that
   // already exist). Checking the unnamespaced name too finds the real record
   // so the deploy updates it instead of trying to create a colliding one.
-  const strippedDeveloperName = stripNamespace(ecaDeveloperName);
   const match = entries.find(
-    (e) => e.fullName.startsWith(ecaDeveloperName) || e.fullName.startsWith(strippedDeveloperName)
+    (e) => e.fullName.startsWith(ecaDeveloperName) || e.fullName.startsWith(unnamespacedEcaName(ecaDeveloperName))
   );
   if (match) {
     console.log('[eca-permission-set] Found existing OAuth policy record:', match.fullName);
@@ -416,7 +434,10 @@ export const provisionEcaPermissionSet = async (
     // its fullName is never the ECA's own name (see resolveEcaOauthPolicyName)
     // and must be discovered, not assumed, or the deploy creates a colliding
     // duplicate instead of updating the real one.
-    const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${stripNamespace(developerName)}_oauthPlcy`;
+    // Never namespaced when creating: ExtlClntAppOauthConfigurablePolicies
+    // isn't packageable, so a subscriber org can only create it under its own
+    // (unnamespaced) namespace — see unnamespacedEcaName's docblock above.
+    const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${unnamespacedEcaName(developerName)}_oauthPlcy`;
     console.log('[eca-permission-set] Deploying ECA OAuth policy:', policyName);
     const union = Array.from(new Set([...existingPermittedPermissionSets, effectivePermissionSetName]));
 
