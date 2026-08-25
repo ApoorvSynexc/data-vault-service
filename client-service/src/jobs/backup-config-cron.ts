@@ -28,7 +28,7 @@ const runArchivalConfig = async (config: IBackupConfig): Promise<number> => {
   }
 
   logger.info(`[ARCH-CRON] config ${config.backupConfigId} FIRE | objects=[${scheduledObjects.map(o => o.name).join(',')}]`);
-  await triggerArchivalBackupJob({  config, objects: scheduledObjects, lastUpdatedAt: config.lastBackupAt, bypassDedup: true});
+  await triggerArchivalBackupJob({ config, objects: scheduledObjects, lastUpdatedAt: config.lastBackupAt, bypassDedup: true });
   return scheduledObjects.length;
 };
 
@@ -59,7 +59,7 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
       try {
         const user = await getUser({ userId: config.userId });
         if (!user) continue;
-        if (config.type === "ARCHIVAL") {
+        if (config.type === "ARCHIVAL" && config.scheduleConfig?.type === 'ONE_TIME') {
           const { scheduledObjects } = filtereObjects(config.objects || []);
           if (scheduledObjects.length) {
             const active = await hasActiveBackupJob(config.backupConfigId);
@@ -70,7 +70,7 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
               );
             }
           }
-        } else {
+        } else if (config.scheduleConfig?.type === 'ONE_TIME') {
           await triggerBackupJob({ user, config, lastUpdatedAt: config.lastBackupAt });
         }
       } catch (error) {
