@@ -69,8 +69,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
     return;
   }
 
-  console.log('RECORDS ==> ' + JSON.stringify(decryptedBody));
-
   const backupConfigs = await getBackupConfigsByCrm(crm.crmId);
   const realtimeConfigs = backupConfigs.filter((c) => c.schedule === SCHEDULE_MODE.realtime);
   if (!realtimeConfigs.length) {
@@ -139,7 +137,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
  */
 const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
-    console.log('PAYLOAD PROCESSING');
     const sf = req.salesforcePayload as DecryptedSalesforceRequest;
     makeResponse(req, res, 200, true, 'fetch');
 
