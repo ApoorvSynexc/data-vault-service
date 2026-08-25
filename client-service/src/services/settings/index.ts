@@ -83,18 +83,14 @@ const upsertSettings = async (params: UpsertSettingsParams): Promise<ISettings> 
   return settings;
 };
 
-const deleteStandardObject = async (
-  userId: string,
-  crmId: string | undefined,
-  name: string
-): Promise<ISettings | null> => {
-  const existing = await getSettingsByUserAndCrm(userId, crmId);
+const deleteStandardObject = async (userId: string, name: string): Promise<ISettings | null> => {
+  const existing = await getSettingsByUser(userId);
   if (!existing) {
     return null;
   }
 
   const standardObjects = existing.standardObjects.filter((s) => s.name !== name);
-  return upsertSettings({ userId, crmId, standardObjects });
+  return upsertSettings({ userId, standardObjects });
 };
 
 export { upsertSettings, getSettingsByUserAndCrm, getSettingsByUser, getSettingsById, deleteStandardObject };
