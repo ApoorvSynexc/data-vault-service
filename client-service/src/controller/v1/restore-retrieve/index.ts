@@ -269,6 +269,24 @@ const toStringList = (v: unknown): string[] | null => {
 
 const VALID_RETRIEVE_TYPES: RetrieveType[] = ['ENTIRE', 'CHANGED_BETWEEN'];
 
+// ponytail: TEMPORARY SHIM — scoped to fetch-records only, remove when the caller fixes this.
+// toIsoDateString (by design, see utils/iso-date.ts) reads a zone-less timestamp as UTC.
+// The current frontend instead sends CHANGED_BETWEEN start/endDate as bare local wall-clock
+// strings that are actually IST (UTC+5:30) — e.g. '2026-08-25T19:38' meant 14:08 UTC, not
+// 19:38 UTC — so every such request silently queried a window 5:30 hours in the future and
+// matched nothing. Until the caller sends real UTC (append 'Z'/an offset itself), assume any
+// zone-less start/endDate here is IST and shift it before handing it to toIsoDateString.
+// TO REMOVE: delete this block and the two `assumeIstIfBare(...)` wraps below, so
+// startDate/endDate go into toIsoDateString unchanged again.
+const IST_OFFSET = '+05:30';
+const hasZoneInfo = (value: string): boolean => /(?:Z|[+-]\d{2}:?\d{2})$/.test(value.trim());
+const assumeIstIfBare = (value: string): string => {
+  const trimmed = value.trim();
+  // Bare date-only values ('2026-06-30') are calendar days, not instants — leave as-is.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  return hasZoneInfo(trimmed) ? trimmed : `${trimmed}${IST_OFFSET}`;
+};
+
 /**
  * Parses the /retrieve/fetch-records body — a flat shape of its own, unrelated
  * to the nested source/selection one /retrieve/show-preview still takes.
@@ -333,8 +351,9 @@ const parseRetrieveParams = (
     ) {
       return { ok: false, error: 'date_range_required' };
     }
-    const start = toIsoDateString(startDate, 'start');
-    const end = toIsoDateString(endDate, 'end');
+    // ponytail: assumeIstIfBare is the temporary shim above — see its comment to remove.
+    const start = toIsoDateString(assumeIstIfBare(startDate), 'start');
+    const end = toIsoDateString(assumeIstIfBare(endDate), 'end');
     if (!start || !end) return { ok: false, error: 'invalid_source_date' };
     // A backwards window selects nothing. Rejecting it beats billing an Athena
     // scan that cannot return a row, and it is almost always a swapped pair of
