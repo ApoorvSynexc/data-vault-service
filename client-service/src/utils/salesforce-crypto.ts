@@ -9,6 +9,14 @@ interface DecryptedSalesforceRequest {
 }
 
 /**
+ * crm.encryptionKey is stored encrypted at rest with the master ENCRYPTION_KEY
+ * (same treatment as crmCredential). Rows written before this change still
+ * hold the raw base64 key as a plain string — pass those through unchanged.
+ */
+const resolveOrgKey = (stored: NonNullable<ICrm['encryptionKey']>): string =>
+  typeof stored === 'string' ? stored : decrypt(stored);
+
+/**
  * Unwraps a two-layer encrypted Salesforce request: the Bootstrap Key
  * (master ENCRYPTION_KEY) wraps `{ orgId, payload | params }`, where the
  * inner field is itself an envelope encrypted with that org's own key
@@ -42,7 +50,7 @@ const decryptSalesforceRequest = async (raw: any): Promise<DecryptedSalesforceRe
   }
 
   const innerEnvelope = JSON.parse(innerEnvelopeRaw);
-  const plaintext = decrypt(readEnvelope(innerEnvelope), crm.encryptionKey);
+  const plaintext = decrypt(readEnvelope(innerEnvelope), resolveOrgKey(crm.encryptionKey));
 
   return { orgId: outer.orgId, crm, plaintext };
 };
@@ -76,7 +84,7 @@ const encryptSalesforceResponse = (crm: ICrm, responsePayload: unknown): { ciphe
   if (!crm.encryptionKey) {
     throw new Error('org_not_registered');
   }
-  const { ciphertext, iv } = encrypt(JSON.stringify(responsePayload), crm.encryptionKey);
+  const { ciphertext, iv } = encrypt(JSON.stringify(responsePayload), resolveOrgKey(crm.encryptionKey));
   return { cipherText: ciphertext, iv, authTag: '' };
 };
 
@@ -89,5 +97,5 @@ const encryptOrgDirect = (plaintext: string, keyBase64: string): EncryptedPayloa
 
 const decryptOrgDirect = (raw: any, keyBase64: string): string => decrypt(readEnvelope(raw), keyBase64);
 
-export { decryptSalesforceRequest, decryptSalesforceQueryRequest, encryptSalesforceResponse, encryptOrgDirect, decryptOrgDirect };
+export { decryptSalesforceRequest, decryptSalesforceQueryRequest, encryptSalesforceResponse, encryptOrgDirect, decryptOrgDirect, resolveOrgKey };
 export type { DecryptedSalesforceRequest };

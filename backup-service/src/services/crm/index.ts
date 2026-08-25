@@ -11,7 +11,7 @@ export interface ICrm {
   crmId: string;
   organizationId: string;
   crmName?: string;
-  encryptionKey?: string;
+  encryptionKey?: string | { ciphertext: string; iv: string };
   instanceUrl?: string;
   environment?: string;
 }

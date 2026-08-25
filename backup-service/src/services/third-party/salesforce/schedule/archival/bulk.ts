@@ -29,7 +29,11 @@ import { uploadRecordTypeMetadata } from '../../record-type';
 import { uploadObjectChilds } from '../../child';
 import { uploadToS3 } from '../../../../destination';
 import { readLatestSchema, writeSchemaFile } from '../../../../schema';
-import { buildS3KeyPrefix, schemasAreEqual } from '../../../../../utils/helper';
+import {
+  buildS3KeyPrefix,
+  schemasAreEqual,
+  withRequiredBulkFields,
+} from '../../../../../utils/helper';
 import { randomUUID } from 'crypto';
 
 // Builds a unique S3 key for one archival CSV file within the object's folder.
@@ -322,11 +326,12 @@ async function uploadSingleObject(
     `[archival:child] WHERE build | objectName:${object.name} parentWhereBody:"${parentWhereBody || '(none)'}" → effectiveWhereBody:"${effectiveWhereBody}"`
   );
 
-  const { fieldNames, schema } = await getObjectMetadata(
+  const { fieldNames: fetchedFieldNames, schema } = await getObjectMetadata(
     ctx.tokens.backupConfigId,
     object.name,
     'backup'
   );
+  const fieldNames = withRequiredBulkFields(fetchedFieldNames);
   await uploadPicklistValues({
     schema,
     destConfig: ctx.destConfig,

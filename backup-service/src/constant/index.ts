@@ -102,6 +102,10 @@ const CONDITION_TYPE = {
   custom: 'CUSTOM',
   soql: 'SOQL',
 };
+// Always queried via Bulk API for backup/archival, regardless of which fields
+// the schema filter selects — restore/reconciliation needs them unconditionally.
+const REQUIRED_BULK_FIELDS = ['CreatedDate', 'LastModifiedDate', 'SystemModstamp'];
+
 const FILTER_OPERATOR = {
   gt: '>',
   lt: '<',
@@ -156,4 +160,5 @@ export {
   CRM_NAME,
   CONDITION_TYPE,
   FILTER_OPERATOR,
+  REQUIRED_BULK_FIELDS,
 };

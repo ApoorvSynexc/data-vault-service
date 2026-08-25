@@ -1,6 +1,7 @@
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { logger } from '../middlewares';
 import { IBackupObject } from '../models';
+import { REQUIRED_BULK_FIELDS } from '../constant';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -363,6 +364,12 @@ const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
   return objects.flatMap((obj) => [obj, ...(obj.children ? recursivelyFlatten(obj.children) : [])]);
 };
 
+// Ensures CreatedDate/LastModifiedDate/SystemModstamp are present in a field
+// list. Call once, right after fetching/filtering the schema — every SOQL
+// built from the result already carries them, no need to re-add per query.
+const withRequiredBulkFields = (fieldNames: string[]): string[] =>
+  Array.from(new Set([...fieldNames, ...REQUIRED_BULK_FIELDS]));
+
 export {
   randomNumber,
   parseExpiryToSeconds,
@@ -379,6 +386,7 @@ export {
   formatFieldValuesForSOQL,
   formatValueByDataType,
   recursivelyFlatten,
+  withRequiredBulkFields,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
