@@ -7,20 +7,8 @@ import {
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
 import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN, AWS_ATHENA_DEBUG } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { logger } from '../../../middlewares';
-
-// AWS SDK clients accept a `logger` with this shape and call it internally
-// around every request/response — this is the SDK-level equivalent of the
-// CLI's --debug flag. Routed through `logger.info` (not `.debug`) so it
-// actually prints regardless of winston's configured level, since the point
-// of AWS_ATHENA_DEBUG is "make it show up".
-const athenaSdkLogger = {
-  debug: (...args: unknown[]) => logger.info('[athena-sdk]', ...args),
-  info: (...args: unknown[]) => logger.info('[athena-sdk]', ...args),
-  warn: (...args: unknown[]) => logger.warn('[athena-sdk]', ...args),
-  error: (...args: unknown[]) => logger.error('[athena-sdk]', ...args),
-};
 
 // Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
 // Principal) — only a caller that has actually assumed that role via STS can
@@ -51,7 +39,6 @@ const athena = new AthenaClient({
   //   masterCredentials,
   //   params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
   // }),
-  ...(AWS_ATHENA_DEBUG ? { logger: athenaSdkLogger } : {}),
 });
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
@@ -75,7 +62,7 @@ const QUERY_TIMEOUT_MS = 300_000;
 setImmediate(() => {
   logger.info(
     `[athena] settings | region:${AWS_REGION} roleArn:${AWS_ATHENA_ROLE_ARN} sessionName:datavault-athena ` +
-    `usingStaticMasterCredentials:${Boolean(masterCredentials)} debug:${AWS_ATHENA_DEBUG} ` +
+    `usingStaticMasterCredentials:${Boolean(masterCredentials)} ` +
     `pollFirstMs:${POLL_FIRST_MS} pollInitialMs:${POLL_INITIAL_MS} pollMaxMs:${POLL_MAX_MS} queryTimeoutMs:${QUERY_TIMEOUT_MS}`
   );
 });

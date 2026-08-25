@@ -315,7 +315,7 @@ flowchart TB
 | Boundary | Status |
 |---|---|
 | Salesforce org (external system) | Confirmed |
-| AWS Account | Confirmed (region `us-east-2` for ECR/ECS; client-service default region `ap-south-1` per `constant/index.ts`) |
+| AWS Account | Confirmed (region `us-east-2`) |
 | EC2 (client-service host) | Confirmed |
 | ECS Fargate (backup-service) | Confirmed — `awsvpc` networking, task has its own public IP |
 | S3, Glue, EMR Serverless, DynamoDB, EventBridge Scheduler, Athena | Confirmed via SDK client instantiation in source |
