@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import initializeDatabase from './config/database';
 import { initializeApp } from './config';
+import { runBackfillCrmEncryptionKey } from './migration/backfill-crm-encryption-key';
 
 // ---------------------------------------------------------------------------
 // Fail fast if any required environment variable is missing or malformed.
@@ -50,6 +51,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 initializeDatabase()
+  .then(() => runBackfillCrmEncryptionKey())
   .then(() => {
     initializeApp();
   })
