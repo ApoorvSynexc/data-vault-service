@@ -402,11 +402,13 @@ const parseRetrieveParams = (
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
 const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  console.log('[fetch-records] request', req.body);
   const parsed = parseRetrieveParams(req.body as Record<string, unknown>, req.user!.userId);
   if (!parsed.ok) {
     makeResponse(req, res, 400, false, parsed.error);
     return;
   }
+  console.log('[fetch-records] query', parsed.value);
 
   let result;
   try {
