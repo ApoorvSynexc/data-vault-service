@@ -10,7 +10,14 @@ export const upsertSettingsValidation = async (
 ) => {
   const schema = Joi.object({
     crmId: Joi.string().optional(),
-    standardObjects: Joi.array().items(Joi.string()).optional(),
+    standardObjects: Joi.array()
+      .items(
+        Joi.object({
+          name: Joi.string().required(),
+          isDefault: Joi.boolean().required(),
+        })
+      )
+      .optional(),
     status: Joi.string()
       .valid(...Object.values(STATUS))
       .optional(),

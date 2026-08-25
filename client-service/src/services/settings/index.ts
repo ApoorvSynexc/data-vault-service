@@ -2,12 +2,12 @@ import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { SETTINGS_TABLE, STATUS } from '../../constant';
-import { ISettings } from '../../models';
+import { ISettings, IStandardObject } from '../../models';
 
 interface UpsertSettingsParams {
   userId: string;
   crmId?: string;
-  standardObjects?: string[];
+  standardObjects?: IStandardObject[];
   status?: string;
 }
 
