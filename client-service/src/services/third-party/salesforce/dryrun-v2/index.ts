@@ -16,6 +16,10 @@ export interface IDryRunV2ObjectResult {
   name: string;
   count: number | null;
   success: boolean;
+  // The COUNT() query generateSoqlQueries built for this object — hand it
+  // straight to previewRecords (as `soql`) to fetch a sample of the actual
+  // matching records.
+  soql: string;
   error?: string;
   children?: IDryRunV2ObjectResult[];
 }
@@ -28,11 +32,13 @@ export interface IDryRunV2Result {
   apiCallCount: number;
 }
 
-// Rebuilds the original object tree shape, attaching each node's count from
-// the flat results Salesforce returned.
+// Rebuilds the original object tree shape, attaching each node's count
+// (and the soql query that produced it) from the flat results Salesforce
+// returned.
 const attachCounts = (
   objects: ISalesforceObject[],
-  countsById: Map<string, ICountResult>
+  countsById: Map<string, ICountResult>,
+  soqlById: Map<string, string>
 ): IDryRunV2ObjectResult[] =>
   objects.map((object) => {
     const outcome = countsById.get(object.id);
@@ -41,8 +47,9 @@ const attachCounts = (
       name: object.name,
       count: outcome?.count ?? null,
       success: outcome?.success ?? false,
+      soql: soqlById.get(object.id) ?? '',
       ...(outcome?.error && { error: outcome.error }),
-      ...(object.children?.length && { children: attachCounts(object.children, countsById) }),
+      ...(object.children?.length && { children: attachCounts(object.children, countsById, soqlById) }),
     };
   });
 
@@ -57,6 +64,7 @@ export const dryRunV2 = async (payload: IDryRunV2Payload): Promise<IDryRunV2Resu
 
   const { results, apiCallCount } = await fetchCountsFromSalesforce(user, queries);
   const countsById = new Map(results.map((result) => [result.id, result]));
+  const soqlById = new Map(queries.map((query) => [query.id, query.soql]));
 
-  return { objects: attachCounts(objects, countsById), apiCallCount };
+  return { objects: attachCounts(objects, countsById, soqlById), apiCallCount };
 };
