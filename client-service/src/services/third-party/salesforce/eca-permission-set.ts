@@ -257,10 +257,26 @@ const resolveEcaOauthPolicyName = async (
   }
 
   // listMetadata's FileProperties don't include the externalClientApplication
-  // reference field, so matching is by naming convention (observed:
-  // "{ecaDeveloperName}_oauthPlcy") rather than an exact relationship lookup.
-  // A prefix match tolerates any exact suffix Salesforce actually uses.
-  const match = entries.find((e) => e.fullName.startsWith(ecaDeveloperName));
+  // reference field, so matching is by naming convention rather than an exact
+  // relationship lookup. A prefix match tolerates any exact suffix Salesforce
+  // actually uses (observed: both "_oauthPlcy" and Salesforce's own
+  // auto-generated "_oauth_defaultPolicy").
+  //
+  // In a Subscriber org the ECA itself is namespace-prefixed
+  // (SYX_DVV__Data_Vault_Connected_App), but Salesforce auto-generates the
+  // default OAuth policy record's fullName from the *unnamespaced* developer
+  // name (Data_Vault_Connected_App_oauth_defaultPolicy) — confirmed live: a
+  // subscriber org only ever returned the unnamespaced record here. Matching
+  // solely against ecaDeveloperName never finds it, which used to fall
+  // through to the create-with-guessed-name fallback below and fail with
+  // "Cannot create a new component with the namespace" (subscriber orgs can't
+  // create new namespaced components via the API — only update ones that
+  // already exist). Checking the unnamespaced name too finds the real record
+  // so the deploy updates it instead of trying to create a colliding one.
+  const strippedDeveloperName = stripNamespace(ecaDeveloperName);
+  const match = entries.find(
+    (e) => e.fullName.startsWith(ecaDeveloperName) || e.fullName.startsWith(strippedDeveloperName)
+  );
   if (match) {
     console.log('[eca-permission-set] Found existing OAuth policy record:', match.fullName);
     return match.fullName;
