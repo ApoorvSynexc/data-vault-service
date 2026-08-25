@@ -6,9 +6,7 @@ import type { ISoqlCountQuery } from "./soql-generation";
 
 const SF_API_VERSION = "v66.0";
 
-// Hard limit imposed by Salesforce — a single Composite API request can carry
-// at most 25 subrequests.
-const MAX_BATCH_SIZE = 25;
+const MAX_BATCH_SIZE = 5;
 
 export interface ICountResult {
   id: string;
@@ -101,9 +99,6 @@ const runCompositeBatch = async (
   });
 };
 
-// Runs every queued COUNT() query for `user` against Salesforce, batching
-// through the Composite API — N objects cost ceil(N/25) API calls instead
-// of N.
 export const fetchCountsFromSalesforce = async (
   user: IUser,
   queries: ISoqlCountQuery[]
