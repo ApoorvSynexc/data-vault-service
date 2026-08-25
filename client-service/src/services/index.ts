@@ -7,7 +7,6 @@ export * from './destination';
 export * from './counter';
 export * from './crm';
 export * from './oauth-state';
-export * from './otp';
 export * from './payload';
 export * from './role';
 export * from './schema';

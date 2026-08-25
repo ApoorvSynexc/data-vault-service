@@ -4,7 +4,6 @@ export * from './destination';
 export * from './crm';
 export * from './oauth-state';
 export * from './table-counter';
-export * from './otp';
 export * from './restore';
 export * from './restore-job';
 export * from './role';

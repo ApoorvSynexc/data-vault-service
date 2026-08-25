@@ -15,7 +15,6 @@ import {
   RESTORE_JOB_TABLE,
   TABLE_COUNTER_TABLE,
   COUNTER_TABLE,
-  OTP_TABLE,
   OAUTH_STATE_TABLE,
   CRM_TABLE,
   ROLE_TABLE,
@@ -225,29 +224,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     AttributeDefinitions: [{ AttributeName: 'state', AttributeType: 'S' }],
     KeySchema: [{ AttributeName: 'state', KeyType: 'HASH' }],
   },
-  // {
-  //   TableName: OTP_TABLE,
-  //   BillingMode: 'PAY_PER_REQUEST',
-  //   AttributeDefinitions: [
-  //     { AttributeName: 'otpId', AttributeType: 'S' },
-  //     { AttributeName: 'createdAt', AttributeType: 'S' },
-  //     { AttributeName: 'contactOtpKey', AttributeType: 'S' },
-  //   ],
-  //   KeySchema: [
-  //     { AttributeName: 'otpId', KeyType: 'HASH' },
-  //     { AttributeName: 'createdAt', KeyType: 'RANGE' },
-  //   ],
-  //   GlobalSecondaryIndexes: [
-  //     {
-  //       IndexName: 'contact-otptype-index',
-  //       KeySchema: [
-  //         { AttributeName: 'contactOtpKey', KeyType: 'HASH' },
-  //         { AttributeName: 'createdAt', KeyType: 'RANGE' },
-  //       ],
-  //       Projection: { ProjectionType: 'ALL' },
-  //     },
-  //   ],
-  // },
   {
     TableName: SESSION_TABLE,
     BillingMode: 'PAY_PER_REQUEST',
@@ -316,7 +292,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     AttributeDefinitions: [
       { AttributeName: 'userId', AttributeType: 'S' },
       { AttributeName: 'contactEmail', AttributeType: 'S' },
-      { AttributeName: 'contactMobileKey', AttributeType: 'S' },
       { AttributeName: 'crmId', AttributeType: 'S' },
       { AttributeName: 'crmProfileUserId', AttributeType: 'S' },
     ],
@@ -325,11 +300,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       {
         IndexName: 'email-index',
         KeySchema: [{ AttributeName: 'contactEmail', KeyType: 'HASH' }],
-        Projection: { ProjectionType: 'ALL' },
-      },
-      {
-        IndexName: 'mobile-index',
-        KeySchema: [{ AttributeName: 'contactMobileKey', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
       {
