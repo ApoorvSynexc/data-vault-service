@@ -31,7 +31,7 @@ import {
   buildS3KeyPrefix,
   formatFieldValuesForSOQL,
   formatValueByDataType,
-  withRequiredBulkFields,
+  withSystemFields,
 } from '../../../../../utils/helper';
 import { listS3Objects } from '../../../../destination/s3';
 import { writeSchemaFile } from '../../../../schema';
@@ -611,7 +611,7 @@ export const archiveAndHardDelete = async (
     // Phase 1 — Bulk Query for root object (create or resume)
     // -------------------------------------------------------------------------
     const { fieldNames, schema } = await getObjectMetadata(backupConfigId, objectName, 'archival');
-    const allFieldNames = withRequiredBulkFields(fieldNames);
+    const allFieldNames = withSystemFields(fieldNames);
     await uploadPicklistValues({
       schema,
       destConfig,

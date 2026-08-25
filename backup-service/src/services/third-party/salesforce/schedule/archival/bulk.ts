@@ -32,7 +32,7 @@ import { readLatestSchema, writeSchemaFile } from '../../../../schema';
 import {
   buildS3KeyPrefix,
   schemasAreEqual,
-  withRequiredBulkFields,
+  withSystemFields,
 } from '../../../../../utils/helper';
 import { randomUUID } from 'crypto';
 
@@ -331,7 +331,7 @@ async function uploadSingleObject(
     object.name,
     'backup'
   );
-  const fieldNames = withRequiredBulkFields(fetchedFieldNames);
+  const fieldNames = withSystemFields(fetchedFieldNames);
   await uploadPicklistValues({
     schema,
     destConfig: ctx.destConfig,

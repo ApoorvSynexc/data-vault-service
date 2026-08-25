@@ -102,9 +102,19 @@ const CONDITION_TYPE = {
   custom: 'CUSTOM',
   soql: 'SOQL',
 };
-// Always queried via Bulk API for backup/archival, regardless of which fields
-// the schema filter selects — restore/reconciliation needs them unconditionally.
-const REQUIRED_BULK_FIELDS = ['CreatedDate', 'LastModifiedDate', 'SystemModstamp'];
+// Salesforce's standard system/audit fields — read-only, present on virtually
+// every object, never user-selectable. Always queried for backup/archival
+// regardless of which fields survive isQueryableField filtering.
+// https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/system_fields.htm
+const SYSTEM_FIELDS = [
+  'Id',
+  'IsDeleted',
+  'CreatedDate',
+  'CreatedById',
+  'LastModifiedDate',
+  'LastModifiedById',
+  'SystemModstamp',
+];
 
 const FILTER_OPERATOR = {
   gt: '>',
@@ -160,5 +170,5 @@ export {
   CRM_NAME,
   CONDITION_TYPE,
   FILTER_OPERATOR,
-  REQUIRED_BULK_FIELDS,
+  SYSTEM_FIELDS,
 };

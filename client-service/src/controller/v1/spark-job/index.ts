@@ -3,7 +3,7 @@ import { buildPayload, buildRestorePayload } from '../../../services/payload';
 import { getBackupConfigById } from '../../../services/backup-config';
 import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
-import { COMPRESSION_STATUS } from '../../../constant';
+import { COMPRESSION_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
@@ -275,8 +275,11 @@ const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promis
  * salesforceObjectDescribe is the same describe call the crm-metadata Fields API
  * (getSalesforceFields) is built on, so describe-level behavior stays identical.
  * Narrows the result to just the field API names Spark can write during a restore:
- * fields with updateable = true, plus Id unconditionally (it's the match/upsert key
- * and is never itself updateable).
+ * fields with updateable = true, minus every standard system/audit field (see
+ * SALESFORCE_SYSTEM_FIELDS — describe's updateable flag alone isn't a safe system-field
+ * check, since some orgs report CreatedDate/CreatedById/etc as updateable via API),
+ * plus Id unconditionally (it's the match/upsert key, itself a system field and never
+ * itself updateable).
  */
 const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreConfigId, objectApiName } = req.query;
@@ -306,7 +309,7 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
   const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
 
   const updateableFieldNames = described.fields
-    .filter((field) => field.updateable)
+    .filter((field) => field.updateable && !SALESFORCE_SYSTEM_FIELDS.includes(field.name))
     .map((field) => field.name);
 
   const fieldNames = Array.from(new Set(['Id', ...updateableFieldNames]));
