@@ -27,28 +27,28 @@ const operationToFolder = (operation: string): 'inserts' | 'updates' | 'deletes'
 // has the same, schema-defined shape regardless of which fields a given CDC
 // record carries. Cells with commas, quotes, or newlines are double-quoted and escaped.
 // ---------------------------------------------------------------------------
-const recordsToCsv = (records: Record<string, any>[], columns: string[]): Buffer => {
-  if (!records.length || !columns.length) {
-    return Buffer.alloc(0);
-  }
+// const recordsToCsv = (records: Record<string, any>[], columns: string[]): Buffer => {
+//   if (!records.length || !columns.length) {
+//     return Buffer.alloc(0);
+//   }
 
-  const escapeCell = (val: unknown): string => {
-    if (val === null || val === undefined) {
-      return '';
-    }
-    const s = typeof val === 'object' ? JSON.stringify(val) : String(val);
-    return s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')
-      ? `"${s.replace(/"/g, '""')}"`
-      : s;
-  };
+//   const escapeCell = (val: unknown): string => {
+//     if (val === null || val === undefined) {
+//       return '';
+//     }
+//     const s = typeof val === 'object' ? JSON.stringify(val) : String(val);
+//     return s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')
+//       ? `"${s.replace(/"/g, '""')}"`
+//       : s;
+//   };
 
-  const lines = [
-    columns.join(','),
-    ...records.map((r) => columns.map((h) => escapeCell(r[h])).join(',')),
-  ];
+//   const lines = [
+//     columns.join(','),
+//     ...records.map((r) => columns.map((h) => escapeCell(r[h])).join(',')),
+//   ];
 
-  return Buffer.from(lines.join('\n'), 'utf8');
-};
+//   return Buffer.from(lines.join('\n'), 'utf8');
+// };
 
 // ---------------------------------------------------------------------------
 // Load the schema already stored in S3 for this object — written by the initial /
@@ -95,25 +95,35 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     destConfig: IDestinationConfig,
     payload: IRealtimePayload
   ) {
-    const { records, operation, objectApiName } = payload;
+    let { records } = payload;
+    const { operation, objectApiName } = payload;
+
+    if (records.length) {
+      records = records.map((record) => {
+        if (record.records) {
+          return record.records;
+        }
+        return record;
+      });
+    }
 
     // Column source, in order of authority:
     //   1. the schema stored in S3 (org-wide, written by the scheduled backup)
     //   2. the descriptor on this hit (permission-scoped, but every field of the
     //      object — still far better than 3, which varies hit to hit)
     //   3. the record's own keys, so an early hit is never dropped for lack of columns
-    const storedSchema = await loadStoredSchema(
-      crmId,
-      crmName,
-      backupConfigId,
-      objectApiName,
-      destConfig
-    );
-    const columns = storedSchema?.length
-      ? storedSchema.map((f) => f.apiName)
-      : payload.fields?.length
-        ? payload.fields.map((f) => f.apiName)
-        : Object.keys(records[0] ?? {}).filter((k) => k !== 'attributes');
+    // const storedSchema = await loadStoredSchema(
+    //   crmId,
+    //   crmName,
+    //   backupConfigId,
+    //   objectApiName,
+    //   destConfig
+    // );
+    // const columns = storedSchema?.length
+    //   ? storedSchema.map((f) => f.apiName)
+    //   : payload.fields?.length
+    //     ? payload.fields.map((f) => f.apiName)
+    //     : Object.keys(records[0] ?? {}).filter((k) => k !== 'attributes');
 
     // ── Upload CSV ──────────────────────────────────────────────────────────
     // All hits for the same job share the same backupJobId folder.

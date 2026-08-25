@@ -108,7 +108,6 @@ const triggerArchivalBackupJob = async (params: {
       config: getDecryptedDestinationConfig(destination),
     },
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
-    ...(config.spaceId && { spaceId: config.spaceId }),
   };
 
   const endpoint = '/archival';
@@ -164,6 +163,8 @@ const triggerBackupJob = async (params: {
 
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
   const credentials = getDecryptedCrmCredential(user);
+  if(!credentials) throw new Error('credentials_not_found');
+
   // Master-Detail children are expanded (and persisted back onto the config) by
   // backup-service at job creation — see expandWithMasterChildren there.
   const payload = {
@@ -181,7 +182,6 @@ const triggerBackupJob = async (params: {
       config: getDecryptedDestinationConfig(destination),
     },
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
-    ...(config.spaceId && { spaceId: config.spaceId }),
     ...(schemaSync ? { schemaSync: true } : {}),
   };
 

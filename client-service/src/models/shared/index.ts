@@ -1,10 +1,3 @@
-export interface IPhone {
-  dialCode: string;
-  iso2: string;
-  country: string;
-  number: string;
-}
-
 export interface IAddress {
   street?: string;
   street2?: string;

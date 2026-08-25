@@ -296,7 +296,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
 const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
     const destination = await getDestinationById(String(req.body.destinationId));
-    const isOwner = destination && (destination.userId === req.user!.userId || destination.spaceId === req.user?.spaceId);
+    const isOwner = destination && destination.userId === req.user!.userId;
 
     if (!isOwner) {
         makeResponse(req, res, 400, false, 'not_exist');
@@ -431,10 +431,9 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     const existing = await getBackupConfigById(String(backupConfigId));
-    const spaceId = req.user?.spaceId;
     const userId = req.user!.userId;
 
-    const isConfigOwner = spaceId ? existing?.spaceId === spaceId : existing?.userId === userId;
+    const isConfigOwner = existing?.userId === userId;
     if (!isConfigOwner || existing?.type !== 'ARCHIVAL') {
         makeResponse(req, res, 400, false, 'not_exist');
         return;
@@ -460,8 +459,11 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     crm.environment
                 );
             }
-            // const triggerResults = await realTimeTriggerManagement('delete', config);
-            // console.log({ triggerResults });
+            // Deleted before the config row itself: this is the last point the config
+            // (and its triggerResults) is still around, and running it here — awaited,
+            // pre-response — means it actually executes as part of the request instead
+            // of racing a response that's already gone out.
+            await realTimeTriggerManagement('delete', config);
         } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
             // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
         }
@@ -472,10 +474,6 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         ]);
 
         makeResponse(req, res, 200, true, 'delete');
-        if (config.schedule === SCHEDULE_MODE.realtime) {
-            const triggerResults = await realTimeTriggerManagement('delete', config);
-            console.log({ triggerResults });
-        }
     } catch (error) {
         throw error;
     }
@@ -483,7 +481,6 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
 const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const { slug } = req.query;
-    const spaceId = req.user!.spaceId;
     const userId = req.user!.userId;
 
     if (slug) {
@@ -501,17 +498,7 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
         return;
     }
 
-    let indexName = 'userId-index';
-    let keyName = 'userId';
-    let keyValue = userId;
-
-    if (spaceId) {
-        indexName = 'spaceId-index';
-        keyName = 'spaceId';
-        keyValue = spaceId;
-    }
-
-    const stats = await computeArchivalJobStats({ indexName, keyName, keyValue });
+    const stats = await computeArchivalJobStats({ indexName: 'userId-index', keyName: 'userId', keyValue: userId });
     makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
@@ -533,7 +520,7 @@ const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<vo
     const pageNum = Math.max(1, parseInt(page ?? '1', 10));
 
     const job = await getBackupJobById(backupJobId);
-    if (!job || (job.userId !== req.user!.userId && job.spaceId !== req.user?.spaceId)) {
+    if (!job || job.userId !== req.user!.userId) {
         makeResponse(req, res, 400, false, 'not_exist');
         return;
     }

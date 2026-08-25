@@ -1,28 +1,31 @@
 import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import {
+  IBackupConfig,
   IBackupObject,
   IDestinationConfig,
   IRestoreConflict,
   IRestoreJobDestination,
   IRestoreJobSource,
+  IS3ObjectKey,
   ISource,
 } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
-import { getBackupJob } from '../../backup-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { archiveAndHardDelete } from './schedule/archival';
 import { runSalesforceRestore } from './restore';
 import { decrypt } from '../../../utils/encryption';
+import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
+import { recursivelyFlatten } from '../../../utils/helper';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
 
 const exportObjectToDestination = async (
-  backupConfigId: string,
+  backupConfig: IBackupConfig,
   backupJobId: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -32,7 +35,7 @@ const exportObjectToDestination = async (
   objectIndex: number,
   destinationType: string,
   destConfig: IDestinationConfig,
-  lastUpdatedAt?: string,
+  lastUpdatedAt?: string
 ): Promise<void> => {
   if (object.status === OBJECT_STATUS.completed) {
     return;
@@ -44,7 +47,7 @@ const exportObjectToDestination = async (
 
   if (!lastUpdatedAt) {
     await exportFirstTime(
-      backupConfigId,
+      backupConfig,
       backupJobId,
       instanceUrl,
       tokens,
@@ -56,7 +59,7 @@ const exportObjectToDestination = async (
     );
   } else {
     await exportIncremental(
-      backupConfigId,
+      backupConfig,
       backupJobId,
       instanceUrl,
       tokens,
@@ -155,6 +158,37 @@ const exportWithRetryArchival = async (
   throw lastError;
 };
 
+// const exportWithRetryArchivalV2 = async (
+//   payload:
+//     {
+//       backupConfigId: string,
+//       backupJobId: string,
+//       source: ISource,
+//       destinationType: string,
+//       destConfig: IDestinationConfig,
+//       object: IBackupObject
+//     }
+// ): Promise<void> => {
+//   const objectName = payload.object.name;
+//   let lastError: any;
+
+//   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+//     try {
+//       await archiveObject(payload);
+//       return;
+//     } catch (err: any) {
+//       lastError = err;
+//       if (attempt < MAX_RETRIES) {
+//         logger.warn(
+//           `Archival job ${payload.backupJobId}: retrying ${objectName} (attempt ${attempt}/${MAX_RETRIES}) - ${err?.message}`
+//         );
+//       }
+//     }
+//   }
+
+//   throw lastError;
+// };
+
 const salesforceHandler: ICrmBackupHandler = {
   runBackup: async (
     backupConfigId: string,
@@ -168,6 +202,11 @@ const salesforceHandler: ICrmBackupHandler = {
     const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
 
     if (!object?.length) {
+      return;
+    }
+
+    const backupConfig = await getBackupConfigById(backupConfigId);
+    if (backupConfig === null || backupConfig === undefined) {
       return;
     }
 
@@ -188,7 +227,7 @@ const salesforceHandler: ICrmBackupHandler = {
       await Promise.allSettled(
         batch.map((item, batchIndex) =>
           exportWithRetry(
-            backupConfigId,
+            backupConfig,
             backupJobId,
             instanceUrl,
             tokens,
@@ -198,22 +237,26 @@ const salesforceHandler: ICrmBackupHandler = {
             i + batchIndex,
             destinationType,
             destConfig,
-            lastUpdatedAt,
+            lastUpdatedAt
           )
         )
       );
     }
 
-    const backupConfig = await getBackupConfigById(backupConfigId);
+    const latestBackupConfig = await getBackupConfigById(backupConfigId);
     let sizeInBytes = 0;
     let completedRecordCount = 0;
-    if(backupConfig) {
-      backupConfig.objects?.forEach((obj) => {
+    if (latestBackupConfig) {
+      latestBackupConfig.objects?.forEach((obj) => {
         sizeInBytes += obj.sizeInBytes ?? 0;
         completedRecordCount += obj.completedRecordCount ?? 0;
-      })
+      });
     }
-    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.success, sizeInBytes, completedRecordCount });
+    await updateBackupConfig(backupConfigId, {
+      backupStatus: BACKUP_STATUS.success,
+      sizeInBytes,
+      completedRecordCount,
+    });
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
   },
   runArchival: async (
@@ -224,72 +267,116 @@ const salesforceHandler: ICrmBackupHandler = {
     destConfig: IDestinationConfig,
     object?: IBackupObject[]
   ): Promise<'SUCCESS' | 'PARTIAL_FAILURE'> => {
-    const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
-
     if (!object?.length) {
       return 'SUCCESS';
     }
 
-    const tokens: SalesforceTokens = {
-      accessToken: access_token,
-      refreshToken: refresh_token,
-      crmId,
-      backupConfigId,
-    };
-
-    for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
-      const batch = object.slice(i, i + CONCURRENCY_LIMIT);
-      await Promise.allSettled(
-        batch.map((item) =>
-          exportWithRetryArchival(
-            backupConfigId,
-            backupJobId,
-            instanceUrl,
-            tokens,
-            crmName,
-            item,
-            destinationType,
-            destConfig
-          ).catch((err: any) => {
-            // Object already marked FAILED + errorMessage inside archiveAndHardDelete.
-            // Log and continue so remaining objects are not skipped.
-            logger.error(
-              `[archival] object failed — continuing with remaining objects | backupJobId:${backupJobId} objectName:${item.name} error:${err?.message}`
-            );
-          })
-        )
-      );
+    let backupConfig = await getBackupConfigById(backupConfigId);
+    if (backupConfig === null || backupConfig === undefined) {
+      return 'PARTIAL_FAILURE';
     }
 
-    // Derive final status from the actual object statuses written to DynamoDB.
-    // Only COMPLETED counts as success — DELETION_RECORDS_FAILED and DELETION_JOB_FAILED
-    // are both failure states even though the delete phase ran.
-    const freshJob = await getBackupJob(backupJobId);
-    const flattenObjects = (items: IBackupObject[]): IBackupObject[] =>
-      items.flatMap((o) => [o, ...flattenObjects(o.children ?? [])]);
-    const allObjects = flattenObjects(freshJob?.object ?? []);
+    const s3Keys: IS3ObjectKey[] = [];
+    for (let index = 0; index < object.length; index++) {
+      const objectDetail = object[index];
+      await exportWithRetryArchivalV2({
+        type: 'backup',
+        backupConfig,
+        backupJobId,
+        source,
+        destConfig,
+        object: objectDetail,
+        s3Keys,
+      });
+    }
 
-    const FAILURE_STATUSES = new Set([
-      OBJECT_STATUS.failed,
-      OBJECT_STATUS.deletionJobFailed,
-      OBJECT_STATUS.deletionRecordsFailed,
-    ]);
-    const hasAnyFailure = allObjects.some((o) => FAILURE_STATUSES.has(o.status ?? ''));
-    const hasAnySuccess = allObjects.some((o) => o.status === OBJECT_STATUS.completed);
+    for (let index = 0; index < object.length; index++) {
+      const objectDetail = object[index];
+      await exportWithRetryArchivalV2({
+        type: 'delete',
+        backupConfig,
+        backupJobId,
+        source,
+        destConfig,
+        object: objectDetail,
+        s3Keys,
+      });
+    }
 
-    const finalStatus =
-      hasAnyFailure && hasAnySuccess
-        ? BACKUP_STATUS.partialFailure
-        : hasAnyFailure
-          ? BACKUP_STATUS.failed
-          : BACKUP_STATUS.success;
+    backupConfig = await getBackupConfigById(backupConfigId);
+    if (backupConfig === null || backupConfig === undefined || !backupConfig.objects) {
+      return 'PARTIAL_FAILURE';
+    }
 
-    await updateBackupConfig(backupConfigId, { backupStatus: finalStatus });
-    logger.info(
-      `Archival job completed | backupJobId:${backupJobId} hasAnyFailure:${hasAnyFailure} hasAnySuccess:${hasAnySuccess} finalStatus:${finalStatus}`
-    );
+    const objects = recursivelyFlatten(backupConfig.objects);
+    let sizeInBytes = 0;
+    let completedRecordCount = 0;
+    if (backupConfig) {
+      objects?.forEach((obj) => {
+        sizeInBytes += obj.sizeInBytes ?? 0;
+        completedRecordCount += obj.completedRecordCount ?? 0;
+      });
+    }
+    await updateBackupConfig(backupConfigId, {
+      backupStatus: BACKUP_STATUS.success,
+      sizeInBytes,
+      completedRecordCount,
+    });
 
-    return hasAnyFailure ? 'PARTIAL_FAILURE' : 'SUCCESS';
+    return 'SUCCESS';
+    // for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
+    //   const batch = object.slice(i, i + CONCURRENCY_LIMIT);
+    //   await Promise.allSettled(
+    //     batch.map((item) =>
+    //       exportWithRetryArchival(
+    //         backupConfigId,
+    //         backupJobId,
+    //         instanceUrl,
+    //         tokens,
+    //         crmName,
+    //         item,
+    //         destinationType,
+    //         destConfig
+    //       ).catch((err: any) => {
+    //         // Object already marked FAILED + errorMessage inside archiveAndHardDelete.
+    //         // Log and continue so remaining objects are not skipped.
+    //         logger.error(
+    //           `[archival] object failed — continuing with remaining objects | backupJobId:${backupJobId} objectName:${item.name} error:${err?.message}`
+    //         );
+    //       })
+    //     )
+    //   );
+    // }
+
+    // // Derive final status from the actual object statuses written to DynamoDB.
+    // // Only COMPLETED counts as success — DELETION_RECORDS_FAILED and DELETION_JOB_FAILED
+    // // are both failure states even though the delete phase ran.
+    // const freshJob = await getBackupJob(backupJobId);
+    // const flattenObjects = (items: IBackupObject[]): IBackupObject[] =>
+    //   items.flatMap((o) => [o, ...flattenObjects(o.children ?? [])]);
+    // const allObjects = flattenObjects(freshJob?.object ?? []);
+
+    // const FAILURE_STATUSES = new Set([
+    //   OBJECT_STATUS.failed,
+    //   OBJECT_STATUS.deletionJobFailed,
+    //   OBJECT_STATUS.deletionRecordsFailed,
+    // ]);
+    // const hasAnyFailure = allObjects.some((o) => FAILURE_STATUSES.has(o.status ?? ''));
+    // const hasAnySuccess = allObjects.some((o) => o.status === OBJECT_STATUS.completed);
+
+    // const finalStatus =
+    //   hasAnyFailure && hasAnySuccess
+    //     ? BACKUP_STATUS.partialFailure
+    //     : hasAnyFailure
+    //       ? BACKUP_STATUS.failed
+    //       : BACKUP_STATUS.success;
+
+    // await updateBackupConfig(backupConfigId, { backupStatus: finalStatus });
+    // logger.info(
+    //   `Archival job completed | backupJobId:${backupJobId} hasAnyFailure:${hasAnyFailure} hasAnySuccess:${hasAnySuccess} finalStatus:${finalStatus}`
+    // );
+
+    // return hasAnyFailure ? 'PARTIAL_FAILURE' : 'SUCCESS';
   },
   runRestore: async (
     restoreId: string,

@@ -1,4 +1,4 @@
-﻿const NODE_ENV =  String(process.env.NODE_ENV);
+﻿const NODE_ENV = String(process.env.NODE_ENV);
 const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 const NODE_ENV_URL = String(process.env.NODE_ENV_URL);
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
@@ -10,7 +10,6 @@ const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
 const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT; // optional: for DynamoDB Local
 const USER_TABLE = `${NODE_ENV_PREFIX}-${process.env.USER_TABLE || 'data-vault-users'}`;
-const OTP_TABLE = `${NODE_ENV_PREFIX}-${process.env.OTP_TABLE || 'data-vault-otps'}`;
 const SESSION_TABLE = `${NODE_ENV_PREFIX}-${process.env.SESSION_TABLE || 'data-vault-sessions'}`;
 const ROLE_TABLE = `${NODE_ENV_PREFIX}-${process.env.ROLE_TABLE || 'data-vault-roles'}`;
 const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters'}`;
@@ -73,7 +72,7 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
-const SPACE_TABLE = `${NODE_ENV_PREFIX}-${process.env.SPACE_TABLE || 'data-vault-spaces'}`;
+const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 
 // S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
@@ -135,7 +134,7 @@ const FILTER_OPERATOR = {
 };
 
 const STATUS = {
-   draft: 'DRAFT',
+  draft: 'DRAFT',
   paused: 'PAUSED',
   resumed: 'RESUMED',
   active: 'ACTIVE',
@@ -203,28 +202,32 @@ const GENDER = {
   female: 'FEMALE',
   other: 'OTHER',
 };
-const OTP_TYPE = {
-  forgotPassword: 'FORGOT-PASSWORD',
-  signup: 'SIGNUP',
-  login: 'LOGIN',
-  updateContact: 'UPDATE-CONTACT',
-};
-const OTP_STATUS = {
-  pending: 'PENDING',
-  verified: 'VERIFIED',
-};
-const OTP_FOR = {
-  user: 'USER',
-  admin: 'ADMIN',
-};
-const OTP_CHANNEL = {
-  email: 'EMAIL',
-  mobile: 'MOBILE',
-};
 const SESSION_STATUS = {
   active: 'ACTIVE',
   revoked: 'REVOKED',
 };
+
+const STANDARD_OBJECT_LIST = [
+  'Account',
+  'Contact',
+  'Lead',
+  'Opportunity',
+  'Case',
+  'WorkOrder',
+  'Asset',
+  'Contract',
+  'Product2',
+  'Pricebook2',
+  'Asset',
+  'OpportunityLineItem',
+  'Quote',
+  'QuoteLineItem',
+  'Order',
+  'OrderItem',
+  'PricebookEntry',
+  'Task',
+  'EmailMessage'
+];
 
 export {
   NODE_ENV,
@@ -238,7 +241,6 @@ export {
   AWS_SECRET_ACCESS_KEY,
   DYNAMODB_ENDPOINT,
   USER_TABLE,
-  OTP_TABLE,
   SESSION_TABLE,
   ROLE_TABLE,
   TABLE_COUNTER_TABLE,
@@ -291,7 +293,7 @@ export {
   // Services
   BACKUP_SERVICE,
   BACKUP_JOB_TABLE,
-  SPACE_TABLE,
+  SETTINGS_TABLE,
   AWS_S3_LOGS_BUCKET,
 
   // Enums
@@ -299,11 +301,7 @@ export {
   AUTH_PROVIDER,
   LANGUAGE,
   GENDER,
-  OTP_TYPE,
-  OTP_STATUS,
   DATASET,
-  OTP_FOR,
-  OTP_CHANNEL,
   SESSION_STATUS,
   SCHEDULE_MODE,
   SCHEDULE_TYPE,
@@ -319,4 +317,5 @@ export {
   OBJECT_TYPE,
   BACKUP_TYPE,
   ENVIRONMENT_TYPE,
+  STANDARD_OBJECT_LIST
 };

@@ -69,6 +69,8 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
     return;
   }
 
+  console.log('RECORDS ==> ' + JSON.stringify(decryptedBody));
+
   const backupConfigs = await getBackupConfigsByCrm(crm.crmId);
   const realtimeConfigs = backupConfigs.filter((c) => c.schedule === SCHEDULE_MODE.realtime);
   if (!realtimeConfigs.length) {
@@ -99,11 +101,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
      *   and only the service that needs them (backup-service) has to decrypt at runtime.
      *   client-service decrypts here only long enough to relay to backup-service over
      *   an internal network call (not exposed externally).
-     *
-     * WHY spaceId is forwarded conditionally:
-     *   spaceId is optional — not all backup configs belong to a named space. Spreading
-     *   it conditionally avoids writing a null/undefined field on the job record in
-     *   DynamoDB, which would waste storage and complicate query filters.
      */
     await httpRequest({
       url: `${BACKUP_SERVICE}/v1/realtime-backup`,
@@ -119,7 +116,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
           config: getDecryptedDestinationConfig(destination),
         },
         realtimePayload: decryptedBody,
-        ...(config.spaceId && { spaceId: config.spaceId }),
       }),
     });
 

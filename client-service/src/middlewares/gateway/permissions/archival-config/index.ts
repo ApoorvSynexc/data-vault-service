@@ -59,6 +59,11 @@ const archivalConfigPermissions = [
         method: 'GET',
         permissions: ['archival.read']
     },
+    {
+        path : '/archival-config/record-errors',
+        method : 'GET',
+        permissions : ['archival.read']
+    },
 ];
 
 export { archivalConfigPermissions };

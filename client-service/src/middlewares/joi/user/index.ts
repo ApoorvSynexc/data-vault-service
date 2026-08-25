@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { AUTH_PROVIDER, GENDER } from '../../../constant';
 import { makeResponse } from '../../../lib';
-import { phoneJoiSchema, passwordJoiSchema } from '../shared';
+import { passwordJoiSchema } from '../shared';
 
 export const changePasswordValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
@@ -26,11 +26,8 @@ export const signupValidation = (req: Request, res: Response, next: NextFunction
       email: Joi.string()
         .trim()
         .email({ tlds: { allow: false } })
-        .optional(),
-      mobile: phoneJoiSchema.optional(),
-    })
-      .or('email', 'mobile')
-      .required(),
+        .required(),
+    }).required(),
     password: passwordJoiSchema,
     authProvider: Joi.string()
       .valid(...Object.values(AUTH_PROVIDER))
@@ -53,10 +50,9 @@ export const loginValidation = (req: Request, res: Response, next: NextFunction)
     email: Joi.string()
       .trim()
       .email({ tlds: { allow: false } })
-      .optional(),
-    mobile: phoneJoiSchema.optional(),
+      .required(),
     password: Joi.string().required(),
-  }).or('email', 'mobile');
+  });
 
   const { error } = schema.validate(req.body);
   if (error) {

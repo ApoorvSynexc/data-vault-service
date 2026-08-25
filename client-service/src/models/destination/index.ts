@@ -15,7 +15,6 @@ export interface IDestination {
   ciphertext: string; // encrypted credentials
   iv: string;
   status: string;
-  spaceId?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -10,6 +10,7 @@ export * from './crm-meatadata';
 export * from './internal';
 export * from './public';
 export * from './salesforce';
+export * from './settings';
 export * from './spark-job';
 export * from './storage';
 export * from './user';

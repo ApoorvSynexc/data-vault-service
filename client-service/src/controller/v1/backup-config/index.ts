@@ -356,7 +356,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       await triggerBackupJob({ user, config: updated, type: 'backup' });
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
-    // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+     await updateAwsEventSchedule(buildEventScheduleInput(updated!));
   } else if (updated?.schedule === SCHEDULE_MODE.realtime && !updated.lastBackupAt) {
     await triggerBackupJob({ user, config: updated, type: 'backup' });
     const triggerResults = await realTimeTriggerManagement('create', updated);
@@ -403,9 +403,13 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
           crm.environment
         );
       }
-      // const triggerResults = await realTimeTriggerManagement('delete', config);
+      // Deleted before the config row itself: this is the last point the config
+      // (and its triggerResults) is still around, and running it here — awaited,
+      // pre-response — means it actually executes as part of the request instead
+      // of racing a response that's already gone out.
+      //await realTimeTriggerManagement('delete', config);
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
-      // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
+      await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
     }
 
     await Promise.all([
@@ -414,10 +418,6 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     ]);
 
     makeResponse(req, res, 200, true, 'delete');
-    if (config.schedule === SCHEDULE_MODE.realtime) {
-      const triggerResults = await realTimeTriggerManagement('delete', config);
-      console.log('Trigger has been deleted successfully, trir length:', triggerResults.length);
-    }
   } catch (error) {
     throw error;
   }

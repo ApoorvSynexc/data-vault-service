@@ -18,7 +18,9 @@ export const salesforceMetadataHandler = async (
   params: ISalesforceMetadataHandler,
   salesforceContext?: ISalesforceContext
 ) => {
-  const { metadataType, backupConfigId, backupJobId, objectNames, objectName } = params;
+  const { metadataType, backupConfig, backupJobId, objectNames, object } = params;
+  const backupConfigId = backupConfig.backupConfigId;
+  const objectName = object.name;
   try {
     logger.info(
       `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
@@ -34,7 +36,6 @@ export const salesforceMetadataHandler = async (
       objectName
     );
 
-
     switch (metadataType) {
       case 'fields': {
         const fields = describedObject.fields;
@@ -42,7 +43,12 @@ export const salesforceMetadataHandler = async (
         return { diff, metadataType, fields };
       }
       case 'childs': {
-        const children = describedObject.childRelationships.filter(ch => objectNames.includes(ch.childSObject));
+        let children = describedObject.childRelationships;
+        if (objectNames) {
+          children = describedObject.childRelationships.filter((ch) =>
+            objectNames.includes(ch.childSObject)
+          );
+        }
         const diff = await childHandler(params, children);
         return { diff, metadataType };
       }
@@ -109,6 +115,83 @@ export const salesforceObjectList = async (
     tokens
   );
   return result?.sobjects ?? [];
+};
+
+export const salesforceObjectFilteredList = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  apexMode?: string,
+  apexType?: string
+): Promise<ISalesforceObjectResponse[]> => {
+  const excludeObjectSuffix = [
+    '__x',
+    '__hd',
+    '__mdt',
+    '__share',
+    '__history',
+    '__feed',
+    '__tag',
+    '__tagset',
+    '__comment',
+    '__changeevent',
+    '__e',
+    '__et',
+    'share',
+    'history',
+    'feed',
+    'tag',
+    'tagset',
+    'comment',
+    'changeevent',
+    'e',
+    'et',
+  ];
+  const STANDARD_OBJECT_LIST = [
+    'Account',
+    'Contact',
+    'Lead',
+    'Opportunity',
+    'Case',
+    'WorkOrder',
+    'Asset',
+    'Contract',
+    'Product2',
+    'Pricebook2',
+    'Asset',
+    'OpportunityLineItem',
+    'Quote',
+    'QuoteLineItem',
+    'Order',
+    'OrderItem',
+    'PricebookEntry',
+    'Task',
+    'EmailMessage',
+  ];
+
+  const objectsList = await salesforceObjectList(instanceUrl, tokens);
+  let filteredObjects = objectsList.filter(
+    (obj) =>
+      obj.deprecatedAndHidden === false &&
+      obj.customSetting === false &&
+      obj.retrieveable === true &&
+      obj.replicateable === true &&
+      obj.keyPrefix !== null &&
+      obj.queryable === true &&
+      ((obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name)) || obj.custom === true) &&
+      !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+  );
+
+  if (apexMode === 'backup' && apexType === 'realtime') {
+    filteredObjects = filteredObjects.filter((obj) => obj.triggerable === true);
+  } else if (apexMode === 'archival') {
+    filteredObjects = filteredObjects.filter((obj) => obj.deletable === true);
+  } else if (apexMode === 'restore') {
+    filteredObjects = filteredObjects.filter(
+      (obj) => obj.createable === true && obj.updateable === true
+    );
+  }
+
+  return filteredObjects;
 };
 
 interface ISalesforceObjectCountResponse {

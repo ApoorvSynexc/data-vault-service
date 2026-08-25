@@ -97,8 +97,12 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
   const children = objectDescription.childRelationships
-    .filter((child) => filteredObjectNames.includes(child.childSObject) && child.childSObject !== objectName && child.cascadeDelete)
-    .map((child) => ({ name: child.childSObject }));
+    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && (filteredObjectNames.includes(child.childSObject) && child.cascadeDelete))))
+    .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
+
+  const fields = objectDescription.fields
+    .filter((field) => field.type === 'reference')
+    .map((field) => ({ label: field.label, referenceTo: field.referenceTo, name: field.name, nillable: field.nillable, cascadeDelete: field.cascadeDelete }));
 
   // const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
   // const parent: { [key: string]: string | boolean }[] = [];
@@ -109,7 +113,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   //     }
   //   })
   // })
-  return makeResponse(req, res, 200, true, 'fetch', { children });
+  return makeResponse(req, res, 200, true, 'fetch', { children, fields });
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
@@ -130,11 +134,9 @@ const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
   return makeResponse(req, res, 200, true, 'fetch', masterObjects);
 }
 
-const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
-  const user = req.user!;
-  // Field metadata is mode-only — schedule vs realtime does not change the fields.
-  const { crmId, objectName, mode } = req.query;
-  const apexMode = toApexMode(mode) ?? 'backup';
+const getSalesforceFields = async (req: IRequest, res: IResponse) => {
+  let user = req.user!;
+  const { crmId, objectName, filterable } = req.query;
 
   if (!user.contactEmail) {
     return makeResponse(req, res, 400, false, 'unauthorized');
@@ -151,20 +153,24 @@ const getsalesfrocefields = async (req: IRequest, res: IResponse) => {
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    const objects = await getApexFields({ user: crmUser, objectName: String(objectName), mode: apexMode })
-    const result = objects?.data ? objects.data : [];
-    return makeResponse(req, res, 200, true, 'fetch', result);
+    user = crmUser;
   }
 
-  const objects = await getApexFields({ user, objectName: String(objectName), mode: apexMode })
-  const result = objects?.data ? objects.data : [];
-  return makeResponse(req, res, 200, true, 'fetch', result);
+  const describedObjects = await salesforceObjectDescribe({ user, objectName: String(objectName) });
+  if (!describedObjects) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const fields = describedObjects.fields
+    .filter((field) => (filterable === 'true') ? field.filterable : true)
+
+  return makeResponse(req, res, 200, true, 'fetch', fields);
 }
 
 export const crmMetadataController = wrapController({
   getSalesforceObjectSchema,
   getsalesfroceObjects,
-  getsalesfrocefields,
+  getSalesforceFields,
   getSalesforceMasterObjects,
   getSalesforceDescribeObject
 });
