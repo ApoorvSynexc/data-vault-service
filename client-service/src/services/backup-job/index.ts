@@ -108,7 +108,6 @@ const triggerArchivalBackupJob = async (params: {
       config: getDecryptedDestinationConfig(destination),
     },
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
-    ...(config.spaceId && { spaceId: config.spaceId }),
   };
 
   const endpoint = '/archival';
@@ -181,7 +180,6 @@ const triggerBackupJob = async (params: {
       config: getDecryptedDestinationConfig(destination),
     },
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
-    ...(config.spaceId && { spaceId: config.spaceId }),
     ...(schemaSync ? { schemaSync: true } : {}),
   };
 

@@ -87,7 +87,7 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
         TableName: USER_TABLE,
         IndexName: 'email-index',
         KeyConditionExpression: 'contactEmail = :email',
-        ProjectionExpression: 'userId, contactEmail, contactMobileKey, firstName, lastName, gender, #status, spaceId, createdAt, updatedAt',
+        ProjectionExpression: 'userId, contactEmail, contactMobileKey, firstName, lastName, gender, #status, createdAt, updatedAt',
         ExpressionAttributeValues: {
           ':email': search['contact.email'],
           ...statusFilter?.ExpressionAttributeValues,
@@ -111,7 +111,7 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
         TableName: USER_TABLE,
         IndexName: 'mobile-index',
         KeyConditionExpression: 'contactMobileKey = :mobileKey',
-        ProjectionExpression: 'userId, contactEmail, contactMobileKey, firstName, lastName, gender, #status, spaceId, createdAt, updatedAt',
+        ProjectionExpression: 'userId, contactEmail, contactMobileKey, firstName, lastName, gender, #status, createdAt, updatedAt',
         ExpressionAttributeValues: {
           ':mobileKey': mobileKey,
           ...statusFilter?.ExpressionAttributeValues,

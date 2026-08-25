@@ -29,12 +29,11 @@ Every table: **`PAY_PER_REQUEST`** billing, every GSI: **`Projection: ALL`**.
 | `data-vault-counters` | `namespace` | `key` | — | — |
 | `data-vault-oauth-states` | `state` | — | — | **`ttl`** |
 | `data-vault-crms` | `crmId` | — | `organizationId-index` (organizationId) | — |
-| `data-vault-backup-configs` | `backupConfigId` | — | `userId-index` (userId / sizeInBytes), `spaceId-index` (spaceId / sizeInBytes), `crmId-index` (crmId / createdAt), `crmId-sizeInBytes-index` (crmId / sizeInBytes) | — |
-| `data-vault-destinations` | `destinationId` | — | `userId-index` (userId), `spaceId-index` (spaceId) | — |
+| `data-vault-backup-configs` | `backupConfigId` | — | `userId-index` (userId / sizeInBytes), `crmId-index` (crmId / createdAt), `crmId-sizeInBytes-index` (crmId / sizeInBytes) | — |
+| `data-vault-destinations` | `destinationId` | — | `userId-index` (userId) | — |
 | `data-vault-restores` | `restoreId` | — | `userId-index` (userId / createdAt), `crmId-index` (crmId / createdAt) | — |
 | `data-vault-restore-jobs` | `restoreJobId` | — | `userId-index` (userId / createdAt), `restoreId-index` (restoreId / createdAt) | — |
-| `data-vault-backup-jobs` | `backupJobId` | — | `userId-index`, `backupConfigId-index`, `spaceId-index`, `crmId-index` (all × `createdAt`) | — |
-| `data-vault-spaces` | `spaceId` | — | — | — |
+| `data-vault-backup-jobs` | `backupJobId` | — | `userId-index`, `backupConfigId-index`, `crmId-index` (all × `createdAt`) | — |
 
 All key attributes are type `S` (string) except `sizeInBytes`, which is `N`.
 

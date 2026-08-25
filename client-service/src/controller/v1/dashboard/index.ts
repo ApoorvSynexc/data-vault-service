@@ -23,23 +23,13 @@ const formatRecords = (count: number): string => {
 };
 
 const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const spaceId = req.user?.spaceId;
   const userId = req.user!.userId;
-  let indexName = 'userId-index';
-  let keyName = 'userId';
-  let keyValue = userId;
-
-  if (spaceId) {
-    indexName = 'spaceId-index';
-    keyName = 'spaceId';
-    keyValue = spaceId;
-  }
 
   try {
     const stats = await computeJobStats({
-      indexName,
-      keyName,
-      keyValue
+      indexName: 'userId-index',
+      keyName: 'userId',
+      keyValue: userId
     });
 
     const totalJobs = stats.completedJobs.count + stats.failedJobs.count;

@@ -18,7 +18,6 @@ import {
   getSalesforceToken,
   getUser,
   upsertCrm,
-  createSpace,
   updateUser,
   SalesforceEnvironment,
   SalesforceTokens,
@@ -325,7 +324,7 @@ const socialLoginCallbackHandler = async (
 
   const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
-  const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
+  const tokens = generateTokens(user.userId, session.sessionId);
 
   // Set cookies
   res.cookie('accessToken', tokens.accessToken, {

@@ -21,7 +21,6 @@ import {
   ROLE_TABLE,
   SESSION_TABLE,
   USER_TABLE,
-  SPACE_TABLE,
   SETTINGS_TABLE,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
@@ -62,7 +61,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
       { AttributeName: 'userId', AttributeType: 'S' },
       { AttributeName: 'backupConfigId', AttributeType: 'S' },
       { AttributeName: 'createdAt', AttributeType: 'S' },
-      { AttributeName: 'spaceId', AttributeType: 'S' },
       { AttributeName: 'crmId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'backupJobId', KeyType: 'HASH' }],
@@ -84,14 +82,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         Projection: { ProjectionType: 'ALL' },
       },
       {
-        IndexName: 'spaceId-index',
-        KeySchema: [
-          { AttributeName: 'spaceId', KeyType: 'HASH' },
-          { AttributeName: 'createdAt', KeyType: 'RANGE' },
-        ],
-        Projection: { ProjectionType: 'ALL' },
-      },
-      {
         IndexName: 'crmId-index',
         KeySchema: [
           { AttributeName: 'crmId', KeyType: 'HASH' },
@@ -107,18 +97,12 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     AttributeDefinitions: [
       { AttributeName: 'destinationId', AttributeType: 'S' },
       { AttributeName: 'userId', AttributeType: 'S' },
-      { AttributeName: 'spaceId', AttributeType: 'S' },
     ],
     KeySchema: [{ AttributeName: 'destinationId', KeyType: 'HASH' }],
     GlobalSecondaryIndexes: [
       {
         IndexName: 'userId-index',
         KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
-        Projection: { ProjectionType: 'ALL' },
-      },
-      {
-        IndexName: 'spaceId-index',
-        KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],
@@ -129,7 +113,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     AttributeDefinitions: [
       { AttributeName: 'backupConfigId', AttributeType: 'S' },
       { AttributeName: 'userId', AttributeType: 'S' },
-      { AttributeName: 'spaceId', AttributeType: 'S' },
       { AttributeName: 'crmId', AttributeType: 'S' },
       { AttributeName: 'sizeInBytes', AttributeType: 'N' },
       { AttributeName: 'createdAt', AttributeType: 'S' },
@@ -140,14 +123,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         IndexName: 'userId-index',
         KeySchema: [
           { AttributeName: 'userId', KeyType: 'HASH' },
-          { AttributeName: 'sizeInBytes', KeyType: 'RANGE' },
-        ],
-        Projection: { ProjectionType: 'ALL' },
-      },
-      {
-        IndexName: 'spaceId-index',
-        KeySchema: [
-          { AttributeName: 'spaceId', KeyType: 'HASH' },
           { AttributeName: 'sizeInBytes', KeyType: 'RANGE' },
         ],
         Projection: { ProjectionType: 'ALL' },
@@ -250,29 +225,29 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
     AttributeDefinitions: [{ AttributeName: 'state', AttributeType: 'S' }],
     KeySchema: [{ AttributeName: 'state', KeyType: 'HASH' }],
   },
-  {
-    TableName: OTP_TABLE,
-    BillingMode: 'PAY_PER_REQUEST',
-    AttributeDefinitions: [
-      { AttributeName: 'otpId', AttributeType: 'S' },
-      { AttributeName: 'createdAt', AttributeType: 'S' },
-      { AttributeName: 'contactOtpKey', AttributeType: 'S' },
-    ],
-    KeySchema: [
-      { AttributeName: 'otpId', KeyType: 'HASH' },
-      { AttributeName: 'createdAt', KeyType: 'RANGE' },
-    ],
-    GlobalSecondaryIndexes: [
-      {
-        IndexName: 'contact-otptype-index',
-        KeySchema: [
-          { AttributeName: 'contactOtpKey', KeyType: 'HASH' },
-          { AttributeName: 'createdAt', KeyType: 'RANGE' },
-        ],
-        Projection: { ProjectionType: 'ALL' },
-      },
-    ],
-  },
+  // {
+  //   TableName: OTP_TABLE,
+  //   BillingMode: 'PAY_PER_REQUEST',
+  //   AttributeDefinitions: [
+  //     { AttributeName: 'otpId', AttributeType: 'S' },
+  //     { AttributeName: 'createdAt', AttributeType: 'S' },
+  //     { AttributeName: 'contactOtpKey', AttributeType: 'S' },
+  //   ],
+  //   KeySchema: [
+  //     { AttributeName: 'otpId', KeyType: 'HASH' },
+  //     { AttributeName: 'createdAt', KeyType: 'RANGE' },
+  //   ],
+  //   GlobalSecondaryIndexes: [
+  //     {
+  //       IndexName: 'contact-otptype-index',
+  //       KeySchema: [
+  //         { AttributeName: 'contactOtpKey', KeyType: 'HASH' },
+  //         { AttributeName: 'createdAt', KeyType: 'RANGE' },
+  //       ],
+  //       Projection: { ProjectionType: 'ALL' },
+  //     },
+  //   ],
+  // },
   {
     TableName: SESSION_TABLE,
     BillingMode: 'PAY_PER_REQUEST',
@@ -368,12 +343,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         Projection: { ProjectionType: 'ALL' },
       },
     ],
-  },
-  {
-    TableName: SPACE_TABLE,
-    BillingMode: 'PAY_PER_REQUEST',
-    AttributeDefinitions: [{ AttributeName: 'spaceId', AttributeType: 'S' }],
-    KeySchema: [{ AttributeName: 'spaceId', KeyType: 'HASH' }],
   },
   {
     TableName: SETTINGS_TABLE,

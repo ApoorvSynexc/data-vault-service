@@ -12,13 +12,11 @@ interface CreateBackupJobParams {
   source: ISource & { object?: IBackupObject[] };
   destination: { type: string; config: IDestinationConfig };
   lastUpdatedAt?: string;
-  spaceId?: string;
   schemaSync?: boolean;
 }
 
 const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination, lastUpdatedAt, spaceId, schemaSync } =
-    params;
+  const { userId, backupConfigId, source, destination, lastUpdatedAt, schemaSync } = params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
   // Minted up front so child schema written during expansion lands in this job's changes/.
@@ -53,7 +51,6 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     ...(allObjects?.length ? { object: allObjects } : {}),
     status: JOB_STATUS.pending,
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
-    ...(spaceId && { spaceId }),
     ...(schemaSync ? { schemaSync: true } : {}),
     createdAt: now,
     updatedAt: now,
@@ -72,7 +69,6 @@ interface CreateArchivalJobParams {
   backupConfigId: string;
   source: ISource & { object?: IBackupObject[] };
   destination: { type: string; config: IDestinationConfig };
-  spaceId?: string;
 }
 
 const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
@@ -88,7 +84,7 @@ const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
 };
 
 const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination, spaceId } = params;
+  const { userId, backupConfigId, source, destination } = params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
@@ -107,7 +103,6 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
     destination: { type: destination.type, ...encryptedDestConfig },
     ...(trackedObjects?.length ? { object: trackedObjects } : {}),
     status: JOB_STATUS.pending,
-    ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
   };

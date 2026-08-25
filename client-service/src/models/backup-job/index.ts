@@ -46,7 +46,6 @@ export interface IBackupJob {
   errorMessage?: string;
   recordCount?: number;
   sizeInBytes?: number;
-  spaceId?: string;
   createdAt: string;
   updatedAt: string;
 
