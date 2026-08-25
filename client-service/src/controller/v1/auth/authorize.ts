@@ -11,7 +11,7 @@ import {
   getSalesforceLoginUrl,
 } from '../../../services';
 import { decrypt, encrypt, generateOrgEncryptionKey, readEnvelope } from '../../../utils/encryption';
-import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
+import { encryptSalesforceResponse, resolveOrgKey } from '../../../utils/salesforce-crypto';
 import { STATUS, SALESFORCE_LOGIN_REDIRECT_URI } from '../../../constant';
 
 interface IAuthorizeOrganizationPayload {
@@ -89,22 +89,29 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
   }
 
   let crm = await getCrmByOrgId(orgId);
+  let rawEncryptionKey: string;
 
   if (!crm) {
-    const encryptionKey = generateOrgEncryptionKey();
+    rawEncryptionKey = generateOrgEncryptionKey();
     crm = await upsertCrm({
       crmId: uuidv4(),
       organizationId: orgId,
       crmName: 'salesforce',
       instanceUrl,
-      encryptionKey,
+      encryptionKey: encrypt(rawEncryptionKey), // encrypted at rest with the master key, like crmCredential
       status: STATUS.notAuthorized,
     });
-  } else if (crm.instanceUrl !== instanceUrl) {
-    crm = (await updateCrm(crm.crmId, { instanceUrl })) ?? crm;
+  } else {
+    if (crm.instanceUrl !== instanceUrl) {
+      crm = (await updateCrm(crm.crmId, { instanceUrl })) ?? crm;
+    }
+    if (!crm.encryptionKey) {
+      throw new Error('org_missing_encryption_key');
+    }
+    rawEncryptionKey = resolveOrgKey(crm.encryptionKey);
   }
 
-  return { encryptionKey: crm.encryptionKey };
+  return { encryptionKey: rawEncryptionKey };
 };
 
 const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise<{authorizationUrl: string}> => {

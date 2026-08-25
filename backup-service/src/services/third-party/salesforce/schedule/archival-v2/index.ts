@@ -12,6 +12,7 @@ import {
   buildS3KeyPrefix,
   formatFieldValuesForSOQL,
   formatValueByDataType,
+  withRequiredBulkFields,
 } from '../../../../../utils/helper';
 import { updateArchivalConfigObject } from '../../../../backup-config';
 import { updateArchivalObject } from '../../../../backup-job';
@@ -220,10 +221,11 @@ const archiveObject = async (payload: IArchiveObject) => {
       },
       { instanceUrl, tokens }
     );
-    const allFieldNames =
+    const allFieldNames = withRequiredBulkFields(
       fieldsMetadata?.metadataType === 'fields'
         ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
-        : [];
+        : []
+    );
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;

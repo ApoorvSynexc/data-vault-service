@@ -19,7 +19,7 @@ interface UpsertCrmParams {
   name?: string;
   status?: string;
   instanceUrl?: string;
-  encryptionKey?: string;
+  encryptionKey?: string | { ciphertext: string; iv: string };
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {

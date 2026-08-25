@@ -2,7 +2,7 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
-import { buildS3KeyPrefix } from '../../../../../utils/helper';
+import { buildS3KeyPrefix, withRequiredBulkFields } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
 import { updateBackupConfigObject } from '../../../../backup-config';
@@ -132,10 +132,11 @@ export const exportFirstTime = async (
       },
       { instanceUrl, tokens }
     );
-    const allFieldNames =
+    const allFieldNames = withRequiredBulkFields(
       fieldsMetadata?.metadataType === 'fields'
         ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
-        : [];
+        : []
+    );
     await salesforceMetadataHandler(
       {
         metadataType: 'picklist',
@@ -350,10 +351,11 @@ export const exportIncremental = async (
       },
       { instanceUrl, tokens }
     );
-    const allFieldNames =
+    const allFieldNames = withRequiredBulkFields(
       fieldsMetadata?.metadataType === 'fields'
         ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
-        : [];
+        : []
+    );
     // await uploadPicklistValues({
     //   schema: latestSchema,
     //   destConfig,
@@ -386,10 +388,9 @@ export const exportIncremental = async (
         status: OBJECT_STATUS.bulkQueryInProgress,
       });
 
-      // IsDeleted, CreatedDate, LastModifiedDate required for classify/delete split
-      const fieldsWithMeta = Array.from(
-        new Set([...allFieldNames, 'IsDeleted', 'CreatedDate', 'LastModifiedDate'])
-      );
+      // IsDeleted required for classify/delete split (CreatedDate/LastModifiedDate/
+      // SystemModstamp are already in allFieldNames via withRequiredBulkFields)
+      const fieldsWithMeta = Array.from(new Set([...allFieldNames, 'IsDeleted']));
 
       const userWhere = buildWhereClause(object);
       const dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;

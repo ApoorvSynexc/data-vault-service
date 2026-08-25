@@ -8,7 +8,10 @@ export interface ICrm {
   environment?: 'production' | 'sandbox';
   status: string;
   instanceUrl?: string; // Salesforce instance URL, set via the configure-org flow
-  encryptionKey?: string; // base64-encoded per-org AES-256 key, set via the configure-org flow
+  // Per-org AES-256 key, set via the configure-org flow, encrypted at rest with the
+  // master ENCRYPTION_KEY (same treatment as crmCredential). `string` accepted for
+  // legacy rows written before this was encrypted — see resolveOrgKey() in salesforce-crypto.ts.
+  encryptionKey?: string | { ciphertext: string; iv: string };
   updatedAt: string;
   createdAt: string;
   
