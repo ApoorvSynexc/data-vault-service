@@ -24,7 +24,6 @@ interface UpsertRealtimeBackupJobParams {
   objectApiName: string;
   operation: string;
   transactionId: string;
-  spaceId?: string;
 }
 
 /**
@@ -139,7 +138,6 @@ const createRealtimeJob = async (params: UpsertRealtimeBackupJobParams): Promise
     objectApiName,
     operation,
     transactionId,
-    spaceId,
   } = params;
 
   const now = new Date().toISOString();
@@ -163,7 +161,6 @@ const createRealtimeJob = async (params: UpsertRealtimeBackupJobParams): Promise
     startedAt: now,
     createdAt: now,
     updatedAt: now,
-    ...(spaceId && { spaceId }),
   };
 
   await docClient.send(

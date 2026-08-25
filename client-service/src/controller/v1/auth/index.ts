@@ -182,7 +182,7 @@ const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
 
     const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
     const session = await createSession(user.userId, ttlSeconds, deviceInfo);
-    const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
+    const tokens = generateTokens(user.userId, session.sessionId);
 
     res.cookie('accessToken', tokens.accessToken, {
       ...baseCookieOptions,
@@ -233,7 +233,7 @@ const loginHandler = async (req: IRequest, res: IResponse) => {
   const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
 
-  const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
+  const tokens = generateTokens(user.userId, session.sessionId);
 
   res.cookie('accessToken', tokens.accessToken, {
     ...baseCookieOptions,
@@ -268,7 +268,7 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
 
   await updateSession(session.sessionId, { lastAccessedAt: new Date().toISOString() });
 
-  const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
+  const tokens = generateTokens(user.userId, session.sessionId);
 
   res.cookie('accessToken', tokens.accessToken, {
     ...baseCookieOptions,

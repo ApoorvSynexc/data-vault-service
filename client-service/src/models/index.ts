@@ -11,5 +11,4 @@ export * from './role';
 export * from './session';
 export * from './settings';
 export * from './shared';
-export * from './space';
 export * from './user';

@@ -73,7 +73,6 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
-const SPACE_TABLE = `${NODE_ENV_PREFIX}-${process.env.SPACE_TABLE || 'data-vault-spaces'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 
 // S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
@@ -314,7 +313,6 @@ export {
   // Services
   BACKUP_SERVICE,
   BACKUP_JOB_TABLE,
-  SPACE_TABLE,
   SETTINGS_TABLE,
   AWS_S3_LOGS_BUCKET,
 

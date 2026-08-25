@@ -80,21 +80,6 @@ const getCrmById = async (crmId: string): Promise<ICrm | null> => {
   return (result.Item as ICrm) ?? null;
 };
 
-const getCrmsBySpace = async (spaceId: string): Promise<ICrm[]> => {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: CRM_TABLE,
-      IndexName: 'spaceId-index',
-      KeyConditionExpression: 'spaceId = :spaceId',
-      ProjectionExpression: 'crmId, organizationId, crmName, slug, #name, environment, #status, createdAt, updatedAt',
-      ExpressionAttributeNames: { '#name': 'name', '#status': 'status' },
-      ExpressionAttributeValues: { ':spaceId': spaceId },
-    })
-  );
-
-  return (result.Items as ICrm[] | undefined) ?? [];
-};
-
 const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
   const existing = await getCrmById(crmId);
 
@@ -262,7 +247,6 @@ export {
   reconnectCrm,
   getCrmById,
   getCrmByOrgId,
-  getCrmsBySpace,
   disconnectCrm,
   deleteCrm,
   updateCrm,

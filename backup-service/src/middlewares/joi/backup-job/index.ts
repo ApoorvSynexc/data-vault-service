@@ -68,7 +68,6 @@ export const createBackupJobValidation = (req: Request, res: Response, next: Nex
     source: sourceSchema.required(),
     destination: destinationSchema.required(),
     lastUpdatedAt: Joi.string().isoDate().optional(),
-    spaceId: Joi.string().optional(),
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });

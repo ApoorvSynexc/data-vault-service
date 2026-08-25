@@ -40,7 +40,6 @@ export interface IBackupConfig {
   completedRecordCount?: number;
   successRecordCount?: number;
   triggerResults?: ITriggerResult[];
-  spaceId?: string;
   crm?: any;
   destination?: any;
   createdAt: string;
