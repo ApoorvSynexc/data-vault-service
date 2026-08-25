@@ -69,7 +69,7 @@ const getBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void>
   }
 
   const job = await getBackupJobById(String(backupJobId));
-  if (!isOwner(job, req.user!.userId)) {
+  if (!isOwner(job, req.user!.userId, req.user!.crmId)) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
@@ -85,7 +85,7 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   }
 
   const job = await getBackupJobById(String(backupJobId));
-  if (!isOwner(job, req.user!.userId)) {
+  if (!isOwner(job, req.user!.userId, req.user!.crmId)) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }

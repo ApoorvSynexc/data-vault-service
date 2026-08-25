@@ -340,7 +340,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   const existing = await getBackupConfigById(String(backupConfigId));
-  if (!isOwner(existing, req.user!.userId)) {
+  if (!isOwner(existing, req.user!.userId, req.user!.crmId)) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }

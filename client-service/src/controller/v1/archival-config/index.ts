@@ -400,7 +400,7 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     const existing = await getBackupConfigById(String(backupConfigId));
-    if (existing && (!isOwner(existing, req.user!.userId) || existing.type !== 'ARCHIVAL')) {
+    if (existing && (!isOwner(existing, user!.userId, user!.crmId) || existing.type !== 'ARCHIVAL')) {
         makeResponse(req, res, 400, false, 'not_exist');
         return;
     }
