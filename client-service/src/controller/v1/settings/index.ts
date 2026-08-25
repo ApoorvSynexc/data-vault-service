@@ -4,7 +4,6 @@ import { wrapController } from '../../../utils/helper';
 
 const getSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
-  const crmId = req.user!.crmId || String(req.query.crmId);
 
   const settings = await getSettingsByUser(userId);
   makeResponse(req, res, 200, true, 'fetch', settings);
@@ -29,7 +28,6 @@ const upsertSettingsHandler = async (req: IRequest, res: IResponse): Promise<voi
 
 const deleteStandardObjectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
-  const crmId = req.user!.crmId || String(req.query.crmId);
   const { name } = req.query;
 
   if (!name) {
@@ -37,7 +35,7 @@ const deleteStandardObjectHandler = async (req: IRequest, res: IResponse): Promi
     return;
   }
 
-  const settings = await deleteStandardObject(userId, crmId, String(name));
+  const settings = await deleteStandardObject(userId, String(name));
   if (!settings) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
