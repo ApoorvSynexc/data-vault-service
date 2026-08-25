@@ -28,6 +28,21 @@ const getSettingsByUserAndCrm = async (userId: string, crmId?: string): Promise<
   return (result.Items?.[0] as ISettings) ?? null;
 };
 
+// Unlike getSettingsByUserAndCrm, this ignores crmId entirely — returns
+// whichever settings row exists for this user (single object, not a list).
+const getSettingsByUser = async (userId: string): Promise<ISettings | null> => {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: SETTINGS_TABLE,
+      IndexName: 'userId-index',
+      KeyConditionExpression: 'userId = :userId',
+      ExpressionAttributeValues: { ':userId': userId },
+      Limit: 1,
+    })
+  );
+  return (result.Items?.[0] as ISettings) ?? null;
+};
+
 const getSettingsById = async (settingId: string): Promise<ISettings | null> => {
   const result = await docClient.send(
     new GetCommand({
@@ -82,4 +97,4 @@ const deleteStandardObject = async (
   return upsertSettings({ userId, crmId, standardObjects });
 };
 
-export { upsertSettings, getSettingsByUserAndCrm, getSettingsById, deleteStandardObject };
+export { upsertSettings, getSettingsByUserAndCrm, getSettingsByUser, getSettingsById, deleteStandardObject };

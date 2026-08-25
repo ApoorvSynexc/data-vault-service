@@ -1,12 +1,12 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { deleteStandardObject, getSettingsByUserAndCrm, upsertSettings } from '../../../services';
+import { deleteStandardObject, getSettingsByUser, upsertSettings } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 
 const getSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
   const crmId = req.user!.crmId || String(req.query.crmId);
 
-  const settings = await getSettingsByUserAndCrm(userId, crmId);
+  const settings = await getSettingsByUser(userId);
   makeResponse(req, res, 200, true, 'fetch', settings);
 };
 
@@ -15,7 +15,7 @@ const upsertSettingsHandler = async (req: IRequest, res: IResponse): Promise<voi
   const { status } = req.body;
   let { standardObjects } = req.body;
 
-  const settings = await getSettingsByUserAndCrm(userId);
+  const settings = await getSettingsByUser(userId);
   const alreadyExistNames = settings?.standardObjects.map((s: any) => s.name);
 
   const filterObjects = standardObjects
