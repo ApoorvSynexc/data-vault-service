@@ -30,7 +30,8 @@ import {
     getDecryptedCrmCredential,
 } from "../../../services";
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
-import { dryRun, validateSoql } from "../../../services/third-party/salesforce/dry-run";
+import { validateSoql } from "../../../services/third-party/salesforce/dry-run";
+import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
@@ -335,10 +336,10 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 const dryRunArchivalHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user;
     try {
-        const result = await dryRun({...req.body, user});
+        const result = await dryRunV2({...req.body, user});
         makeResponse(req, res, 201, true, 'create', result);
     } catch (error) {
-        logger.error('Error creating backup config, Deleting backup config: ', error);
+        logger.error('Error running archival dry-run: ', error);
         throw error;
     }
 };
