@@ -66,6 +66,13 @@ const decryptWithBootstrap = (envelope: EncryptedPayload): string => {
   return decryptWithKey(envelope, SALESFORCE_BOOTSTRAP_KEY);
 };
 
+// crm.encryptionKey is stored encrypted at rest with the Bootstrap Key (same
+// value as client-service's master ENCRYPTION_KEY — see client-service's
+// resolveOrgKey()). Rows written before that change still hold the raw
+// base64 key as a plain string — pass those through unchanged.
+const resolveOrgKey = (stored: string | EncryptedPayload): string =>
+  typeof stored === 'string' ? stored : decryptWithBootstrap(stored);
+
 export interface DecryptedSalesforceRequest {
   orgId: string;
   crm: ICrm;
@@ -97,7 +104,7 @@ export const decryptSalesforceRequest = async (raw: any): Promise<DecryptedSales
   }
 
   const innerEnvelope = JSON.parse(innerEnvelopeRaw);
-  const plaintext = decryptWithKey(readEnvelope(innerEnvelope), crm.encryptionKey);
+  const plaintext = decryptWithKey(readEnvelope(innerEnvelope), resolveOrgKey(crm.encryptionKey));
 
   return { orgId: outer.orgId, crm, plaintext };
 };
