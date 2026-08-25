@@ -11,6 +11,7 @@ import {
   toApexMode,
   initalizePayloadTransform,
   getDecryptedCrmCredential,
+  updateUser,
 } from '../../../services';
 import { BACKUP_STATUS, STATUS } from '../../../constant';
 import {
@@ -18,6 +19,7 @@ import {
   SalesforceAuthExpiredError,
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
+import { encrypt } from '../../../utils/encryption';
 
 const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupConfigId, objectName, mode } = req.query;
@@ -128,6 +130,13 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
   } catch {
     throw new SalesforceAuthExpiredError();
   }
+
+  const crmCredential = {
+    access_token: refreshed.access_token,
+    refresh_token: refreshed.refresh_token || tokens.refresh_token,
+  }
+  const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+  await updateUser({ userId: user.userId }, { crmCredential: encrptedCrm });
 
   makeResponse(req, res, 200, true, 'update', refreshed);
 };

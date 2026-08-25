@@ -125,7 +125,7 @@ const salesforceRequest = async <T = any>(
     if (tokens.userId) {
       const crmCredential = {
         access_token: refreshed.access_token,
-        refresh_token: refreshed.refresh_token,
+        refresh_token: refreshed.refresh_token || tokens.refreshToken,
       }
       const encrptedCrm = encrypt(JSON.stringify(crmCredential));
       await updateUser({ userId: tokens.userId }, { crmCredential: encrptedCrm });

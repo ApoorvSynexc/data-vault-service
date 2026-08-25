@@ -2,12 +2,12 @@ import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { SETTINGS_TABLE, STATUS } from '../../constant';
-import { ISettings } from '../../models';
+import { ISettings, IStandardObject } from '../../models';
 
 interface UpsertSettingsParams {
   userId: string;
   crmId?: string;
-  standardObjects?: string[];
+  standardObjects?: IStandardObject[];
   status?: string;
 }
 
@@ -22,6 +22,21 @@ const getSettingsByUserAndCrm = async (userId: string, crmId?: string): Promise<
         ':userId': userId,
         ...(crmId !== undefined && { ':crmId': crmId }),
       },
+      Limit: 1,
+    })
+  );
+  return (result.Items?.[0] as ISettings) ?? null;
+};
+
+// Unlike getSettingsByUserAndCrm, this ignores crmId entirely — returns
+// whichever settings row exists for this user (single object, not a list).
+const getSettingsByUser = async (userId: string): Promise<ISettings | null> => {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: SETTINGS_TABLE,
+      IndexName: 'userId-index',
+      KeyConditionExpression: 'userId = :userId',
+      ExpressionAttributeValues: { ':userId': userId },
       Limit: 1,
     })
   );
@@ -68,4 +83,14 @@ const upsertSettings = async (params: UpsertSettingsParams): Promise<ISettings> 
   return settings;
 };
 
-export { upsertSettings, getSettingsByUserAndCrm, getSettingsById };
+const deleteStandardObject = async (userId: string, name: string): Promise<ISettings | null> => {
+  const existing = await getSettingsByUser(userId);
+  if (!existing) {
+    return null;
+  }
+
+  const standardObjects = existing.standardObjects.filter((s) => s.name !== name);
+  return upsertSettings({ userId, standardObjects });
+};
+
+export { upsertSettings, getSettingsByUserAndCrm, getSettingsByUser, getSettingsById, deleteStandardObject };

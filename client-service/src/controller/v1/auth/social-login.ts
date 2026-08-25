@@ -261,7 +261,7 @@ const socialLoginCallbackHandler = async (
       await upsertSettings({
         userId: user.userId,
         crmId: user.crmId,
-        standardObjects: STANDARD_OBJECT_LIST
+        standardObjects: STANDARD_OBJECT_LIST.map((name) => ({ name, isDefault: true }))
       });
     }
   }

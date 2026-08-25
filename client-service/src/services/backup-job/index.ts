@@ -12,6 +12,7 @@ import { incrementTableCounter } from '../counter';
 import { flattenBackupObjects } from '../../utils/helper';
 import { logger } from '../../middlewares';
 import { getDecryptedCrmCredential } from '../user';
+import { SalesforceAuthExpiredError } from '../third-party';
 
 const getSourceObjects = (objects?: IObject[]) => {
   if (objects?.length) {
@@ -163,7 +164,7 @@ const triggerBackupJob = async (params: {
 
   await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
   const credentials = getDecryptedCrmCredential(user);
-  if(!credentials) throw new Error('credentials_not_found');
+  if (!credentials) throw new SalesforceAuthExpiredError();
 
   // Master-Detail children are expanded (and persisted back onto the config) by
   // backup-service at job creation — see expandWithMasterChildren there.
