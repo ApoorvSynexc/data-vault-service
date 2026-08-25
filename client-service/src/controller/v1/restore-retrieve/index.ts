@@ -3,7 +3,7 @@ import {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
-  getObjectListByConfigId,
+  getRestoreObjectListByConfigId,
   getBackupJobIdsChangedBetween,
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
@@ -151,7 +151,10 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
 
 /**
  * GET /get-objectlist-by-configid?backupConfigId=&configType=
- * Returns the objects[] the user selected when creating the config — not job execution results.
+ * Returns the objects[] the user selected when creating the config, narrowed to
+ * what a restore can actually write back to — the existing Object List API
+ * (salesforceObjectFilteredList, apexMode: 'restore') already filters that set
+ * down to createable && updateable on top of its shared backup/archival filters.
  * configType is validated against the config's stored type to prevent cross-type access
  * (e.g. a NORMAL configType cannot return an ARCHIVAL config's objects).
  * Returns not_exist if the config doesn't exist, belongs to another user, or its type mismatches.
@@ -170,7 +173,7 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
     return;
   }
 
-  const { objects, found } = await getObjectListByConfigId(
+  const { objects, found } = await getRestoreObjectListByConfigId(
     backupConfigId,
     configType as ConfigType,
     userId
