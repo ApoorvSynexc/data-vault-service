@@ -3,7 +3,7 @@
 Source of truth: `client-service/src/config/database/index.ts`
 Names: `client-service/src/constant/index.ts`
 
-**Create nothing by hand.** `initializeDatabase()` runs on boot (`src/index.ts:52`) and creates all 13 active tables + GSIs if they're missing. You only need `AWS_REGION` set, IAM permission to `CreateTable`/`DescribeTable`/`UpdateTimeToLive` (plus normal data ops), and `npm start` once. Console-created tables are only needed if you deploy with a read-only IAM role — in that case, use the schemas below.
+**Create nothing by hand.** `initializeDatabase()` runs on boot (`src/index.ts:52`) and creates all 12 active tables + GSIs if they're missing. You only need `AWS_REGION` set, IAM permission to `CreateTable`/`DescribeTable`/`UpdateTimeToLive` (plus normal data ops), and `npm start` once. Console-created tables are only needed if you deploy with a read-only IAM role — in that case, use the schemas below.
 
 `backup-service/src/config/database/index.ts` re-declares (does not own) four of these — `data-vault-backup-jobs`, `data-vault-restores`, `data-vault-restore-jobs`, `data-vault-table-counters` — so it can `ensureTable()` them too if it boots before client-service. **Both `TABLE_DEFINITIONS` must stay identical** for those four; a GSI added on one side and not the other silently breaks queries on whichever side is missing it.
 
@@ -26,7 +26,6 @@ Every table below uses `BillingMode: PAY_PER_REQUEST` and every GSI uses `Projec
 11. [SETTINGS_TABLE — `data-vault-settings`](#settings_table--data-vault-settings)
 12. [TABLE_COUNTER_TABLE — `data-vault-table-counters`](#table_counter_table--data-vault-table-counters-shared)
 13. [COUNTER_TABLE — `data-vault-counters`](#counter_table--data-vault-counters)
-14. [OTP_TABLE — `data-vault-otps`](#otp_table--data-vault-otps-inactive)
 
 Each entry has two parts: **Schema** (the literal `AttributeDefinitions` / `KeySchema` / `GlobalSecondaryIndexes` passed to `CreateTableCommand`, plus the item's full field list — most fields are never part of a key or index, they just ride along on the item) and **Explanation** (why the table exists, why the partition key is what it is, and what each GSI is for).
 
@@ -39,31 +38,28 @@ Each entry has two parts: **Schema** (the literal `AttributeDefinitions` / `KeyS
 ```
 PK:  userId (S)
 
-AttributeDefinitions (indexed only): userId, contactEmail, contactMobileKey, crmId, crmProfileUserId
+AttributeDefinitions (indexed only): userId, contactEmail, crmId, crmProfileUserId
 
 GSIs:
-  email-index            HASH contactEmail
-  mobile-index            HASH contactMobileKey
-  crmId-index              HASH crmId
-  crmProfileUserId-index   HASH crmProfileUserId
+  email-index              HASH contactEmail
+  crmId-index                HASH crmId
+  crmProfileUserId-index     HASH crmProfileUserId
 
 Full item (IUser): userId, crmId?, profile?, firstName?, lastName?, customUrl?,
   crmProfile? (instanceUrl, organizationId, userId, username?, email?, photoUrl?,
   firstName?, lastName?), isCrmConnected?, crmCredential? (ciphertext, iv),
-  contact? (email?, isEmailVerified?, isMobileVerified?, mobile?),
-  contactEmail?, contactMobileKey?, settings? (notifications?, language?),
-  role (name, roleId, permissions?), gender?, password?, status?, authProvider?,
-  deletedAt?, createdAt?, updatedAt?
+  contact? (email?, isEmailVerified?), contactEmail?, settings? (notifications?,
+  language?), role (name, roleId, permissions?), gender?, password?, status?,
+  authProvider?, deletedAt?, createdAt?, updatedAt?
 ```
 
 ### Explanation
 
-The account record — one row per person who can log in, whether via email/password or a Salesforce social login. `userId` is a generated UUID, not anything Salesforce-derived, so it stays stable across CRM reconnects.
+The account record — one row per person who can log in via email/password or a Salesforce social login. `userId` is a generated UUID, not anything Salesforce-derived, so it stays stable across CRM reconnects.
 
-- **`email-index`** — login by email/password. Sparse: only rows with `contactEmail` set (email/password or email-verified social users) appear in it.
-- **`mobile-index`** — same idea for mobile/OTP login, keyed by `contactMobileKey` (a normalized `+<dialCode><number>` string, not the raw `IPhone` object, so it can be an exact-match GSI key).
+- **`email-index`** — login by email/password, the only auth path (mobile-based login/signup and OTP verification were removed — see [Removed: OTP and mobile auth](#removed-otp-and-mobile-auth) below). Sparse: only rows with `contactEmail` set appear in it.
 - **`crmId-index`** — "give me every user attached to this CRM connection." Used when a Salesforce admin's login needs to resolve which app user record it maps to, and by admin-side user listing.
-- **`crmProfileUserId-index`** — looks a user up by their *Salesforce* user id (`crmProfile.userId`, i.e. `sfProfile.user_id` from the OAuth profile call). This is the primary key used by the social-login callback to decide "have we seen this Salesforce user before" — email/mobile are secondary signals, the Salesforce user id is the durable identity.
+- **`crmProfileUserId-index`** — looks a user up by their *Salesforce* user id (`crmProfile.userId`, i.e. `sfProfile.user_id` from the OAuth profile call). This is the primary key used by the social-login callback to decide "have we seen this Salesforce user before" — email is a secondary signal, the Salesforce user id is the durable identity.
 
 `crmCredential` holds the user's Salesforce OAuth tokens, but only as an encrypted envelope (`ciphertext` + `iv`) — see `utils/encryption.ts`. Nothing reads `access_token`/`refresh_token` off this table directly; they're decrypted on demand via `getDecryptedCrmCredential`.
 
@@ -431,25 +427,11 @@ General-purpose atomic sequence generator, separate from `TABLE_COUNTER_TABLE` �
 
 ---
 
-## OTP_TABLE — `data-vault-otps` (inactive)
+## Removed: OTP and mobile auth
 
-### Schema
+`OTP_TABLE` (`data-vault-otps`) and the `mobile-index` GSI on `USER_TABLE` no longer exist. OTP had already been dead for a while — its `CreateTableCommand` was commented out, so every OTP-dependent flow (`/send-otp`, `/verify-otp`, `/reset-password`, and the OTP-gated branches of `/signup`) was throwing at the `getOtp`/`createOtp` call rather than working. Mobile-based login (`loginHandler`'s password-by-mobile branch) was still functional but was removed alongside it as a deliberate scope cut, not because it was broken.
 
-```
-PK:  otpId (S)
-SK:  createdAt (S)
-
-GSIs:
-  contact-otptype-index   HASH contactOtpKey,  RANGE createdAt
-```
-
-### Explanation
-
-**Not currently created** — its `CreateTableCommand` block in `client-service/src/config/database/index.ts` is commented out, so `ensureTable()` skips it entirely on boot. The constant (`OTP_TABLE`) and this schema are kept for reference/history, not because the table is live.
-
-If reactivated: `otpId` + `createdAt` as a composite key lets one OTP record type hold a full history per `otpId` rather than overwrite-in-place; `contact-otptype-index` (keyed by `contactOtpKey`, a normalized email/mobile + OTP-type string) is how a login/signup/forgot-password flow finds the latest pending OTP for a given contact + purpose.
-
-Known gap documented below: even if reactivated as-is, OTP rows would never TTL-expire — `expiresAt` is stored as an ISO string, not the epoch-seconds number DynamoDB TTL requires, and `OTP_TABLE` isn't in `TTL_CONFIG` regardless.
+What that means today: `services/otp/`, `models/otp/`, the `OTP_TABLE`/`OTP_TYPE`/`OTP_STATUS`/`OTP_CHANNEL`/`OTP_FOR` constants, `IUser.contactMobileKey`/`contact.mobile`/`isMobileVerified`, and the `IPhone` model are all gone. `signupHandler` creates a user directly from email + password (no verification step); `loginHandler` is email + password only; `/reset-password` has no replacement yet — self-service password reset needs a new mechanism (e.g. an emailed reset link) before it can come back.
 
 ---
 
@@ -463,7 +445,7 @@ Known gap documented below: even if reactivated as-is, OTP rows would never TTL-
 
 **Sparse GSIs.** `mobile-index` and `crmProfileUserId-index` only contain items that actually have those attributes. An email-only user never enters `mobile-index`. This is free filtering — the index stays small and scans over it stay cheap.
 
-**Composite keys.** `otps` (`otpId` + `createdAt`) and the counter tables use partition+sort. Fetching one item needs both halves; with only the partition key you must `Query`, not `GetItem`.
+**Composite keys.** The counter tables (`table-counters`, `counters`) use partition+sort. Fetching one item needs both halves; with only the partition key you must `Query`, not `GetItem`.
 
 **Not set — inherits AWS defaults.** Encryption at rest: on, AWS-owned key. Point-in-time recovery: **off**. Streams: off. Deletion protection: off. PITR is the one worth turning on manually for `users`, `crms`, `backup-configs` — it's the difference between a bad `DeleteItem` being a 5-minute restore and a permanent one.
 
@@ -485,28 +467,3 @@ All active tables run in parallel via `Promise.all`. Idempotent, safe on every b
 `ensureTable` creates missing **tables**. It does not add a missing **GSI** to a table that already exists. Add an index to `TABLE_DEFINITIONS` and every existing environment silently keeps the old schema — queries fail at runtime, not at boot.
 
 Adding a GSI later means a one-off `UpdateTable` (AWS console or CLI), and only one GSI can be added at a time.
-
----
-
-## Known gap: OTP records never expire
-
-`services/otp/index.ts:162` says old OTPs are "auto-cleaned via TTL". They are not (and the table isn't even created today — see [OTP_TABLE](#otp_table--data-vault-otps-inactive)):
-
-- `OTP_TABLE` is absent from `TTL_CONFIG`.
-- The table stores `expiresAt` as an **ISO string**, which TTL cannot read — TTL requires a Number attribute in epoch seconds.
-
-Fix is two lines, whenever the table is reactivated:
-
-```ts
-// config/database/index.ts
-const TTL_CONFIG: Record<string, string> = {
-  [SESSION_TABLE]: 'ttl',
-  [OAUTH_STATE_TABLE]: 'ttl',
-  [OTP_TABLE]: 'ttl',
-};
-
-// services/otp — write alongside expiresAt
-ttl: Math.floor(new Date(expiresAtStr).getTime() / 1000),
-```
-
-Existing rows won't be touched (no `ttl` attribute = never expires); backfill or leave them.

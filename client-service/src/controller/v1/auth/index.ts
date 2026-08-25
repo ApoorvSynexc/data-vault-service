@@ -1,13 +1,9 @@
 import bcrypt from 'bcrypt';
-import dayjs from 'dayjs';
 import jwt from 'jsonwebtoken';
 import {
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
   JWT_REFRESH_SECRET,
-  OTP_CHANNEL,
-  OTP_STATUS,
-  OTP_TYPE,
   SESSION_STATUS,
   STATUS,
 } from '../../../constant';
@@ -15,52 +11,21 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   createSession,
   createUser,
-  getOtp,
   getSession,
   getUser,
-  updateOtp,
   updateSession,
-  updateUser,
 } from '../../../services';
 import { generateTokens, parseExpiryToSeconds, wrapController } from '../../../utils/helper';
 import { defaultRoles } from '../../../assets';
 
-const OTP_EXPIRY_MINUTES = 10;
 const SALT_ROUNDS = 10;
 
 const signupHandler = async (req: IRequest, res: IResponse) => {
   const body = req.body;
 
-  const isEmailSignup = !!body.contact?.email;
-  const contactField = isEmailSignup ? 'contact.email' : 'contact.mobile';
-  const contactValue = isEmailSignup ? body.contact.email : body.contact.mobile;
-
-  const record = await getOtp({
-    [contactField]: contactValue,
-    otpType: OTP_TYPE.signup,
-    status: OTP_STATUS.verified,
-  });
-
-  if (!record || dayjs().isAfter(dayjs(record.expiresAt))) {
-    return makeResponse(req, res, 400, false, 'otp_expired');
-  }
-
-  if (isEmailSignup) {
-    body.contact.isEmailVerified = true;
-    const existing = await getUser({ 'contact.email': body.contact.email, status: STATUS.active });
-    if (existing) {
-      return makeResponse(req, res, 400, false, 'email_exit');
-    }
-  } else {
-    body.contact.isMobileVerified = true;
-    const existing = await getUser({
-      'contact.mobile.number': body.contact.mobile.number,
-      'contact.mobile.dialCode': body.contact.mobile.dialCode,
-      status: STATUS.active,
-    });
-    if (existing) {
-      return makeResponse(req, res, 400, false, 'mobile_exit');
-    }
+  const existing = await getUser({ 'contact.email': body.contact.email, status: STATUS.active });
+  if (existing) {
+    return makeResponse(req, res, 400, false, 'email_exit');
   }
 
   if (body.password) {
@@ -74,131 +39,6 @@ const signupHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 201, true, 'create');
 };
 
-const sendOtpHandler = async (req: IRequest, res: IResponse) => {
-  const { contact, channel, otpType } = req.body as {
-    contact: string | object;
-    channel: string;
-    otpType: string;
-  };
-
-  const userSearch =
-    channel === OTP_CHANNEL.email
-      ? { 'contact.email': contact }
-      : {
-          'contact.mobile.number': (contact as any).number,
-          'contact.mobile.dialCode': (contact as any).dialCode,
-        };
-
-  if (otpType === OTP_TYPE.signup) {
-    const existing = await getUser({ ...userSearch, status: STATUS.active });
-    if (existing) {
-      return makeResponse(
-        req,
-        res,
-        400,
-        false,
-        channel === OTP_CHANNEL.email ? 'email_exit' : 'mobile_exit'
-      );
-    }
-  }
-
-  if (otpType === OTP_TYPE.login) {
-    const existing = await getUser({ ...userSearch, status: STATUS.active });
-    if (!existing) {
-      return makeResponse(req, res, 400, false, 'unauthorized');
-    }
-  }
-
-  const otpNumber = 123456;
-  const expiresAt = dayjs().add(OTP_EXPIRY_MINUTES, 'minute').toDate();
-
-  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
-
-  await updateOtp(
-    { [contactField]: contact, channel, otpType: otpType },
-    {
-      [contactField]: contact,
-      channel,
-      otp: otpNumber,
-      expiresAt,
-      otpType: otpType,
-      status: OTP_STATUS.pending,
-    }
-  );
-
-  // TODO: send OTP via email/SMS based on channel === OTP_CHANNEL.email / OTP_CHANNEL.mobile
-
-  makeResponse(req, res, 200, true, 'otp_sent');
-};
-
-const verifyOtpHandler = async (req: IRequest, res: IResponse) => {
-  const { contact, channel, otpType, otp } = req.body as {
-    contact: string | object;
-    channel: string;
-    otpType: string;
-    otp: string;
-  };
-
-  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
-
-  const record = await getOtp({
-    [contactField]: contact,
-    channel,
-    otpType,
-    otp: Number(otp),
-    status: OTP_STATUS.pending,
-  });
-
-  if (!record) {
-    return makeResponse(req, res, 400, false, 'otp_incorrect');
-  }
-
-  if (dayjs().isAfter(dayjs(record.expiresAt))) {
-    await updateOtp({ _id: record._id }, { $set: { status: OTP_STATUS.verified } });
-    return makeResponse(req, res, 400, false, 'otp_expired');
-  }
-
-  await updateOtp({ _id: record._id }, { $set: { status: OTP_STATUS.verified } });
-
-  // Handle OTP-based login
-  if (otpType === OTP_TYPE.login) {
-    const userSearch =
-      channel === OTP_CHANNEL.email
-        ? { 'contact.email': contact }
-        : {
-            'contact.mobile.number': (contact as any).number,
-            'contact.mobile.dialCode': (contact as any).dialCode,
-          };
-
-    const user = await getUser({ ...userSearch, status: STATUS.active });
-    if (!user) {
-      return makeResponse(req, res, 401, false, 'unauthorized');
-    }
-
-    const deviceInfo = {
-      userAgent: req.headers['user-agent'],
-      ipAddress: (req.headers['x-forwarded-for'] as string) ?? req.socket.remoteAddress,
-    };
-
-    const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
-    const session = await createSession(user.userId, ttlSeconds, deviceInfo);
-    const tokens = generateTokens(user.userId, session.sessionId);
-
-    res.cookie('accessToken', tokens.accessToken, {
-      ...baseCookieOptions,
-      maxAge: parseExpiryToSeconds(JWT_ACCESS_EXPIRY) * 1000,
-    });
-    res.cookie('refreshToken', tokens.refreshToken, {
-      ...baseCookieOptions,
-      maxAge: parseExpiryToSeconds(JWT_REFRESH_EXPIRY) * 1000,
-    });
-
-    return makeResponse(req, res, 200, true, 'login');
-  }
-
-  makeResponse(req, res, 200, true, 'otp_verify');
-};
-
 const isProduction = process.env.NODE_ENV === 'production';
 
 const baseCookieOptions = {
@@ -208,13 +48,9 @@ const baseCookieOptions = {
 };
 
 const loginHandler = async (req: IRequest, res: IResponse) => {
-  const { email, mobile, password } = req.body;
+  const { email, password } = req.body;
 
-  const search = email
-    ? { 'contact.email': email }
-    : { 'contact.mobile.number': mobile.number, 'contact.mobile.dialCode': mobile.dialCode };
-
-  const user = await getUser({ ...search, status: STATUS.active });
+  const user = await getUser({ 'contact.email': email, status: STATUS.active });
 
   if (!user) {
     return makeResponse(req, res, 401, false, 'unauthorized');
@@ -300,44 +136,9 @@ const logoutHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'logout');
 };
 
-const resetPasswordHandler = async (req: IRequest, res: IResponse) => {
-  const { contact, channel, newPassword } = req.body;
-
-  const contactField = channel === OTP_CHANNEL.email ? 'contact.email' : 'contact.mobile';
-
-  const record = await getOtp({
-    [contactField]: contact,
-    channel,
-    otpType: OTP_TYPE.forgotPassword,
-    status: OTP_STATUS.verified,
-  });
-
-  if (!record || dayjs().isAfter(dayjs(record.expiresAt))) {
-    return makeResponse(req, res, 400, false, 'otp_expired');
-  }
-
-  const userSearch =
-    channel === OTP_CHANNEL.email
-      ? { 'contact.email': contact }
-      : { 'contact.mobile.number': contact.number, 'contact.mobile.dialCode': contact.dialCode };
-
-  const user = await getUser(userSearch);
-  if (!user) {
-    return makeResponse(req, res, 404, false, 'not_exist');
-  }
-
-  const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
-  await updateUser({ userId: user.userId }, { password: hashed });
-
-  makeResponse(req, res, 200, true, 'update');
-};
-
 export const authController = wrapController({
   signupHandler,
-  sendOtpHandler,
-  verifyOtpHandler,
   loginHandler,
   refreshTokenHandler,
   logoutHandler,
-  resetPasswordHandler,
 });
