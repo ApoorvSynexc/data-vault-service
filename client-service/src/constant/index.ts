@@ -226,6 +226,25 @@ const STANDARD_OBJECT_LIST = [
   'EmailMessage'
 ];
 
+// Standard audit/system fields Salesforce puts on (almost) every sObject. Describe's
+// `updateable` flag alone doesn't catch these: orgs with the "Create Audit Fields"
+// permission enabled can make CreatedDate/CreatedById/LastModifiedDate/LastModifiedById
+// updateable via API for data-migration purposes, which would otherwise let them leak
+// into a restore field list. Name-based, not describe-flag-based, so it's a hard exclude
+// regardless of what a given org's permissions report.
+const SALESFORCE_SYSTEM_FIELDS = [
+  'Id',
+  'IsDeleted',
+  'CreatedDate',
+  'CreatedById',
+  'LastModifiedDate',
+  'LastModifiedById',
+  'SystemModstamp',
+  'LastActivityDate',
+  'LastViewedDate',
+  'LastReferencedDate',
+];
+
 export {
   NODE_ENV,
   NODE_ENV_URL,
@@ -313,5 +332,6 @@ export {
   OBJECT_TYPE,
   BACKUP_TYPE,
   ENVIRONMENT_TYPE,
-  STANDARD_OBJECT_LIST
+  STANDARD_OBJECT_LIST,
+  SALESFORCE_SYSTEM_FIELDS
 };

@@ -2,7 +2,7 @@ import { OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
-import { buildS3KeyPrefix, withRequiredBulkFields } from '../../../../../utils/helper';
+import { buildS3KeyPrefix, withSystemFields } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
 import { updateBackupConfigObject } from '../../../../backup-config';
@@ -142,7 +142,7 @@ export const exportFirstTime = async (
       },
       { instanceUrl, tokens }
     );
-    const allFieldNames = withRequiredBulkFields(
+    const allFieldNames = withSystemFields(
       fieldsMetadata?.metadataType === 'fields'
         ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
         : []
@@ -361,7 +361,7 @@ export const exportIncremental = async (
       },
       { instanceUrl, tokens }
     );
-    const allFieldNames = withRequiredBulkFields(
+    const allFieldNames = withSystemFields(
       fieldsMetadata?.metadataType === 'fields'
         ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
         : []
@@ -398,14 +398,12 @@ export const exportIncremental = async (
         status: OBJECT_STATUS.bulkQueryInProgress,
       });
 
-      // IsDeleted required for classify/delete split (CreatedDate/LastModifiedDate/
-      // SystemModstamp are already in allFieldNames via withRequiredBulkFields)
-      const fieldsWithMeta = Array.from(new Set([...allFieldNames, 'IsDeleted']));
-
+      // IsDeleted (needed for classify/delete split) is already in allFieldNames
+      // via withSystemFields, same as every other system field.
       const userWhere = buildWhereClause(object);
       const dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
       const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
-      const soql = `SELECT ${fieldsWithMeta.join(', ')} FROM ${objectName} ${where} ORDER BY Id ASC`;
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} ORDER BY Id ASC`;
 
       // queryAll so Salesforce includes soft-deleted records in the result set
       try {
