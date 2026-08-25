@@ -12,10 +12,10 @@ const getSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> 
 
 const upsertSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
-  const { crmId, status } = req.body;
+  const { status } = req.body;
   let { standardObjects } = req.body;
 
-  const settings = await getSettingsByUserAndCrm(userId, crmId);
+  const settings = await getSettingsByUserAndCrm(userId);
   const alreadyExistNames = settings?.standardObjects.map((s: any) => s.name);
 
   const filterObjects = standardObjects
@@ -23,7 +23,7 @@ const upsertSettingsHandler = async (req: IRequest, res: IResponse): Promise<voi
     .map((s: any) => ({ ...s, isDefault: false }));
   standardObjects = [...(settings?.standardObjects || []), ...filterObjects];
 
-  await upsertSettings({ userId, crmId, standardObjects, status });
+  await upsertSettings({ userId, standardObjects, status });
   makeResponse(req, res, 200, true, 'update', settings);
 };
 
