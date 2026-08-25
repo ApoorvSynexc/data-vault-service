@@ -28,8 +28,11 @@ import {
     getDecryptedDestinationConfig,
     unwrapApex,
     getDecryptedCrmCredential,
+    createAwsEventScheduler,
+    updateAwsEventSchedule,
+    deleteAwsEventScheduler,
 } from "../../../services";
-import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
+import { buildEventScheduleInput, filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
@@ -301,7 +304,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         if (immediateObjects.length > 0) {
             await triggerArchivalBackupJob({ user, config, objects: immediateObjects });
         } else {
-            // await createAwsEventScheduler(buildEventScheduleInput(config));
+            await createAwsEventScheduler(buildEventScheduleInput(config));
         }
 
         makeResponse(req, res, 201, true, 'create', config);
@@ -329,7 +332,6 @@ const validateSoqlArchivalHandler = async (req: IRequest, res: IResponse): Promi
         return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    // Joi (validateSoqlSchema) guarantees the actual shape: { crmId, object: { name, condition?, field? }, isParent }
     const { object, isParent } = req.body as {
         object: { name: string; condition?: ICondition; field?: IFieldFilter[] };
         isParent: boolean;
@@ -424,7 +426,7 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
-        // await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+        await updateAwsEventSchedule(buildEventScheduleInput(updated!));
     }
 
     makeResponse(req, res, 200, true, 'update', updated!);
@@ -476,7 +478,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
             // of racing a response that's already gone out.
             await realTimeTriggerManagement('delete', config);
         } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
-            // await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
+            await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
         }
 
         await Promise.all([
