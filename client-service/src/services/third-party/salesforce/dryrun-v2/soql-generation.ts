@@ -138,29 +138,27 @@ const transformWhereBodyForChild = (whereBody: string, fkFieldName: string): str
   );
 };
 
-// Recursive walk mirroring backup-service archival-v2's archiveObject — builds
-// this object's own WHERE clause, works out the clause its children inherit,
-// pushes this object's COUNT() query onto `queries`, then recurses into
-// children the exact same way archiveObject recurses via
-// exportWithRetryArchivalV2. Only the WHERE-building/traversal shape is
-// reused here — no bulk job, no S3 upload, no metadata fetch, since a
-// dry-run only ever needs a count.
 const generateObjectSoql = (
   object: ISalesforceObject,
-  parentWhereClause: string,
+  ancestorWhereBody: string,
   queries: ISoqlCountQuery[]
 ): void => {
-  const whereClause = buildWhereClause(object);
-  let propagatedWhereClause: string;
+  const ownWhereClause = buildWhereClause(object);
+  const ownWhereBody = ownWhereClause.replace(/^WHERE\s+/i, '').trim();
 
-  if (parentWhereClause) {
-    propagatedWhereClause = transformWhereBodyForChild(whereClause, object.fieldApiName!);
+  let effectiveWhereBody: string;
+  if (object.fieldApiName) {
+    const propagated = ancestorWhereBody
+      ? transformWhereBodyForChild(ancestorWhereBody, object.fieldApiName)
+      : `${object.fieldApiName} != null`;
+    effectiveWhereBody = ownWhereBody ? `(${propagated}) AND (${ownWhereBody})` : propagated;
   } else {
-    propagatedWhereClause = whereClause;
+    effectiveWhereBody = ownWhereBody;
   }
 
-  const whereBody = whereClause.replace(/^WHERE\s+/i, '').trim();
-  const soqlWhere = whereBody ? `WHERE IsDeleted = false AND (${whereBody})` : 'WHERE IsDeleted = false';
+  const soqlWhere = effectiveWhereBody
+    ? `WHERE IsDeleted = false AND (${effectiveWhereBody})`
+    : 'WHERE IsDeleted = false';
 
   queries.push({
     referenceId: `n${queries.length}`,
@@ -171,7 +169,7 @@ const generateObjectSoql = (
 
   if (object.children?.length) {
     for (const child of object.children) {
-      generateObjectSoql(child, propagatedWhereClause, queries);
+      generateObjectSoql(child, effectiveWhereBody, queries);
     }
   }
 };
