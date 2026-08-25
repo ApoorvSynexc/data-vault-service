@@ -85,10 +85,16 @@ const buildSlug = (base: string, count: number): string => {
   return count === 1 ? baseSlug : `${baseSlug}-${count}`;
 };
 
-// Returns false when entity is null/undefined or belongs to a different user.
+// Returns false when entity is null/undefined or belongs to neither this user
+// nor (when passed) this CRM. crmId is optional so existing callers that only
+// check userId keep working unchanged.
 // Use this in controllers instead of repeating the ownership check inline.
-const isOwner = (entity: { userId: string } | null | undefined, userId: string): boolean =>
-  !!entity && entity.userId === userId;
+const isOwner = (
+  entity: { userId: string; crmId?: string } | null | undefined,
+  userId: string,
+  crmId?: string
+): boolean =>
+  !!entity && (entity.userId === userId || (crmId !== undefined && entity.crmId === crmId));
 
 const timer = (ms: number): Promise<void> => {
   return new Promise((resolve) => setTimeout(resolve, ms));
