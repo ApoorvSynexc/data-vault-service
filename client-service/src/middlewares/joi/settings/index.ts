@@ -14,7 +14,6 @@ export const upsertSettingsValidation = async (
       .items(
         Joi.object({
           name: Joi.string().required(),
-          isDefault: Joi.boolean().required(),
         })
       )
       .optional(),

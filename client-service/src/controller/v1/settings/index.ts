@@ -12,8 +12,18 @@ const getSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> 
 
 const upsertSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
-  const { crmId, standardObjects, status } = req.body;
+  const { crmId, status } = req.body;
+  let { standardObjects } = req.body;
 
+  standardObjects = standardObjects.map((s: any) => {
+    if (!s.isDefault) {
+      return {
+        ...s,
+        isDefault: false
+      }
+    };
+    return s
+  });
   const settings = await upsertSettings({ userId, crmId, standardObjects, status });
   makeResponse(req, res, 200, true, 'update', settings);
 };
