@@ -73,7 +73,6 @@ export const createArchivalJobValidation = (req: Request, res: Response, next: N
     source: sourceSchema.required(),
     destination: destinationSchema.required(),
     lastUpdatedAt: Joi.string().isoDate().optional(),
-    spaceId: Joi.string().optional(),
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });

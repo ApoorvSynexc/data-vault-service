@@ -16,6 +16,7 @@ import { salesforceRouter } from './salesforce.route';
 import { aclGateway } from '../../middlewares/gateway';
 import { storageRouter } from './storage.routes';
 import { crmMetadataRouter } from './crm-metadata.route';
+import { settingsRouter } from './settings.route';
 
 const router = Router();
 
@@ -39,5 +40,6 @@ router.use('/dashboard', dashboardRouter);
 router.use('/destination', destinationRouter);
 router.use('/restore', restoreRetrieveRouter);
 router.use('/storage', storageRouter);
+router.use('/settings', settingsRouter);
 
 export const v1Routers = router;

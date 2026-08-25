@@ -27,8 +27,8 @@ const randomNumber = (digits: number = 6): string => {
   return String(Math.floor(min + Math.random() * (max - min + 1)));
 };
 
-const generateTokens = (userId: string, sessionId: string, spaceId?: string) => {
-  const payload = { userId, sessionId, ...(spaceId && { spaceId }) };
+const generateTokens = (userId: string, sessionId: string) => {
+  const payload = { userId, sessionId };
   const accessToken = jwt.sign(payload, JWT_ACCESS_SECRET, {
     expiresIn: JWT_ACCESS_EXPIRY as jwt.SignOptions['expiresIn'],
   });

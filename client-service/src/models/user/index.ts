@@ -1,4 +1,4 @@
-import { IMedia, IPhone } from '../shared';
+import { IMedia } from '../shared';
 
 export interface ICrmProfile {
   instanceUrl: string;
@@ -27,11 +27,8 @@ export interface IUser {
   contact?: {
     email?: string;
     isEmailVerified?: boolean;
-    isMobileVerified?: boolean;
-    mobile?: IPhone;
   };
   contactEmail?: string; // GSI: email-index  PK
-  contactMobileKey?: string; // GSI: mobile-index PK  e.g. "+919876543210"
   settings?: {
     notifications?: boolean;
     language?: string;
@@ -48,6 +45,4 @@ export interface IUser {
   deletedAt?: string;
   createdAt?: string;
   updatedAt?: string;
-
-  spaceId?: string;
 }

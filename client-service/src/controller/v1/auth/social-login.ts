@@ -1,9 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
-import { defaultPermissions } from '../../../assets';
+import { fullAccessPermissions } from '../../../assets';
 import {
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
   SALESFORCE_LOGIN_REDIRECT_URI,
+  STANDARD_OBJECT_LIST,
   STATUS,
 } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
@@ -17,7 +18,6 @@ import {
   getSalesforceToken,
   getUser,
   upsertCrm,
-  createSpace,
   updateUser,
   SalesforceEnvironment,
   SalesforceTokens,
@@ -28,13 +28,14 @@ import {
   getDecryptedCrmCredential,
 } from '../../../services';
 import { provisionEcaPermissionSet } from '../../../services/third-party/salesforce/eca-permission-set';
-import { ICrm, IRolePermissions, IUser } from '../../../models';
+import { ICrm, IUser } from '../../../models';
 import { encrypt } from '../../../utils/encryption';
 import {
   generateTokens,
   parseExpiryToSeconds,
   wrapController,
 } from '../../../utils/helper';
+import { getSettingsByUserAndCrm, upsertSettings } from '../../../services/settings';
 
 const parseSalesforceError = (error: any): string | null => {
   try {
@@ -219,15 +220,9 @@ const socialLoginCallbackHandler = async (
       // above has already succeeded.
       const { username, email, firstName, lastName } = adminProfile;
 
-      const permissions: IRolePermissions = [];
-      defaultPermissions.forEach((module) => {
-        module.permissions.forEach((permission) => {
-          permissions.push(`${module.value}.${permission.value}`);
-        });
-      });
       const roleName = 'Custom';
       const roleId = uuidv4();
-      await createRole({ roleId, name: roleName, permissions });
+      await createRole({ roleId, name: roleName, permissions: fullAccessPermissions });
 
       const userId = uuidv4();
       const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId, firstName, lastName };
@@ -259,6 +254,15 @@ const socialLoginCallbackHandler = async (
       // use the record we just wrote for the rest of the login flow.
       user = { userId, crmId, crmProfile, status: STATUS.active, isCrmConnected: true, customUrl: oauthState.customUrl } as IUser;
       userJustCreated = true;
+    }
+
+    const settingsExist = await getSettingsByUserAndCrm(user.userId);
+    if (!settingsExist) {
+      await upsertSettings({
+        userId: user.userId,
+        crmId: user.crmId,
+        standardObjects: STANDARD_OBJECT_LIST
+      });
     }
   }
 
@@ -320,7 +324,7 @@ const socialLoginCallbackHandler = async (
 
   const ttlSeconds = parseExpiryToSeconds(JWT_REFRESH_EXPIRY);
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
-  const tokens = generateTokens(user.userId, session.sessionId, user.spaceId);
+  const tokens = generateTokens(user.userId, session.sessionId);
 
   // Set cookies
   res.cookie('accessToken', tokens.accessToken, {

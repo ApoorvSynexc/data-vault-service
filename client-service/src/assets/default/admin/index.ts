@@ -10,7 +10,6 @@ export const defaultAdmin = {
   contact: {
     email: process.env.DEFAULT_ADMIN_EMAIL ?? 'admin@datavault.com',
     isEmailVerified: true,
-    isMobileVerified: false,
   },
   password: process.env.DEFAULT_ADMIN_PASSWORD,
   ...(adminRole && {role: {

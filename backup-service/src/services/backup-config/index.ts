@@ -1,7 +1,8 @@
 import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE } from '../../constant';
-import { IBackupConfig, IScheduleConfig, ITriggerResult } from '../../models';
+import { IBackupConfig, IBackupObject, IScheduleConfig, ITriggerResult } from '../../models';
+import { recursivelyUpdateObjects } from '../backup-job';
 
 interface UpdateBackupConfigParams {
   name?: string;
@@ -314,6 +315,70 @@ const updateBackupConfigObject = async (params: UpdateBackupConfigObjectParams):
   }
 };
 
+// ref: updateArchivalObject in ../backup-job/index.ts — same recursive
+// merge-by-id + optimistic-lock retry, applied to backup-config's `objects`
+// attribute (keyed by backupConfigId) instead of backup-job's `object`.
+const updateArchivalConfigObject = async ({
+  backupConfigId,
+  object,
+  objects,
+}: {
+  backupConfigId: string;
+  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined };
+  objects?: IBackupObject[];
+}): Promise<IBackupObject[] | []> => {
+  // When `objects` is provided (caller already holds the array), use it directly
+  // with no retry — the caller owns the version.
+  if (objects?.length) {
+    const payload = await recursivelyUpdateObjects(objects, object);
+    await docClient.send(
+      new UpdateCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        Key: { backupConfigId },
+        UpdateExpression: 'SET #objects = :objects',
+        ExpressionAttributeNames: { '#objects': 'objects' },
+        ExpressionAttributeValues: { ':objects': payload },
+      })
+    );
+    return payload;
+  }
+
+  // Optimistic-lock retry: read → merge → conditional write.
+  const MAX_RETRIES = 5;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const config = await getBackupConfigById(backupConfigId);
+    if (!config?.objects?.length) {
+      return [];
+    }
+
+    const payload = await recursivelyUpdateObjects(config.objects, object);
+
+    try {
+      await docClient.send(
+        new UpdateCommand({
+          TableName: BACKUP_CONFIG_TABLE,
+          Key: { backupConfigId },
+          UpdateExpression: 'SET #objects = :objects',
+          ConditionExpression: '#objects = :current',
+          ExpressionAttributeNames: { '#objects': 'objects' },
+          ExpressionAttributeValues: {
+            ':objects': payload,
+            ':current': config.objects,
+          },
+        })
+      );
+      return payload;
+    } catch (err: any) {
+      if (err.name === 'ConditionalCheckFailedException' && attempt < MAX_RETRIES) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return [];
+};
+
 const updateBackupConfigSizeRecords = async (params: {
   backupConfigId: string;
   sizeInBytes: number;
@@ -344,6 +409,7 @@ const updateBackupConfigSizeRecords = async (params: {
 export {
   updateBackupConfig,
   updateBackupConfigObject,
+  updateArchivalConfigObject,
   updateBackupConfigSizeRecords,
   getBackupConfigById,
   incrementBackupConfigCounters,

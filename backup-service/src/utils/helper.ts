@@ -1,5 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { logger } from '../middlewares';
+import { IBackupObject } from '../models';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 
@@ -358,6 +359,10 @@ const formatDateTime = (dateString: string): string => {
   return date.toISOString();
 };
 
+const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
+  return objects.flatMap((obj) => [obj, ...(obj.children ? recursivelyFlatten(obj.children) : [])]);
+};
+
 export {
   randomNumber,
   parseExpiryToSeconds,
@@ -373,6 +378,7 @@ export {
   parseCSVLine,
   formatFieldValuesForSOQL,
   formatValueByDataType,
+  recursivelyFlatten,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,

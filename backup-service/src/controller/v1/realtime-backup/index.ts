@@ -41,16 +41,14 @@ import { wrapController } from '../../../utils/helper';
 const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   // client-service already decrypted the Salesforce envelope in its own middleware
   // and relays the plaintext body over the internal network — nothing to decrypt here.
-  const { userId, backupConfigId, crmId, crmName, destination, realtimePayload, spaceId } =
-    req.body as {
-      userId: string;
-      backupConfigId: string;
-      crmId: string;
-      crmName: string;
-      destination: { type: string; config: IDestinationConfig };
-      realtimePayload: IRealtimePayload;
-      spaceId?: string;
-    };
+  const { userId, backupConfigId, crmId, crmName, destination, realtimePayload } = req.body as {
+    userId: string;
+    backupConfigId: string;
+    crmId: string;
+    crmName: string;
+    destination: { type: string; config: IDestinationConfig };
+    realtimePayload: IRealtimePayload;
+  };
 
   /**
    * Resolve (or create) the job for this hit.
@@ -67,7 +65,6 @@ const realtimeBackupHandler = async (req: IRequest, res: IResponse): Promise<voi
     objectApiName: realtimePayload.objectApiName,
     operation: realtimePayload.operation,
     transactionId: realtimePayload.transactionId,
-    ...(spaceId && { spaceId }),
   });
 
   /**

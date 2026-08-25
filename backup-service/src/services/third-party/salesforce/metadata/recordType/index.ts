@@ -50,7 +50,8 @@ export interface IRecordTypeComparisonParams extends ISchemaComparison {
   latestRecordTypes: ISalesforceRecordTypeInfo[];
 }
 
-const recordTypeKey = (recordType: ISalesforceRecordTypeInfo): string => recordType.recordTypeId ?? '';
+const recordTypeKey = (recordType: ISalesforceRecordTypeInfo): string =>
+  recordType.recordTypeId ?? '';
 
 // Record-type-by-record-type, object-level diff of two snapshots — see
 // diffEntities in ../common for the shared, order-independent, non-stringify comparison.
@@ -79,7 +80,9 @@ export const recordTypeComparison = async (
   const key = buildS3Key({ ...params, metadataType: 'recordTypes' });
 
   const storedEntries = await getStoredEntries<ISalesforceRecordTypeInfo[]>(destConfig, key);
-  const storedRecordTypes = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
+  const storedRecordTypes = storedEntries.length
+    ? storedEntries[storedEntries.length - 1].context
+    : [];
   const diff = diffRecordTypes(storedRecordTypes, latestRecordTypes);
 
   return { ...diff, latestRecordTypes, storedEntries };
@@ -91,10 +94,16 @@ export const recordTypeHandler = async (
   params: ISalesforceMetadataHandler,
   recordTypeInfos: ISalesforceRecordTypeInfo[]
 ) => {
-  const { backupConfigId, backupJobId, objectName } = params;
+  const { backupConfig, backupJobId, object } = params;
+  const backupConfigId = backupConfig.backupConfigId;
+  const objectName = object.name;
   try {
     const destConfig = await getDestConfigForJob(backupJobId);
-    const diff = await recordTypeComparison({ ...params, destConfig, latestRecordTypes: recordTypeInfos });
+    const diff = await recordTypeComparison({
+      ...params,
+      destConfig,
+      latestRecordTypes: recordTypeInfos,
+    });
     if (diff.recordTypesChanged) {
       logger.info(
         `Object record type change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedRecordTypes.length}, removed=${diff.removedRecordTypes.length}, modified=${diff.modifiedRecordTypes.length}`

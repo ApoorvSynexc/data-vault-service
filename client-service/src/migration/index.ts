@@ -4,7 +4,6 @@ dotenv.config();
 import initializeDatabase from '../config/database';
 import { runCreateRole } from './create-role';
 import { runCreateAdmin } from './create-admin';
-import { runIndexMigration } from './update-crm-index';
 import { runBackfillCrmOrganizationId } from './backfill-crm-organizationid';
 import { deleteUserTrigger } from './delete-apex-trigger';
 
@@ -13,7 +12,7 @@ const [, , command] = process.argv;
 const run = async (): Promise<void> => {
   if (!command) {
     console.error('Usage: node dist/migration/index.js <COMMAND>');
-    console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, UPDATE_CRM_INDEX, BACKFILL_CRM_ORGANIZATIONID');
+    console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, BACKFILL_CRM_ORGANIZATIONID');
     process.exit(1);
   }
 
@@ -28,10 +27,6 @@ const run = async (): Promise<void> => {
       await runCreateAdmin();
       break;
     }
-    case 'UPDATE_INDEX': {
-      await runIndexMigration();
-      break;
-    }
     case 'BACKFILL_CRM_ORGANIZATIONID': {
       await runBackfillCrmOrganizationId();
       break;
@@ -42,7 +37,7 @@ const run = async (): Promise<void> => {
     }
     default:
       console.error(`Unknown migration command: ${command}`);
-      console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, UPDATE_CRM_INDEX, BACKFILL_CRM_ORGANIZATIONID');
+      console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, BACKFILL_CRM_ORGANIZATIONID');
       process.exit(1);
   }
 

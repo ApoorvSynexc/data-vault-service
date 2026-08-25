@@ -1,12 +1,5 @@
 import Joi from 'joi';
 
-export const phoneJoiSchema = Joi.object({
-  dialCode: Joi.string().required(),
-  iso2: Joi.string().length(2).uppercase().required(),
-  country: Joi.string().required(),
-  number: Joi.string().required(),
-});
-
 // Length is the strongest lever against brute force (NIST SP 800-63B); the
 // character-class check on top of it is the baseline most compliance reviews
 // still expect. Capped at 128 so an oversized input can't be used to waste

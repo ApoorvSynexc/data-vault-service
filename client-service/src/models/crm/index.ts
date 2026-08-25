@@ -13,7 +13,6 @@ export interface ICrm {
   createdAt: string;
   
   // userId: string; // GSI: userId-crmName-index
-  // spaceId?: string;
   // customUrl?: string;
   // crmProfile?: ICrmProfile;
   // encryptedCredentials?: string;

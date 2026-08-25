@@ -18,7 +18,6 @@ interface CreateDestinationParams {
   provider: 'AWS' | 'AZURE' | 'GCP';
   type: string;
   config: Record<string, any>;
-  spaceId?: string;
 }
 
 interface UpdateDestinationParams {
@@ -29,7 +28,7 @@ interface UpdateDestinationParams {
 }
 
 const createDestination = async (params: CreateDestinationParams): Promise<IDestination> => {
-  const { userId, name, provider, type, config, spaceId } = params;
+  const { userId, name, provider, type, config } = params;
   const now = new Date().toISOString();
   const { ciphertext, iv } = encrypt(JSON.stringify(config), deriveKey(userId));
 
@@ -42,7 +41,6 @@ const createDestination = async (params: CreateDestinationParams): Promise<IDest
     ciphertext,
     iv,
     status: STATUS.active,
-    ...(spaceId && { spaceId }),
     createdAt: now,
     updatedAt: now,
   };
@@ -70,35 +68,9 @@ const getDestinationsByUser = async (
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
       FilterExpression: '#status = :active',
-      ProjectionExpression: 'destinationId, userId, #name, provider, #type, ciphertext, iv, #status, spaceId, createdAt, updatedAt',
+      ProjectionExpression: 'destinationId, userId, #name, provider, #type, ciphertext, iv, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#status': 'status', '#name': 'name', '#type': 'type' },
       ExpressionAttributeValues: { ':uid': userId, ':active': STATUS.active },
-      Limit: optional.limit,
-      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
-    })
-  );
-
-  return {
-    documents: (result.Items as IDestination[] | undefined) ?? [],
-    nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
-  };
-};
-
-const getDestinationsBySpace = async (
-  spaceId: string,
-  optional: { limit: number; cursor?: string }
-): Promise<{ documents: IDestination[]; nextCursor: string | null }> => {
-  const exclusiveStartKey = decodeCursor(optional.cursor);
-
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: DESTINATION_TABLE,
-      IndexName: 'spaceId-index',
-      KeyConditionExpression: 'spaceId = :spaceId',
-      FilterExpression: '#status = :active',
-      ProjectionExpression: 'destinationId, userId, #name, provider, #type, ciphertext, iv, #status, spaceId, createdAt, updatedAt',
-      ExpressionAttributeNames: { '#status': 'status', '#name': 'name', '#type': 'type' },
-      ExpressionAttributeValues: { ':spaceId': spaceId, ':active': STATUS.active },
       Limit: optional.limit,
       ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
     })
@@ -171,7 +143,6 @@ export {
   createDestination,
   getDestinationById,
   getDestinationsByUser,
-  getDestinationsBySpace,
   updateDestination,
   deleteDestination,
   getDecryptedDestinationConfig,

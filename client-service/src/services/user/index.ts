@@ -19,12 +19,6 @@ import { decrypt } from '../../utils/encryption';
 // DynamoDB table layout
 //   PK:  userId           (UUID)
 //   GSI: email-index      PK = contactEmail
-//   GSI: mobile-index     PK = contactMobileKey  e.g. "+919876543210"
-// ---------------------------------------------------------------------------
-
-const buildMobileKey = (mobile: { dialCode?: string; number?: string }): string =>
-  `${mobile.dialCode ?? ''}${mobile.number ?? ''}`;
-
 // ---------------------------------------------------------------------------
 // crmCredential is stored encrypted (utils/encryption.ts). Every caller that
 // needs the underlying Salesforce { access_token, refresh_token } shape was
@@ -43,7 +37,6 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
     ...data,
     userId: data.userId ?? uuidv4(),
     contactEmail: data.crmProfile?.email ?? data.contact?.email ?? data.contactEmail,
-    contactMobileKey: data.contact?.mobile ? buildMobileKey(data.contact.mobile) : undefined,
     crmProfileUserId: data.crmProfile?.userId ?? undefined,
     status: data.status ?? STATUS.active,
     createdAt: now,
@@ -87,33 +80,9 @@ const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
         TableName: USER_TABLE,
         IndexName: 'email-index',
         KeyConditionExpression: 'contactEmail = :email',
-        ProjectionExpression: 'userId, contactEmail, contactMobileKey, firstName, lastName, gender, #status, spaceId, createdAt, updatedAt',
+        ProjectionExpression: 'userId, contactEmail, firstName, lastName, gender, #status, createdAt, updatedAt',
         ExpressionAttributeValues: {
           ':email': search['contact.email'],
-          ...statusFilter?.ExpressionAttributeValues,
-        },
-        ExpressionAttributeNames: { '#status': 'status', ...statusFilter?.ExpressionAttributeNames },
-        FilterExpression: statusFilter?.FilterExpression,
-        Limit: 1,
-      })
-    );
-    return (result.Items?.[0] as IUser) ?? null;
-  }
-
-  // ── By mobile (GSI) ───────────────────────────────────────────────────────
-  if (search['contact.mobile.number'] && search['contact.mobile.dialCode']) {
-    const mobileKey = buildMobileKey({
-      dialCode: search['contact.mobile.dialCode'],
-      number: search['contact.mobile.number'],
-    });
-    const result = await docClient.send(
-      new QueryCommand({
-        TableName: USER_TABLE,
-        IndexName: 'mobile-index',
-        KeyConditionExpression: 'contactMobileKey = :mobileKey',
-        ProjectionExpression: 'userId, contactEmail, contactMobileKey, firstName, lastName, gender, #status, spaceId, createdAt, updatedAt',
-        ExpressionAttributeValues: {
-          ':mobileKey': mobileKey,
           ...statusFilter?.ExpressionAttributeValues,
         },
         ExpressionAttributeNames: { '#status': 'status', ...statusFilter?.ExpressionAttributeNames },
@@ -207,9 +176,8 @@ const buildFilterExpression = (search: Record<string, any>) => {
     names['#firstName'] = 'firstName';
     names['#lastName'] = 'lastName';
     names['#contactEmail'] = 'contactEmail';
-    names['#contactMobileKey'] = 'contactMobileKey';
     parts.push(
-      '(contains(#firstName, :search) OR contains(#lastName, :search) OR contains(#contactEmail, :search) OR contains(#contactMobileKey, :search))'
+      '(contains(#firstName, :search) OR contains(#lastName, :search) OR contains(#contactEmail, :search))'
     );
   }
 
@@ -224,8 +192,8 @@ const buildFilterExpression = (search: Record<string, any>) => {
 };
 
 // ---------------------------------------------------------------------------
-// Queries by email or mobile GSI and applies an optional FilterExpression
-// for remaining fields (e.g. gender).
+// Queries by email GSI and applies an optional FilterExpression for
+// remaining fields (e.g. gender).
 // ---------------------------------------------------------------------------
 const queryByContact = async (
   search: Record<string, any>,
@@ -233,57 +201,27 @@ const queryByContact = async (
 ): Promise<IUser[]> => {
   const filter = buildFilterExpression(search);
 
-  if (search['contact.email']) {
-    const result = await docClient.send(
-      new QueryCommand({
-        TableName: USER_TABLE,
-        IndexName: 'email-index',
-        KeyConditionExpression: 'contactEmail = :email',
-        ExpressionAttributeValues: {
-          ':email': search['contact.email'],
-          ...filter?.ExpressionAttributeValues,
-        },
-        ...(filter && {
-          FilterExpression: filter.FilterExpression,
-          ExpressionAttributeNames: filter.ExpressionAttributeNames,
-        }),
-        ...extraParams,
-      })
-    );
-    return (result.Items ?? []) as IUser[];
-  }
-
-  if (search['contact.mobile.number'] && search['contact.mobile.dialCode']) {
-    const mobileKey = buildMobileKey({
-      dialCode: search['contact.mobile.dialCode'],
-      number: search['contact.mobile.number'],
-    });
-    const result = await docClient.send(
-      new QueryCommand({
-        TableName: USER_TABLE,
-        IndexName: 'mobile-index',
-        KeyConditionExpression: 'contactMobileKey = :mobileKey',
-        ExpressionAttributeValues: {
-          ':mobileKey': mobileKey,
-          ...filter?.ExpressionAttributeValues,
-        },
-        ...(filter && {
-          FilterExpression: filter.FilterExpression,
-          ExpressionAttributeNames: filter.ExpressionAttributeNames,
-        }),
-        ...extraParams,
-      })
-    );
-    return (result.Items ?? []) as IUser[];
-  }
-
-  return [];
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: USER_TABLE,
+      IndexName: 'email-index',
+      KeyConditionExpression: 'contactEmail = :email',
+      ExpressionAttributeValues: {
+        ':email': search['contact.email'],
+        ...filter?.ExpressionAttributeValues,
+      },
+      ...(filter && {
+        FilterExpression: filter.FilterExpression,
+        ExpressionAttributeNames: filter.ExpressionAttributeNames,
+      }),
+      ...extraParams,
+    })
+  );
+  return (result.Items ?? []) as IUser[];
 };
 
 const getUsers = async (search: Record<string, any> = {}): Promise<IUser[]> => {
-  const hasContact =
-    search['contact.email'] ||
-    (search['contact.mobile.number'] && search['contact.mobile.dialCode']);
+  const hasContact = search['contact.email'];
 
   if (hasContact) {
     return queryByContact(search);
@@ -370,9 +308,7 @@ const getUsersWithPagination = async (
   const exclusiveStartKey = decodeCursor(optional.cursor);
   const mergedNames = { ...filter?.ExpressionAttributeNames, ...proj?.ExpressionAttributeNames };
 
-  const hasContact =
-    search['contact.email'] ||
-    (search['contact.mobile.number'] && search['contact.mobile.dialCode']);
+  const hasContact = search['contact.email'];
 
   if (hasContact) {
     const baseParams = {
@@ -383,38 +319,18 @@ const getUsersWithPagination = async (
       ...(Object.keys(mergedNames).length && { ExpressionAttributeNames: mergedNames }),
     };
 
-    let result;
-    if (search['contact.email']) {
-      result = await docClient.send(
-        new QueryCommand({
-          TableName: USER_TABLE,
-          IndexName: 'email-index',
-          KeyConditionExpression: 'contactEmail = :email',
-          ExpressionAttributeValues: {
-            ':email': search['contact.email'],
-            ...filter?.ExpressionAttributeValues,
-          },
-          ...baseParams,
-        })
-      );
-    } else {
-      const mobileKey = buildMobileKey({
-        dialCode: search['contact.mobile.dialCode'],
-        number: search['contact.mobile.number'],
-      });
-      result = await docClient.send(
-        new QueryCommand({
-          TableName: USER_TABLE,
-          IndexName: 'mobile-index',
-          KeyConditionExpression: 'contactMobileKey = :mobileKey',
-          ExpressionAttributeValues: {
-            ':mobileKey': mobileKey,
-            ...filter?.ExpressionAttributeValues,
-          },
-          ...baseParams,
-        })
-      );
-    }
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: USER_TABLE,
+        IndexName: 'email-index',
+        KeyConditionExpression: 'contactEmail = :email',
+        ExpressionAttributeValues: {
+          ':email': search['contact.email'],
+          ...filter?.ExpressionAttributeValues,
+        },
+        ...baseParams,
+      })
+    );
 
     return {
       documents: (result.Items ?? []) as IUser[],

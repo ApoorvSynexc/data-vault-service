@@ -88,7 +88,6 @@ export interface IBackupConfig {
   completedRecordCount?: number;
   sizeInBytes?: number;
   successRecordCount?: number;
-  spaceId?: string;
   triggerResults?: ITriggerResult[];
   createdAt: string;
   updatedAt: string;

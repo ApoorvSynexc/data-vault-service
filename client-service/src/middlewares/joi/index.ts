@@ -1,5 +1,4 @@
 export * from './archival-config';
-export * from './auth';
 export * from './backup-config';
 export * from './crm';
 export * from './public';
@@ -7,5 +6,6 @@ export * from './restore';
 export * from './salesforce';
 export * from './crm-metadata';
 export * from './destination';
+export * from './settings';
 export * from './user';
 export * from './shared';

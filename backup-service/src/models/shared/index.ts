@@ -5,3 +5,8 @@ export interface IAwsCredentials {
     secretAccessKey: string;
   };
 }
+
+export interface IS3ObjectKey {
+  objectId: string;
+  key: string;
+}

@@ -8,6 +8,6 @@ router.get('/object-schema', crmMetadataController.getSalesforceObjectSchema);
 router.get('/objects/list', crmMetadataController.getsalesfroceObjects);
 router.get('/objects/describe', crmMetadataController.getSalesforceDescribeObject);
 router.post('/objects/master/list', getMasterObjectsValidation, crmMetadataController.getSalesforceMasterObjects);
-router.get('/fields/list', crmMetadataController.getsalesfrocefields);
+router.get('/fields/list', crmMetadataController.getSalesforceFields);
 
 export const crmMetadataRouter = router;
