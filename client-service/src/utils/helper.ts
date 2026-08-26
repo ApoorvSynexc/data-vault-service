@@ -340,6 +340,29 @@ const combineDateAndTime = (dateStr: string, timeStr: string | undefined, tz: st
   return result.toDate();
 };
 
+const MS_PER_RATE_UNIT = { hour: 60 * 60 * 1000, day: 24 * 60 * 60 * 1000 } as const;
+
+// HOURLY/DAILY/WEEKLY compile to AWS rate() expressions, which fire at fixed
+// absolute-time intervals counted from the schedule's StartDate anchor (AWS
+// treats "day" as exactly 86400s, not a calendar day) — so the next occurrence
+// is anchor + k*step for the smallest k that lands strictly after `now`, not
+// `now + one interval`, which drifts away from the real AWS fire times as soon
+// as `now` isn't itself exactly on a previous occurrence.
+const nextRateOccurrence = (
+  anchor: dayjs.Dayjs | null,
+  now: dayjs.Dayjs,
+  amount: number,
+  unit: keyof typeof MS_PER_RATE_UNIT
+): Date => {
+  if (!anchor || !anchor.isBefore(now)) {
+    return (anchor ?? now).toDate();
+  }
+  const stepMs = amount * MS_PER_RATE_UNIT[unit];
+  const elapsedMs = now.valueOf() - anchor.valueOf();
+  const steps = Math.floor(elapsedMs / stepMs) + 1;
+  return new Date(anchor.valueOf() + steps * stepMs);
+};
+
 const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = new Date()): Date => {
   const s = scheduleConfig.scheduling;
   const tz = scheduleConfig.timeZone || 'UTC';
@@ -353,17 +376,23 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
     throw new Error('INCREMENTAL schedule requires a scheduling object');
   }
 
+  const anchor = s.startDate ? dayjs.tz(combineDateAndTime(s.startDate, s.startTime, tz), tz) : null;
+
   switch (s.frequency) {
     case 'HOURLY':
-      return now.add(s.interval || 1, 'hour').toDate();
+      return nextRateOccurrence(anchor, now, s.interval || 1, 'hour');
     case 'DAILY':
-      return now.add(s.interval || 1, 'day').toDate();
+      return nextRateOccurrence(anchor, now, s.interval || 1, 'day');
     case 'WEEKLY':
-      return now.add((s.interval || 1) * 7, 'day').toDate();
+      return nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
     case 'MONTHLY': {
       const day = s.monthDate ?? 1;
-      let next = now.date(day).hour(0).minute(0).second(0).millisecond(0);
-      if (!next.isAfter(now)) {
+      const [hour, minute] = (s.startTime ?? '00:00').split(':').map(Number);
+      // Once AWS's StartDate gates the schedule, no occurrence can land before it —
+      // anchor the search there when it's still ahead of `now`.
+      const reference = anchor && anchor.isAfter(now) ? anchor : now;
+      let next = reference.date(day).hour(hour).minute(minute).second(0).millisecond(0);
+      if (!next.isAfter(reference)) {
         next = next.add(1, 'month');
       }
       return next.toDate();
