@@ -316,7 +316,10 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
     case 'HOURLY': return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
     case 'DAILY': return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
     case 'WEEKLY': return `rate(${s.interval * 7} days)`;
-    case 'MONTHLY': return `cron(0 0 ${s.monthDate ?? 1} * ? *)`;
+    case 'MONTHLY': {
+      const [hour, minute] = (s.startTime ?? '00:00').split(':');
+      return `cron(${minute} ${hour} ${s.monthDate ?? 1} * ? *)`;
+    }
     case 'CUSTOM':
       if (s.startDate && s.startTime) {
         return `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`;
@@ -375,11 +378,33 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
   }
 };
 
+// HOURLY/DAILY/WEEKLY/MONTHLY compile to rate()/cron() expressions that carry no
+// start instant of their own — AWS would otherwise start firing them immediately
+// on creation instead of at the user's chosen startDate/startTime. AWS's own
+// StartDate/EndDate fields on the schedule (ignored for one-time schedules, so
+// ONCE/CUSTOM — which already encode a fixed fire instant in the cron itself —
+// are left alone) anchor the window instead of reinventing it in the expression.
+const RECURRING_FREQUENCIES = new Set(['HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY']);
+
+const computeAwsScheduleWindow = (scheduleConfig: IScheduleConfig): { startDate?: Date; endDate?: Date } => {
+  const s = scheduleConfig.scheduling;
+  if (!s || !RECURRING_FREQUENCIES.has(s.frequency)) {
+    return {};
+  }
+
+  const tz = scheduleConfig.timeZone || 'UTC';
+  return {
+    startDate: s.startDate ? combineDateAndTime(s.startDate, s.startTime, tz) : undefined,
+    endDate: s.endDate ? dayjs.tz(s.endDate, tz).endOf('day').toDate() : undefined,
+  };
+};
+
 const buildEventScheduleInput = (config: IBackupConfig) => ({
   name: `datavault-${config.backupConfigId}`,
   scheduleExpression: toAwsCronExpression(config.scheduleConfig!),
   timeZone: config.scheduleConfig!.timeZone,
   payload: { backupConfigId: config.backupConfigId, userId: config.userId },
+  ...computeAwsScheduleWindow(config.scheduleConfig!),
 });
 
 
@@ -403,6 +428,7 @@ export {
   pickLegacyFieldsKey,
   schemasAreEqual,
   buildEventScheduleInput,
+  computeAwsScheduleWindow,
   computeNextScheduledRun,
   toAwsCronExpression,
   type ISchemaS3KeyParams,
