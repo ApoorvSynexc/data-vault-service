@@ -1,11 +1,11 @@
 export interface IScheduleConfig {
-  type: string; // ONE_TIME | INCREMENTAL
+  type: 'ONE_TIME' | 'INCREMENTAL';
   timeZone: string;
   scheduling?: IScheduling;
 }
 
 export interface IScheduling {
-  frequency: string; // HOUR | DAYS | WEEK | MONTH
+  frequency: 'ONCE' | 'HOURLY' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'CUSTOM';
   interval: number;
   weekDays?: string[];
   monthDate?: number;
