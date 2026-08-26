@@ -478,9 +478,11 @@ export interface IFetchInactiveRecordTypesParams {
 }
 
 // The shape returned per inactive/deleted Record Type — always the flat
-// record-type object, never the UPDATE delta's {prev,new} wrapper.
+// record-type object, never the UPDATE delta's {prev,new} wrapper. `active`
+// (not `isActive`) — matches the raw change_data payload and
+// ISalesforceRecordTypeInfo.active from the live describe.
 export interface IInactiveRecordType {
-  isActive: boolean;
+  active: boolean;
   developerName: string;
   name: string;
   recordTypeId: string;
@@ -605,7 +607,7 @@ const retrieveRecords = async (
  * inside [startDate, endDate].
  *
  * UPDATE deltas report the record type only when it went inactive in this
- * change (`change_data.new.isActive === false`) — a type that stayed active,
+ * change (`change_data.new.active === false`) — a type that stayed active,
  * or went active→inactive→active again as separate deltas, is not what this
  * is for. DELETE deltas always report: a deleted type has no "new" half, and
  * being gone is itself the inactive state. INSERT never carries an inactive
@@ -640,7 +642,7 @@ const retrieveInactiveRecordTypes = async (
 
     if (row['change_type'] === 'DELETE') {
       inactiveTypes.push(changeData);
-    } else if (changeData.new?.isActive === false) {
+    } else if (changeData.new?.active === false) {
       inactiveTypes.push(changeData.new);
     }
   }
@@ -1065,7 +1067,7 @@ const retrieveMissingRecordTypes = async (
           if (!changeData) continue;
           const flagged: IInactiveRecordType | undefined =
             row['change_type'] === 'DELETE' ? changeData
-              : changeData.new?.isActive === false ? changeData.new
+              : changeData.new?.active === false ? changeData.new
                 : undefined;
           if (flagged?.recordTypeId) candidates.set(flagged.recordTypeId, flagged);
         }
