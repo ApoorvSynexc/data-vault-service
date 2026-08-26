@@ -418,11 +418,6 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
           crm.environment
         );
       }
-      // Deleted before the config row itself: this is the last point the config
-      // (and its triggerResults) is still around, and running it here — awaited,
-      // pre-response — means it actually executes as part of the request instead
-      // of racing a response that's already gone out.
-      await realTimeTriggerManagement('delete', config);
     } else if (isIncrementalBackup || isOneTimeSchedule) {
       await deleteAwsEventScheduler(buildBackupScheduleName(config.backupConfigId));
     }
@@ -433,6 +428,17 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     ]);
 
     makeResponse(req, res, 200, true, 'delete');
+
+    // Real-time cleanup is one sequential Salesforce deploy per object
+    // (RunLocalTests can take a while each) — run it after the response
+    // instead of making the client's connection sit through all of them and
+    // hit a gateway timeout (504). Uses `config` captured above, not a
+    // re-fetch — the DB row is already gone by the time this runs.
+    if (config.schedule === SCHEDULE_MODE.realtime) {
+      realTimeTriggerManagement('delete', config).catch((err) => {
+        logger.error(`[trigger-delete] backupConfigId ${config.backupConfigId} background cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
   } catch (error) {
     throw error;
   }
