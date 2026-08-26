@@ -4,6 +4,7 @@ import {
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
   getRestoreObjectListByConfigId,
+  getObjectListByConfigId,
   getBackupJobIdsChangedBetween,
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
@@ -304,10 +305,13 @@ const parseRetrieveParams = (
 ):
   | { ok: true; value: IRetrieveRecordsParams }
   | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  const { backupConfigId, objectApiName, type, columnNames, searchText, cursor } = body;
+  const { backupConfigId, configType, objectApiName, type, columnNames, searchText, cursor } = body;
 
   if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
     return { ok: false, error: 'id_required' };
+  }
+  if (!VALID_CONFIG_TYPES.includes(configType as ConfigType)) {
+    return { ok: false, error: 'invalid_config_type' };
   }
   if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
     return { ok: false, error: 'object_api_name_required' };
@@ -336,6 +340,7 @@ const parseRetrieveParams = (
 
   const value: IRetrieveRecordsParams = {
     backupConfigId: backupConfigId.trim(),
+    configType: configType as ConfigType,
     objectApiName: objectApiName.trim(),
     type: type as RetrieveType,
     columnNames: columns,
@@ -391,6 +396,7 @@ const parseRetrieveParams = (
  *
  * Body: {
  *   backupConfigId: string     (required — owns the CRM, destination and tables)
+ *   configType:     'BACKUP' | 'ARCHIVAL'   (required — which config type backupConfigId belongs to)
  *   objectApiName:  string     (required)
  *   type:           'ENTIRE' | 'CHANGED_BETWEEN'
  *   startDate:      ISO 8601   (required for CHANGED_BETWEEN, ignored otherwise)
@@ -566,6 +572,9 @@ const parseDryRunParams = (
   if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
     return { ok: false, error: 'id_required' };
   }
+  if (!VALID_CONFIG_TYPES.includes(configType)) {
+    return { ok: false, error: 'invalid_config_type' };
+  }
 
   const type = source?.type;
   if (!VALID_RETRIEVE_TYPES.includes(type)) {
@@ -579,19 +588,16 @@ const parseDryRunParams = (
   if (!VALID_DRYRUN_SCOPE_TYPES.includes(restoreScope.type)) {
     return { ok: false, error: 'invalid_restore_scope_type' };
   }
-  if (restoreScope.type === 'ALL' && (!configType || !VALID_CONFIG_TYPES.includes(configType))) {
-    return { ok: false, error: 'invalid_config_type' };
-  }
 
   const scopeCheck = validateDryRunScope(restoreScope);
   if (!scopeCheck.ok) return scopeCheck;
 
   const value: IDryRunParams = {
     backupConfigId: backupConfigId.trim(),
+    configType,
     userId,
     type: type as DryRunSourceType,
     restoreScope,
-    ...(configType ? { configType } : {}),
   };
 
   if (value.type === 'CHANGED_BETWEEN') {
@@ -619,7 +625,7 @@ const parseDryRunParams = (
  * POST /dry-run
  * Body: {
  *   backupConfigId: string
- *   configType?:    'BACKUP' | 'ARCHIVAL'   (required when restoreScope.type is 'ALL')
+ *   configType:     'BACKUP' | 'ARCHIVAL'   (required — which config type backupConfigId belongs to)
  *   source: { type: 'ENTIRE' | 'CHANGED_BETWEEN', startDate?, endDate? }
  *   selection: { restoreScope: IRestoreScope }   (type: ALL | OBJECT | FIELD | FILTER)
  * }
@@ -814,6 +820,21 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
 const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
   const { ...body } = req.body;
+
+  // Joi only checks internal consistency (e.g. DELETED_BETWEEN requires configType
+  // ARCHIVAL within the payload itself) — this confirms the claimed configType
+  // actually matches backupConfigId's stored type, same cross-check
+  // getObjectListByConfigIdHandler already applies to the object-list endpoint.
+  const { found: configTypeMatches } = await getObjectListByConfigId(
+    body.source.backupConfigId,
+    body.source.configType,
+    user!.userId
+  );
+  if (!configTypeMatches) {
+    makeResponse(req, res, 400, false, 'invalid_config_type');
+    return;
+  }
+
   const restoreId = uuidv4();
   const payload = { restoreId, userId: user!.userId, ...body };
   const created = await createRestore(payload);
