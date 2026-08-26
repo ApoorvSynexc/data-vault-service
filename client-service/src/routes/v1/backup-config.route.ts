@@ -14,6 +14,7 @@ router.get('/list', backupConfigController.listBackupConfigsHandler);
 router.get('/', backupConfigController.getBackupConfigHandler);
 router.put('/', updateBackupConfigValidation, backupConfigController.updateBackupConfigHandler);
 router.delete('/', backupConfigController.deleteBackupConfigHandler);
+router.get('/run-now', backupConfigController.runNowHandler);
 router.get('/stats', backupConfigController.getBackupJobStatsHandler);
 router.get('/initalize-payload-transform', backupConfigController.initalizePayloadTransformHandler);
 router.get('/sync-metadata', backupConfigController.syncMetadataTriggerHandler);
