@@ -1,4 +1,7 @@
 import jwt from 'jsonwebtoken';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
 import {
   DURATION_TYPE,
   JWT_ACCESS_EXPIRY,
@@ -11,6 +14,9 @@ import { IRequest, IResponse, makeResponse } from '../lib';
 import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
 import { IBackupConfig, IBackupObject, IObject, IScheduleConfig } from '../models';
 import { logger } from '../middlewares';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 type S3KeyType = 'backup' | 'archival';
@@ -321,26 +327,34 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   }
 };
 
-const combineDateAndTime = (dateStr: string, timeStr?: string): Date => {
-  const date = new Date(dateStr);
+// Interprets dateStr/timeStr as wall-clock time in `tz` (not the server's
+// local timezone) — e.g. startDate "2026-08-20" + startTime "09:00" in
+// "America/New_York" is 09:00 New York time, not 09:00 wherever this process
+// happens to be running.
+const combineDateAndTime = (dateStr: string, timeStr: string | undefined, tz: string): Date => {
+  let result = dayjs.tz(dateStr, tz);
   if (timeStr) {
     const [hours, minutes] = timeStr.split(':').map(Number);
-    date.setHours(hours, minutes, 0, 0);
+    result = result.hour(hours).minute(minutes).second(0).millisecond(0);
   }
-  return date;
+  return result.toDate();
 };
 
 // Computes the next concrete date/time this schedule would fire, starting
-// from `from` (defaults to now). Mirrors the same frequency branches as
-// toAwsCronExpression so the two never disagree about what "next run" means
-// for a given scheduling config — used to stamp upcomingJob.skipDateTime
-// when a scheduled run is being skipped (e.g. because it was just invoked
-// manually via "Run Now").
+// from `from` (defaults to now), evaluated in the schedule's own timeZone —
+// so a MONTHLY run pinned to the 1st, or an HOURLY interval, lands on the
+// day/hour boundary as the org configuring it sees it, not the server's.
+// Mirrors the same frequency branches as toAwsCronExpression so the two
+// never disagree about what "next run" means for a given scheduling config
+// — used to stamp upcomingJob.skipDateTime when a scheduled run is being
+// skipped (e.g. because it was just invoked manually via "Run Now").
 const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = new Date()): Date => {
   const s = scheduleConfig.scheduling;
+  const tz = scheduleConfig.timeZone || 'UTC';
+  const now = dayjs.tz(from, tz);
 
   if (scheduleConfig.type === SCHEDULE_TYPE.oneTime && s?.frequency === DURATION_TYPE.once) {
-    return s.startDate ? combineDateAndTime(s.startDate, s.startTime) : from;
+    return s.startDate ? combineDateAndTime(s.startDate, s.startTime, tz) : from;
   }
 
   if (!s) {
@@ -348,32 +362,23 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
   }
 
   switch (s.frequency) {
-    case 'HOURLY': {
-      const next = new Date(from);
-      next.setHours(next.getHours() + (s.interval || 1));
-      return next;
-    }
-    case 'DAILY': {
-      const next = new Date(from);
-      next.setDate(next.getDate() + (s.interval || 1));
-      return next;
-    }
-    case 'WEEKLY': {
-      const next = new Date(from);
-      next.setDate(next.getDate() + (s.interval || 1) * 7);
-      return next;
-    }
+    case 'HOURLY':
+      return now.add(s.interval || 1, 'hour').toDate();
+    case 'DAILY':
+      return now.add(s.interval || 1, 'day').toDate();
+    case 'WEEKLY':
+      return now.add((s.interval || 1) * 7, 'day').toDate();
     case 'MONTHLY': {
       const day = s.monthDate ?? 1;
-      const next = new Date(from.getFullYear(), from.getMonth(), day, 0, 0, 0, 0);
-      if (next <= from) {
-        next.setMonth(next.getMonth() + 1);
+      let next = now.date(day).hour(0).minute(0).second(0).millisecond(0);
+      if (!next.isAfter(now)) {
+        next = next.add(1, 'month');
       }
-      return next;
+      return next.toDate();
     }
     case 'CUSTOM':
       if (s.startDate) {
-        return combineDateAndTime(s.startDate, s.startTime);
+        return combineDateAndTime(s.startDate, s.startTime, tz);
       }
       throw new Error('CUSTOM schedule requires startDate and startTime');
     default:
