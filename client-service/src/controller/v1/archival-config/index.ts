@@ -32,7 +32,7 @@ import {
     updateAwsEventSchedule,
     deleteAwsEventScheduler,
 } from "../../../services";
-import { buildEventScheduleInput, computeAwsScheduleWindow, filtereObjects, isOwner, toAwsCronExpression, wrapController } from "../../../utils/helper";
+import { buildArchivalObjectScheduleName, buildScheduleInput, filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
@@ -314,13 +314,13 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     continue;
                 }
 
-                await createAwsEventScheduler({
-                    name: `datavault-objId-${scheduledObject.id}`,
-                    scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
-                    timeZone: scheduledObject.scheduleConfig!.timeZone,
-                    payload: { backupConfigId: config.backupConfigId, userId: config.userId, id: scheduledObject.id },
-                    ...computeAwsScheduleWindow(scheduledObject.scheduleConfig!),
-                });
+                await createAwsEventScheduler(
+                    buildScheduleInput(
+                        buildArchivalObjectScheduleName(scheduledObject.id),
+                        scheduledObject.scheduleConfig!,
+                        { backupConfigId: config.backupConfigId, userId: config.userId, id: scheduledObject.id }
+                    )
+                );
             }
         }
 
@@ -450,13 +450,13 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     continue;
                 }
 
-                await updateAwsEventSchedule({
-                    name: `datavault-objId-${scheduledObject.id}`,
-                    scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
-                    timeZone: scheduledObject.scheduleConfig!.timeZone,
-                    payload: { backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id },
-                    ...computeAwsScheduleWindow(scheduledObject.scheduleConfig!),
-                });
+                await updateAwsEventSchedule(
+                    buildScheduleInput(
+                        buildArchivalObjectScheduleName(scheduledObject.id),
+                        scheduledObject.scheduleConfig!,
+                        { backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id }
+                    )
+                );
             }
         }
     }
@@ -500,7 +500,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     continue;
                 }
 
-                await deleteAwsEventScheduler(`datavault-objId-${scheduledObject.id}`);
+                await deleteAwsEventScheduler(buildArchivalObjectScheduleName(scheduledObject.id));
             }
         }
 

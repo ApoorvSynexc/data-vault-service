@@ -418,13 +418,24 @@ const computeAwsScheduleWindow = (scheduleConfig: IScheduleConfig): { startDate?
   };
 };
 
-const buildEventScheduleInput = (config: IBackupConfig) => ({
-  name: `datavault-${config.backupConfigId}`,
-  scheduleExpression: toAwsCronExpression(config.scheduleConfig!),
-  timeZone: config.scheduleConfig!.timeZone,
-  payload: { backupConfigId: config.backupConfigId, userId: config.userId },
-  ...computeAwsScheduleWindow(config.scheduleConfig!),
+
+const buildBackupScheduleName = (backupConfigId: string): string => `datavault-${backupConfigId}`;
+const buildArchivalObjectScheduleName = (objectId: string): string => `datavault-objId-${objectId}`;
+
+
+const buildScheduleInput = (name: string, scheduleConfig: IScheduleConfig, payload: Record<string, unknown>) => ({
+  name,
+  scheduleExpression: toAwsCronExpression(scheduleConfig),
+  timeZone: scheduleConfig.timeZone,
+  payload,
+  ...computeAwsScheduleWindow(scheduleConfig),
 });
+
+const buildEventScheduleInput = (config: IBackupConfig) =>
+  buildScheduleInput(buildBackupScheduleName(config.backupConfigId), config.scheduleConfig!, {
+    backupConfigId: config.backupConfigId,
+    userId: config.userId,
+  });
 
 
 export {
@@ -447,6 +458,9 @@ export {
   pickLegacyFieldsKey,
   schemasAreEqual,
   buildEventScheduleInput,
+  buildScheduleInput,
+  buildBackupScheduleName,
+  buildArchivalObjectScheduleName,
   computeAwsScheduleWindow,
   computeNextScheduledRun,
   toAwsCronExpression,
