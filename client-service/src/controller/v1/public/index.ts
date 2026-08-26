@@ -150,7 +150,9 @@ const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise
 const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
     const event = req.body;
-    const { backupConfigId, userId } = event.detail as { backupConfigId: string, userId: string };
+    // `id` is only present on archival's per-object schedule payload (see
+    // buildScheduleInput) — backup-config's config-level schedule never sends it.
+    const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
 
     const config = await getBackupConfigById(backupConfigId);
     if (!config) {
@@ -160,6 +162,27 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     const user = await getUser({ userId });
     if (!user) {
       return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    // A manually invoked run-now marks the next automatic fire to be skipped —
+    // on backup-config that flag lives on the config, on archival it lives on the
+    // specific object whose schedule fired. Consume it (reset to skip:false) and
+    // no-op this invocation instead of running the job twice.
+    const targetObject = objectId ? config.objects?.find((obj) => obj.id === objectId) : undefined;
+    const shouldSkip = objectId ? targetObject?.upcomingJob?.skip : config.upcomingJob?.skip;
+
+    if (shouldSkip) {
+      if (objectId) {
+        const updatedObjects = (config.objects ?? []).map((obj) =>
+          obj.id === objectId ? { ...obj, upcomingJob: { skip: false } } : obj
+        );
+        await updateBackupConfig(config.backupConfigId, { objects: updatedObjects });
+      } else {
+        await updateBackupConfig(config.backupConfigId, { upcomingJob: { skip: false } });
+      }
+      logger.info(`Skipped EventBridge-triggered run — already invoked manually | backupConfigId=${backupConfigId}${objectId ? ` objectId=${objectId}` : ''}`);
+      makeResponse(req, res, 200, true, 'fetch');
+      return;
     }
 
     await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
