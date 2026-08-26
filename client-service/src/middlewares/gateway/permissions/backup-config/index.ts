@@ -53,6 +53,11 @@ const backupConfigPermissions = [
         path: '/backup-config/sync-metadata',
         method: 'GET',
         permissions: ['backup.read']
+    },
+    {
+        path: '/backup-config/run-now',
+        method: 'GET',
+        permissions: ['backup.write']
     }
 ];
 

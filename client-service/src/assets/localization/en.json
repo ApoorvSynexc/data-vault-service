@@ -107,6 +107,7 @@
   "invalid_full_restore": "fullRestore must be a boolean",
   "invalid_time_format": "startTime and endTime must be ISO 8601 strings, e.g. 2026-06-30 or 2026-06-30T23:59:59.999Z",
   "invalid_time_range": "the start of the window must not be later than its end",
+  "invalid_schedule_config": "Backup configuration has an invalid or missing schedule configuration",
   "crm_not_connected": "Salesforce is not connected for this organization. Please reconnect your account",
   "admin_provisioning_failed": "Failed to provision admin permissions in Salesforce. Please try again"
 }

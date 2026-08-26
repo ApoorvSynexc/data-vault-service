@@ -64,6 +64,11 @@ const archivalConfigPermissions = [
         method : 'GET',
         permissions : ['archival.read']
     },
+    {
+        path: '/archival-config/run-now',
+        method: 'GET',
+        permissions: ['archival.write']
+    },
 ];
 
 export { archivalConfigPermissions };
