@@ -74,9 +74,9 @@ export interface ITriggerResult {
   permissionSetError?: string;
   error?: string;
   // Set on a create FAILED result — the deploy (Apex Trigger + SeeAllData test
-  // class) failed and the recovery flow needs the user to supply the Trigger
-  // Record ID so it can be looked up and forced Active directly.
-  needsTriggerRecordId?: boolean;
+  // class) failed and the recovery flow needs the user to supply a record Id
+  // of `objectApiName` so a retry deploy can build its test class around it.
+  needsRecoveryRecordId?: boolean;
 }
 
 export interface IBackupConfig {

@@ -138,7 +138,7 @@ export const recoverTriggerValidation = (req: Request, res: Response, next: Next
   const schema = Joi.object({
     backupConfigId: Joi.string().required(),
     objectApiName: Joi.string().required(),
-    triggerRecordId: Joi.string().required(),
+    recordId: Joi.string().required(),
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });
