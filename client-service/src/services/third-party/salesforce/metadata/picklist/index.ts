@@ -1,7 +1,7 @@
 import { logger } from "../../../../../middlewares";
 import { IUser } from "../../../../../models";
 import { uploadToS3 } from "../../../s3-bucket";
-import { getApexFields, getApexPicklistValues, unwrapApex } from "../../apex";
+import { ISalesforceFieldDescribe, ISalesforcePicklistValue } from "..";
 import {
     buildS3Key,
     diffEntities,
@@ -11,29 +11,14 @@ import {
     ISchemaComparison,
     IStoredEntry,
 } from "../common";
-import { ISchemaField } from "../field";
 
 const PICKLIST_TYPES = new Set(['picklist', 'multipicklist']);
-
-export interface IPicklistValue {
-    label: string;
-    value: string;
-}
-
-// get-picklist-values replies with an envelope around the value list, not a
-// bare array — count/fieldApiName/objectApiName travel alongside the values.
-export interface IPicklistValuesResponse {
-    count: number;
-    values: IPicklistValue[];
-    fieldApiName: string;
-    objectApiName: string;
-}
 
 export interface IPicklistValueChange {
     value: string;
     changedKeys: string[];
-    before: IPicklistValue;
-    after: IPicklistValue;
+    before: ISalesforcePicklistValue;
+    after: ISalesforcePicklistValue;
 }
 
 export interface IPicklistDiff {
@@ -43,21 +28,22 @@ export interface IPicklistDiff {
     modifiedValues: IPicklistValueChange[];
 }
 
-// The full envelope is stored, not just the value list, so count/fieldApiName/
-// objectApiName survive in the history too.
-export type IStoredPicklistEntry = IStoredEntry<IPicklistValuesResponse>;
+export type IStoredPicklistEntry = IStoredEntry<ISalesforcePicklistValue[]>;
 
 export interface IPicklistFieldResult extends IPicklistDiff {
     fieldApiName: string;
-    latestValues: IPicklistValuesResponse;
+    latestValues: ISalesforcePicklistValue[];
     storedEntries: IStoredPicklistEntry[];
 }
 
-const picklistValueKey = (value: IPicklistValue): string => value.value ?? value.label ?? "";
+const picklistValueKey = (value: ISalesforcePicklistValue): string => value.value ?? value.label ?? "";
 
 // Value-by-value, object-level diff of two picklist snapshots — see diffEntities
 // in ../common for the shared, order-independent, non-stringify comparison.
-export const diffPicklistValues = (existing: IPicklistValue[], latest: IPicklistValue[]): IPicklistDiff => {
+export const diffPicklistValues = (
+    existing: ISalesforcePicklistValue[],
+    latest: ISalesforcePicklistValue[]
+): IPicklistDiff => {
     const { changed, added, removed, modified } = diffEntities(existing, latest, picklistValueKey);
     return {
         valuesChanged: changed,
@@ -73,58 +59,49 @@ export const diffPicklistValues = (existing: IPicklistValue[], latest: IPicklist
 };
 
 // One picklist/multipicklist field's value-history, diffed the same way schema
-// fields are: read the last stored snapshot, fetch the live values, compare.
-// The diff itself only looks at .values — count/fieldApiName/objectApiName are
-// carried along in the stored envelope but aren't part of the comparison.
+// fields are: read the last stored snapshot, compare against the values already
+// nested on this field in the describe response (no separate fetch per field —
+// that's the whole point of sourcing from the describe call).
 const picklistFieldComparison = async (
     params: ISchemaComparison,
-    fieldApiName: string
+    fieldApiName: string,
+    latestValues: ISalesforcePicklistValue[]
 ): Promise<IPicklistFieldResult> => {
-    const { objectName, destConfig, user } = params;
+    const { destConfig } = params;
     const key = buildS3Key({ ...params, metadataType: "picklist", fieldApiName });
 
-    const [storedEntries, valuesReply] = await Promise.all([
-        getStoredEntries<IPicklistValuesResponse>(destConfig, key),
-        getApexPicklistValues({ user, objectApiName: objectName, fieldApiName }),
-    ]);
-
-    const latestValues: IPicklistValuesResponse = unwrapApex<IPicklistValuesResponse>(valuesReply) ?? {
-        count: 0,
-        values: [],
-        fieldApiName,
-        objectApiName: objectName,
-    };
-    const storedValues = storedEntries.length
-        ? (storedEntries[storedEntries.length - 1].context.values ?? [])
-        : [];
-    const diff = diffPicklistValues(storedValues, latestValues.values ?? []);
+    const storedEntries = await getStoredEntries<ISalesforcePicklistValue[]>(destConfig, key);
+    const storedValues = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
+    const diff = diffPicklistValues(storedValues, latestValues);
 
     return { ...diff, fieldApiName, latestValues, storedEntries };
 };
 
 // Every picklist/multipicklist field on the object, compared in parallel — same
 // shape as schemaComparison, one level deeper (per-field instead of per-object).
-export const picklistComparison = async (params: ISchemaComparison): Promise<IPicklistFieldResult[]> => {
-    const { objectName, policyConfigType, user } = params;
-    const unwrapped = unwrapApex<{ fields?: ISchemaField[] } | ISchemaField[]>(
-        await getApexFields({ user, objectName, mode: policyConfigType })
-    );
-    const schema: ISchemaField[] = Array.isArray(unwrapped) ? unwrapped : (unwrapped?.fields ?? []);
-
-    const picklistFields = schema.filter((field) =>
-        PICKLIST_TYPES.has(String(field.dataType ?? "").toLowerCase())
+// `fields` is the same describe-sourced array schemaHandler receives.
+export const picklistComparison = async (
+    params: ISchemaComparison,
+    fields: ISalesforceFieldDescribe[]
+): Promise<IPicklistFieldResult[]> => {
+    const picklistFields = fields.filter((field) =>
+        PICKLIST_TYPES.has(String(field.type ?? "").toLowerCase())
     );
 
     return Promise.all(
-        picklistFields.map((field) => picklistFieldComparison(params, field.apiName))
+        picklistFields.map((field) => picklistFieldComparison(params, field.name, field.picklistValues ?? []))
     );
 };
 
-export const picklistHandler = async (params: ISalesforceMetadataHandler, knownUser?: IUser) => {
+export const picklistHandler = async (
+    params: ISalesforceMetadataHandler,
+    fields: ISalesforceFieldDescribe[],
+    knownUser?: IUser
+) => {
     const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const { user, destConfig } = await getComparisonContext(backupConfigId, knownUser);
-        const results = await picklistComparison({ ...params, destConfig, user });
+        const { destConfig } = await getComparisonContext(backupConfigId, knownUser);
+        const results = await picklistComparison({ ...params, destConfig }, fields);
         const changedResults = results.filter((result) => result.valuesChanged);
 
         await Promise.all(

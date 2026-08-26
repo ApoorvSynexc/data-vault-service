@@ -1,7 +1,6 @@
 import { logger } from "../../../../../middlewares";
 import { IUser } from "../../../../../models";
 import { uploadToS3 } from "../../../s3-bucket";
-import { getRecordTypeMetadata, unwrapApex } from "../../apex";
 import {
     buildS3Key,
     diffEntities,
@@ -12,28 +11,29 @@ import {
     IStoredEntry,
 } from "../common";
 
-export interface IRecordTypeInfo {
-    recordTypeId: string;
+// Shape of one entry in describedObject.recordTypeInfos (standard sobjects/
+// {name}/describe) — the orchestrator (../index.ts) fetches the describe once
+// per object and hands `recordTypeInfos` in directly. This module no longer
+// fetches anything itself (no more Apex object-record-type-metadata call).
+// Mirrors backup-service/.../metadata/recordType/index.ts exactly — both
+// services append to the same schema history file, so the stored shape must
+// stay byte-for-byte identical between them. Unlike the retired Apex reply,
+// the standard describe carries no developerName — recordTypeId is the only
+// stable identifier available here.
+export interface ISalesforceRecordTypeInfo {
+    active: boolean;
+    available: boolean;
+    defaultRecordTypeMapping: boolean;
+    master: boolean;
     name: string;
-    developerName: string;
-    isActive: boolean;
-    isDefault: boolean;
-    isMaster: boolean;
-}
-
-// get-record-types replies with an envelope around the record-type list, not a
-// bare array — count/objectApiName travel alongside recordTypes.
-export interface IRecordTypesResponse {
-    count: number;
-    recordTypes: IRecordTypeInfo[];
-    objectApiName: string;
+    recordTypeId: string;
 }
 
 export interface IRecordTypeChange {
     recordTypeId: string;
     changedKeys: string[];
-    before: IRecordTypeInfo;
-    after: IRecordTypeInfo;
+    before: ISalesforceRecordTypeInfo;
+    after: ISalesforceRecordTypeInfo;
 }
 
 export interface IRecordTypeDiff {
@@ -43,23 +43,25 @@ export interface IRecordTypeDiff {
     modifiedRecordTypes: IRecordTypeChange[];
 }
 
-// The full envelope is stored, not just the record-type list, so count/
-// objectApiName survive in the history too.
-export type IStoredRecordTypeEntry = IStoredEntry<IRecordTypesResponse>;
+export type IStoredRecordTypeEntry = IStoredEntry<ISalesforceRecordTypeInfo[]>;
 
 export interface IRecordTypeComparisonResult extends IRecordTypeDiff {
-    latestRecordTypes: IRecordTypesResponse;
+    latestRecordTypes: ISalesforceRecordTypeInfo[];
     storedEntries: IStoredRecordTypeEntry[];
 }
 
-const recordTypeKey = (recordType: IRecordTypeInfo): string =>
-    recordType.recordTypeId ?? recordType.developerName ?? "";
+export interface IRecordTypeComparisonParams extends ISchemaComparison {
+    latestRecordTypes: ISalesforceRecordTypeInfo[];
+}
+
+const recordTypeKey = (recordType: ISalesforceRecordTypeInfo): string =>
+    recordType.recordTypeId ?? "";
 
 // Record-type-by-record-type, object-level diff of two snapshots — see
 // diffEntities in ../common for the shared, order-independent, non-stringify comparison.
 export const diffRecordTypes = (
-    existing: IRecordTypeInfo[],
-    latest: IRecordTypeInfo[]
+    existing: ISalesforceRecordTypeInfo[],
+    latest: ISalesforceRecordTypeInfo[]
 ): IRecordTypeDiff => {
     const { changed, added, removed, modified } = diffEntities(existing, latest, recordTypeKey);
     return {
@@ -75,38 +77,40 @@ export const diffRecordTypes = (
     };
 };
 
-// The diff itself only looks at .recordTypes — count/objectApiName are carried
-// along in the stored envelope but aren't part of the comparison.
 export const recordTypeComparison = async (
-    params: ISchemaComparison
+    params: IRecordTypeComparisonParams
 ): Promise<IRecordTypeComparisonResult> => {
-    const { objectName, destConfig, user } = params;
+    const { destConfig, latestRecordTypes } = params;
     const key = buildS3Key({ ...params, metadataType: "recordTypes" });
 
-    const [storedEntries, recordTypesReply] = await Promise.all([
-        getStoredEntries<IRecordTypesResponse>(destConfig, key),
-        getRecordTypeMetadata({ user, objectApiName: objectName }),
-    ]);
-
-    const latestRecordTypes: IRecordTypesResponse = unwrapApex<IRecordTypesResponse>(recordTypesReply) ?? {
-        count: 0,
-        recordTypes: [],
-        objectApiName: objectName,
-    };
+    const storedEntries = await getStoredEntries<ISalesforceRecordTypeInfo[]>(destConfig, key);
     const storedRecordTypes = storedEntries.length
-        ? (storedEntries[storedEntries.length - 1].context.recordTypes ?? [])
+        ? storedEntries[storedEntries.length - 1].context
         : [];
-    const diff = diffRecordTypes(storedRecordTypes, latestRecordTypes.recordTypes ?? []);
+    const diff = diffRecordTypes(storedRecordTypes, latestRecordTypes);
 
     return { ...diff, latestRecordTypes, storedEntries };
 };
 
-export const recordTypeHandler = async (params: ISalesforceMetadataHandler, knownUser?: IUser) => {
+// `recordTypeInfos` is the already-fetched latest snapshot (the orchestrator's
+// describe call), treated here as-is — no live Salesforce call happens in this module.
+export const recordTypeHandler = async (
+    params: ISalesforceMetadataHandler,
+    recordTypeInfos: ISalesforceRecordTypeInfo[],
+    knownUser?: IUser
+) => {
     const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const { user, destConfig } = await getComparisonContext(backupConfigId, knownUser);
-        const diff = await recordTypeComparison({ ...params, destConfig, user });
+        const { destConfig } = await getComparisonContext(backupConfigId, knownUser);
+        const diff = await recordTypeComparison({
+            ...params,
+            destConfig,
+            latestRecordTypes: recordTypeInfos,
+        });
         if (diff.recordTypesChanged) {
+            logger.info(
+                `Object record type change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedRecordTypes.length}, removed=${diff.removedRecordTypes.length}, modified=${diff.modifiedRecordTypes.length}`
+            );
             const operations: Array<"inserts" | "updates" | "deletes"> = [];
             if (diff.addedRecordTypes.length) {
                 operations.push("inserts");
@@ -132,10 +136,6 @@ export const recordTypeHandler = async (params: ISalesforceMetadataHandler, know
             });
 
             await uploadToS3(destConfig, s3Key, buffer);
-
-            logger.info(
-                `Object record type change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedRecordTypes.length}, removed=${diff.removedRecordTypes.length}, modified=${diff.modifiedRecordTypes.length}`
-            );
         }
 
         logger.info(

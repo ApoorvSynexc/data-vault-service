@@ -5,18 +5,20 @@ import { IUser } from "../../../../models";
 import { getCrmById } from "../../../crm";
 import { getDecryptedCrmCredential } from "../../../user";
 import { childHandler } from "./child";
-import { ISalesforceMetadataHandler } from "./common";
-import { schemaHandler } from "./field";
+import { getComparisonContext, ISalesforceMetadataHandler } from "./common";
+import { isQueryableField, schemaHandler } from "./field";
 import { picklistHandler } from "./picklist";
 import { recordTypeHandler } from "./recordType";
 
-// Unlike backup-service's orchestrator, no salesforceContext (instanceUrl/tokens)
-// needs to be threaded in here — every apex.ts call this module makes (including
-// childHandler's) resolves Salesforce credentials itself from the user record.
+// Like backup-service's orchestrator, one standard Salesforce REST `describe`
+// call per object feeds every metadataType — no per-handler Apex REST call.
+// Both services append to the very same S3 schema history file, so what gets
+// stored per metadataType must stay byte-for-byte identical between them —
+// see the comments in ./field, ./picklist, ./recordType, ./child.
 //
 // `knownUser` is optional — a caller that already has the user in hand (e.g. a
 // job comparing many objects/metadataTypes for the same config) can pass it
-// through to skip a redundant getUser() per call; omit it and each handler
+// through to skip a redundant getUser() per call; omit it and this orchestrator
 // resolves the user itself from params.backupConfigId.
 export const salesforceMetadataHandler = async (
     params: ISalesforceMetadataHandler,
@@ -28,21 +30,25 @@ export const salesforceMetadataHandler = async (
             `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
         );
 
+        const { user } = await getComparisonContext(backupConfigId, knownUser);
+        const describedObject = await salesforceObjectDescribe({ user, objectName });
+
         switch (metadataType) {
             case "fields": {
-                const diff = await schemaHandler(params, knownUser);
-                return { diff, metadataType };
+                const fields = describedObject.fields.filter(isQueryableField);
+                const diff = await schemaHandler(params, fields, user);
+                return { diff, metadataType, fields };
             }
             case "childs": {
-                const diff = await childHandler(params, knownUser);
+                const diff = await childHandler(params, describedObject.childRelationships, user);
                 return { diff, metadataType };
             }
             case "picklist": {
-                const diff = await picklistHandler(params, knownUser);
+                const diff = await picklistHandler(params, describedObject.fields, user);
                 return { diff, metadataType };
             }
             case "recordTypes": {
-                const diff = await recordTypeHandler(params, knownUser);
+                const diff = await recordTypeHandler(params, describedObject.recordTypeInfos, user);
                 return { diff, metadataType };
             }
         }
@@ -217,7 +223,7 @@ interface ISalesforceObjectDescribeParams {
     objectName: string;
 }
 
-interface ISalesforcePicklistValue {
+export interface ISalesforcePicklistValue {
     active: boolean;
     defaultValue: boolean;
     label: string;
@@ -225,7 +231,7 @@ interface ISalesforcePicklistValue {
     value: string;
 }
 
-interface ISalesforceFieldDescribe {
+export interface ISalesforceFieldDescribe {
     aggregatable: boolean;
     aiPredictionField: boolean;
     autoNumber: boolean;
@@ -285,7 +291,7 @@ interface ISalesforceFieldDescribe {
     writeRequiresMasterRead: boolean;
 }
 
-interface ISalesforceChildRelationship {
+export interface ISalesforceChildRelationship {
     cascadeDelete: boolean;
     childSObject: string;
     deprecatedAndHidden: boolean;
@@ -294,6 +300,20 @@ interface ISalesforceChildRelationship {
     junctionReferenceTo: string[];
     relationshipName: string | null;
     restrictedDelete: boolean;
+}
+
+// One entry in describedObject.recordTypeInfos. Unlike the retired Apex
+// endpoint, the standard describe carries no developerName — recordTypeId is
+// the only stable identifier available here. Mirrors backup-service's own
+// metadata/recordType/index.ts exactly (see that module's comment): both
+// services append to the same schema history file, so this shape can't diverge.
+export interface ISalesforceRecordTypeInfo {
+    active: boolean;
+    available: boolean;
+    defaultRecordTypeMapping: boolean;
+    master: boolean;
+    name: string;
+    recordTypeId: string;
 }
 
 export interface ISalesforceObjectDescribeResponse {
@@ -327,7 +347,7 @@ export interface ISalesforceObjectDescribeResponse {
     namedLayoutInfos: unknown[];
     networkScopeFieldName: string | null;
     queryable: boolean;
-    recordTypeInfos: unknown[];
+    recordTypeInfos: ISalesforceRecordTypeInfo[];
     replicateable: boolean;
     retrieveable: boolean;
     searchLayoutable: boolean;
