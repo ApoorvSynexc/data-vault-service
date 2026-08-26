@@ -20,6 +20,11 @@ const restorePermissions = [
         permissions: ['restore.read']
     },
     {
+        path : '/restore/retrieve/fetch-count',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
         path : '/restore/fetch-object-fields',
         method: 'GET',
         permissions: ['restore.read']
