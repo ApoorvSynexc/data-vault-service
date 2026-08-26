@@ -41,10 +41,12 @@ const athena = new AthenaClient({
   // }),
 });
 
-// Adaptive polling: wait POLL_FIRST_MS before the first status check (Athena
-// almost never finishes sooner, so an earlier check is a wasted call), then
-// poll on a 250ms→2s backoff ladder.
-const POLL_FIRST_MS = 2000;
+// Adaptive polling: wait POLL_FIRST_MS before the first status check, then
+// poll on a 250ms→2s backoff ladder. These compressed Hudi/delta tables are
+// small and partition-pruned, so queries routinely finish under 1s — a 2s
+// first-wait was pure dead time on the common case. 400ms still avoids
+// hammering GetQueryExecution; slower queries just climb the backoff ladder.
+const POLL_FIRST_MS = 400;
 const POLL_INITIAL_MS = 250;
 const POLL_MAX_MS = 2000;
 
