@@ -79,18 +79,18 @@ const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> =
 };
 
 const getObjectChildHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const user = req.user;
-    // `type` is the schedule/realtime split; older clients sent it as `mode`.
-    const { crmId, objectName, type, mode, relationshipDepth } = req.query;
-    if (!crmId) {
-        return makeResponse(req, res, 400, false, 'crm_id_required');
-    }
+  const user = req.user;
+  // `type` is the schedule/realtime split; older clients sent it as `mode`.
+  const { crmId, objectName, type, mode, relationshipDepth } = req.query;
+  if (!crmId) {
+    return makeResponse(req, res, 400, false, 'crm_id_required');
+  }
 
-    const [apexResult] = await Promise.all([
-        getApexObjectChilds({ user, objectName: String(objectName), mode: 'backup', type: toApexType(type ?? mode), relationshipType: 'MASTER', relationshipDepth: 0 }),
-    ]);
+  const [apexResult] = await Promise.all([
+    getApexObjectChilds({ user, objectName: String(objectName), mode: 'backup', type: toApexType(type ?? mode), relationshipType: 'MASTER', relationshipDepth: 0 }),
+  ]);
 
-    makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
+  makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
 };
 
 const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -318,7 +318,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       await triggerBackupJob({ user, config: updated, type: 'backup' });
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
-     await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+    await updateAwsEventSchedule(buildEventScheduleInput(updated!));
   } else if (updated?.schedule === SCHEDULE_MODE.realtime && !updated.lastBackupAt) {
     await triggerBackupJob({ user, config: updated, type: 'backup' });
     const triggerResults = await realTimeTriggerManagement('create', updated);
@@ -352,6 +352,8 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   try {
+    const isIncrementalBackup = config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL';
+    const isOneTimeSchedule = config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'ONE_TIME' && !config.lastBackupAt;
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const crm = await getCrmById(config.crmId);
       if (crm && crmCredential) {
@@ -370,7 +372,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       // pre-response — means it actually executes as part of the request instead
       // of racing a response that's already gone out.
       //await realTimeTriggerManagement('delete', config);
-    } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
+    } else if (isIncrementalBackup || isOneTimeSchedule) {
       await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
     }
 
@@ -384,6 +386,44 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     throw error;
   }
 };
+
+const runNowHandler = async (req: IRequest, res: IResponse) => {
+  const { backupConfigId } = req.query;
+  if (!backupConfigId) {
+    makeResponse(req, res, 400, false, 'id_required');
+    return;
+  }
+
+  const backupConfig = await getBackupConfigById(String(backupConfigId));
+  if (!backupConfig) {
+    makeResponse(req, res, 400, false, 'backup_config_not_found');
+    return;
+  }
+
+  if (backupConfig.schedule === SCHEDULE_MODE.realtime) {
+    makeResponse(req, res, 400, false, 'backup_config_not_found');
+  }
+
+  if (backupConfig.schedule === SCHEDULE_MODE.schedule && backupConfig.scheduleConfig?.type === 'ONE_TIME') {
+    if (!backupConfig.lastBackupAt) {
+      await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup' });
+      await deleteAwsEventScheduler(`datavault-${backupConfig.backupConfigId}`);
+    }
+
+    return makeResponse(req, res, 400, false, 'job_already_invoked');
+  }
+
+  if (backupConfig.schedule === SCHEDULE_MODE.schedule && backupConfig.scheduleConfig?.type === 'INCREMENTAL') {
+    await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup' });
+    const upcomingJob = {
+      skip: true,
+      skipReason: 'Invoked immediately',
+      skipDateTime: ''
+    }
+    await updateBackupConfig(backupConfig.backupConfigId, { upcomingJob });
+  }
+
+}
 
 const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { slug } = req.query;
@@ -458,7 +498,7 @@ const syncMetadataHandler = async (req: IRequest, res: IResponse): Promise<void>
   }
 
   const user = await getUser({ userId: config.userId });
-  if(!user) {
+  if (!user) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
