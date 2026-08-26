@@ -468,6 +468,47 @@ export const buildDeltaPartitionWhere = (
   return parts.length ? parts.join(' AND ') : null;
 };
 
+// =============================================================================
+// Record counts — POST /dry-run
+// =============================================================================
+/**
+ * Pure counting builders for the dry-run endpoint: how many records a restore
+ * would touch, without reading any row data. Reuse the same table names,
+ * window handling (asInstant/inWindow) and record-row filter (RECORD_ROWS_ONLY)
+ * as the retrieval builders above — a dry-run count must agree with what
+ * fetch-records would actually return.
+ */
+
+// ENTIRE: a plain count of the Hudi table (current state), optionally narrowed
+// by a FILTER-scope WHERE body built from restoreScope.filters via
+// buildAthenaFilterWhere. Per the dry-run contract, ENTIRE counts main Hudi
+// data only — deleted records (reconstructed from the delta table) are not
+// part of it.
+export const buildHudiCountSql = (hudiTable: string, whereBody?: string | null): string =>
+  `SELECT COUNT(*) AS cnt FROM "${hudiTable}"` + whereClause([whereBody], 'WHERE');
+
+/**
+ * CHANGE_BETWEEN: total/UPDATE/DELETE counts out of the delta table's
+ * record-level rows (is_schema_change excluded via RECORD_ROWS_ONLY) whose
+ * change_time falls in [startDate, endDate].
+ *
+ * ponytail: FILTER-scope field conditions are not applied here — change_data
+ * is a JSON snapshot (DELETE) or {prev,new} diff (UPDATE), not flat columns,
+ * so the same WHERE body ENTIRE uses cannot bind to it as-is. Object/field
+ * scope (which objects to count) still applies via which table this runs
+ * against. Add per-field json_extract_scalar conditions, split by change_type,
+ * if a per-field CHANGE_BETWEEN count is needed later.
+ */
+export const buildDeltaCountSql = (
+  deltaTable: string,
+  p: { startDate: string; endDate: string; deltaPartition?: string | null }
+): string =>
+  `SELECT COUNT(*) AS total_cnt, ` +
+  `SUM(CASE WHEN change_type = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
+  `SUM(CASE WHEN change_type = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt ` +
+  `FROM "${deltaTable}"` +
+  whereClause([RECORD_ROWS_ONLY, inWindow('change_time', p.startDate, p.endDate), p.deltaPartition], 'WHERE');
+
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npx ts-node src/services/restore-retrieve/athena-fetch.ts
 if (require.main === module) {
@@ -606,6 +647,28 @@ if (require.main === module) {
   } catch (e) {
     assert.ok(e instanceof FilterError && e.code === 'invalid_column_name');
   }
+
+  // ── Dry-run counts ──────────────────────────────────────────────────────────
+  assert.strictEqual(buildHudiCountSql('t_hudi'), `SELECT COUNT(*) AS cnt FROM "t_hudi"`);
+  assert.strictEqual(
+    buildHudiCountSql('t_hudi', `"Name" = 'Acme'`),
+    `SELECT COUNT(*) AS cnt FROM "t_hudi" WHERE ("Name" = 'Acme')`
+  );
+
+  const deltaCount = buildDeltaCountSql('t_delta', { startDate: START, endDate: END, deltaPartition: prune });
+  assert.ok(deltaCount.startsWith(
+    `SELECT COUNT(*) AS total_cnt, SUM(CASE WHEN change_type = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
+    `SUM(CASE WHEN change_type = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt FROM "t_delta"`
+  ));
+  assert.ok(deltaCount.includes('(NOT COALESCE(is_schema_change, false))'), 'schema-change deltas excluded');
+  assert.ok(deltaCount.includes(prune), 'prunes to the window’s months like every other delta scan');
+  assert.ok(!deltaCount.includes('ORDER BY') && !deltaCount.includes('LIMIT'), 'a count has no paging');
+  assert.ok(
+    deltaCount.includes(`from_iso8601_timestamp('${START}')`) && deltaCount.includes(`from_iso8601_timestamp('${END}')`),
+    'window is parsed, not string-compared'
+  );
+  const deltaCountNoPrune = buildDeltaCountSql('t_delta', { startDate: START, endDate: END });
+  assert.ok(!deltaCountNoPrune.includes('year >'), 'no deltaPartition passed → no partition prune');
 
   console.log('athena-fetch self-check passed');
 }
