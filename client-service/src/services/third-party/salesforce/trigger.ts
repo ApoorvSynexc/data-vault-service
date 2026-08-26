@@ -3,12 +3,12 @@ import { createHash } from 'crypto';
 import { salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig, ITriggerResult, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
-import { appendObjectsToBackupConfig } from '../../backup-config';
+import { appendObjectsToBackupConfig, getBackupConfigsByCrm } from '../../backup-config';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
 import { getMasterChildApiNames } from './apex';
 import { withNamespace } from '../../../utils/salesforce-namespace';
-import { SALESFORCE_NAMESPACE } from '../../../constant';
+import { SALESFORCE_NAMESPACE, SCHEDULE_MODE } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
@@ -38,6 +38,13 @@ const objectApiNameOf = (config: IBackupConfig, result: ITriggerResult): string 
   result.objectApiName ??
   (config.objectNames ?? []).find((name) => triggerNameFor(name) === result.triggerName) ??
   String(result.triggerName).replace('DataVault_', '').replace('_Trigger', '');
+
+// testClassNameFor is deterministic today, but the stored value is what's
+// actually deployed in the org — preferring it (falling back to recompute for
+// older records saved before this was tracked) means a future change to the
+// naming/truncation rule can't orphan an already-deployed class.
+const testClassNameOf = (triggerName: string, result: ITriggerResult): string =>
+  result.testClassName ?? testClassNameFor(triggerName);
 
 // ---------------------------------------------------------------------------
 // Production orgs reject the Tooling API for writing Apex (both POST create
@@ -596,7 +603,7 @@ const recoverTriggerCreation = async (
   tokens: SalesforceTokens,
   objectApiName: string,
   recordId: string
-): Promise<{ triggerName: string }> => {
+): Promise<{ triggerName: string; testClassName: string }> => {
   if (!SALESFORCE_RECORD_ID_PATTERN.test(recordId)) {
     throw new Error(`invalid_record_id:${recordId}`);
   }
@@ -615,7 +622,7 @@ const recoverTriggerCreation = async (
 
   await deployTriggerWithTestClass(instanceUrl, tokens, objectApiName, testClassBody, `Trigger ${triggerName} recovery`);
 
-  return { triggerName };
+  return { triggerName, testClassName };
 };
 
 // ---------------------------------------------------------------------------
@@ -651,10 +658,10 @@ const deployTriggerStatus = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiName: string,
-  status: 'Active' | 'Inactive'
+  status: 'Active' | 'Inactive',
+  testClassName: string
 ): Promise<void> => {
   const triggerName = triggerNameFor(objectApiName);
-  const testClassName = testClassNameFor(triggerName);
 
   const packageXml =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
@@ -709,9 +716,9 @@ const deployTriggerStatus = async (
 const deleteSingleTrigger = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  triggerName: string
+  triggerName: string,
+  testClassName: string
 ): Promise<void> => {
-  const testClassName = testClassNameFor(triggerName);
   const testClassId = await fetchApexClassId(instanceUrl, tokens, testClassName);
 
   await destructiveDeploy(
@@ -983,20 +990,22 @@ const createTriggers = async (
   for (let i = 0; i < objectApiNames.length; i++) {
     const objectApiName = objectApiNames[i];
     const triggerName = triggerNameFor(objectApiName);
+    const testClassName = testClassNameFor(triggerName);
     try {
       const existing = await fetchApexTriggerStatus(instanceUrl, tokens, triggerName);
       if (existing?.Status === 'Active') {
-        results.push({ objectApiName, triggerName, status: 'EXIST' });
+        results.push({ objectApiName, triggerName, testClassName, status: 'EXIST' });
         continue;
       }
       await createSingleTrigger(instanceUrl, tokens, objectApiName);
-      results.push({ objectApiName, triggerName, status: 'CREATED' });
+      results.push({ objectApiName, triggerName, testClassName, status: 'CREATED' });
       await timer(500);
     } catch (err) {
       console.log(`Error creating trigger for ${objectApiName}:`, err);
       results.push({
         objectApiName,
         triggerName,
+        testClassName,
         status: 'FAILED',
         error: err instanceof Error ? err.message : String(err),
         needsRecoveryRecordId: true,
@@ -1039,8 +1048,10 @@ const toggleTriggerStatus = async (
     const triggerResult = triggerResults[i];
     const objectApiName = objectApiNameOf(config, triggerResult);
     const triggerName = triggerNameFor(objectApiName);
+    const testClassName = testClassNameOf(triggerName, triggerResult);
     triggerResult.objectApiName = objectApiName;
     triggerResult.triggerName = triggerName;
+    triggerResult.testClassName = testClassName;
     try {
       const trigger = await fetchApexTriggerStatus(instanceUrl, tokens, triggerName);
 
@@ -1052,7 +1063,7 @@ const toggleTriggerStatus = async (
         } else if (trigger.Status === 'Active') {
           triggerResult.status = 'EXIST';
         } else {
-          await deployTriggerStatus(instanceUrl, tokens, objectApiName, 'Active');
+          await deployTriggerStatus(instanceUrl, tokens, objectApiName, 'Active', testClassName);
           triggerResult.status = 'CREATED';
         }
       } else {
@@ -1061,7 +1072,7 @@ const toggleTriggerStatus = async (
         } else if (trigger.Status === 'Inactive') {
           triggerResult.status = 'INACTIVE';
         } else {
-          await deployTriggerStatus(instanceUrl, tokens, objectApiName, 'Inactive');
+          await deployTriggerStatus(instanceUrl, tokens, objectApiName, 'Inactive', testClassName);
           triggerResult.status = 'INACTIVE';
         }
       }
@@ -1081,8 +1092,46 @@ const toggleTriggerStatus = async (
 };
 
 // ---------------------------------------------------------------------------
-// Delete the DataVaultRealTimeTriggerAccess permission set via Metadata API deploy.
-// Called after all triggers are deleted so the permission set is cleaned up too.
+// Delete every PermissionSetAssignment on a permission set before the set
+// itself is destroyed. PermissionSetAssignment is a regular SObject (e.g. an
+// admin assigning the set to the integration user via Setup), not a metadata
+// component, so this goes through the standard Data API's sObject Collections
+// DELETE rather than a Metadata API deploy — up to 200 Ids per call, chunked.
+// ---------------------------------------------------------------------------
+const COMPOSITE_DELETE_CHUNK_SIZE = 200;
+
+const deletePermissionSetAssignments = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  permissionSetId: string
+): Promise<void> => {
+  const { data } = await salesforceRequest<{ records: { Id: string }[] }>(
+    {
+      url: soqlUrl(instanceUrl, `SELECT Id FROM PermissionSetAssignment WHERE PermissionSetId = '${permissionSetId}'`),
+      method: 'GET',
+    },
+    tokens
+  );
+  const ids = (data.records ?? []).map((record) => record.Id);
+  if (!ids.length) { return; }
+
+  for (let i = 0; i < ids.length; i += COMPOSITE_DELETE_CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + COMPOSITE_DELETE_CHUNK_SIZE);
+    await salesforceRequest(
+      {
+        url: `${instanceUrl}/services/data/v${API_VERSION}/composite/sobjects?ids=${chunk.join(',')}&allOrNone=false`,
+        method: 'DELETE',
+      },
+      tokens
+    );
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Delete the DataVaultRealTimeTriggerAccess permission set via Metadata API
+// deploy — assignments first (see deletePermissionSetAssignments), since the
+// set can't be meaningfully in use once its own triggers are gone. Called
+// after all triggers are deleted so the permission set is cleaned up too.
 // No-op if the permission set doesn't exist.
 // ---------------------------------------------------------------------------
 const deletePermissionSet = async (
@@ -1091,6 +1140,8 @@ const deletePermissionSet = async (
 ): Promise<void> => {
   const existing = await fetchPermissionSetId(instanceUrl, tokens);
   if (!existing) { return; }
+
+  await deletePermissionSetAssignments(instanceUrl, tokens, existing);
 
   await destructiveDeploy(
     instanceUrl,
@@ -1102,8 +1153,15 @@ const deletePermissionSet = async (
 
 // ---------------------------------------------------------------------------
 // Delete triggers — permanently removes each object's Apex Trigger + Test
-// Class from the org. After all triggers are deleted, the permission set is
-// also deleted. No-op for objects whose trigger doesn't exist.
+// Class from the org, then the permission set. Both are shared, org-wide
+// resources when more than one real-time backup config exists for the same
+// CRM connection, so neither is safe to delete unconditionally:
+//   - An object's trigger/test class is skipped (SKIPPED_SHARED) if another
+//     real-time config in this org still lists that object.
+//   - The permission set is only deleted if this is the last real-time config
+//     left in the org — otherwise a sibling config's handler-class/external-
+//     credential access would be deleted out from under it.
+// No-op for objects whose trigger doesn't exist.
 // ---------------------------------------------------------------------------
 const deleteTriggers = async (
   instanceUrl: string,
@@ -1125,11 +1183,27 @@ const deleteTriggers = async (
     return [{ objectApiName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
+  const siblingRealtimeConfigs = (await getBackupConfigsByCrm(config.crmId)).filter(
+    (sibling) => sibling.backupConfigId !== config.backupConfigId && sibling.schedule === SCHEDULE_MODE.realtime
+  );
+  const sharedObjectNames = new Set(
+    siblingRealtimeConfigs.flatMap((sibling) => sibling.objectNames ?? []).map((name) => name.toLowerCase())
+  );
+  const isLastRealtimeConfig = siblingRealtimeConfigs.length === 0;
+
   for (const triggerResult of triggerResults) {
     const objectApiName = objectApiNameOf(config, triggerResult);
     const triggerName = triggerNameFor(objectApiName);
+    const testClassName = testClassNameOf(triggerName, triggerResult);
     triggerResult.objectApiName = objectApiName;
     triggerResult.triggerName = triggerName;
+    triggerResult.testClassName = testClassName;
+
+    if (sharedObjectNames.has(objectApiName.toLowerCase())) {
+      triggerResult.status = 'SKIPPED_SHARED';
+      logger.info(`[trigger-delete] ${objectApiName}: still used by another real-time config in this org — trigger kept`);
+      continue;
+    }
 
     // No status gate: attempting delete regardless of the last recorded status
     // is what catches the case that status has drifted from what's actually
@@ -1142,7 +1216,7 @@ const deleteTriggers = async (
         continue;
       }
 
-      await deleteSingleTrigger(instanceUrl, tokens, triggerName);
+      await deleteSingleTrigger(instanceUrl, tokens, triggerName, testClassName);
 
       triggerResult.status = 'DELETED';
       logger.info(`[trigger-delete] ${objectApiName}: deleted trigger ${triggerName}`);
@@ -1153,12 +1227,17 @@ const deleteTriggers = async (
     }
   }
 
-  // Delete the permission set after all triggers are removed.
-  try {
-    await deletePermissionSet(instanceUrl, tokens);
-    logger.info(`[trigger-delete] permission set '${PERMISSION_SET_NAME}' deleted`);
-  } catch (err) {
-    logger.error(`[trigger-delete] failed to delete permission set: ${err instanceof Error ? err.message : String(err)}`);
+  // The permission set is shared org-wide infrastructure, not per-config —
+  // only tear it down once no other real-time config in this org needs it.
+  if (isLastRealtimeConfig) {
+    try {
+      await deletePermissionSet(instanceUrl, tokens);
+      logger.info(`[trigger-delete] permission set '${PERMISSION_SET_NAME}' deleted`);
+    } catch (err) {
+      logger.error(`[trigger-delete] failed to delete permission set: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else {
+    logger.info(`[trigger-delete] permission set kept — ${siblingRealtimeConfigs.length} other real-time config(s) remain in this org`);
   }
 
   const deleted = triggerResults.filter((r) => r.status === 'DELETED').length;

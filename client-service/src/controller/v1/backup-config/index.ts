@@ -180,7 +180,14 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
 
     makeResponse(req, res, 201, true, 'create', config);
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      const triggerResults = await realTimeTriggerManagement('create', config);
+      let triggerResults = await realTimeTriggerManagement('create', config);
+      // A config can be created already PAUSED (not just paused later) —
+      // creation always deploys the trigger Active, so inactivate it right
+      // away rather than leaving a paused config syncing from the start.
+      if (config.status === STATUS.paused) {
+        triggerResults = await realTimeTriggerManagement('inactivate', { ...config, triggerResults });
+        logger.info(`backupConfigId ${config.backupConfigId} created paused: inactivated ${triggerResults.length} trigger(s)`);
+      }
       await updateBackupConfig(config.backupConfigId, { triggerResults });
       logger.info(`Real-time trigger setup results for backupConfigId ${config.backupConfigId}: ${triggerResults.length}`);
     }
@@ -310,6 +317,23 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
 
   const updated = await updateBackupConfig(String(backupConfigId), req.body);
+
+  // Real-time sync runs through an Apex Trigger per object — pausing/resuming
+  // a realtime config must inactivate/reactivate those triggers in step, or a
+  // paused config keeps syncing (or a resumed one stays dark).
+  if (updated!.schedule === SCHEDULE_MODE.realtime && updated!.status !== existing!.status) {
+    if (updated!.status === STATUS.paused) {
+      const triggerResults = await realTimeTriggerManagement('inactivate', updated!);
+      await updateBackupConfig(updated!.backupConfigId, { triggerResults });
+      updated!.triggerResults = triggerResults;
+      logger.info(`backupConfigId ${updated!.backupConfigId} paused: inactivated ${triggerResults.length} trigger(s)`);
+    } else if (existing!.status === STATUS.paused) {
+      const triggerResults = await realTimeTriggerManagement('activate', updated!);
+      await updateBackupConfig(updated!.backupConfigId, { triggerResults });
+      updated!.triggerResults = triggerResults;
+      logger.info(`backupConfigId ${updated!.backupConfigId} resumed (${updated!.status}): activated ${triggerResults.length} trigger(s)`);
+    }
+  }
 
   if (updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig && updated.scheduleConfig.type === SCHEDULE_TYPE.oneTime && !updated.lastBackupAt) {
     const scheduleConfig = updated.scheduleConfig;
@@ -580,11 +604,20 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
 
   try {
     const recovered = await recoverTriggerCreation(instanceUrl, tokens, objectApiName, recordId);
-    const triggerResults = (config.triggerResults ?? []).map((result) =>
-      result.objectApiName === objectApiName
-        ? { ...result, status: 'CREATED' as const, triggerName: recovered.triggerName, error: undefined, needsRecoveryRecordId: false }
-        : result
-    );
+    const triggerResults = (config.triggerResults ?? []).map((result) => {
+      if (result.objectApiName !== objectApiName) { return result; }
+      // Drop `error` rather than setting it to undefined — DynamoDB's marshaller
+      // throws on undefined values (needs removeUndefinedValues:true) unless the
+      // key is absent entirely.
+      const { error, ...cleared } = result;
+      return {
+        ...cleared,
+        status: 'CREATED' as const,
+        triggerName: recovered.triggerName,
+        testClassName: recovered.testClassName,
+        needsRecoveryRecordId: false,
+      };
+    });
     await updateBackupConfig(config.backupConfigId, { triggerResults });
     makeResponse(req, res, 200, true, 'update', { triggerName: recovered.triggerName, status: 'CREATED' });
   } catch (error) {
