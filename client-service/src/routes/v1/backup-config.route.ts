@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { backupConfigController } from '../../controller';
-import { createBackupConfigValidation, updateBackupConfigValidation } from '../../middlewares';
+import { createBackupConfigValidation, updateBackupConfigValidation, recoverTriggerValidation } from '../../middlewares';
 
 const router = Router();
 
@@ -18,5 +18,6 @@ router.get('/stats', backupConfigController.getBackupJobStatsHandler);
 router.get('/initalize-payload-transform', backupConfigController.initalizePayloadTransformHandler);
 router.get('/sync-metadata', backupConfigController.syncMetadataTriggerHandler);
 router.get('/sync-schema-metadata', backupConfigController.syncMetadataHandler);
+router.post('/trigger/recover', recoverTriggerValidation, backupConfigController.recoverTriggerHandler);
 
 export const backupRouter = router;

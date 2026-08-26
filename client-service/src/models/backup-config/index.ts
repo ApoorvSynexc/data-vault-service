@@ -57,13 +57,17 @@ export interface ITriggerResult {
   // label named a component that no longer exists in the org.
   objectApiName: string;
   flowNames: string[];
-  // Legacy: only present on configs written before flows replaced Apex triggers.
-  // Read to recover the object name, then dropped. Never written.
+  // The deployed Apex trigger's name. Empty (`flowNames: []`) whenever this is
+  // set — creation deploys an Apex Trigger + Test Class, not Flows.
   triggerName?: string;
   status: "INITIALIZE" | "CREATED" | "EXIST" | "FAILED" | "DELETED" | "DELETE_FAILED" | "NOT_FOUND" | "INACTIVE" | "INACTIVATE_FAILED";
   permissionSetStatus?: "CREATED" | "EXIST" | "FAILED";
   permissionSetError?: string;
   error?: string;
+  // Set on a create FAILED result — the deploy (Apex Trigger + SeeAllData test
+  // class) failed and the recovery flow needs the user to supply the Trigger
+  // Record ID so it can be looked up and forced Active directly.
+  needsTriggerRecordId?: boolean;
 }
 
 export interface IBackupConfig {
