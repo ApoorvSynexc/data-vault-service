@@ -321,6 +321,66 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   }
 };
 
+const combineDateAndTime = (dateStr: string, timeStr?: string): Date => {
+  const date = new Date(dateStr);
+  if (timeStr) {
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    date.setHours(hours, minutes, 0, 0);
+  }
+  return date;
+};
+
+// Computes the next concrete date/time this schedule would fire, starting
+// from `from` (defaults to now). Mirrors the same frequency branches as
+// toAwsCronExpression so the two never disagree about what "next run" means
+// for a given scheduling config — used to stamp upcomingJob.skipDateTime
+// when a scheduled run is being skipped (e.g. because it was just invoked
+// manually via "Run Now").
+const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = new Date()): Date => {
+  const s = scheduleConfig.scheduling;
+
+  if (scheduleConfig.type === SCHEDULE_TYPE.oneTime && s?.frequency === DURATION_TYPE.once) {
+    return s.startDate ? combineDateAndTime(s.startDate, s.startTime) : from;
+  }
+
+  if (!s) {
+    throw new Error('INCREMENTAL schedule requires a scheduling object');
+  }
+
+  switch (s.frequency) {
+    case 'HOURLY': {
+      const next = new Date(from);
+      next.setHours(next.getHours() + (s.interval || 1));
+      return next;
+    }
+    case 'DAILY': {
+      const next = new Date(from);
+      next.setDate(next.getDate() + (s.interval || 1));
+      return next;
+    }
+    case 'WEEKLY': {
+      const next = new Date(from);
+      next.setDate(next.getDate() + (s.interval || 1) * 7);
+      return next;
+    }
+    case 'MONTHLY': {
+      const day = s.monthDate ?? 1;
+      const next = new Date(from.getFullYear(), from.getMonth(), day, 0, 0, 0, 0);
+      if (next <= from) {
+        next.setMonth(next.getMonth() + 1);
+      }
+      return next;
+    }
+    case 'CUSTOM':
+      if (s.startDate) {
+        return combineDateAndTime(s.startDate, s.startTime);
+      }
+      throw new Error('CUSTOM schedule requires startDate and startTime');
+    default:
+      throw new Error(`Unsupported schedule frequency: ${s.frequency}`);
+  }
+};
+
 const buildEventScheduleInput = (config: IBackupConfig) => ({
   name: `datavault-${config.backupConfigId}`,
   scheduleExpression: toAwsCronExpression(config.scheduleConfig!),
@@ -349,6 +409,7 @@ export {
   pickLegacyFieldsKey,
   schemasAreEqual,
   buildEventScheduleInput,
+  computeNextScheduledRun,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
   type SchemaKind,
