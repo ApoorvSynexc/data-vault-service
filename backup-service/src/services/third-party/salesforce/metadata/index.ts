@@ -18,7 +18,8 @@ export const salesforceMetadataHandler = async (
   params: ISalesforceMetadataHandler,
   salesforceContext?: ISalesforceContext
 ) => {
-  const { metadataType, backupConfig, backupJobId, objectNames, object } = params;
+  const { metadataType, backupConfig, backupJobId, object } = params;
+  let { objectNames = [] } = params as { objectNames?: string[] };
   const backupConfigId = backupConfig.backupConfigId;
   const objectName = object.name;
   try {
@@ -35,6 +36,11 @@ export const salesforceMetadataHandler = async (
       salesforceContext?.tokens,
       objectName
     );
+
+    if (!objectNames || !objectNames.length) {
+      const filteredObjects = await salesforceObjectFilteredList(salesforceContext?.instanceUrl, salesforceContext?.tokens);
+      objectNames = filteredObjects.map(o => o.name);
+    }
 
     switch (metadataType) {
       case 'fields': {

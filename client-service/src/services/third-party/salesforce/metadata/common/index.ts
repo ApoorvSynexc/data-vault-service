@@ -16,9 +16,11 @@ export interface ISalesforceMetadataHandler {
     isInitialBackup: boolean;
 }
 
+// `user` isn't needed here any more — every metadataType now gets its latest
+// snapshot handed in by the orchestrator (one describe call), so nothing in the
+// comparison layer talks to Salesforce directly.
 export interface ISchemaComparison extends ISalesforceMetadataHandler {
     destConfig: IS3Config;
-    user: IUser;
 }
 
 export interface IBuildKeyParams extends ISalesforceMetadataHandler {
@@ -53,8 +55,8 @@ export const valuesAreEqual = (a: unknown, b: unknown): boolean => {
 };
 
 // Every key that differs between two entities of the same shape — for schema
-// fields that's label/dataType/isCustom/isRequired/...; for picklist values
-// it's label/value/... — not just a couple of hardcoded properties.
+// fields that's label/type/cascadeDelete/referenceTo/...; for picklist values
+// it's label/value/active/... — not just a couple of hardcoded properties.
 export const getChangedKeys = <T extends object>(before: T, after: T): string[] => {
     const b = before as Record<string, unknown>;
     const a = after as Record<string, unknown>;

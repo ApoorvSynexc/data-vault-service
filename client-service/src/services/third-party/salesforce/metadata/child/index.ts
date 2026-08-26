@@ -1,7 +1,7 @@
 import { logger } from "../../../../../middlewares";
 import { IUser } from "../../../../../models";
 import { uploadToS3 } from "../../../s3-bucket";
-import { getApexObjectChilds, unwrapApex } from "../../apex";
+import { ISalesforceChildRelationship } from "..";
 import {
     buildS3Key,
     diffEntities,
@@ -12,18 +12,12 @@ import {
     IStoredEntry,
 } from "../common";
 
-export interface ISalesforceChild {
-    apiName?: string;
-    relationshipType?: string; // MASTER | LOOKUP | REQUIRED_LOOKUP
-    isRequired?: boolean;
-    [key: string]: any;
-}
-
 export interface IChildChange {
-    apiName: string;
+    childSObject: string;
+    field: string;
     changedKeys: string[];
-    before: ISalesforceChild;
-    after: ISalesforceChild;
+    before: ISalesforceChildRelationship;
+    after: ISalesforceChildRelationship;
 }
 
 export interface IChildDiff {
@@ -33,25 +27,32 @@ export interface IChildDiff {
     modifiedChilds: IChildChange[];
 }
 
-export type IStoredChildEntry = IStoredEntry<ISalesforceChild[]>;
+export type IStoredChildEntry = IStoredEntry<ISalesforceChildRelationship[]>;
 
 export interface IChildComparisonResult extends IChildDiff {
-    latestChilds: ISalesforceChild[];
+    latestChilds: ISalesforceChildRelationship[];
     storedEntries: IStoredChildEntry[];
 }
 
-const childKey = (child: ISalesforceChild): string => child.apiName ?? "";
+// childSObject alone isn't always unique — a parent can have more than one
+// relationship to the same child object type (e.g. two lookups to Contact) —
+// so the field (the FK field name on the child) disambiguates.
+const childKey = (child: ISalesforceChildRelationship): string => `${child.childSObject}:${child.field}`;
 
 // Child-by-child, object-level diff of two relationship-tree snapshots — see
 // diffEntities in ../common for the shared, order-independent, non-stringify comparison.
-export const diffChilds = (existing: ISalesforceChild[], latest: ISalesforceChild[]): IChildDiff => {
+export const diffChilds = (
+    existing: ISalesforceChildRelationship[],
+    latest: ISalesforceChildRelationship[]
+): IChildDiff => {
     const { changed, added, removed, modified } = diffEntities(existing, latest, childKey);
     return {
         childsChanged: changed,
         addedChilds: added,
         removedChilds: removed,
-        modifiedChilds: modified.map(({ key, changedKeys, before, after }) => ({
-            apiName: key,
+        modifiedChilds: modified.map(({ changedKeys, before, after }) => ({
+            childSObject: after.childSObject,
+            field: after.field,
             changedKeys,
             before,
             after,
@@ -59,38 +60,37 @@ export const diffChilds = (existing: ISalesforceChild[], latest: ISalesforceChil
     };
 };
 
-// Unlike backup-service's version of this module (which needs a live instanceUrl
-// + tokens passed in explicitly), getApexObjectChilds resolves Salesforce
-// credentials itself from `user` — same as every other apex.ts call this module
-// uses. relationshipType=ALL, mirroring backup-service's full relationship-tree
-// fetch (distinct from the MASTER-only expansion used elsewhere for job creation).
-export const childComparison = async (params: ISchemaComparison): Promise<IChildComparisonResult> => {
-    const { objectName, destConfig, user, policyConfigType } = params;
+// `children` is the orchestrator's already-fetched describe snapshot — no live
+// Salesforce call happens in this module any more. Legacy Apex `ISalesforceChild`
+// carried a derived relationshipType (MASTER/LOOKUP/REQUIRED_LOOKUP) + isRequired
+// that describe's own childRelationships entry doesn't expose directly (that
+// classification lives on the *child* object's own field describe, not the
+// parent's) — dropped rather than reconstructed via extra per-child-object
+// describe calls, matching backup-service's own migrated shape. No consumer of
+// this module's stored output depends on those two fields.
+export const childComparison = async (
+    params: ISchemaComparison,
+    children: ISalesforceChildRelationship[]
+): Promise<IChildComparisonResult> => {
+    const { destConfig } = params;
     const key = buildS3Key({ ...params, metadataType: "childs" });
 
-    const [storedEntries, childsReply] = await Promise.all([
-        getStoredEntries<ISalesforceChild[]>(destConfig, key),
-        getApexObjectChilds({
-            user,
-            objectName,
-            mode: policyConfigType,
-            type: 'schedule',
-            relationshipType: 'ALL',
-        }),
-    ]);
-
-    const latestChilds = unwrapApex<{ childs?: ISalesforceChild[] }>(childsReply)?.childs ?? [];
+    const storedEntries = await getStoredEntries<ISalesforceChildRelationship[]>(destConfig, key);
     const storedChilds = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
-    const diff = diffChilds(storedChilds, latestChilds);
+    const diff = diffChilds(storedChilds, children);
 
-    return { ...diff, latestChilds, storedEntries };
+    return { ...diff, latestChilds: children, storedEntries };
 };
 
-export const childHandler = async (params: ISalesforceMetadataHandler, knownUser?: IUser) => {
+export const childHandler = async (
+    params: ISalesforceMetadataHandler,
+    children: ISalesforceChildRelationship[],
+    knownUser?: IUser
+) => {
     const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const { user, destConfig } = await getComparisonContext(backupConfigId, knownUser);
-        const diff = await childComparison({ ...params, destConfig, user });
+        const { destConfig } = await getComparisonContext(backupConfigId, knownUser);
+        const diff = await childComparison({ ...params, destConfig }, children);
         if (diff.childsChanged) {
             const operations: Array<"inserts" | "updates" | "deletes"> = [];
             if (diff.addedChilds.length) {
