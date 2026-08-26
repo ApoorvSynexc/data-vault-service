@@ -32,7 +32,7 @@ import {
     updateAwsEventSchedule,
     deleteAwsEventScheduler,
 } from "../../../services";
-import { buildEventScheduleInput, filtereObjects, isOwner, wrapController } from "../../../utils/helper";
+import { buildEventScheduleInput, filtereObjects, isOwner, toAwsCronExpression, wrapController } from "../../../utils/helper";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
@@ -300,11 +300,27 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
             return;
         }
 
-        const { immediateObjects } = filtereObjects(req.body?.objects || []);
+        const { immediateObjects, scheduledObjects } = filtereObjects(req.body?.objects || []);
         if (immediateObjects.length > 0) {
             await triggerArchivalBackupJob({ user, config, objects: immediateObjects });
-        } else {
-            await createAwsEventScheduler(buildEventScheduleInput(config));
+        }
+
+        if (scheduledObjects.length) {
+            for (let index = 0; index < scheduledObjects.length; index++) {
+                const scheduledObject = scheduledObjects[index];
+
+                const isOneTimeNonScheduled = scheduledObject.scheduleConfig?.type === SCHEDULE_TYPE.oneTime && !scheduledObject.scheduleConfig.scheduling?.startDate && !scheduledObject.scheduleConfig.scheduling?.startTime
+                if (isOneTimeNonScheduled) {
+                    continue;
+                }
+
+                await createAwsEventScheduler({
+                    name: `datavault-objId-${scheduledObject.id}`,
+                    scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
+                    timeZone: scheduledObject.scheduleConfig!.timeZone,
+                    payload: { backupConfigId: config.backupConfigId, userId: config.userId, id: scheduledObject.id },
+                });
+            }
         }
 
         makeResponse(req, res, 201, true, 'create', config);
@@ -419,14 +435,28 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
     const updated = await updateBackupConfig(String(backupConfigId), req.body);
     if (updated && !updated.lastBackupAt) {
-        const { immediateObjects } = filtereObjects(req.body?.objects || []);
+        const { immediateObjects, scheduledObjects } = filtereObjects(req.body?.objects || []);
         if (immediateObjects.length > 0) {
             await triggerArchivalBackupJob({ user, config: updated, objects: immediateObjects });
         }
-    }
 
-    if (updated!.schedule === SCHEDULE_MODE.schedule && req.body!.scheduleConfig) {
-        await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+        if (scheduledObjects.length) {
+            for (let index = 0; index < scheduledObjects.length; index++) {
+                const scheduledObject = scheduledObjects[index];
+
+                const isOneTimeNonScheduled = scheduledObject.scheduleConfig?.type === SCHEDULE_TYPE.oneTime && !scheduledObject.scheduleConfig.scheduling?.startDate && !scheduledObject.scheduleConfig.scheduling?.startTime
+                if (isOneTimeNonScheduled) {
+                    continue;
+                }
+
+                await updateAwsEventSchedule({
+                    name: `datavault-objId-${scheduledObject.id}`,
+                    scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
+                    timeZone: scheduledObject.scheduleConfig!.timeZone,
+                    payload: { backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id },
+                });
+            }
+        }
     }
 
     makeResponse(req, res, 200, true, 'update', updated!);
@@ -459,26 +489,17 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     try {
-        if (config.schedule === SCHEDULE_MODE.realtime) {
-            const crm = await getCrmById(config.crmId);
-            if (crm) {
-                const credentials = getDecryptedCrmCredential(user);
-                await getSalesforceProfile(
-                    {
-                        accessToken: credentials.access_token,
-                        refreshToken: credentials.refresh_token,
-                        userId: user.userId,
-                    },
-                    crm.environment
-                );
+        const { scheduledObjects } = filtereObjects(config.objects || []);
+        if (scheduledObjects.length) {
+            for (let index = 0; index < scheduledObjects.length; index++) {
+                const scheduledObject = scheduledObjects[index];
+                const isOneTimeNonScheduled = scheduledObject.scheduleConfig?.type === SCHEDULE_TYPE.oneTime && !scheduledObject.scheduleConfig.scheduling?.startDate && !scheduledObject.scheduleConfig.scheduling?.startTime
+                if (isOneTimeNonScheduled) {
+                    continue;
+                }
+
+                await deleteAwsEventScheduler(`datavault-objId-${scheduledObject.id}`);
             }
-            // Deleted before the config row itself: this is the last point the config
-            // (and its triggerResults) is still around, and running it here — awaited,
-            // pre-response — means it actually executes as part of the request instead
-            // of racing a response that's already gone out.
-            await realTimeTriggerManagement('delete', config);
-        } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
-            await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
         }
 
         await Promise.all([
