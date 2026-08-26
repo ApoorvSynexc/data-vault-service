@@ -469,7 +469,7 @@ const runNowArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                 ...obj,
                 upcomingJob: {
                     skip: true,
-                    skipReason: 'Invoked immediately',
+                    skipReason: 'This object was archived manually, so its next automatic run has been skipped to avoid running it twice',
                     skipDateTime: computeNextScheduledRun(obj.scheduleConfig!).toISOString(),
                 },
             };
