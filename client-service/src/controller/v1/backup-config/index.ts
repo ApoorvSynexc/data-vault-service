@@ -41,7 +41,7 @@ const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
   'picklist',
   'recordTypes',
 ];
-import { wrapController, isOwner, buildEventScheduleInput, computeNextScheduledRun } from '../../../utils/helper';
+import { wrapController, isOwner, buildEventScheduleInput, buildBackupScheduleName, computeNextScheduledRun } from '../../../utils/helper';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 
@@ -373,7 +373,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       // of racing a response that's already gone out.
       //await realTimeTriggerManagement('delete', config);
     } else if (isIncrementalBackup || isOneTimeSchedule) {
-      await deleteAwsEventScheduler(`datavault-${config.backupConfigId}`);
+      await deleteAwsEventScheduler(buildBackupScheduleName(config.backupConfigId));
     }
 
     await Promise.all([
@@ -407,7 +407,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
   if (backupConfig.schedule === SCHEDULE_MODE.schedule && backupConfig.scheduleConfig?.type === 'ONE_TIME') {
     if (!backupConfig.lastBackupAt) {
       await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup' });
-      await deleteAwsEventScheduler(`datavault-${backupConfig.backupConfigId}`);
+      await deleteAwsEventScheduler(buildBackupScheduleName(backupConfig.backupConfigId));
     }
 
     return makeResponse(req, res, 400, false, 'job_already_invoked');
