@@ -262,6 +262,9 @@ const updateBackupConfig = async (
   if (params.status !== undefined) {
     updates.status = params.status;
   }
+  if (params.upcomingJob !== undefined) {
+    updates.upcomingJob = params.upcomingJob;
+  }
 
   const setExpr = Object.keys(updates)
     .map((k) => {

@@ -41,7 +41,7 @@ const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
   'picklist',
   'recordTypes',
 ];
-import { wrapController, isOwner, buildEventScheduleInput } from '../../../utils/helper';
+import { wrapController, isOwner, buildEventScheduleInput, computeNextScheduledRun } from '../../../utils/helper';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 
@@ -418,9 +418,10 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     const upcomingJob = {
       skip: true,
       skipReason: 'Invoked immediately',
-      skipDateTime: ''
-    }
+      skipDateTime: computeNextScheduledRun(backupConfig.scheduleConfig).toISOString(),
+    };
     await updateBackupConfig(backupConfig.backupConfigId, { upcomingJob });
+    return makeResponse(req, res, 200, true, 'fetch');
   }
 
 }
