@@ -20,24 +20,6 @@ const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
 const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
 const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
 
-// Compound/binary describe types (Schema.DisplayType: ADDRESS, LOCATION, BASE64)
-// aren't directly SELECT-able in SOQL — their sub-fields are queried individually
-// instead (e.g. MailingAddress -> MailingStreet, MailingCity, ...).
-const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
-const EXCLUDED_FIELD_NAMES = new Set(['InformalName']);
-// calculated covers both formula and roll-up summary fields — neither is
-// writable/restorable and both are computed by Salesforce, not stored data.
-const isQueryableField = (f: {
-  name: string;
-  type: string;
-  calculated?: boolean;
-  autoNumber?: boolean;
-}): boolean =>
-  !EXCLUDED_FIELD_NAMES.has(f.name) &&
-  !EXCLUDED_FIELD_TYPES.has(f.type) &&
-  !f.calculated &&
-  !f.autoNumber;
-
 const buildFilterCondition = (name: string, operator: string, value: string): string => {
   if (!SAFE_FIELD_NAME_RE.test(name)) {
     throw new Error(`Invalid SOQL field name: "${name}"`);
@@ -143,9 +125,7 @@ export const exportFirstTime = async (
       { instanceUrl, tokens }
     );
     const allFieldNames = withSystemFields(
-      fieldsMetadata?.metadataType === 'fields'
-        ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
-        : []
+      fieldsMetadata?.metadataType === 'fields' ? fieldsMetadata.fields.map((f) => f.name) : []
     );
     await salesforceMetadataHandler(
       {
@@ -362,9 +342,7 @@ export const exportIncremental = async (
       { instanceUrl, tokens }
     );
     const allFieldNames = withSystemFields(
-      fieldsMetadata?.metadataType === 'fields'
-        ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
-        : []
+      fieldsMetadata?.metadataType === 'fields' ? fieldsMetadata.fields.map((f) => f.name) : []
     );
     // await uploadPicklistValues({
     //   schema: latestSchema,
