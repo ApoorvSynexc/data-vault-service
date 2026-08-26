@@ -15,6 +15,9 @@ import { createRestoreValidation } from '../../middlewares';
  * POST /retrieve/fetch-missing-fields   — fields deleted from an object inside a date window
  * GET  /fetch-object-fields             — latest S3 schema for objectApiName across the (single)
  *                                         backup config shared by the given backupJobIds
+ * POST /dry-run                         — record counts a restore configuration would touch
+ *                                         (ENTIRE: main Hudi only; CHANGED_BETWEEN: delta
+ *                                         total/UPDATE/DELETE) — read-only, no restore is performed
  * GET  /                                — single restore/retrieve job (by backupJobId)
  */
 const router = Router();
@@ -34,6 +37,7 @@ router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecords
 router.post('/retrieve/fetch-inactive-record-types', restoreRetrieveJobController.fetchInactiveRecordTypesHandler);
 router.post('/retrieve/fetch-missing-fields', restoreRetrieveJobController.fetchMissingFieldsHandler);
 router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
+router.post('/dry-run', restoreRetrieveJobController.dryRunHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 
