@@ -58,6 +58,11 @@ const backupConfigPermissions = [
         path: '/backup-config/run-now',
         method: 'GET',
         permissions: ['backup.write']
+    },
+    {
+        path: '/backup-config/trigger/recover',
+        method: 'POST',
+        permissions: ['backup.write']
     }
 ];
 
