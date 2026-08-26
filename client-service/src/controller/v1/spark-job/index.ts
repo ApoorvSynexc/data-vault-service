@@ -202,6 +202,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
 
     return makeResponse(req, res, 200, true, 'update', { updated, failed });
   } else if (decrypted.type === "RESTORE") {
+    console.log('RESTORE SPARK_JOB STATUS');
     const { restoreConfigId, objects, success, errorMessage } = decrypted.restore;
     if (!restoreConfigId) {
       return makeResponse(req, res, 400, false, 'id_required');
