@@ -4,6 +4,7 @@ import {
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
   getRestoreObjectListByConfigId,
+  getObjectListByConfigId,
   getBackupJobIdsChangedBetween,
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
@@ -814,6 +815,21 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
 const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
   const { ...body } = req.body;
+
+  // Joi only checks internal consistency (e.g. DELETED_BETWEEN requires configType
+  // ARCHIVAL within the payload itself) — this confirms the claimed configType
+  // actually matches backupConfigId's stored type, same cross-check
+  // getObjectListByConfigIdHandler already applies to the object-list endpoint.
+  const { found: configTypeMatches } = await getObjectListByConfigId(
+    body.source.backupConfigId,
+    body.source.configType,
+    user!.userId
+  );
+  if (!configTypeMatches) {
+    makeResponse(req, res, 400, false, 'invalid_config_type');
+    return;
+  }
+
   const restoreId = uuidv4();
   const payload = { restoreId, userId: user!.userId, ...body };
   const created = await createRestore(payload);
