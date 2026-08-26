@@ -1,7 +1,7 @@
 import { logger } from "../../../../../middlewares";
 import { IUser } from "../../../../../models";
 import { uploadToS3 } from "../../../s3-bucket";
-import { getApexFields, unwrapApex } from "../../apex";
+import { ISalesforceFieldDescribe } from "..";
 import {
     buildS3Key,
     diffEntities,
@@ -12,19 +12,60 @@ import {
     IStoredEntry,
 } from "../common";
 
-export interface ISchemaField {
+// Compound/binary describe types (Schema.DisplayType: ADDRESS, LOCATION, BASE64)
+// aren't directly SELECT-able in SOQL — their sub-fields are queried individually
+// instead (e.g. MailingAddress -> MailingStreet, MailingCity, ...).
+const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
+const EXCLUDED_FIELD_NAMES = new Set(['InformalName']);
+
+// Single gate for "is this field part of backup/archival" — used both to build
+// the SOQL SELECT list and to decide what's persisted to the schema folder, so
+// the two never drift apart. calculated covers both formula and roll-up summary
+// fields — neither is writable/restorable and both are computed by Salesforce,
+// not stored data. Mirrors backup-service/.../metadata/field/index.ts exactly —
+// both services append to the same schema history file, so the gate and the
+// stored shape below must stay byte-for-byte identical between them.
+export const isQueryableField = (
+    f: Pick<ISalesforceFieldDescribe, 'name' | 'type' | 'calculated' | 'autoNumber'>
+): boolean =>
+    !EXCLUDED_FIELD_NAMES.has(f.name) &&
+    !EXCLUDED_FIELD_TYPES.has(f.type) &&
+    !f.calculated &&
+    !f.autoNumber;
+
+// Trimmed subset of ISalesforceFieldDescribe actually tracked/stored/diffed by
+// the schema handler — the rest of the describe payload is noise for drift
+// detection purposes (picklist/index.ts still reads the full describe fields
+// directly, since it needs `type` + `picklistValues`).
+export interface ISalesforceFieldSnapshot {
+    cascadeDelete: boolean;
     label: string;
-    dataType: string;
-    apiName: string;
-    isCustom?: boolean;
-    isRequired?: boolean;
+    length: number;
+    name: string;
+    referenceTo: string[];
+    relationshipName: string | null;
+    relationshipOrder: number | null;
+    restrictedDelete: boolean;
+    type: string;
 }
+
+const toFieldSnapshot = (field: ISalesforceFieldDescribe): ISalesforceFieldSnapshot => ({
+    cascadeDelete: field.cascadeDelete,
+    label: field.label,
+    length: field.length,
+    name: field.name,
+    referenceTo: field.referenceTo,
+    relationshipName: field.relationshipName,
+    relationshipOrder: field.relationshipOrder,
+    restrictedDelete: field.restrictedDelete,
+    type: field.type,
+});
 
 export interface ISchemaFieldChange {
     apiName: string;
     changedKeys: string[];
-    before: ISchemaField;
-    after: ISchemaField;
+    before: ISalesforceFieldSnapshot;
+    after: ISalesforceFieldSnapshot;
 }
 
 export interface ISchemaDiff {
@@ -34,18 +75,25 @@ export interface ISchemaDiff {
     modifiedFields: ISchemaFieldChange[];
 }
 
-export type IStoredSchemaEntry = IStoredEntry<ISchemaField[]>;
+export type IStoredSchemaEntry = IStoredEntry<ISalesforceFieldSnapshot[]>;
 
 export interface ISchemaComparisonResult extends ISchemaDiff {
-    latestSchema: ISchemaField[];
+    latestSchema: ISalesforceFieldSnapshot[];
     storedEntries: IStoredSchemaEntry[];
 }
 
-const fieldKey = (field: ISchemaField): string => field.apiName ?? (field as any).name ?? "";
+export interface IFieldComparisonParams extends ISchemaComparison {
+    latestSchema: ISalesforceFieldSnapshot[];
+}
+
+const fieldKey = (field: ISalesforceFieldSnapshot): string => field.name ?? "";
 
 // Field-by-field, object-level diff of two schema snapshots — see diffEntities
 // in ../common for the shared, order-independent, non-stringify comparison.
-export const diffSchemas = (existing: ISchemaField[], latest: ISchemaField[]): ISchemaDiff => {
+export const diffSchemas = (
+    existing: ISalesforceFieldSnapshot[],
+    latest: ISalesforceFieldSnapshot[]
+): ISchemaDiff => {
     const { changed, added, removed, modified } = diffEntities(existing, latest, fieldKey);
     return {
         schemaChanged: changed,
@@ -60,34 +108,32 @@ export const diffSchemas = (existing: ISchemaField[], latest: ISchemaField[]): I
     };
 };
 
-// object-fields-metadata replies { success, data: { fields: [...] } } — unwrapApex
-// gives { fields }, but tolerate a bare array too, same as the existing drift
-// check in services/payload/schema-sync.ts does.
-export const schemaComparison = async (params: ISchemaComparison): Promise<ISchemaComparisonResult> => {
-    const { objectName, destConfig, policyConfigType, user } = params;
+export const schemaComparison = async (
+    params: IFieldComparisonParams
+): Promise<ISchemaComparisonResult> => {
+    const { destConfig, latestSchema } = params;
     const key = buildS3Key({ ...params, metadataType: "fields" });
 
-    const [storedEntries, fieldsReply] = await Promise.all([
-        getStoredEntries<ISchemaField[]>(destConfig, key),
-        getApexFields({ user, objectName, mode: policyConfigType }),
-    ]);
-
-    const unwrapped = unwrapApex<{ fields?: ISchemaField[] } | ISchemaField[]>(fieldsReply);
-    const latestSchema: ISchemaField[] = Array.isArray(unwrapped)
-        ? unwrapped
-        : (unwrapped?.fields ?? []);
-
+    const storedEntries = await getStoredEntries<ISalesforceFieldSnapshot[]>(destConfig, key);
     const storedSchema = storedEntries.length ? storedEntries[storedEntries.length - 1].context : [];
     const diff = diffSchemas(storedSchema, latestSchema);
 
     return { ...diff, latestSchema, storedEntries };
 }
 
-export const schemaHandler = async (params: ISalesforceMetadataHandler, knownUser?: IUser) => {
+// `fields` is the orchestrator's already-fetched describe snapshot, already
+// filtered through isQueryableField — no live Salesforce call happens in this
+// module any more.
+export const schemaHandler = async (
+    params: ISalesforceMetadataHandler,
+    fields: ISalesforceFieldDescribe[],
+    knownUser?: IUser
+) => {
     const { backupConfigId, backupJobId, objectName } = params;
     try {
-        const { user, destConfig } = await getComparisonContext(backupConfigId, knownUser);
-        const diff = await schemaComparison({ ...params, destConfig, user });
+        const { destConfig } = await getComparisonContext(backupConfigId, knownUser);
+        const latestSchema = fields.map(toFieldSnapshot);
+        const diff = await schemaComparison({ ...params, destConfig, latestSchema });
         if (diff.schemaChanged) {
             const operations: Array<"inserts" | "updates" | "deletes"> = [];
             if (diff.addedFields.length) {

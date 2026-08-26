@@ -1,6 +1,7 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { computeJobStats, getBackupConfigById, getBackupJobsByUser } from '../../../services';
+import { computeJobStats, getBackupConfigById, getBackupConfigCount, getBackupJobsByUser } from '../../../services';
 import { wrapController } from '../../../utils/helper';
+import { BACKUP_STATUS, STATUS } from '../../../constant';
 
 const formatBytes = (bytes: number): string => {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -26,11 +27,20 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   const userId = req.user!.userId;
 
   try {
-    const stats = await computeJobStats({
-      indexName: 'userId-index',
-      keyName: 'userId',
-      keyValue: userId
-    });
+    // Backup-config counts, distinct from the job/run counts below. "Active"
+    // reads the config's own status (is it enabled/running on schedule);
+    // completed/failed read backupStatus instead (status has no such states —
+    // that's the outcome of the config's last backup run).
+    const [stats, activeBackups, completedBackups, failedBackups] = await Promise.all([
+      computeJobStats({
+        indexName: 'userId-index',
+        keyName: 'userId',
+        keyValue: userId
+      }),
+      getBackupConfigCount(userId, { status: STATUS.active }),
+      getBackupConfigCount(userId, { backupStatus: BACKUP_STATUS.success }),
+      getBackupConfigCount(userId, { backupStatus: BACKUP_STATUS.failed }),
+    ]);
 
     const totalJobs = stats.completedJobs.count + stats.failedJobs.count;
     const successRate = totalJobs > 0
@@ -66,6 +76,12 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
         running: totalActiveJobs,
         period: 'Running',
       },
+      activeBackups,
+      completedBackups,
+      failedBackups,
+      completedJobs: stats.completedJobs.count,
+      runningJobs: stats.runningJobs.count,
+      failedJobs: stats.failedJobs.count,
     };
 
     makeResponse(req, res, 200, true, 'fetch', overviewData);

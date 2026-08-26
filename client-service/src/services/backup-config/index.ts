@@ -667,11 +667,66 @@ const getBackupConfigsInBatches = async (
   } while (lastEvaluatedKey);
 };
 
+// Count-only counterpart to getBackupConfigsByUser — Select: 'COUNT' skips
+// transferring the matched items themselves, just their tally, for callers
+// (e.g. dashboard overview) that only need a number per filter bucket rather
+// than the configs themselves.
+const getBackupConfigCount = async (
+  userId: string,
+  filters?: { backupStatus?: string; type?: 'NORMAL' | 'ARCHIVAL'; status?: string }
+): Promise<number> => {
+  let count = 0;
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  const filterExpressions: string[] = [];
+  const expressionAttributeNames: Record<string, string> = {};
+  const expressionAttributeValues: Record<string, any> = { ':uid': userId };
+
+  if (filters?.backupStatus) {
+    filterExpressions.push('#backupStatus = :backupStatus');
+    expressionAttributeNames['#backupStatus'] = 'backupStatus';
+    expressionAttributeValues[':backupStatus'] = filters.backupStatus;
+  }
+  if (filters?.type) {
+    filterExpressions.push('#type = :type');
+    expressionAttributeNames['#type'] = 'type';
+    expressionAttributeValues[':type'] = filters.type;
+  }
+  if (filters?.status) {
+    filterExpressions.push('#status = :status');
+    expressionAttributeNames['#status'] = 'status';
+    expressionAttributeValues[':status'] = filters.status;
+  }
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :uid',
+        Select: 'COUNT',
+        ...(filterExpressions.length && {
+          FilterExpression: filterExpressions.join(' AND '),
+          ExpressionAttributeNames: expressionAttributeNames,
+        }),
+        ExpressionAttributeValues: expressionAttributeValues,
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    count += result.Count ?? 0;
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return count;
+};
+
 export {
   createBackupConfig,
   getBackupConfigById,
   getBackupConfigBySlug,
   getBackupConfigsByUser,
+  getBackupConfigCount,
   getBackupConfigsByUserAndCrm,
   getBackupConfigsByCrm,
   getBackupConfigsInBatches,
