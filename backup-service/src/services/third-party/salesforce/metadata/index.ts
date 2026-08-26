@@ -2,7 +2,7 @@ import { logger } from '../../../../middlewares';
 import { salesforceRequest, SalesforceTokens } from '../api-request';
 import { childHandler, ISalesforceChildRelationship } from './child';
 import { ISalesforceMetadataHandler } from './common';
-import { ISalesforceFieldDescribe, schemaHandler } from './field';
+import { isQueryableField, ISalesforceFieldDescribe, schemaHandler } from './field';
 import { picklistHandler } from './picklist';
 import { ISalesforceRecordTypeInfo, recordTypeHandler } from './recordType';
 
@@ -38,7 +38,10 @@ export const salesforceMetadataHandler = async (
 
     switch (metadataType) {
       case 'fields': {
-        const fields = describedObject.fields;
+        // Filtered once here so the schema folder and the Bulk API SELECT list
+        // (built by the caller from these same `fields`) never disagree about
+        // what's part of backup/archival.
+        const fields = describedObject.fields.filter(isQueryableField);
         const diff = await schemaHandler(params, fields);
         return { diff, metadataType, fields };
       }
