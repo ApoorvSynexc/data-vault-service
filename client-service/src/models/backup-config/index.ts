@@ -49,6 +49,14 @@ export interface IObject {
   scheduleConfig?: IScheduleConfig;
   children?: IObject[];
   parentObjects?: IObjectParent[];
+  // Archival scheduling is per-object (unlike backup-config's single config-level
+  // schedule), so a manually-invoked INCREMENTAL object's "skip the next automatic
+  // run" note has to live on the object itself, not the shared config.
+  upcomingJob?: {
+    skip: boolean;
+    skipReason: string;
+    skipDateTime: string;
+  };
 }
 
 export interface ITriggerResult {

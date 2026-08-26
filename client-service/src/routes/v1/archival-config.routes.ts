@@ -14,6 +14,7 @@ router.get('/', archivalConfigController.getArchivalConfigHandler);
 router.get('/stats', archivalConfigController.getArchivalJobStatsHandler);
 router.put('/', archivalConfigController.updateArchivalConfigHandler);
 router.delete('/', archivalConfigController.deletearchivalConfigHandler);
+router.get('/run-now', archivalConfigController.runNowArchivalConfigHandler);
 router.post('/dry-run', dryRunArchivalValidation, archivalConfigController.dryRunArchivalHandler);
 router.post('/validate-soql', validateSoqlArchivalValidation, archivalConfigController.validateSoqlArchivalHandler);
 router.post('/', createArchivalConfigValidation, archivalConfigController.createArchivalConfigHandler);
