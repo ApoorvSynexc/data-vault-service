@@ -430,26 +430,28 @@ const fetchApexTriggerStatus = async (
 };
 
 // ---------------------------------------------------------------------------
-// Creates a single Apex Trigger + its generated Test Class via Metadata API
-// deploy — the only route available: production orgs block a direct Tooling
-// API POST /sobjects/ApexTrigger (ENTITY_IS_LOCKED). Production deploys
-// containing Apex also require a testLevel other than NoTestRun.
+// Shared deploy — the Apex Trigger body (always buildTriggerBody's
+// deterministic output) plus a caller-supplied Test Class body, both Active.
+// The only route available for creating/replacing Apex in production: direct
+// Tooling API POST /sobjects/ApexTrigger is blocked there (ENTITY_IS_LOCKED),
+// and any deploy containing Apex requires a testLevel other than NoTestRun.
+//
+// RunSpecifiedTests, not RunLocalTests: RunLocalTests enforces the org-wide
+// 75% average across ALL local Apex, which a subscriber org with its own
+// uncovered code can never satisfy no matter what we ship. RunSpecifiedTests
+// applies the 75% bar per deployed component instead, so only this trigger
+// has to be covered — and running just our own test also stops unrelated
+// failing tests in the subscriber org from blocking the deploy.
 // ---------------------------------------------------------------------------
-const createSingleTrigger = async (
+const deployTriggerWithTestClass = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  objectApiName: string
+  objectApiName: string,
+  testClassBody: string,
+  label: string
 ): Promise<void> => {
   const triggerName = triggerNameFor(objectApiName);
   const testClassName = testClassNameFor(triggerName);
-
-  // Salesforce rejects triggers on some standard objects (Partner, and most
-  // Chatter internals). Ask first — the describe is needed for the test class
-  // anyway, and failing here beats burning a full deploy round-trip to be told.
-  const describe = await describeObject(instanceUrl, tokens, objectApiName);
-  if (describe.triggerable === false) {
-    throw new Error(`SObject type does not allow triggers: ${objectApiName}`);
-  }
 
   const packageXml =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
@@ -482,21 +484,10 @@ const createSingleTrigger = async (
   const zip = new JSZip();
   zip.file(`triggers/${triggerName}.trigger`, buildTriggerBody(objectApiName));
   zip.file(`triggers/${triggerName}.trigger-meta.xml`, triggerMetaXml);
-  zip.file(
-    `classes/${testClassName}.cls`,
-    await buildTriggerTestBody(
-      instanceUrl, tokens, objectApiName, testClassName, triggerName, describe.fields ?? []
-    )
-  );
+  zip.file(`classes/${testClassName}.cls`, testClassBody);
   zip.file(`classes/${testClassName}.cls-meta.xml`, classMetaXml);
   zip.file('package.xml', packageXml);
 
-  // RunSpecifiedTests, not RunLocalTests: RunLocalTests enforces the org-wide
-  // 75% average across ALL local Apex, which a subscriber org with its own
-  // uncovered code can never satisfy no matter what we ship. RunSpecifiedTests
-  // applies the 75% bar per deployed component instead, so only this trigger
-  // has to be covered — and running just our own test also stops unrelated
-  // failing tests in the subscriber org from blocking the deploy.
   await deployMetadata(
     instanceUrl,
     tokens,
@@ -511,38 +502,120 @@ const createSingleTrigger = async (
       testLevel: 'RunSpecifiedTests',
       runTests: [testClassName],
     },
-    `Trigger ${triggerName}`
+    label
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Creates a single Apex Trigger + its generated Test Class. The test class
+// inserts a synthetic record built from the object's describe metadata (see
+// buildTriggerTestBody) — this is what can fail recoverTriggerCreation is for:
+// a validation rule, duplicate rule, or required dependency the describe
+// metadata doesn't capture can reject the synthetic insert even though the
+// trigger itself is fine.
+// ---------------------------------------------------------------------------
+const createSingleTrigger = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiName: string
+): Promise<void> => {
+  const triggerName = triggerNameFor(objectApiName);
+  const testClassName = testClassNameFor(triggerName);
+
+  // Salesforce rejects triggers on some standard objects (Partner, and most
+  // Chatter internals). Ask first — the describe is needed for the test class
+  // anyway, and failing here beats burning a full deploy round-trip to be told.
+  const describe = await describeObject(instanceUrl, tokens, objectApiName);
+  if (describe.triggerable === false) {
+    throw new Error(`SObject type does not allow triggers: ${objectApiName}`);
+  }
+
+  const testClassBody = await buildTriggerTestBody(
+    instanceUrl, tokens, objectApiName, testClassName, triggerName, describe.fields ?? []
+  );
+
+  await deployTriggerWithTestClass(instanceUrl, tokens, objectApiName, testClassBody, `Trigger ${triggerName}`);
+};
+
+// A Salesforce record Id is exactly 15 (case-sensitive) or 18 (case-insensitive)
+// alphanumeric characters — validated before this ever reaches generated Apex
+// source, since recordId is user-supplied and gets embedded in a SOQL literal
+// that gets compiled and deployed to the org.
+const SALESFORCE_RECORD_ID_PATTERN = /^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$/;
+
+// ---------------------------------------------------------------------------
+// Recovery test class for when createSingleTrigger's synthetic insert fails:
+// instead of constructing a new record from describe metadata, this queries
+// an existing, already-valid record the user points to (by its record Id, not
+// a trigger/class Id — there's nothing else the user could have at this point)
+// and re-saves it unchanged. A no-op `update` on a record that already passed
+// every validation/duplicate rule on the way in is about as safe as a DML
+// statement gets, and it still fires the trigger for coverage.
+// ---------------------------------------------------------------------------
+const buildTriggerRecoveryTestBody = (
+  objectApiName: string,
+  testClassName: string,
+  triggerName: string,
+  recordId: string
+): string => {
+  const recordType = apexSObjectType(objectApiName);
+
+  return (
+    `@isTest(SeeAllData=true)\n` +
+    `private class ${testClassName} {\n` +
+    `\n` +
+    `    @isTest\n` +
+    `    static void syncTriggerFiresOnUpdate() {\n` +
+    `        ${recordType} record = [SELECT Id FROM ${objectApiName} WHERE Id = '${recordId}' LIMIT 1];\n` +
+    `\n` +
+    `        Test.startTest();\n` +
+    `        update record;\n` +
+    `        Test.stopTest();\n` +
+    `\n` +
+    `        Assert.isNotNull(\n` +
+    `            record.Id,\n` +
+    `            'Update of existing ${objectApiName} record should succeed and fire ${triggerName}.'\n` +
+    `        );\n` +
+    `    }\n` +
+    `}`
   );
 };
 
 // ---------------------------------------------------------------------------
 // Recovery path when createSingleTrigger fails even with the SeeAllData test
-// class: the caller collects a Trigger Record ID from the user. This confirms
-// that record actually exists in the org, then forces it Active via the same
-// Metadata API deploy path as everything else here (deployTriggerStatus,
-// below) — production orgs reject Tooling API writes on ApexTrigger, so there
-// is no lighter-weight PATCH route. Throws if the record can't be found or the
-// deploy itself fails; the controller is expected to tell the user to contact
-// Support at that point.
+// class: the caller collects a real record Id of `objectApiName` from the
+// user (not a Trigger/Class Id — the user has no way to know one of those)
+// and this confirms that record exists in the org, then redeploys the trigger
+// with a test class built around it (buildTriggerRecoveryTestBody) instead of
+// a synthetic insert. Throws if the Id is malformed, the record can't be
+// found, or the deploy itself fails; the controller is expected to tell the
+// user to contact Support at that point.
 // ---------------------------------------------------------------------------
 const recoverTriggerCreation = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiName: string,
-  triggerRecordId: string
+  recordId: string
 ): Promise<{ triggerName: string }> => {
-  const { data } = await salesforceRequest<{ records: { Id: string; Name: string }[] }>(
-    { url: soqlUrl(instanceUrl, `SELECT Id, Name FROM ApexTrigger WHERE Id = '${triggerRecordId}' LIMIT 1`), method: 'GET' },
-    tokens
-  );
-  const trigger = data.records[0];
-  if (!trigger) {
-    throw new Error(`trigger_record_not_found:${triggerRecordId}`);
+  if (!SALESFORCE_RECORD_ID_PATTERN.test(recordId)) {
+    throw new Error(`invalid_record_id:${recordId}`);
   }
 
-  await deployTriggerStatus(instanceUrl, tokens, objectApiName, 'Active');
+  const { data } = await salesforceRequest<{ totalSize: number }>(
+    { url: soqlUrl(instanceUrl, `SELECT Id FROM ${objectApiName} WHERE Id = '${recordId}' LIMIT 1`), method: 'GET' },
+    tokens
+  );
+  if (data.totalSize === 0) {
+    throw new Error(`record_not_found:${recordId}`);
+  }
 
-  return { triggerName: trigger.Name };
+  const triggerName = triggerNameFor(objectApiName);
+  const testClassName = testClassNameFor(triggerName);
+  const testClassBody = buildTriggerRecoveryTestBody(objectApiName, testClassName, triggerName, recordId);
+
+  await deployTriggerWithTestClass(instanceUrl, tokens, objectApiName, testClassBody, `Trigger ${triggerName} recovery`);
+
+  return { triggerName };
 };
 
 // ---------------------------------------------------------------------------
@@ -894,9 +967,9 @@ const expandWithMasterChildren = async (
 // ---------------------------------------------------------------------------
 // Create an Apex Trigger + generated Test Class for one or more objects,
 // sequentially. Handler class is ensured once before all trigger creations.
-// A FAILED result carries needsTriggerRecordId so the caller knows to run the
-// Trigger Record ID recovery path (recoverTriggerCreation) instead of just
-// surfacing the error.
+// A FAILED result carries needsRecoveryRecordId so the caller knows to prompt
+// for a record Id and run the recovery path (recoverTriggerCreation) instead
+// of just surfacing the error.
 // ---------------------------------------------------------------------------
 const createTriggers = async (
   instanceUrl: string,
@@ -926,7 +999,7 @@ const createTriggers = async (
         triggerName,
         status: 'FAILED',
         error: err instanceof Error ? err.message : String(err),
-        needsTriggerRecordId: true,
+        needsRecoveryRecordId: true,
       });
     }
   }
