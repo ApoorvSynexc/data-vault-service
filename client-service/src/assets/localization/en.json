@@ -46,6 +46,7 @@
   "resume": "Backup job resumed successfully",
   "too_many_requests": "Too many requests. Please wait and try again",
   "backup_configs_exist": "Cannot delete CRM with existing backup configurations",
+  "job_already_invoked": "Backup job is already in invoked for this configuration",
   "deletion_failed": "Failed to delete CRM",
   "backup_pending_cannot_delete": "Cannot delete backup configuration with PENDING status",
   "organization_mismatch_exist": "Selected organization does not matched with existing organization",

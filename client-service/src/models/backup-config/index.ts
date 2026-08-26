@@ -95,4 +95,9 @@ export interface IBackupConfig {
   // Additional
   crm?: object;
   destination?: object;
+  upcomingJob?: {
+    skip: true,
+    skipReason: string,
+    skipDateTime: string
+  }
 }

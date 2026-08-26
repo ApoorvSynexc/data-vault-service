@@ -48,6 +48,11 @@ interface UpdateBackupConfigParams {
   triggerResults?: ITriggerResult[];
   type?: string;
   status?: string;
+  upcomingJob?: {
+    skip: boolean;
+    skipReason: string;
+    skipDateTime: string;
+  }
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
