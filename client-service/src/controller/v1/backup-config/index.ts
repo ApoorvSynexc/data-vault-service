@@ -21,6 +21,7 @@ import {
   getCrmById,
   getDestinationById,
   realTimeTriggerManagement,
+  recoverTriggerCreation,
   computeJobStats,
   getApexObjectsCount,
   getSalesforceProfile,
@@ -542,6 +543,54 @@ const syncMetadataHandler = async (req: IRequest, res: IResponse): Promise<void>
   return makeResponse(req, res, 200, true, 'update');
 }
 
+// Recovery path for a failed real-time trigger creation (Apex Trigger + Test
+// Class). Called once the client has prompted the user for the Trigger
+// Record ID; a failure here is the "contact Support" case.
+const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { backupConfigId, objectApiName, triggerRecordId } = req.body as {
+    backupConfigId: string;
+    objectApiName: string;
+    triggerRecordId: string;
+  };
+
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config || config.userId !== req.user!.userId) {
+    makeResponse(req, res, 400, false, 'backup_config_not_found');
+    return;
+  }
+
+  const user = await getUser({ userId: config.userId });
+  const crm = user?.crmId ? await getCrmById(user.crmId) : null;
+  const instanceUrl = user?.crmProfile?.instanceUrl;
+  if (!user || !crm || !instanceUrl) {
+    makeResponse(req, res, 400, false, 'crm_not_found');
+    return;
+  }
+
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+  const tokens = {
+    accessToken: access_token,
+    refreshToken: refresh_token,
+    userId: user.userId,
+    environment: crm.environment,
+    customUrl: user.customUrl,
+  };
+
+  try {
+    const recovered = await recoverTriggerCreation(instanceUrl, tokens, objectApiName, triggerRecordId);
+    const triggerResults = (config.triggerResults ?? []).map((result) =>
+      result.objectApiName === objectApiName
+        ? { ...result, status: 'CREATED' as const, triggerName: recovered.triggerName, error: undefined, needsTriggerRecordId: false }
+        : result
+    );
+    await updateBackupConfig(config.backupConfigId, { triggerResults });
+    makeResponse(req, res, 200, true, 'update', { triggerName: recovered.triggerName, status: 'CREATED' });
+  } catch (error) {
+    logger.error(`Trigger recovery failed for backupConfigId ${backupConfigId}, triggerRecordId ${triggerRecordId}: `, error);
+    makeResponse(req, res, 400, false, 'trigger_recovery_failed_contact_support' as any);
+  }
+};
+
 export const backupConfigController = wrapController({
   getObjectsHanlder,
   getObjectsCountHanlder,
@@ -556,5 +605,6 @@ export const backupConfigController = wrapController({
   getBackupJobStatsHandler,
   syncMetadataHandler,
   getObjectChildHandler,
-  runNowHandler
+  runNowHandler,
+  recoverTriggerHandler,
 });

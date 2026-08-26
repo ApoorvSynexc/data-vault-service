@@ -134,6 +134,21 @@ export const createBackupConfigValidation = (
   next();
 };
 
+export const recoverTriggerValidation = (req: Request, res: Response, next: NextFunction) => {
+  const schema = Joi.object({
+    backupConfigId: Joi.string().required(),
+    objectApiName: Joi.string().required(),
+    triggerRecordId: Joi.string().required(),
+  });
+
+  const { error } = schema.validate(req.body, { abortEarly: false });
+  if (error) {
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    return;
+  }
+  next();
+};
+
 export const updateBackupConfigValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     crmId: Joi.string().optional(),

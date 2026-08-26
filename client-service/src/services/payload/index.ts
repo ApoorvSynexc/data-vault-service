@@ -278,14 +278,16 @@ async function buildPayload(backupConfigId: string) {
 // posted backupJobIds alongside ENTIRE) — only forward what the type uses.
 // No type on legacy records: forward as stored, unchanged.
 function mapRestoreSource(source: IRestoreSource) {
-    const { backupConfigId, type, backupJobIds, startDate, endDate } = source;
+    const { backupConfigId, configType, type, backupJobIds, startDate, endDate } = source;
     switch (type) {
         case 'ENTIRE':
-            return { backupConfigId, type };
+            return { backupConfigId, configType, type };
         case 'PARTIAL':
-            return { backupConfigId, type, backupJobIds };
+            return { backupConfigId, configType, type, backupJobIds };
         case 'CHANGED_BETWEEN':
-            return { backupConfigId, type, startDate, endDate };
+            return { backupConfigId, configType, type, startDate, endDate };
+        case 'DELETED_BETWEEN':
+            return { backupConfigId, configType, type, startDate, endDate };
         default:
             return source;
     }
