@@ -40,6 +40,21 @@ const restorePermissions = [
         permissions: ['restore.read']
     },
     {
+        path : '/restore/retrieve/fetch-missing-fields',
+        method: 'POST',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/retrieve/fetch-missing-record-types',
+        method: 'POST',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/retrieve/required-fields',
+        method: 'POST',
+        permissions: ['restore.read']
+    },
+    {
         path : '/restore',
         method: 'POST',
         permissions: ['restore.write']
