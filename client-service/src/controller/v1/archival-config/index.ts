@@ -28,7 +28,7 @@ import {
     deleteAwsEventScheduler,
 } from "../../../services";
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
-import { buildArchivalObjectScheduleName, buildScheduleInput } from "../../../utils/event-bridge";
+import { buildArchivalObjectScheduleName, buildScheduleInput, computeNextScheduledRun } from "../../../utils/event-bridge";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
@@ -415,6 +415,71 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 };
 
+// Archival scheduling is per-object (each scheduled object owns its own AWS
+// schedule), unlike backup-config's one-schedule-per-config model — so "run now"
+// here batch-triggers every currently eligible object in one shot. ONE_TIME
+// eligibility still only has config.lastBackupAt as a proxy for "has this ever
+// run" (no per-object run marker exists), so a mix of ONE_TIME + INCREMENTAL
+// objects on one config can under/over-gate the ONE_TIME side.
+const runNowArchivalConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+    const user = req.user;
+    const { backupConfigId } = req.query;
+    if (!backupConfigId) {
+        makeResponse(req, res, 400, false, 'id_required');
+        return;
+    }
+
+    const existing = await getBackupConfigById(String(backupConfigId));
+    if (!existing || !isOwner(existing, user!.userId, user!.crmId) || existing.type !== 'ARCHIVAL') {
+        makeResponse(req, res, 400, false, 'not_exist');
+        return;
+    }
+
+    const { scheduledObjects } = filtereObjects(existing.objects || []);
+
+    const oneTimePending = existing.lastBackupAt
+        ? []
+        : scheduledObjects.filter((obj) => obj.scheduleConfig?.type === SCHEDULE_TYPE.oneTime);
+    // INCREMENTAL: always eligible, same as backup-config's ungated INCREMENTAL branch.
+    const incrementalObjects = scheduledObjects.filter((obj) => obj.scheduleConfig?.type === SCHEDULE_TYPE.incremental);
+
+    const objectsToRun = [...oneTimePending, ...incrementalObjects];
+    if (!objectsToRun.length) {
+        makeResponse(req, res, 400, false, 'job_already_invoked');
+        return;
+    }
+
+    await triggerArchivalBackupJob({ user, config: existing, objects: objectsToRun });
+
+    // A fired ONE_TIME object won't fire again — its AWS schedule is now dead weight.
+    await Promise.all(
+        oneTimePending.map((obj) => deleteAwsEventScheduler(buildArchivalObjectScheduleName(obj.id)))
+    );
+
+    // Informational only (same as backup-config's upcomingJob) — each INCREMENTAL
+    // object owns its own schedule, so its skip note lives on the object itself
+    // rather than a single config-level slot shared by every object.
+    if (incrementalObjects.length) {
+        const invokedIds = new Set(incrementalObjects.map((obj) => obj.id));
+        const updatedObjects = (existing.objects ?? []).map((obj) => {
+            if (!invokedIds.has(obj.id)) {
+                return obj;
+            }
+            return {
+                ...obj,
+                upcomingJob: {
+                    skip: true,
+                    skipReason: 'This object was archived manually, so its next automatic run has been skipped to avoid running it twice',
+                    skipDateTime: computeNextScheduledRun(obj.scheduleConfig!).toISOString(),
+                },
+            };
+        });
+        await updateBackupConfig(existing.backupConfigId, { objects: updatedObjects });
+    }
+
+    makeResponse(req, res, 200, true, 'fetch');
+};
+
 const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const { slug } = req.query;
     const userId = req.user!.userId;
@@ -540,6 +605,7 @@ export const archivalConfigController = wrapController({
     getArchivalConfigHandler,
     updateArchivalConfigHandler,
     deletearchivalConfigHandler,
+    runNowArchivalConfigHandler,
     getArchivalJobStatsHandler,
     dryRunArchivalHandler,
     validateSoqlArchivalHandler,

@@ -37,6 +37,15 @@ export interface IObjectParent {
   name: string;
 }
 
+// skipReason/skipDateTime are only meaningful while skip is true — once the
+// EventBridge-triggered run that was told to skip actually fires and consumes
+// the flag, it's reset to { skip: false } with both omitted, not left stale.
+export interface IUpcomingJob {
+  skip: boolean;
+  skipReason?: string;
+  skipDateTime?: string;
+}
+
 export interface IObject {
   id: string;
   schemaChange?: boolean;
@@ -49,6 +58,10 @@ export interface IObject {
   scheduleConfig?: IScheduleConfig;
   children?: IObject[];
   parentObjects?: IObjectParent[];
+  // Archival scheduling is per-object (unlike backup-config's single config-level
+  // schedule), so a manually-invoked INCREMENTAL object's "skip the next automatic
+  // run" note has to live on the object itself, not the shared config.
+  upcomingJob?: IUpcomingJob;
 }
 
 export interface ITriggerResult {
@@ -95,9 +108,5 @@ export interface IBackupConfig {
   // Additional
   crm?: object;
   destination?: object;
-  upcomingJob?: {
-    skip: boolean;
-    skipReason: string;
-    skipDateTime: string;
-  };
+  upcomingJob?: IUpcomingJob;
 }
