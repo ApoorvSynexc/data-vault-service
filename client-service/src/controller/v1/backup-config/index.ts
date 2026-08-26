@@ -41,7 +41,8 @@ const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
   'picklist',
   'recordTypes',
 ];
-import { wrapController, isOwner, buildEventScheduleInput, buildBackupScheduleName, computeNextScheduledRun } from '../../../utils/helper';
+import { wrapController, isOwner } from '../../../utils/helper';
+import { buildEventScheduleInput, buildBackupScheduleName, computeNextScheduledRun } from '../../../utils/event-bridge';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 

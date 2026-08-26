@@ -1,4 +1,4 @@
-import { SCHEDULE_MODE, BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from "../../../constant";
+import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -17,24 +17,19 @@ import {
     getBackupConfigBySlug,
     getBackupConfigById,
     updateBackupConfig,
-    getSalesforceProfile,
     deleteBackupJobsByConfig,
-    realTimeTriggerManagement,
-    computeJobStats,
     computeArchivalJobStats,
-    getApexObjectRecords,
     triggerArchivalBackupJob,
     getBackupJobById,
     getDecryptedDestinationConfig,
     unwrapApex,
-    getDecryptedCrmCredential,
     createAwsEventScheduler,
     updateAwsEventSchedule,
     deleteAwsEventScheduler,
 } from "../../../services";
-import { buildArchivalObjectScheduleName, buildScheduleInput, filtereObjects, isOwner, wrapController } from "../../../utils/helper";
+import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
+import { buildArchivalObjectScheduleName, buildScheduleInput } from "../../../utils/event-bridge";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
-import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
@@ -42,103 +37,12 @@ import { previewRecords } from "../../../services/third-party/salesforce/dryrun-
 import { validateSoql } from "../../../services/third-party/salesforce/dryrun-v2/validate-soql";
 import { generateSoqlQueries } from "../../../services/third-party/salesforce/dryrun-v2/soql-generation";
 
-// ── Parent chain types ────────────────────────────────────────────────────────
-
-interface ParentFilters {
-    condition: ICondition | null;
-    fields: IFieldFilter[] | null;
-}
-
-interface ParentNode {
-    apiName: string;
-    referenceName: string;
-    filters: ParentFilters;
-    parent?: ParentNode;
-}
-
 interface ObjectRecordsBody {
     id: string;
     name: string;
     fieldNames: string[]
     soql: string
 }
-
-// ── WHERE clause builder ──────────────────────────────────────────────────────
-// Flattens the nested parent chain (outermost = immediate parent, innermost = root),
-// reverses it to root-first order, builds the root's own WHERE body, then
-// transforms it outward through each ancestor using buildChildWhereBody.
-//
-// Returns null when the root has no filter conditions (fields is null and condition
-// has no soqlQuery), which signals the caller to omit the whereClause entirely.
-
-// Converts a FK field name to its SOQL relationship traversal name.
-// "AccountId"  → "Account"   (strip trailing "Id")
-// "Trainer__c" → "Trainer__r" (replace "__c" with "__r")
-// "WhatId"     → "What"      (strip trailing "Id")
-const toRelationshipName = (fieldApiName: string): string => {
-    if (fieldApiName.endsWith('__c')) return `${fieldApiName.slice(0, -3)}__r`;
-    if (fieldApiName.endsWith('Id')) return fieldApiName.slice(0, -2);
-    return fieldApiName;
-};
-
-const buildWhereClauseFromParentChain = (parent: ParentNode, childReferenceName?: string): string | null => {
-    const chain: ParentNode[] = [];
-    let node: ParentNode | undefined = parent;
-    while (node) {
-        chain.push(node);
-        node = node.parent;
-    }
-    // chain[0] = immediate parent (outermost), chain[last] = root (innermost)
-    chain.reverse(); // now root-first: [root, level1, ..., immediate-parent]
-
-    const root = chain[0];
-    const rootWhereBody = buildOwnWhereBody({
-        condition: root.filters.condition ?? undefined,
-        field: root.filters.fields ?? undefined,
-    });
-
-    // Direct child of root (chain has only the root as parent):
-    // use buildChildWhereBody to translate root's WHERE into the child's FK field.
-    // e.g. root WHERE "Id != null" + childReferenceName "AccountId" → "AccountId != null"
-    if (chain.length === 1) {
-        if (!childReferenceName) { return rootWhereBody; }
-        if (!rootWhereBody) { return `${childReferenceName} != null`; }
-        return buildChildWhereBody(rootWhereBody, childReferenceName);
-    }
-
-    // Multiple levels deep: build a dotted SOQL traversal path.
-    //
-    // The chain contains only parent nodes (root → ... → immediate parent).
-    // childReferenceName is the FK on the requested object itself (e.g. "WhatId").
-    //
-    // Example:
-    //   chain  = [Account, Contact, Pok_mon__c]  (root-first)
-    //   childReferenceName = "WhatId"  (ContactRequest's own FK)
-    //
-    //   childReferenceName "WhatId"     → toRelName → "What"       (outermost traversal)
-    //   chain[2].referenceName "Trainer__c" → toRelName → "Trainer__r" (middle traversal)
-    //   chain[1].referenceName "AccountId"                              (terminal FK field)
-    //
-    // Result: "What.Trainer__r.AccountId != null"
-
-    const traversalParts: string[] = [];
-
-    // Outermost: the requested child object's own FK → relationship name
-    if (childReferenceName) {
-        traversalParts.push(toRelationshipName(childReferenceName));
-    }
-
-    // Intermediate ancestors (chain[last] down to chain[2]): relationship names
-    for (let i = chain.length - 1; i >= 2; i--) {
-        traversalParts.push(toRelationshipName(chain[i].referenceName));
-    }
-
-    // Terminal: chain[1].referenceName is the FK column on root's immediate child — kept as-is
-    traversalParts.push(chain[1].referenceName);
-
-    const fieldPath = traversalParts.join('.');
-    return `${fieldPath} != null`;
-};
 
 
 const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -199,10 +103,6 @@ const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<v
     makeResponse(req, res, 200, true, 'fetch', result);
 };
 
-// Computes per-row aggregate stats (records archived, bytes archived) by
-// walking that config's archival job history. Adds `archivedRecordsCount` +
-// `archivedSizeInBytes` to each row in place. Runs in parallel across rows
-// so list latency is bounded by the slowest single config, not the sum.
 const attachArchivalStatsToRows = async (documents: any[]): Promise<void> => {
     await Promise.all(
         documents.map(async (document) => {
@@ -541,11 +441,6 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
 const PAGE_SIZE = 10;
 const BATCH_SIZE = 200; // records per S3 file
 
-// GET /v1/archival-config/record-errors?backupJobId=&objectId=&page=
-// Returns one page (10 records) of per-record delete errors stored in S3.
-// S3 files are named batch_00001.csv, batch_00002.csv … each holding 200 records.
-// Page → file mapping is deterministic so forward/backward navigation never
-// skips or repeats records: file_idx = floor((page-1)*10 / 200).
 const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const { backupJobId, objectId, page } = req.query as Record<string, string>;
     if (!backupJobId || !objectId) {
@@ -579,9 +474,6 @@ const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<vo
         return;
     }
 
-    // Resolve destination config via the backup config's destinationId.
-    // The job record's destination is encrypted with the backup-service key (AES-GCM),
-    // which the client-service cannot decrypt. Go through the destination table instead.
     const config = await getBackupConfigById(job.backupConfigId);
     if (!config?.destinationId) {
         makeResponse(req, res, 500, false, 'destination_config_unavailable');
@@ -604,9 +496,6 @@ const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<vo
     const prefix = targetObj.recordErrorsS3Prefix;
     const allKeys = await listS3Keys(s3Cfg, prefix);
 
-    // totalRecords = sum of (BATCH_SIZE * all-but-last files) + rows in last file.
-    // We approximate with allKeys.length * BATCH_SIZE and clip on the last page —
-    // the actual row count is returned after reading the file.
     const globalOffset = (pageNum - 1) * PAGE_SIZE;
     const fileIdx = Math.floor(globalOffset / BATCH_SIZE);
 
@@ -628,13 +517,10 @@ const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<vo
         if (commaIdx === -1) return { recordId: row, error: '' };
         const recordId = row.slice(0, commaIdx);
         let error = row.slice(commaIdx + 1);
-        // strip surrounding JSON quotes added during write
         try { error = JSON.parse(error); } catch { /* leave as-is */ }
         return { recordId, error };
     });
 
-    // Compute accurate totalRecords: (files - 1) * BATCH_SIZE + dataRows.length of last file
-    // We only know the current file's row count; for the last file use dataRows.length.
     const isLastFile = fileIdx === allKeys.length - 1;
     const totalRecords = isLastFile
         ? fileIdx * BATCH_SIZE + dataRows.length
