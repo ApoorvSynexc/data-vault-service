@@ -935,14 +935,14 @@ const grantApexClassAccess = async (
   );
   if (check.totalSize > 0) { return; }
 
-  // SetupEntityType is required on this POST — Apex DML infers it from
-  // SetupEntityId's key prefix at compile time, but the generic sobject REST
-  // endpoint doesn't do that inference, so omitting it fails the insert.
+  // SetupEntityType is NOT sent — it's a read-only, system-derived field
+  // (Salesforce infers it from SetupEntityId's key prefix). Sending it
+  // explicitly fails the insert with INVALID_FIELD_FOR_INSERT_UPDATE.
   await salesforceRequest(
     {
       url: `${instanceUrl}/services/data/v${API_VERSION}/sobjects/SetupEntityAccess`,
       method: 'POST',
-      body: JSON.stringify({ ParentId: permissionSetId, SetupEntityId: apexClassId, SetupEntityType: 'ApexClass' }),
+      body: JSON.stringify({ ParentId: permissionSetId, SetupEntityId: apexClassId }),
     },
     tokens
   );
