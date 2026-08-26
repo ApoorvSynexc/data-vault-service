@@ -3,6 +3,7 @@ import { STANDARD_OBJECT_LIST } from "../../../../constant";
 import { logger } from "../../../../middlewares";
 import { IUser } from "../../../../models";
 import { getCrmById } from "../../../crm";
+import { getSettingsByUser } from "../../../settings";
 import { getDecryptedCrmCredential } from "../../../user";
 import { childHandler } from "./child";
 import { getComparisonContext, ISalesforceMetadataHandler } from "./common";
@@ -142,6 +143,13 @@ export const salesforceObjectList = async (params: ISalesforceObjectListParams):
 export const salesforceObjectFilteredList = async (params: ISalesforceObjectListParams): Promise<ISalesforceObjectResponse[]> => {
     const { user, apexMode, apexType } = params;
     try {
+        const standardObjects: string[] = [];
+        const settings = await getSettingsByUser(user.userId);
+        if(settings && settings.standardObjects.length) {
+            const standardObjectNames = settings.standardObjects.map(s => s.name);
+            standardObjects.push(...standardObjectNames);
+        }
+
         const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
         const objectsList = await salesforceObjectList({ user });
         let filteredObjects = objectsList.filter((obj) =>
@@ -152,7 +160,8 @@ export const salesforceObjectFilteredList = async (params: ISalesforceObjectList
             obj.keyPrefix !== null &&
             obj.queryable === true &&
             (obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name) || obj.custom === true) &&
-            !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+            !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
+            !standardObjects.includes(obj.name)
         );
 
         if (apexMode === 'backup' && apexType === 'realtime') {
