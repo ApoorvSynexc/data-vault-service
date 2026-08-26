@@ -3,12 +3,13 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE } from '../../constant';
-import { IBackupJob, IObject, IRestoreScope, IRestoreFilters } from '../../models';
+import { IBackupJob, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getUser } from '../user';
-import { salesforceObjectFilteredList } from '../third-party/salesforce/metadata/index';
+import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third-party/salesforce/metadata/index';
+import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
@@ -28,7 +29,6 @@ import {
   buildWindowDeltasSql,
   buildDeltaPartitionWhere,
   buildRecordTypeDeltaSql,
-  buildFieldDeleteDeltaSql,
   buildHudiCountSql,
   buildDeltaCountSql,
 } from './athena-fetch';
@@ -647,51 +647,71 @@ const retrieveInactiveRecordTypes = async (
   return inactiveTypes;
 };
 
-// Same shape retrieveInactiveRecordTypes takes — one object's delta table,
-// scoped by owner, windowed by change_time.
-export type IFetchMissingFieldsParams = IFetchInactiveRecordTypesParams;
-
-// A FIELD DELETE delta's change_data — the deleted field's own definition,
-// exactly as backup-service captured it.
-export interface IDeletedField {
-  label: string;
-  isRequired: boolean;
-  isCustom: boolean;
-  dataType: string;
-  apiName: string;
+export interface IFetchMissingFieldsParams {
+  backupConfigId: string;
+  objectApiName: string;
+  userId: string;
+  user: IUser;
 }
 
+export interface IMissingField {
+  apiName: string;
+  label: string;
+  type: string;
+}
+
+export interface IFetchMissingFieldsResult {
+  hasMissingFields: boolean;
+  missingFields: IMissingField[];
+}
+
+// Unwraps the S3 schema history array fetchObjectFields returns down to the
+// current field snapshot — same "main entry, else most recent" rule
+// fetchObjectFieldsHandler applies, needed here too since the comparison
+// works off the same stored shape.
+const latestStoredFields = (schema: unknown): ISalesforceFieldSnapshot[] | null => {
+  const entries = schema as Array<{ sourceType?: string; context: ISalesforceFieldSnapshot[] }>;
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const mainEntry = entries.find((entry) => entry.sourceType === 'main');
+  return (mainEntry ?? entries[entries.length - 1]).context;
+};
+
 /**
- * Fields deleted from an object inside [startDate, endDate], out of the FIELD
- * schema-change deltas — the delta table's DELETE change_data is already the
- * flat field definition, so no prev/new split like retrieveInactiveRecordTypes
- * needs. UPDATE/INSERT FIELD deltas never reach the SQL.
+ * Compares the field schema stored on S3 for a backup config against the
+ * destination object's live Salesforce describe, and reports the fields the
+ * backup captured that no longer exist on the destination — the set a
+ * restore's "missing fields in destination" edge case needs to map to an
+ * existing destination field.
  *
- * Returns null when the config does not exist or is not owned by the caller.
+ * Reuses fetchObjectFields for the stored side and diffSchemas — the same
+ * comparator the backup pipeline's own schema-drift detection
+ * (schemaComparison) uses — for the comparison, filtering the live describe
+ * through isQueryableField first so it lines up with what backup-service
+ * would have captured.
+ *
+ * Returns null when the config does not exist, is not owned by the caller,
+ * or no schema has been stored for the object yet.
  */
 const retrieveMissingFields = async (
   params: IFetchMissingFieldsParams
-): Promise<IDeletedField[] | null> => {
-  const config = await getBackupConfigById(params.backupConfigId);
-  if (!config || config.userId !== params.userId) return null;
+): Promise<IFetchMissingFieldsResult | null> => {
+  const { backupConfigId, objectApiName, userId, user } = params;
 
-  const databaseName = toGlueId(params.backupConfigId);
-  const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
-  const deltaTable = `${table}_delta`;
+  const stored = await fetchObjectFields({ objectApiName, backupConfigId, userId });
+  if (!stored.ok) return null;
 
-  const { startDate, endDate } = params;
-  const { run } = makeRunner(databaseName, null);
-  const result = await run('fieldDeleteDeltas', () =>
-    buildFieldDeleteDeltaSql(deltaTable, {
-      startDate,
-      endDate,
-      deltaPartition: buildDeltaPartitionWhere(startDate, endDate),
-    })
-  );
+  const storedFields = latestStoredFields(stored.schema);
+  if (!storedFields) return null;
 
-  return result.rows
-    .map((row) => JSON.parse(row['change_data'] || 'null'))
-    .filter((field): field is IDeletedField => Boolean(field));
+  const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
+  const liveFields = described.fields.filter(isQueryableField).map(toFieldSnapshot);
+
+  const { removedFields } = diffSchemas(storedFields, liveFields);
+  const missingFields = storedFields
+    .filter((field) => removedFields.includes(field.name))
+    .map((field) => ({ apiName: field.name, label: field.label, type: field.type }));
+
+  return { hasMissingFields: missingFields.length > 0, missingFields };
 };
 
 // ---------------------------------------------------------------------------
@@ -962,6 +982,179 @@ const getObjectRecordCounts = async (
 };
 
 // ---------------------------------------------------------------------------
+// POST /retrieve/fetch-missing-record-types — record types to map per object
+// ---------------------------------------------------------------------------
+
+export interface IRecordTypeMappingCandidate {
+  sourceRecordTypeId: string;
+  sourceRecordTypeName: string;
+  status: 'MISSING' | 'INACTIVE';
+}
+
+export interface IObjectRecordTypeMapping {
+  objectApiName: string;
+  recordTypes: IRecordTypeMappingCandidate[];
+}
+
+export interface IFetchMissingRecordTypesParams {
+  backupConfigId: string;
+  configType: ConfigType;
+  userId: string;
+  user: IUser;
+  // Restore scope's own object list (OBJECT/RECORD/FIELD/... scope types already
+  // know theirs on the frontend) — omit/empty to resolve every restorable object
+  // on the config (an ALL/ENTIRE scope), same as getObjectRecordCounts.
+  objectApiNames?: string[];
+  // Scopes the delta scan the same way CHANGED_BETWEEN restores already scope
+  // their record window — omit both for the whole delta history.
+  startDate?: IsoDateString | null;
+  endDate?: IsoDateString | null;
+}
+
+/**
+ * Record types a restore's "Record type missing" edge case needs mapped, one
+ * group per object: the record types this backup's RECORD_TYPE schema-change
+ * deltas ever flagged inactive/deleted (retrieveInactiveRecordTypes' own
+ * query, unbounded unless a window is given) that are, right now, either
+ * absent from the destination object's live Salesforce record types
+ * (MISSING) or still inactive there (INACTIVE). A record type reactivated
+ * since is dropped — it needs no mapping.
+ *
+ * Resolves the object scope itself via getRestoreObjectListByConfigId when
+ * the caller doesn't supply objectApiNames, so an ENTIRE restore never
+ * requires the UI to enumerate objects or call this once per object. Runs
+ * one Athena query per object concurrently (same Promise.all pattern
+ * getObjectRecordCounts uses), and only describes an object's live
+ * Salesforce record types when it actually has delta-flagged candidates —
+ * most objects, whose record types never changed, cost one cheap Athena scan
+ * and nothing else.
+ *
+ * Returns null when the config does not exist, is not owned by the caller,
+ * or (when objectApiNames is omitted) its type mismatches.
+ */
+const retrieveMissingRecordTypes = async (
+  params: IFetchMissingRecordTypesParams
+): Promise<IObjectRecordTypeMapping[] | null> => {
+  const { backupConfigId, configType, userId, user, startDate, endDate } = params;
+
+  let objectNames = params.objectApiNames?.filter(Boolean) ?? [];
+  if (objectNames.length === 0) {
+    const { objects, found } = await getRestoreObjectListByConfigId(backupConfigId, configType, userId);
+    if (!found) return null;
+    objectNames = objects.map((o) => o.name);
+  } else {
+    const config = await getBackupConfigById(backupConfigId);
+    if (!config || config.userId !== userId) return null;
+  }
+
+  const databaseName = toGlueId(backupConfigId);
+  const { run } = makeRunner(databaseName, null);
+  const deltaPartition = buildDeltaPartitionWhere(startDate ?? null, endDate ?? null);
+
+  const perObject = await Promise.all(
+    objectNames.map(async (objectApiName): Promise<IObjectRecordTypeMapping | null> => {
+      try {
+        const deltaTable = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}_delta`;
+        const result = await run(`recordTypeDeltas:${objectApiName}`, () =>
+          buildRecordTypeDeltaSql(deltaTable, { startDate, endDate, deltaPartition })
+        );
+
+        const candidates = new Map<string, IInactiveRecordType>();
+        for (const row of result.rows) {
+          const changeData = JSON.parse(row['change_data'] || 'null');
+          if (!changeData) continue;
+          const flagged: IInactiveRecordType | undefined =
+            row['change_type'] === 'DELETE' ? changeData
+              : changeData.new?.isActive === false ? changeData.new
+                : undefined;
+          if (flagged?.recordTypeId) candidates.set(flagged.recordTypeId, flagged);
+        }
+        if (candidates.size === 0) return null;
+
+        const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
+        const liveById = new Map(described.recordTypeInfos.map((rt) => [rt.recordTypeId, rt]));
+
+        const recordTypes: IRecordTypeMappingCandidate[] = [];
+        for (const candidate of candidates.values()) {
+          const live = liveById.get(candidate.recordTypeId);
+          if (!live) {
+            recordTypes.push({ sourceRecordTypeId: candidate.recordTypeId, sourceRecordTypeName: candidate.name, status: 'MISSING' });
+          } else if (!live.active) {
+            recordTypes.push({ sourceRecordTypeId: candidate.recordTypeId, sourceRecordTypeName: candidate.name, status: 'INACTIVE' });
+          }
+        }
+
+        return recordTypes.length ? { objectApiName, recordTypes } : null;
+      } catch {
+        // One object's Athena/describe failure shouldn't fail the whole
+        // response — same "skip and continue" as getObjectRecordCounts, just
+        // omitted here instead of reported, since this response only ever
+        // carries objects that need action.
+        return null;
+      }
+    })
+  );
+
+  return perObject.filter((o): o is IObjectRecordTypeMapping => o !== null);
+};
+
+// ---------------------------------------------------------------------------
+// POST /retrieve/required-fields — required fields for a "missing required
+// field value" edge case default, one object at a time
+// ---------------------------------------------------------------------------
+
+export interface IRequiredFieldsParams {
+  backupConfigId: string;
+  objectApiName: string;
+  userId: string;
+  user: IUser;
+}
+
+export interface IRequiredField {
+  fieldApiName: string;
+  fieldLabel: string;
+  dataType: string;
+  picklistValues?: string[];
+}
+
+/**
+ * Fields a restore's "Missing required field value" edge case needs a
+ * default for: the live Salesforce object's required fields, narrowed
+ * through the same two gates the rest of the restore write path already
+ * applies — isRestoreEligibleField (restore-writable, non-system; the exact
+ * predicate getRestoreFieldsHandler/spark-job filters restore field names
+ * through) and isRequiredField (createable, non-nillable, no default,
+ * not auto-number — trigger.ts's isRequiredOnCreate definition). A field
+ * Salesforce marks required but restore filtering already excludes never
+ * reaches this response.
+ *
+ * Picklist fields carry their active picklistValues; every other type omits
+ * the field entirely rather than sending an empty array.
+ *
+ * Returns null when the config does not exist or is not owned by the caller.
+ */
+const retrieveRequiredFields = async (
+  params: IRequiredFieldsParams
+): Promise<IRequiredField[] | null> => {
+  const config = await getBackupConfigById(params.backupConfigId);
+  if (!config || config.userId !== params.userId) return null;
+
+  const described = await salesforceObjectDescribe({ user: params.user, objectName: params.objectApiName });
+
+  return described.fields
+    .filter(isRestoreEligibleField)
+    .filter(isRequiredField)
+    .map((field) => ({
+      fieldApiName: field.name,
+      fieldLabel: field.label,
+      dataType: field.type,
+      ...(field.type === 'picklist'
+        ? { picklistValues: field.picklistValues.filter((p) => p.active).map((p) => p.value) }
+        : {}),
+    }));
+};
+
+// ---------------------------------------------------------------------------
 // Fetch object schema (fields) from S3
 // ---------------------------------------------------------------------------
 
@@ -1082,6 +1275,8 @@ export {
   retrieveRecords,
   retrieveInactiveRecordTypes,
   retrieveMissingFields,
+  retrieveMissingRecordTypes,
+  retrieveRequiredFields,
   fetchObjectFields,
   fetchPicklistValues,
   dryRunRestore,

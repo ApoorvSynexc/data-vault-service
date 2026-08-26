@@ -36,6 +36,8 @@ import {
   getBackupJobsByConfig,
   retrieveInactiveRecordTypes,
   retrieveMissingFields,
+  retrieveMissingRecordTypes,
+  retrieveRequiredFields,
   dryRunRestore,
   IDryRunParams,
   DryRunSourceType,
@@ -689,7 +691,7 @@ const dryRunHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 /**
  * Parses the body shared by every "schema-change deltas for one object in a
  * window" endpoint: backupConfigId, objectApiName, startDate, endDate. Used by
- * both fetchInactiveRecordTypesHandler and fetchMissingFieldsHandler.
+ * fetchInactiveRecordTypesHandler.
  */
 const parseSchemaDeltaWindowParams = (
   body: Record<string, unknown>,
@@ -755,21 +757,202 @@ const fetchInactiveRecordTypesHandler = async (req: IRequest, res: IResponse): P
 };
 
 /**
+ * Parses the body fetchMissingFieldsHandler takes: backupConfigId,
+ * objectApiName — no date window, this compares stored schema against a
+ * live Salesforce describe, not schema-change deltas.
+ */
+const parseMissingFieldsParams = (
+  body: Record<string, unknown>,
+  userId: string
+):
+  | { ok: true; value: { backupConfigId: string; objectApiName: string; userId: string } }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const { backupConfigId, objectApiName } = body;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
+  }
+  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
+    return { ok: false, error: 'object_api_name_required' };
+  }
+
+  return {
+    ok: true,
+    value: { backupConfigId: backupConfigId.trim(), objectApiName: objectApiName.trim(), userId },
+  };
+};
+
+/**
  * POST /retrieve/fetch-missing-fields
- * Body: { backupConfigId, objectApiName, startDate, endDate }
+ * Body: { backupConfigId, objectApiName }
  *
- * Fields deleted from the object inside [startDate, endDate], out of the FIELD
- * schema-change deltas — see retrieveMissingFields.
- * Returns not_exist when the config doesn't exist or isn't owned by the caller.
+ * Compares the field schema stored on S3 for the backup config against the
+ * destination object's live Salesforce fields, and returns the fields the
+ * backup captured that no longer exist on the destination — what a restore's
+ * "missing fields in destination" edge case needs to map to an existing
+ * destination field. hasMissingFields is false (with an empty missingFields
+ * array) when every backed-up field still exists on the destination.
+ *
+ * Returns not_exist when the config doesn't exist, isn't owned by the
+ * caller, or no schema has been stored for the object yet.
  */
 const fetchMissingFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const parsed = parseSchemaDeltaWindowParams(req.body as Record<string, unknown>, req.user!.userId);
+  const parsed = parseMissingFieldsParams(req.body as Record<string, unknown>, req.user!.userId);
   if (!parsed.ok) {
     makeResponse(req, res, 400, false, parsed.error);
     return;
   }
 
-  const result = await retrieveMissingFields(parsed.value);
+  const result = await retrieveMissingFields({ ...parsed.value, user: req.user! });
+  if (!result) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result);
+};
+
+/**
+ * Parses the body fetchMissingRecordTypesHandler takes: backupConfigId,
+ * configType, and either an explicit objectApiNames list (the frontend
+ * already knows its restore scope's objects for OBJECT/RECORD/FIELD/...
+ * scope types) or nothing (resolved to every restorable object on the
+ * config — an ALL/ENTIRE scope). startDate/endDate are optional and, when
+ * given, scope the delta scan the same way a CHANGED_BETWEEN restore's own
+ * window already does; omit both for the whole delta history.
+ */
+const parseMissingRecordTypesParams = (
+  body: Record<string, unknown>,
+  userId: string
+):
+  | { ok: true; value: Omit<Parameters<typeof retrieveMissingRecordTypes>[0], 'user'> }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const { backupConfigId, configType, objectApiNames, startDate, endDate } = body;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
+  }
+  if (typeof configType !== 'string' || !VALID_CONFIG_TYPES.includes(configType as ConfigType)) {
+    return { ok: false, error: 'invalid_config_type' };
+  }
+  if (objectApiNames !== undefined && (!Array.isArray(objectApiNames) || !objectApiNames.every((o) => typeof o === 'string'))) {
+    return { ok: false, error: 'object_api_name_required' };
+  }
+
+  if (startDate === undefined && endDate === undefined) {
+    return {
+      ok: true,
+      value: {
+        backupConfigId: backupConfigId.trim(),
+        configType: configType as ConfigType,
+        userId,
+        objectApiNames: (objectApiNames as string[] | undefined)?.map((o) => o.trim()).filter(Boolean),
+      },
+    };
+  }
+
+  if (typeof startDate !== 'string' || !startDate.trim() || typeof endDate !== 'string' || !endDate.trim()) {
+    return { ok: false, error: 'date_range_required' };
+  }
+  const start = toIsoDateString(startDate, 'start');
+  const end = toIsoDateString(endDate, 'end');
+  if (!start || !end) {
+    return { ok: false, error: 'invalid_source_date' };
+  }
+  if (start > end) {
+    return { ok: false, error: 'invalid_time_range' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      backupConfigId: backupConfigId.trim(),
+      configType: configType as ConfigType,
+      userId,
+      objectApiNames: (objectApiNames as string[] | undefined)?.map((o) => o.trim()).filter(Boolean),
+      startDate: start,
+      endDate: end,
+    },
+  };
+};
+
+/**
+ * POST /retrieve/fetch-missing-record-types
+ * Body: { backupConfigId, configType, objectApiNames?, startDate?, endDate? }
+ *
+ * Record types a restore's "Record type missing" edge case needs mapped,
+ * grouped by object: record types this backup's history ever flagged
+ * inactive/deleted (the same RECORD_TYPE schema-change delta query
+ * fetchInactiveRecordTypesHandler uses) that are, right now, either missing
+ * from or still inactive on the destination object's live Salesforce record
+ * types. Runs across every object in one call — pass objectApiNames for a
+ * scoped restore, omit it to resolve every restorable object on the config
+ * (an ENTIRE restore), so the UI never has to call this once per object.
+ *
+ * Returns not_exist when the config doesn't exist, isn't owned by the
+ * caller, or (when objectApiNames is omitted) its type mismatches.
+ */
+const fetchMissingRecordTypesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseMissingRecordTypesParams(req.body as Record<string, unknown>, req.user!.userId);
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
+    return;
+  }
+
+  const result = await retrieveMissingRecordTypes({ ...parsed.value, user: req.user! });
+  if (!result) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result);
+};
+
+/**
+ * Parses the body requiredFieldsHandler takes: backupConfigId, objectApiName
+ * — same shape as parseMissingFieldsParams, since this is the same "one
+ * object, no date window" request family.
+ */
+const parseRequiredFieldsParams = (
+  body: Record<string, unknown>,
+  userId: string
+):
+  | { ok: true; value: { backupConfigId: string; objectApiName: string; userId: string } }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const { backupConfigId, objectApiName } = body;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
+  }
+  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
+    return { ok: false, error: 'object_api_name_required' };
+  }
+
+  return {
+    ok: true,
+    value: { backupConfigId: backupConfigId.trim(), objectApiName: objectApiName.trim(), userId },
+  };
+};
+
+/**
+ * POST /retrieve/required-fields
+ * Body: { backupConfigId, objectApiName }
+ *
+ * Required fields a restore's "Missing required field value" edge case
+ * needs a default for, on one object — see retrieveRequiredFields for the
+ * restore-field-filtering + required-field gates applied before a field
+ * reaches this response.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller.
+ */
+const requiredFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseRequiredFieldsParams(req.body as Record<string, unknown>, req.user!.userId);
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
+    return;
+  }
+
+  const result = await retrieveRequiredFields({ ...parsed.value, user: req.user! });
   if (!result) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
@@ -999,6 +1182,8 @@ export const restoreRetrieveJobController = wrapController({
   fetchRecordsHandler,
   fetchInactiveRecordTypesHandler,
   fetchMissingFieldsHandler,
+  fetchMissingRecordTypesHandler,
+  requiredFieldsHandler,
   fetchObjectFieldsHandler,
   dryRunHandler,
   createRestoreHandler,

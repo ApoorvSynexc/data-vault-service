@@ -1,5 +1,6 @@
 import { logger } from "../../../../../middlewares";
 import { IUser } from "../../../../../models";
+import { SALESFORCE_SYSTEM_FIELDS } from "../../../../../constant";
 import { uploadToS3 } from "../../../s3-bucket";
 import { ISalesforceFieldDescribe } from "..";
 import {
@@ -33,6 +34,24 @@ export const isQueryableField = (
     !f.calculated &&
     !f.autoNumber;
 
+// Fields a restore is actually allowed to write back — the same gate
+// getRestoreFieldsHandler (spark-job) applies before naming the columns Spark
+// may set on a restore row. describe's updateable flag alone isn't a safe
+// system-field check on its own — some orgs report CreatedDate/CreatedById
+// etc. as updateable via the "Create Audit Fields" permission — hence the
+// explicit SALESFORCE_SYSTEM_FIELDS exclusion on top.
+export const isRestoreEligibleField = (
+    f: Pick<ISalesforceFieldDescribe, 'name' | 'updateable'>
+): boolean => f.updateable && !SALESFORCE_SYSTEM_FIELDS.includes(f.name);
+
+// Same "required on create" definition trigger.ts's isRequiredOnCreate uses
+// for Apex test-class field population: writable, no default, rejects null.
+// autoNumber is excluded on top of nillable because an auto-number field
+// reports nillable:false but is assigned by the org, never supplied by a caller.
+export const isRequiredField = (
+    f: Pick<ISalesforceFieldDescribe, 'createable' | 'nillable' | 'defaultedOnCreate' | 'autoNumber'>
+): boolean => f.createable && !f.nillable && !f.defaultedOnCreate && !f.autoNumber;
+
 // Trimmed subset of ISalesforceFieldDescribe actually tracked/stored/diffed by
 // the schema handler — the rest of the describe payload is noise for drift
 // detection purposes (picklist/index.ts still reads the full describe fields
@@ -49,7 +68,7 @@ export interface ISalesforceFieldSnapshot {
     type: string;
 }
 
-const toFieldSnapshot = (field: ISalesforceFieldDescribe): ISalesforceFieldSnapshot => ({
+export const toFieldSnapshot = (field: ISalesforceFieldDescribe): ISalesforceFieldSnapshot => ({
     cascadeDelete: field.cascadeDelete,
     label: field.label,
     length: field.length,
