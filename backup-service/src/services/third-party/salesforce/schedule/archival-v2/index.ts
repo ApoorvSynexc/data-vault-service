@@ -60,21 +60,6 @@ const DATE_LITERALS = new Set([
   'NEXT_FISCAL_YEAR',
 ]);
 
-const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
-const EXCLUDED_FIELD_NAMES = new Set(['InformalName']);
-// calculated covers both formula and roll-up summary fields — neither is
-// writable/restorable and both are computed by Salesforce, not stored data.
-const isQueryableField = (f: {
-  name: string;
-  type: string;
-  calculated?: boolean;
-  autoNumber?: boolean;
-}): boolean =>
-  !EXCLUDED_FIELD_NAMES.has(f.name) &&
-  !EXCLUDED_FIELD_TYPES.has(f.type) &&
-  !f.calculated &&
-  !f.autoNumber;
-
 const isDateLiteral = (value: string): boolean =>
   DATE_LITERALS.has(value.toUpperCase()) ||
   /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(
@@ -232,9 +217,7 @@ const archiveObject = async (payload: IArchiveObject) => {
       { instanceUrl, tokens }
     );
     const allFieldNames = withSystemFields(
-      fieldsMetadata?.metadataType === 'fields'
-        ? fieldsMetadata.fields.filter(isQueryableField).map((f) => f.name)
-        : []
+      fieldsMetadata?.metadataType === 'fields' ? fieldsMetadata.fields.map((f) => f.name) : []
     );
 
     if (object.bulkJobId) {
