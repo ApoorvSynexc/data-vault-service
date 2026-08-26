@@ -420,7 +420,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup' });
     const upcomingJob = {
       skip: true,
-      skipReason: 'Invoked immediately',
+      skipReason: 'This backup was started manually, so its next automatic run has been skipped to avoid running it twice',
       skipDateTime: computeNextScheduledRun(backupConfig.scheduleConfig).toISOString(),
     };
     await updateBackupConfig(backupConfig.backupConfigId, { upcomingJob });
