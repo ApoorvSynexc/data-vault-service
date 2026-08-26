@@ -404,6 +404,7 @@ export {
   schemasAreEqual,
   buildEventScheduleInput,
   computeNextScheduledRun,
+  toAwsCronExpression,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
   type SchemaKind,
