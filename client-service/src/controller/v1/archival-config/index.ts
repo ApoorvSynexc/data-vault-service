@@ -314,7 +314,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     continue;
                 }
 
-                await updateAwsEventSchedule({
+                await createAwsEventScheduler({
                     name: `datavault-objId-${scheduledObject.id}`,
                     scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
                     timeZone: scheduledObject.scheduleConfig!.timeZone,
