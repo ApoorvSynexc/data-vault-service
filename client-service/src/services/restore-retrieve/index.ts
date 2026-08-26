@@ -219,26 +219,35 @@ const getBackupJobIdsChangedBetween = async (
 export type ConfigType = 'BACKUP' | 'ARCHIVAL';
 
 // Minimal shape covering both IObject (config-level) and IBackupObject (job-level)
-// so the same walker can flatten either tree.
+// so the same walker can flatten either tree. `type` only exists on IObject —
+// IBackupObject rows fall back to STANDARD below.
 interface INamedTreeNode {
   name: string;
+  type?: string;
   children?: INamedTreeNode[];
 }
 
-const flattenObjectNames = (objects: INamedTreeNode[]): string[] => {
-  const names: string[] = [];
+// name + STANDARD/CUSTOM, as stored on the config's IObject — the shape the
+// object-list endpoints and their callers work with from here on.
+export interface IObjectSummary {
+  name: string;
+  type: string; // STANDARD | CUSTOM
+}
+
+const flattenObjects = (objects: INamedTreeNode[]): IObjectSummary[] => {
+  const result: IObjectSummary[] = [];
   for (const obj of objects) {
-    names.push(obj.name);
-    if (obj.children?.length) names.push(...flattenObjectNames(obj.children));
+    result.push({ name: obj.name, type: obj.type ?? 'STANDARD' });
+    if (obj.children?.length) result.push(...flattenObjects(obj.children));
   }
-  return names;
+  return result;
 };
 
 const getObjectListByConfigId = async (
   backupConfigId: string,
   configType: ConfigType,
   userId: string
-): Promise<{ objects: string[]; found: boolean }> => {
+): Promise<{ objects: IObjectSummary[]; found: boolean }> => {
   const config = await getBackupConfigById(backupConfigId);
 
   // BACKUP maps to the stored type 'NORMAL' in DynamoDB.
@@ -247,9 +256,10 @@ const getObjectListByConfigId = async (
     return { objects: [], found: false };
   }
 
-  const allNames = flattenObjectNames((config.objects ?? []) as IObject[]);
-  const uniqueNames = [...new Set(allNames)];
-  return { objects: uniqueNames, found: true };
+  const all = flattenObjects((config.objects ?? []) as IObject[]);
+  const uniqueByName = new Map<string, IObjectSummary>();
+  for (const obj of all) if (!uniqueByName.has(obj.name)) uniqueByName.set(obj.name, obj);
+  return { objects: [...uniqueByName.values()], found: true };
 };
 
 /**
@@ -263,7 +273,7 @@ const getRestoreObjectListByConfigId = async (
   backupConfigId: string,
   configType: ConfigType,
   userId: string
-): Promise<{ objects: string[]; found: boolean }> => {
+): Promise<{ objects: IObjectSummary[]; found: boolean }> => {
   const { objects, found } = await getObjectListByConfigId(backupConfigId, configType, userId);
   if (!found) return { objects: [], found: false };
 
@@ -272,7 +282,7 @@ const getRestoreObjectListByConfigId = async (
 
   const restorable = await salesforceObjectFilteredList({ user, apexMode: 'restore' });
   const restorableNames = new Set(restorable.map((obj) => obj.name));
-  return { objects: objects.filter((name) => restorableNames.has(name)), found: true };
+  return { objects: objects.filter((obj) => restorableNames.has(obj.name)), found: true };
 };
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
@@ -793,7 +803,7 @@ const resolveDryRunObjects = async (
         params.configType!,
         params.userId
       );
-      return { objectNames: objects, filterByObject };
+      return { objectNames: objects.map((o) => o.name), filterByObject };
     }
     case 'OBJECT':
       return { objectNames: [...new Set(scope.objects ?? [])], filterByObject };
@@ -901,6 +911,54 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
       objects,
     },
   };
+};
+
+// ---------------------------------------------------------------------------
+// GET /retrieve/fetch-count — per-object record counts for a config
+// ---------------------------------------------------------------------------
+
+export interface IObjectRecordCount {
+  objectApiName: string;
+  ok: boolean;
+  count: number;
+  error?: string;
+}
+
+/**
+ * Record counts for every object on a config — one Athena COUNT(*) against
+ * the object's main Hudi table, all run concurrently (same runHudiCount +
+ * buildHudiCountSql the dry-run ENTIRE path already uses, just without a
+ * FILTER-scope WHERE body). Feeds the object-selection step's Records column.
+ *
+ * Uses the same restore-eligible object list /get-objectlist-by-configid
+ * returns (getRestoreObjectListByConfigId), so the two responses line up by
+ * objectApiName.
+ *
+ * Returns found:false when the config doesn't exist, isn't owned by the
+ * caller, or its type mismatches — same collapsing as the object-list endpoint.
+ */
+const getObjectRecordCounts = async (
+  backupConfigId: string,
+  configType: ConfigType,
+  userId: string
+): Promise<{ counts: IObjectRecordCount[]; found: boolean }> => {
+  const { objects, found } = await getRestoreObjectListByConfigId(backupConfigId, configType, userId);
+  if (!found) return { counts: [], found: false };
+
+  const databaseName = toGlueId(backupConfigId);
+  const counts = await Promise.all(
+    objects.map(async ({ name }): Promise<IObjectRecordCount> => {
+      try {
+        const table = `cfg_${toGlueId(backupConfigId)}_${toGlueId(name)}_hudi`;
+        const count = await runHudiCount(databaseName, buildHudiCountSql(table, null));
+        return { objectApiName: name, ok: true, count };
+      } catch (e) {
+        return { objectApiName: name, ok: false, count: 0, error: errorMessage(e) };
+      }
+    })
+  );
+
+  return { counts, found: true };
 };
 
 // ---------------------------------------------------------------------------
@@ -1027,4 +1085,5 @@ export {
   fetchObjectFields,
   fetchPicklistValues,
   dryRunRestore,
+  getObjectRecordCounts,
 };

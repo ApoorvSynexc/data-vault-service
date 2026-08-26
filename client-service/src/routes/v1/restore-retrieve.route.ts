@@ -7,6 +7,9 @@ import { createRestoreValidation } from '../../middlewares';
  *
  * GET  /list                            — paginated list of restore/retrieve jobs (by config or user)
  * GET  /get-objectlist-by-configid      — object list selected on a single backup config
+ * GET  /retrieve/fetch-count            — per-object record counts for a config (concurrent
+ *                                         Athena COUNT(*) per object, same list/order as
+ *                                         /get-objectlist-by-configid)
  * GET  /fetch-change-between-backup-jobs — backupJobIds of a config that started inside a time window
  * POST /retrieve/fetch-records          — records for one object out of the compressed Hudi/Delta
  *                                         tables: ENTIRE, or CHANGED_BETWEEN a date window, each row
@@ -29,6 +32,7 @@ router.get('/job', restoreRetrieveJobController.getRestoreJobHandler);
 router.get('/job/stats', restoreRetrieveJobController.getRestoreJobStatsHandler);
 router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler);
 router.get('/get-objectlist-by-configid', restoreRetrieveJobController.getObjectListByConfigIdHandler);
+router.get('/retrieve/fetch-count', restoreRetrieveJobController.fetchObjectRecordCountsHandler);
 router.get(
   '/fetch-change-between-backup-jobs',
   restoreRetrieveJobController.fetchChangeBetweenBackupJobsHandler

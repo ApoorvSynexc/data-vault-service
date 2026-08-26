@@ -2300,7 +2300,7 @@ Returns the object list selected on a given backup/archival config.
 {
   "success": true,
   "message": "Fetched successfully",
-  "data": [ { "id": "obj-1", "name": "Contact" } ],
+  "data": [ { "name": "Contact", "type": "STANDARD" }, { "name": "My_Custom__c", "type": "CUSTOM" } ],
   "meta": {}
 }
 ```
@@ -2308,6 +2308,36 @@ Returns the object list selected on a given backup/archival config.
 **Error response `400`**
 ```json
 { "success": false, "message": "invalid_config_type", "data": null, "meta": {} }
+```
+
+### GET /api/v1/restore/retrieve/fetch-count
+Record counts for every object on a config — one Athena `COUNT(*)` against each object's main Hudi
+table, all run concurrently. Same object list (and order) as `/get-objectlist-by-configid`, so
+counts line up with that response by `objectApiName`.
+
+**Query params**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| backupConfigId | string | Yes | Config id |
+| configType | "BACKUP"\|"ARCHIVAL" | Yes | Must match the config's stored type |
+
+**Success response `200`**
+```json
+{
+  "success": true,
+  "message": "Fetched successfully",
+  "data": [
+    { "objectApiName": "Contact", "ok": true, "count": 15234 },
+    { "objectApiName": "My_Custom__c", "ok": true, "count": 812 }
+  ],
+  "meta": {}
+}
+```
+
+**Error response `400`**
+```json
+{ "success": false, "message": "not_exist", "data": null, "meta": {} }
 ```
 
 ### GET /api/v1/restore/fetch-change-between-backup-jobs
