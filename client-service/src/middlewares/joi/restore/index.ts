@@ -7,7 +7,11 @@ const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELET
 const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
 const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT'];
 const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP'];
-const RESTORE_SOURCE_TYPE = ['ENTIRE', 'PARTIAL', 'CHANGED_BETWEEN'];
+const RESTORE_CONFIG_TYPE = ['BACKUP', 'ARCHIVAL'];
+// Each configType has its own restore type set — see the configType-conditional
+// `type` field below. BACKUP never accepts DELETED_BETWEEN; ARCHIVAL never accepts CHANGED_BETWEEN.
+const BACKUP_SOURCE_TYPE = ['ENTIRE', 'CHANGED_BETWEEN'];
+const ARCHIVAL_SOURCE_TYPE = ['ENTIRE', 'DELETED_BETWEEN'];
 
 const scopeRecordSchema = Joi.object({
   objectName: Joi.string().required(),
@@ -250,7 +254,12 @@ export const createRestoreValidation = (req: Request, res: Response, next: NextF
     crmId: Joi.string().optional(),
     source: Joi.object({
       backupConfigId: Joi.string().required(),
-      type: Joi.string().valid(...RESTORE_SOURCE_TYPE).optional(),
+      configType: Joi.string().valid(...RESTORE_CONFIG_TYPE).required(),
+      type: Joi.when('configType', {
+        is: 'ARCHIVAL',
+        then: Joi.string().valid(...ARCHIVAL_SOURCE_TYPE).optional(),
+        otherwise: Joi.string().valid(...BACKUP_SOURCE_TYPE).optional(),
+      }),
       startDate: Joi.string().isoDate().optional(),
       endDate: Joi.string().isoDate().optional(),
       backupJobIds: Joi.array().items(Joi.string()).optional(),
