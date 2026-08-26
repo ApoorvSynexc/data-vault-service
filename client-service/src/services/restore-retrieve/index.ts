@@ -429,6 +429,8 @@ export interface IRetrieveRecordsParams {
   // Owns the CRM (→ Glue database), the destination and the table names —
   // everything the query needs resolves from this one id.
   backupConfigId: string;
+  // BACKUP | ARCHIVAL — which config type backupConfigId belongs to.
+  configType: ConfigType;
   objectApiName: string;
   type: RetrieveType;
   /**
@@ -695,8 +697,9 @@ export type DryRunScopeType = 'ALL' | 'OBJECT' | 'FIELD' | 'FILTER';
 
 export interface IDryRunParams {
   backupConfigId: string;
-  // Required only when restoreScope.type is 'ALL' — see getRestoreObjectListByConfigId.
-  configType?: ConfigType;
+  // BACKUP | ARCHIVAL — which config type backupConfigId belongs to. Always required;
+  // only actually consulted when restoreScope.type is 'ALL' — see getRestoreObjectListByConfigId.
+  configType: ConfigType;
   userId: string;
   type: DryRunSourceType;
   startDate?: IsoDateString;
