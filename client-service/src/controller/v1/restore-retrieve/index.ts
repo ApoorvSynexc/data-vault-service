@@ -34,12 +34,16 @@ import {
   getBackupJobById,
   getBackupJobsByConfig,
   retrieveInactiveRecordTypes,
-  retrieveMissingFields
+  retrieveMissingFields,
+  dryRunRestore,
+  IDryRunParams,
+  DryRunSourceType,
+  buildAthenaFilterWhere
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
-import { IBackupJob } from '../../../models';
+import { IBackupJob, IRestoreScope, IRestoreFilters } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { removeCsvColumnsInFolder } from '../../../utils/restore-csv-format';
@@ -460,6 +464,189 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 };
 
 
+// Scope types the dry-run endpoint can resolve to an object list — see
+// resolveDryRunObjects. RECORD/DELETED_ONLY/INSERTS_ONLY/CHANGE_SINCE/BULK_CSV
+// aren't asked for by the dry-run contract, so they 400 rather than silently
+// counting the wrong thing.
+const VALID_DRYRUN_SCOPE_TYPES = ['ALL', 'OBJECT', 'FIELD', 'FILTER'];
+const VALID_FILTER_TYPES = ['AND', 'OR', 'SOQL'];
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+// Shape-checks one restoreScope.filters[].filter block — same rules the removed
+// /retrieve/show-preview parser applied to the identical IRestoreFilters shape.
+// Does not compile it; buildAthenaFilterWhere (called separately, below) is
+// what maps a well-shaped filter to FilterError codes for anything the
+// converter itself can't support (bad operator, SOQL relationship/subquery/
+// date-literal, unparseable SOQL, etc).
+const validateFilterShape = (
+  f: unknown
+): { ok: true } | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  if (!isPlainObject(f)) return { ok: false, error: 'invalid_filters' };
+  if (!VALID_FILTER_TYPES.includes(f.type as string)) return { ok: false, error: 'invalid_filter_type' };
+  if (f.type === 'SOQL') {
+    if (typeof f.soqlQuery !== 'string' || !f.soqlQuery.trim()) return { ok: false, error: 'soql_query_required' };
+    return { ok: true };
+  }
+  if (!Array.isArray(f.fields) || f.fields.length === 0) return { ok: false, error: 'filter_fields_required' };
+  for (const field of f.fields) {
+    if (
+      !isPlainObject(field) ||
+      typeof field.name !== 'string' ||
+      typeof field.dataType !== 'string' ||
+      typeof field.operator !== 'string' ||
+      field.value === undefined
+    ) {
+      return { ok: false, error: 'invalid_filter_field' };
+    }
+  }
+  return { ok: true };
+};
+
+// Validates the object list/filter shape a scope type demands, and — for
+// FILTER — compiles every per-object filter up front so a bad operator or
+// unsupported SOQL shape 400s here rather than surfacing as a per-object
+// failure after Athena has already been queried for the others.
+const validateDryRunScope = (
+  restoreScope: IRestoreScope
+): { ok: true } | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  if (restoreScope.type === 'OBJECT') {
+    if (!Array.isArray(restoreScope.objects) || restoreScope.objects.length === 0) {
+      return { ok: false, error: 'invalid_scope_objects' };
+    }
+  }
+
+  if (restoreScope.type === 'FIELD') {
+    if (!Array.isArray(restoreScope.fields) || restoreScope.fields.length === 0) {
+      return { ok: false, error: 'invalid_scope_fields' };
+    }
+    for (const f of restoreScope.fields) {
+      if (!isPlainObject(f) || typeof f.objectName !== 'string' || !f.objectName.trim()) {
+        return { ok: false, error: 'invalid_scope_fields' };
+      }
+    }
+  }
+
+  if (restoreScope.type === 'FILTER') {
+    if (!Array.isArray(restoreScope.filters) || restoreScope.filters.length === 0) {
+      return { ok: false, error: 'invalid_scope_filters' };
+    }
+    for (const entry of restoreScope.filters) {
+      if (!isPlainObject(entry) || typeof entry.objectName !== 'string' || !entry.objectName.trim()) {
+        return { ok: false, error: 'invalid_scope_filters' };
+      }
+      const shape = validateFilterShape(entry.filter);
+      if (!shape.ok) return shape;
+      try {
+        buildAthenaFilterWhere(entry.filter as IRestoreFilters);
+      } catch (e) {
+        if (e instanceof FilterError) return { ok: false, error: e.code as Parameters<typeof makeResponse>[4] };
+        throw e;
+      }
+    }
+  }
+
+  return { ok: true };
+};
+
+/**
+ * Parses the /dry-run body — the same source.type/startDate/endDate and
+ * selection.restoreScope shape the restore-creation body (POST /) carries,
+ * narrowed to what counting needs: no destination, conflict, or schedule.
+ */
+const parseDryRunParams = (
+  body: Record<string, unknown>,
+  userId: string
+):
+  | { ok: true; value: IDryRunParams }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const { backupConfigId, configType, source, selection } = body as Record<string, any>;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
+  }
+
+  const type = source?.type;
+  if (!VALID_RETRIEVE_TYPES.includes(type)) {
+    return { ok: false, error: 'invalid_retrieve_type' };
+  }
+
+  const restoreScope = selection?.restoreScope as IRestoreScope | undefined;
+  if (!restoreScope || typeof restoreScope !== 'object') {
+    return { ok: false, error: 'invalid_restore_scope' };
+  }
+  if (!VALID_DRYRUN_SCOPE_TYPES.includes(restoreScope.type)) {
+    return { ok: false, error: 'invalid_restore_scope_type' };
+  }
+  if (restoreScope.type === 'ALL' && (!configType || !VALID_CONFIG_TYPES.includes(configType))) {
+    return { ok: false, error: 'invalid_config_type' };
+  }
+
+  const scopeCheck = validateDryRunScope(restoreScope);
+  if (!scopeCheck.ok) return scopeCheck;
+
+  const value: IDryRunParams = {
+    backupConfigId: backupConfigId.trim(),
+    userId,
+    type: type as DryRunSourceType,
+    restoreScope,
+    ...(configType ? { configType } : {}),
+  };
+
+  if (value.type === 'CHANGED_BETWEEN') {
+    const { startDate, endDate } = source;
+    if (
+      typeof startDate !== 'string' ||
+      !startDate.trim() ||
+      typeof endDate !== 'string' ||
+      !endDate.trim()
+    ) {
+      return { ok: false, error: 'date_range_required' };
+    }
+    const start = toIsoDateString(startDate, 'start');
+    const end = toIsoDateString(endDate, 'end');
+    if (!start || !end) return { ok: false, error: 'invalid_source_date' };
+    if (start > end) return { ok: false, error: 'invalid_time_range' };
+    value.startDate = start;
+    value.endDate = end;
+  }
+
+  return { ok: true, value };
+};
+
+/**
+ * POST /dry-run
+ * Body: {
+ *   backupConfigId: string
+ *   configType?:    'BACKUP' | 'ARCHIVAL'   (required when restoreScope.type is 'ALL')
+ *   source: { type: 'ENTIRE' | 'CHANGED_BETWEEN', startDate?, endDate? }
+ *   selection: { restoreScope: IRestoreScope }   (type: ALL | OBJECT | FIELD | FILTER)
+ * }
+ *
+ * Counts how many records a restore matching this configuration would touch —
+ * read-only. Never writes, restores, or produces a CSV. See dryRunRestore for
+ * what ENTIRE vs CHANGED_BETWEEN each count.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller.
+ */
+const dryRunHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseDryRunParams(req.body as Record<string, unknown>, req.user!.userId);
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
+    return;
+  }
+
+  const result = await dryRunRestore(parsed.value);
+
+  if (!result.ok) {
+    makeResponse(req, res, 400, false, result.error);
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result.value);
+};
+
 /**
  * Parses the body shared by every "schema-change deltas for one object in a
  * window" endpoint: backupConfigId, objectApiName, startDate, endDate. Used by
@@ -758,6 +945,7 @@ export const restoreRetrieveJobController = wrapController({
   fetchInactiveRecordTypesHandler,
   fetchMissingFieldsHandler,
   fetchObjectFieldsHandler,
+  dryRunHandler,
   createRestoreHandler,
   activateRestoreHandler,
   getPicklistFieldValuesHandler,
