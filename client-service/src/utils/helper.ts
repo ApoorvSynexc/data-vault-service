@@ -295,11 +295,10 @@ const schemasAreEqual = (existing: any[], latest: any[]): boolean => {
 const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   const s = scheduleConfig.scheduling;
 
-  if (scheduleConfig.type === SCHEDULE_TYPE.oneTime) {
-    if (s?.frequency === DURATION_TYPE.once && s.startDate && s.startTime) {
+  if (scheduleConfig.type === SCHEDULE_TYPE.oneTime && s?.frequency === DURATION_TYPE.once) {
+    if (s.startDate && s.startTime) {
       return `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`;
     }
-    throw new Error('ONE_TIME schedule requires scheduling.frequency=ONCE with startDate and startTime');
   }
 
   // INCREMENTAL — scheduling is always present for this type.
