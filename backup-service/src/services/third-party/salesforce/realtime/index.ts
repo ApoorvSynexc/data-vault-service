@@ -4,6 +4,7 @@ import { uploadToS3 } from '../../../destination/s3';
 import { readLatestSchema } from '../../../schema';
 import { ICrmRealtimeHandler } from '../../types';
 import { persistRealtimeSchema } from './schema';
+import { EXCLUDED_FIELD_NAMES, EXCLUDED_FIELD_TYPES, ISalesforceFieldSnapshot } from '../metadata/field';
 
 // ---------------------------------------------------------------------------
 // Map Salesforce CDC operation to the S3 folder convention used by bulk jobs
@@ -65,22 +66,30 @@ const loadStoredSchema = async (
   backupConfigId: string,
   objectApiName: string,
   destConfig: IDestinationConfig
-): Promise<ISchemaField[] | null> => {
+): Promise<ISalesforceFieldSnapshot[] | null> => {
   try {
-    // schema/main/{object}/fields/, falling back to the legacy folder for configs whose last
-    // scheduled backup predates the main/changes layout.
+    // schema/main/{object}/fields/, falling back to the legacy folder — the same
+    // isQueryableField-filtered snapshot the scheduled backup writes and builds its
+    // Bulk API SELECT list from (see metadata/field/index.ts:schemaHandler).
     return (await readLatestSchema(destConfig, {
       crmId,
       crmName,
       backupConfigId,
       objectName: objectApiName,
       type: 'backup',
-    })) as ISchemaField[] | null;
+    })) as ISalesforceFieldSnapshot[] | null;
   } catch {
     logger.debug(`No stored schema found for ${objectApiName}, falling back to record keys`);
     return null;
   }
 };
+
+// Same gate the scheduled backup uses to keep the Bulk API SELECT list and the
+// schema folder in sync (metadata/field/index.ts:isQueryableField) — applied here
+// to the permission-scoped descriptor fallback so a realtime hit never persists a
+// compound Address/Location/Base64 field the Bulk query could never have selected.
+const isQueryableSchemaField = (f: ISchemaField): boolean =>
+  !EXCLUDED_FIELD_NAMES.has(f.apiName) && !EXCLUDED_FIELD_TYPES.has((f.dataType ?? '').toLowerCase());
 
 // ---------------------------------------------------------------------------
 // Salesforce realtime handler — implements ICrmRealtimeHandler
@@ -108,31 +117,37 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     }
 
     // Column source, in order of authority:
-    //   1. the schema stored in S3 (org-wide, written by the scheduled backup)
-    //   2. the descriptor on this hit (permission-scoped, but every field of the
-    //      object — still far better than 3, which varies hit to hit)
+    //   1. the schema stored in S3 (org-wide, written by the scheduled backup) — the
+    //      same isQueryableField-filtered list the Bulk API SELECT is built from
+    //   2. the descriptor on this hit (permission-scoped), filtered the same way
     //   3. the record's own keys, so an early hit is never dropped for lack of columns
-    // const storedSchema = await loadStoredSchema(
-    //   crmId,
-    //   crmName,
-    //   backupConfigId,
-    //   objectApiName,
-    //   destConfig
-    // );
-    // const columns = storedSchema?.length
-    //   ? storedSchema.map((f) => f.apiName)
-    //   : payload.fields?.length
-    //     ? payload.fields.map((f) => f.apiName)
-    //     : Object.keys(records[0] ?? {}).filter((k) => k !== 'attributes');
+    const storedSchema = await loadStoredSchema(
+      crmId,
+      crmName,
+      backupConfigId,
+      objectApiName,
+      destConfig
+    );
+    const columns = storedSchema?.length
+      ? storedSchema.map((f) => f.name)
+      : payload.fields?.length
+        ? payload.fields.filter(isQueryableSchemaField).map((f) => f.apiName)
+        : null;
 
-    // ── Upload CSV ──────────────────────────────────────────────────────────
+    // Drop any key not in the Bulk-query field set (e.g. compound Address/Location
+    // fields) so realtime writes never store more than a scheduled backup would.
+    const filteredRecords = columns
+      ? records.map((record) =>
+          Object.fromEntries(columns.filter((c) => c in record).map((c) => [c, record[c]]))
+        )
+      : records;
+
+    // ── Upload ───────────────────────────────────────────────────────────────
     // All hits for the same job share the same backupJobId folder.
     // Each hit gets a unique UUID filename so concurrent uploads never overwrite each other.
     const folder = operationToFolder(operation);
-    // const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.csv`;
-    // const csvBuffer = recordsToCsv(records, columns);
     const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.json`;
-    const csvBuffer = Buffer.from(JSON.stringify(records), 'utf8');
+    const csvBuffer = Buffer.from(JSON.stringify(filteredRecords), 'utf8');
     const sizeInBytes = csvBuffer.length;
     const s3Path = await uploadToS3(destConfig, s3Key, csvBuffer);
 
