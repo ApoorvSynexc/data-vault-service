@@ -109,5 +109,8 @@
   "invalid_time_range": "the start of the window must not be later than its end",
   "invalid_schedule_config": "Backup configuration has an invalid or missing schedule configuration",
   "crm_not_connected": "Salesforce is not connected for this organization. Please reconnect your account",
-  "admin_provisioning_failed": "Failed to provision admin permissions in Salesforce. Please try again"
+  "admin_provisioning_failed": "Failed to provision admin permissions in Salesforce. Please try again",
+  "invalid_record_id": "The record Id you entered is not valid. Please double-check it and try again",
+  "trigger_recovery_record_not_found": "We couldn't find a record with that Id in your Salesforce org. Please verify the record exists and try again",
+  "trigger_recovery_failed": "We couldn't recover this trigger. Please try again, and contact support if the issue persists"
 }
