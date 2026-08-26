@@ -153,7 +153,16 @@ export const readHudiTableSchema = async (
   tableRootKey: string
 ): Promise<IHudiTableSchema> => {
   const hoodieDir = `${tableRootKey}.hoodie/`;
-  const keys = await listS3Objects(destConfig, hoodieDir);
+  // `.hoodie/metadata/` is Hudi's own internal metadata table (file listing,
+  // column stats, bloom filters, record/secondary index) — a self-contained
+  // Hudi table with its own nested `.hoodie/` timeline and its own unrelated
+  // schema (key, type, filesystemMetadata, ...). It must never be mistaken
+  // for the main table's commits, so it's excluded before anything else
+  // looks at `keys`.
+  const metadataTableDir = `${hoodieDir}metadata/`;
+  const keys = (await listS3Objects(destConfig, hoodieDir)).filter(
+    (k) => !k.startsWith(metadataTableDir)
+  );
 
   if (keys.length === 0) {
     throw new Error(`no .hoodie metadata under ${hoodieDir}`);
