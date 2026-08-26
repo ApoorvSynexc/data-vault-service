@@ -315,7 +315,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                 }
 
                 await updateAwsEventSchedule({
-                    name: `datavault-archival-${config.backupConfigId}-objectId-${scheduledObject.id}`,
+                    name: `datavault-objId-${scheduledObject.id}`,
                     scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
                     timeZone: scheduledObject.scheduleConfig!.timeZone,
                     payload: { backupConfigId: config.backupConfigId, userId: config.userId, id: scheduledObject.id },
@@ -450,7 +450,7 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                 }
 
                 await updateAwsEventSchedule({
-                    name: `datavault-archival-${updated.backupConfigId}-objectId-${scheduledObject.id}`,
+                    name: `datavault-objId-${scheduledObject.id}`,
                     scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
                     timeZone: scheduledObject.scheduleConfig!.timeZone,
                     payload: { backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id },
@@ -498,7 +498,7 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     continue;
                 }
 
-                await deleteAwsEventScheduler(`datavault-archival-${config.backupConfigId}-objectId-${scheduledObject.id}`);
+                await deleteAwsEventScheduler(`datavault-objId-${scheduledObject.id}`);
             }
         }
 
