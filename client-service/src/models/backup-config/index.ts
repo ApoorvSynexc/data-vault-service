@@ -69,7 +69,14 @@ export interface ITriggerResult {
   objectApiName: string;
   // The deployed Apex trigger's name (DataVault_<Object>_Trigger).
   triggerName?: string;
-  status: "INITIALIZE" | "CREATED" | "EXIST" | "FAILED" | "DELETED" | "DELETE_FAILED" | "NOT_FOUND" | "INACTIVE" | "INACTIVATE_FAILED";
+  // The deployed Apex Test Class name that covers it (<triggerName>Test, or a
+  // truncated+hashed form past the 40-char Apex identifier cap). Needed on
+  // status-change deploys (as the RunSpecifiedTests target) and on delete (to
+  // remove it), without recomputing.
+  testClassName?: string;
+  // SKIPPED_SHARED (delete only): another real-time backup config in the same
+  // org still lists this object, so its trigger + test class were left alone.
+  status: "INITIALIZE" | "CREATED" | "EXIST" | "FAILED" | "DELETED" | "DELETE_FAILED" | "NOT_FOUND" | "INACTIVE" | "INACTIVATE_FAILED" | "SKIPPED_SHARED";
   permissionSetStatus?: "CREATED" | "EXIST" | "FAILED";
   permissionSetError?: string;
   error?: string;
