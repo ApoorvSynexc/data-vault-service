@@ -327,10 +327,7 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   }
 };
 
-// Interprets dateStr/timeStr as wall-clock time in `tz` (not the server's
-// local timezone) — e.g. startDate "2026-08-20" + startTime "09:00" in
-// "America/New_York" is 09:00 New York time, not 09:00 wherever this process
-// happens to be running.
+
 const combineDateAndTime = (dateStr: string, timeStr: string | undefined, tz: string): Date => {
   let result = dayjs.tz(dateStr, tz);
   if (timeStr) {
@@ -340,14 +337,6 @@ const combineDateAndTime = (dateStr: string, timeStr: string | undefined, tz: st
   return result.toDate();
 };
 
-// Computes the next concrete date/time this schedule would fire, starting
-// from `from` (defaults to now), evaluated in the schedule's own timeZone —
-// so a MONTHLY run pinned to the 1st, or an HOURLY interval, lands on the
-// day/hour boundary as the org configuring it sees it, not the server's.
-// Mirrors the same frequency branches as toAwsCronExpression so the two
-// never disagree about what "next run" means for a given scheduling config
-// — used to stamp upcomingJob.skipDateTime when a scheduled run is being
-// skipped (e.g. because it was just invoked manually via "Run Now").
 const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = new Date()): Date => {
   const s = scheduleConfig.scheduling;
   const tz = scheduleConfig.timeZone || 'UTC';
