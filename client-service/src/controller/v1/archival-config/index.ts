@@ -32,7 +32,7 @@ import {
     updateAwsEventSchedule,
     deleteAwsEventScheduler,
 } from "../../../services";
-import { buildEventScheduleInput, filtereObjects, isOwner, toAwsCronExpression, wrapController } from "../../../utils/helper";
+import { buildEventScheduleInput, computeAwsScheduleWindow, filtereObjects, isOwner, toAwsCronExpression, wrapController } from "../../../utils/helper";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { IObject } from "../../../models";
 import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
@@ -319,6 +319,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
                     timeZone: scheduledObject.scheduleConfig!.timeZone,
                     payload: { backupConfigId: config.backupConfigId, userId: config.userId, id: scheduledObject.id },
+                    ...computeAwsScheduleWindow(scheduledObject.scheduleConfig!),
                 });
             }
         }
@@ -454,6 +455,7 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     scheduleExpression: toAwsCronExpression(scheduledObject.scheduleConfig!),
                     timeZone: scheduledObject.scheduleConfig!.timeZone,
                     payload: { backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id },
+                    ...computeAwsScheduleWindow(scheduledObject.scheduleConfig!),
                 });
             }
         }
