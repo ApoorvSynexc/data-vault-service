@@ -709,9 +709,10 @@ const deployTriggerStatus = async (
 // behind would orphan an uncoverable class in the org — included only when
 // actually present, since destructiveChanges on a missing member errors.
 //
-// testLevel RunLocalTests: production deploys touching Apex must run tests.
-// Unlike createSingleTrigger there is no component to cover here, so the
-// per-component 75% bar that ruled RunLocalTests out for create does not apply.
+// testLevel RunLocalTests: production deploys touching Apex must run tests,
+// and this uses the org's real overall Apex coverage rather than a synthetic
+// always-passing class — if the org is below Salesforce's 75% bar, this fails
+// and surfaces that honestly instead of masking it.
 // ---------------------------------------------------------------------------
 const deleteSingleTrigger = async (
   instanceUrl: string,
