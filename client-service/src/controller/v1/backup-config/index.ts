@@ -574,7 +574,7 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
   };
 
   try {
-    const recovered = await recoverTriggerCreation(instanceUrl, tokens, triggerRecordId);
+    const recovered = await recoverTriggerCreation(instanceUrl, tokens, objectApiName, triggerRecordId);
     const triggerResults = (config.triggerResults ?? []).map((result) =>
       result.objectApiName === objectApiName
         ? { ...result, status: 'CREATED' as const, triggerName: recovered.triggerName, error: undefined, needsTriggerRecordId: false }
