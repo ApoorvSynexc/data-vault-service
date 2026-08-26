@@ -22,6 +22,7 @@ import {
   getDestinationById,
   realTimeTriggerManagement,
   recoverTriggerCreation,
+  checkSharedTriggerConflict,
   computeJobStats,
   getApexObjectsCount,
   getSalesforceProfile,
@@ -184,9 +185,17 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       // A config can be created already PAUSED (not just paused later) —
       // creation always deploys the trigger Active, so inactivate it right
       // away rather than leaving a paused config syncing from the start.
+      // The response already went out as 201 by this point, so a conflict
+      // here just leaves the trigger Active (logged) rather than unwinding
+      // the config that was just reported created.
       if (config.status === STATUS.paused) {
-        triggerResults = await realTimeTriggerManagement('inactivate', { ...config, triggerResults });
-        logger.info(`backupConfigId ${config.backupConfigId} created paused: inactivated ${triggerResults.length} trigger(s)`);
+        const conflict = await checkSharedTriggerConflict({ ...config, triggerResults });
+        if (conflict) {
+          logger.error(`backupConfigId ${config.backupConfigId} created paused, but trigger left Active — ${conflict}`);
+        } else {
+          triggerResults = await realTimeTriggerManagement('inactivate', { ...config, triggerResults });
+          logger.info(`backupConfigId ${config.backupConfigId} created paused: inactivated ${triggerResults.length} trigger(s)`);
+        }
       }
       await updateBackupConfig(config.backupConfigId, { triggerResults });
       logger.info(`Real-time trigger setup results for backupConfigId ${config.backupConfigId}: ${triggerResults.length}`);
@@ -316,6 +325,22 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     return;
   }
 
+  // Reject the pause up front if it would also stop real-time sync for
+  // another config sharing the same object(s) in this org — checked before
+  // the status write below so a blocked pause never leaves the config's
+  // stored status out of sync with what's actually deployed in Salesforce.
+  if (
+    req.body.status === STATUS.paused &&
+    existing!.schedule === SCHEDULE_MODE.realtime &&
+    existing!.status !== STATUS.paused
+  ) {
+    const conflict = await checkSharedTriggerConflict(existing!);
+    if (conflict) {
+      makeResponse(req, res, 400, false, conflict as any);
+      return;
+    }
+  }
+
   const updated = await updateBackupConfig(String(backupConfigId), req.body);
 
   // Real-time sync runs through an Apex Trigger per object — pausing/resuming
@@ -397,7 +422,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       // (and its triggerResults) is still around, and running it here — awaited,
       // pre-response — means it actually executes as part of the request instead
       // of racing a response that's already gone out.
-      //await realTimeTriggerManagement('delete', config);
+      await realTimeTriggerManagement('delete', config);
     } else if (isIncrementalBackup || isOneTimeSchedule) {
       await deleteAwsEventScheduler(buildBackupScheduleName(config.backupConfigId));
     }
@@ -622,7 +647,13 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
     makeResponse(req, res, 200, true, 'update', { triggerName: recovered.triggerName, status: 'CREATED' });
   } catch (error) {
     logger.error(`Trigger recovery failed for backupConfigId ${backupConfigId}, recordId ${recordId}: `, error);
-    makeResponse(req, res, 400, false, 'trigger_recovery_failed_contact_support' as any);
+    const reason = error instanceof Error ? error.message : String(error);
+    const messageKey = reason.startsWith('invalid_record_id')
+      ? 'invalid_record_id'
+      : reason.startsWith('record_not_found')
+      ? 'trigger_recovery_record_not_found'
+      : 'trigger_recovery_failed';
+    makeResponse(req, res, 400, false, messageKey);
   }
 };
 
