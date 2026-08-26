@@ -580,11 +580,14 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
 
   try {
     const recovered = await recoverTriggerCreation(instanceUrl, tokens, objectApiName, recordId);
-    const triggerResults = (config.triggerResults ?? []).map((result) =>
-      result.objectApiName === objectApiName
-        ? { ...result, status: 'CREATED' as const, triggerName: recovered.triggerName, error: undefined, needsRecoveryRecordId: false }
-        : result
-    );
+    const triggerResults = (config.triggerResults ?? []).map((result) => {
+      if (result.objectApiName !== objectApiName) { return result; }
+      // Drop `error` rather than setting it to undefined — DynamoDB's marshaller
+      // throws on undefined values (needs removeUndefinedValues:true) unless the
+      // key is absent entirely.
+      const { error, ...cleared } = result;
+      return { ...cleared, status: 'CREATED' as const, triggerName: recovered.triggerName, needsRecoveryRecordId: false };
+    });
     await updateBackupConfig(config.backupConfigId, { triggerResults });
     makeResponse(req, res, 200, true, 'update', { triggerName: recovered.triggerName, status: 'CREATED' });
   } catch (error) {
