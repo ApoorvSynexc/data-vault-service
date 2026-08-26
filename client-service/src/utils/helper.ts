@@ -307,7 +307,6 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
     }
   }
 
-  // INCREMENTAL — scheduling is always present for this type.
   if (!s) {
     throw new Error('INCREMENTAL schedule requires a scheduling object');
   }
@@ -330,7 +329,6 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   }
 };
 
-
 const combineDateAndTime = (dateStr: string, timeStr: string | undefined, tz: string): Date => {
   let result = dayjs.tz(dateStr, tz);
   if (timeStr) {
@@ -341,13 +339,6 @@ const combineDateAndTime = (dateStr: string, timeStr: string | undefined, tz: st
 };
 
 const MS_PER_RATE_UNIT = { hour: 60 * 60 * 1000, day: 24 * 60 * 60 * 1000 } as const;
-
-// HOURLY/DAILY/WEEKLY compile to AWS rate() expressions, which fire at fixed
-// absolute-time intervals counted from the schedule's StartDate anchor (AWS
-// treats "day" as exactly 86400s, not a calendar day) — so the next occurrence
-// is anchor + k*step for the smallest k that lands strictly after `now`, not
-// `now + one interval`, which drifts away from the real AWS fire times as soon
-// as `now` isn't itself exactly on a previous occurrence.
 const nextRateOccurrence = (
   anchor: dayjs.Dayjs | null,
   now: dayjs.Dayjs,
@@ -414,7 +405,6 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
 // ONCE/CUSTOM — which already encode a fixed fire instant in the cron itself —
 // are left alone) anchor the window instead of reinventing it in the expression.
 const RECURRING_FREQUENCIES = new Set(['HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY']);
-
 const computeAwsScheduleWindow = (scheduleConfig: IScheduleConfig): { startDate?: Date; endDate?: Date } => {
   const s = scheduleConfig.scheduling;
   if (!s || !RECURRING_FREQUENCIES.has(s.frequency)) {
