@@ -402,16 +402,17 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
   }
 
   if (backupConfig.schedule === SCHEDULE_MODE.realtime) {
-    makeResponse(req, res, 400, false, 'backup_config_not_found');
+    return makeResponse(req, res, 400, false, 'backup_config_not_found');
   }
 
   if (backupConfig.schedule === SCHEDULE_MODE.schedule && backupConfig.scheduleConfig?.type === 'ONE_TIME') {
-    if (!backupConfig.lastBackupAt) {
-      await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup' });
-      await deleteAwsEventScheduler(buildBackupScheduleName(backupConfig.backupConfigId));
+    if (backupConfig.lastBackupAt) {
+      return makeResponse(req, res, 400, false, 'job_already_invoked');
     }
 
-    return makeResponse(req, res, 400, false, 'job_already_invoked');
+    await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup' });
+    await deleteAwsEventScheduler(buildBackupScheduleName(backupConfig.backupConfigId));
+    return makeResponse(req, res, 200, true, 'fetch');
   }
 
   if (backupConfig.schedule === SCHEDULE_MODE.schedule && backupConfig.scheduleConfig?.type === 'INCREMENTAL') {
@@ -425,6 +426,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return makeResponse(req, res, 200, true, 'fetch');
   }
 
+  return makeResponse(req, res, 400, false, 'invalid_schedule_config');
 }
 
 const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -553,5 +555,6 @@ export const backupConfigController = wrapController({
   syncMetadataTriggerHandler,
   getBackupJobStatsHandler,
   syncMetadataHandler,
-  getObjectChildHandler
+  getObjectChildHandler,
+  runNowHandler
 });
