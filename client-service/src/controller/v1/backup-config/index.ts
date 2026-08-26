@@ -544,13 +544,15 @@ const syncMetadataHandler = async (req: IRequest, res: IResponse): Promise<void>
 }
 
 // Recovery path for a failed real-time trigger creation (Apex Trigger + Test
-// Class). Called once the client has prompted the user for the Trigger
-// Record ID; a failure here is the "contact Support" case.
+// Class). Called once the client has prompted the user for a record Id of
+// `objectApiName` — not a trigger/class Id, the user has no way to know one of
+// those — so the retry can build its test class around a real, already-valid
+// record. A failure here is the "contact Support" case.
 const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, objectApiName, triggerRecordId } = req.body as {
+  const { backupConfigId, objectApiName, recordId } = req.body as {
     backupConfigId: string;
     objectApiName: string;
-    triggerRecordId: string;
+    recordId: string;
   };
 
   const config = await getBackupConfigById(backupConfigId);
@@ -577,16 +579,16 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
   };
 
   try {
-    const recovered = await recoverTriggerCreation(instanceUrl, tokens, objectApiName, triggerRecordId);
+    const recovered = await recoverTriggerCreation(instanceUrl, tokens, objectApiName, recordId);
     const triggerResults = (config.triggerResults ?? []).map((result) =>
       result.objectApiName === objectApiName
-        ? { ...result, status: 'CREATED' as const, triggerName: recovered.triggerName, error: undefined, needsTriggerRecordId: false }
+        ? { ...result, status: 'CREATED' as const, triggerName: recovered.triggerName, error: undefined, needsRecoveryRecordId: false }
         : result
     );
     await updateBackupConfig(config.backupConfigId, { triggerResults });
     makeResponse(req, res, 200, true, 'update', { triggerName: recovered.triggerName, status: 'CREATED' });
   } catch (error) {
-    logger.error(`Trigger recovery failed for backupConfigId ${backupConfigId}, triggerRecordId ${triggerRecordId}: `, error);
+    logger.error(`Trigger recovery failed for backupConfigId ${backupConfigId}, recordId ${recordId}: `, error);
     makeResponse(req, res, 400, false, 'trigger_recovery_failed_contact_support' as any);
   }
 };
