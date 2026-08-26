@@ -1,9 +1,5 @@
 import jwt from 'jsonwebtoken';
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
-import timezone from 'dayjs/plugin/timezone';
 import {
-  DURATION_TYPE,
   JWT_ACCESS_EXPIRY,
   JWT_ACCESS_SECRET,
   JWT_REFRESH_EXPIRY,
@@ -12,11 +8,8 @@ import {
 } from '../constant';
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
-import { IBackupConfig, IBackupObject, IObject, IScheduleConfig } from '../models';
+import { IBackupObject, IObject } from '../models';
 import { logger } from '../middlewares';
-
-dayjs.extend(utc);
-dayjs.extend(timezone);
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
 type S3KeyType = 'backup' | 'archival';
@@ -298,91 +291,6 @@ const schemasAreEqual = (existing: any[], latest: any[]): boolean => {
   });
 };
 
-const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
-  const s = scheduleConfig.scheduling;
-
-  if (scheduleConfig.type === SCHEDULE_TYPE.oneTime && s?.frequency === DURATION_TYPE.once) {
-    if (s.startDate && s.startTime) {
-      return `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`;
-    }
-  }
-
-  // INCREMENTAL — scheduling is always present for this type.
-  if (!s) {
-    throw new Error('INCREMENTAL schedule requires a scheduling object');
-  }
-
-  switch (s.frequency) {
-    case 'HOURLY': return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
-    case 'DAILY': return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
-    case 'WEEKLY': return `rate(${s.interval * 7} days)`;
-    case 'MONTHLY': return `cron(0 0 ${s.monthDate ?? 1} * ? *)`;
-    case 'CUSTOM':
-      if (s.startDate && s.startTime) {
-        return `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`;
-      }
-      throw new Error('CUSTOM schedule requires startDate and startTime');
-    default:
-      throw new Error(`Unsupported schedule frequency: ${s.frequency}`);
-  }
-};
-
-
-const combineDateAndTime = (dateStr: string, timeStr: string | undefined, tz: string): Date => {
-  let result = dayjs.tz(dateStr, tz);
-  if (timeStr) {
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    result = result.hour(hours).minute(minutes).second(0).millisecond(0);
-  }
-  return result.toDate();
-};
-
-const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = new Date()): Date => {
-  const s = scheduleConfig.scheduling;
-  const tz = scheduleConfig.timeZone || 'UTC';
-  const now = dayjs.tz(from, tz);
-
-  if (scheduleConfig.type === SCHEDULE_TYPE.oneTime && s?.frequency === DURATION_TYPE.once) {
-    return s.startDate ? combineDateAndTime(s.startDate, s.startTime, tz) : from;
-  }
-
-  if (!s) {
-    throw new Error('INCREMENTAL schedule requires a scheduling object');
-  }
-
-  switch (s.frequency) {
-    case 'HOURLY':
-      return now.add(s.interval || 1, 'hour').toDate();
-    case 'DAILY':
-      return now.add(s.interval || 1, 'day').toDate();
-    case 'WEEKLY':
-      return now.add((s.interval || 1) * 7, 'day').toDate();
-    case 'MONTHLY': {
-      const day = s.monthDate ?? 1;
-      let next = now.date(day).hour(0).minute(0).second(0).millisecond(0);
-      if (!next.isAfter(now)) {
-        next = next.add(1, 'month');
-      }
-      return next.toDate();
-    }
-    case 'CUSTOM':
-      if (s.startDate) {
-        return combineDateAndTime(s.startDate, s.startTime, tz);
-      }
-      throw new Error('CUSTOM schedule requires startDate and startTime');
-    default:
-      throw new Error(`Unsupported schedule frequency: ${s.frequency}`);
-  }
-};
-
-const buildEventScheduleInput = (config: IBackupConfig) => ({
-  name: `datavault-${config.backupConfigId}`,
-  scheduleExpression: toAwsCronExpression(config.scheduleConfig!),
-  timeZone: config.scheduleConfig!.timeZone,
-  payload: { backupConfigId: config.backupConfigId, userId: config.userId },
-});
-
-
 export {
   filtereObjects,
   randomNumber,
@@ -402,9 +310,6 @@ export {
   buildSchemaKey,
   pickLegacyFieldsKey,
   schemasAreEqual,
-  buildEventScheduleInput,
-  computeNextScheduledRun,
-  toAwsCronExpression,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
   type SchemaKind,

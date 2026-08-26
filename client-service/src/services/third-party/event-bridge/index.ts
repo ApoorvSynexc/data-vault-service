@@ -18,13 +18,17 @@ interface ScheduleInput {
     scheduleExpression: string;
     timeZone?: string;
     payload?: Record<string, unknown>;
+    startDate?: Date;
+    endDate?: Date;
 }
 
-const buildParams = ({ name, scheduleExpression, timeZone, payload }: ScheduleInput) => ({
+const buildParams = ({ name, scheduleExpression, timeZone, payload, startDate, endDate }: ScheduleInput) => ({
     Name: name,
     ScheduleExpression: scheduleExpression,
     ScheduleExpressionTimezone: timeZone ?? "UTC",
     FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
+    ...(startDate && { StartDate: startDate }),
+    ...(endDate && { EndDate: endDate }),
     Target: {
         Arn: AWS_EVENT_BUS_ARN,
         RoleArn: AWS_SCHEDULER_ROLE_ARN,
@@ -37,10 +41,10 @@ const buildParams = ({ name, scheduleExpression, timeZone, payload }: ScheduleIn
 });
 
 const createAwsEventScheduler = async (input: ScheduleInput): Promise<CreateScheduleCommandOutput> => {
-    const { name, scheduleExpression, timeZone, payload } = input;
+    const { name, scheduleExpression, timeZone, payload, startDate, endDate } = input;
 
     try {
-        return await scheduler.send(new CreateScheduleCommand(buildParams({ name, scheduleExpression, timeZone, payload })));
+        return await scheduler.send(new CreateScheduleCommand(buildParams({ name, scheduleExpression, timeZone, payload, startDate, endDate })));
     } catch (err: any) {
         if (err.name === "ConflictException")
             throw new Error(`Schedule "${name}" already exists. Use update instead.`);
@@ -49,11 +53,11 @@ const createAwsEventScheduler = async (input: ScheduleInput): Promise<CreateSche
 };
 
 const updateAwsEventSchedule = async (input: ScheduleInput): Promise<UpdateScheduleCommandOutput> => {
-    const { name, scheduleExpression, timeZone, payload } = input;
+    const { name, scheduleExpression, timeZone, payload, startDate, endDate } = input;
 
     try {
         return await scheduler.send(
-            new UpdateScheduleCommand({ ...buildParams({ name, scheduleExpression, timeZone, payload }), State: ScheduleState.ENABLED })
+            new UpdateScheduleCommand({ ...buildParams({ name, scheduleExpression, timeZone, payload, startDate, endDate }), State: ScheduleState.ENABLED })
         );
     } catch (err: any) {
         if (err.name === "ResourceNotFoundException")
