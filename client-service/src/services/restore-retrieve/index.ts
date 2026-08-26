@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE } from '../../constant';
-import { IBackupJob, IObject } from '../../models';
+import { IBackupJob, IObject, IRestoreScope, IRestoreFilters } from '../../models';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
@@ -15,8 +15,9 @@ import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
 import { S3Config } from '../../utils/validate-aws-credentials';
 
-export { FilterError } from './athena-filter';
+export { FilterError, buildAthenaFilterWhere } from './athena-filter';
 export { validateColumns } from './athena-fetch';
+import { buildAthenaFilterWhere } from './athena-filter';
 import {
   pairedColumns,
   IPageKey,
@@ -28,6 +29,8 @@ import {
   buildDeltaPartitionWhere,
   buildRecordTypeDeltaSql,
   buildFieldDeleteDeltaSql,
+  buildHudiCountSql,
+  buildDeltaCountSql,
 } from './athena-fetch';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
@@ -680,6 +683,224 @@ const retrieveMissingFields = async (
 };
 
 // ---------------------------------------------------------------------------
+// POST /dry-run — record counts a restore would touch, without touching data
+// ---------------------------------------------------------------------------
+
+export type DryRunSourceType = 'ENTIRE' | 'CHANGED_BETWEEN';
+
+// Only the scope types the dry-run endpoint knows how to resolve to an object
+// list. Every other IRestoreScope type (RECORD, DELETED_ONLY, INSERTS_ONLY,
+// CHANGE_SINCE, BULK_CSV) is rejected up front by the controller.
+export type DryRunScopeType = 'ALL' | 'OBJECT' | 'FIELD' | 'FILTER';
+
+export interface IDryRunParams {
+  backupConfigId: string;
+  // Required only when restoreScope.type is 'ALL' — see getRestoreObjectListByConfigId.
+  configType?: ConfigType;
+  userId: string;
+  type: DryRunSourceType;
+  startDate?: IsoDateString;
+  endDate?: IsoDateString;
+  restoreScope: IRestoreScope;
+}
+
+export interface IDryRunObjectCount {
+  objectApiName: string;
+  ok: boolean;
+  error?: string;
+  count: number;
+  // CHANGED_BETWEEN only.
+  updateCount?: number;
+  deleteCount?: number;
+}
+
+export interface IDryRunResult {
+  type: DryRunSourceType;
+  totalCount: number;
+  totalUpdateCount?: number;
+  totalDeleteCount?: number;
+  objects: IDryRunObjectCount[];
+}
+
+export type IDryRunOutcome =
+  | { ok: true; value: IDryRunResult }
+  | { ok: false; error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' };
+
+// A table not yet compressed (no backup has run) is "nothing to count", not an
+// error — same treatment retrieveRecords gives a missing Hudi/delta table.
+const isMissingTable = (e: unknown): boolean =>
+  /TABLE_NOT_FOUND|does not exist/i.test(String((e as Error).message));
+
+const runHudiCount = async (databaseName: string, sql: string): Promise<number> => {
+  try {
+    const result = await runAthenaQuery(sql, databaseName);
+    return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
+  } catch (e) {
+    if (isMissingTable(e)) return 0;
+    throw e;
+  }
+};
+
+const runDeltaCount = async (
+  databaseName: string,
+  sql: string
+): Promise<{ total: number; update: number; delete: number }> => {
+  try {
+    const result = await runAthenaQuery(sql, databaseName);
+    const row = result.rows[0] ?? {};
+    return {
+      total: parseInt(row['total_cnt'] ?? '0', 10) || 0,
+      update: parseInt(row['update_cnt'] ?? '0', 10) || 0,
+      delete: parseInt(row['delete_cnt'] ?? '0', 10) || 0,
+    };
+  } catch (e) {
+    if (isMissingTable(e)) return { total: 0, update: 0, delete: 0 };
+    throw e;
+  }
+};
+
+const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : 'unknown_error');
+
+/**
+ * Resolves an IRestoreScope down to the object list a dry-run counts, plus (for
+ * FILTER scope) the per-object Athena WHERE body to narrow each count with —
+ * same scope behaviour /get-objectlist-by-configid and the restore creation
+ * flow already apply:
+ *
+ *   ALL    — every restore-eligible object on the config (getRestoreObjectListByConfigId).
+ *   OBJECT — exactly the objects named in restoreScope.objects.
+ *   FIELD  — the objects named in restoreScope.fields[].objectName (the field
+ *            names themselves narrow columns, not which/how many records match).
+ *   FILTER — the objects named in restoreScope.filters[].objectName, each
+ *            paired with its own filter compiled to Athena SQL.
+ *
+ * Returns null for any other scope type — the caller maps that to
+ * invalid_restore_scope_type.
+ */
+const resolveDryRunObjects = async (
+  params: IDryRunParams
+): Promise<{ objectNames: string[]; filterByObject: Map<string, IRestoreFilters> } | null> => {
+  const scope = params.restoreScope;
+  const filterByObject = new Map<string, IRestoreFilters>();
+
+  switch (scope.type as DryRunScopeType) {
+    case 'ALL': {
+      const { objects } = await getRestoreObjectListByConfigId(
+        params.backupConfigId,
+        params.configType!,
+        params.userId
+      );
+      return { objectNames: objects, filterByObject };
+    }
+    case 'OBJECT':
+      return { objectNames: [...new Set(scope.objects ?? [])], filterByObject };
+    case 'FIELD':
+      return { objectNames: [...new Set((scope.fields ?? []).map((f) => f.objectName))], filterByObject };
+    case 'FILTER':
+      for (const f of scope.filters ?? []) filterByObject.set(f.objectName, f.filter);
+      return { objectNames: [...filterByObject.keys()], filterByObject };
+    default:
+      return null;
+  }
+};
+
+/**
+ * Counts, per object and in total, how many records a restore would touch —
+ * read-only, no CSV, no Hudi/delta write, no restore execution.
+ *
+ * ENTIRE          — COUNT(*) on the object's Hudi table (current state) only,
+ *                   narrowed by a FILTER scope's Athena WHERE body when given.
+ *                   Deleted records (which fetch-records reconstructs from the
+ *                   delta table) are deliberately excluded — the dry-run
+ *                   contract counts main Hudi data only.
+ * CHANGED_BETWEEN — total/UPDATE/DELETE counts out of the delta table's
+ *                   record-level rows (is_schema_change excluded) whose
+ *                   change_time falls in [startDate, endDate]. See
+ *                   buildDeltaCountSql for why FILTER-scope field conditions
+ *                   don't reach this path.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller.
+ */
+const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => {
+  const config = await getBackupConfigById(params.backupConfigId);
+  if (!config || config.userId !== params.userId) return { ok: false, error: 'not_exist' };
+
+  const resolved = await resolveDryRunObjects(params);
+  if (!resolved) return { ok: false, error: 'invalid_restore_scope_type' };
+
+  const { objectNames, filterByObject } = resolved;
+  const databaseName = toGlueId(params.backupConfigId);
+  const tableFor = (objectApiName: string) =>
+    `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(objectApiName)}`;
+
+  if (params.type === 'ENTIRE') {
+    const objects = await Promise.all(
+      objectNames.map(async (objectApiName): Promise<IDryRunObjectCount> => {
+        try {
+          const filter = filterByObject.get(objectApiName);
+          const whereBody = filter ? buildAthenaFilterWhere(filter) : null;
+          const count = await runHudiCount(
+            databaseName,
+            buildHudiCountSql(`${tableFor(objectApiName)}_hudi`, whereBody)
+          );
+          return { objectApiName, ok: true, count };
+        } catch (e) {
+          return { objectApiName, ok: false, count: 0, error: errorMessage(e) };
+        }
+      })
+    );
+
+    return {
+      ok: true,
+      value: {
+        type: 'ENTIRE',
+        totalCount: objects.reduce((sum, o) => sum + o.count, 0),
+        objects,
+      },
+    };
+  }
+
+  // CHANGED_BETWEEN
+  if (!params.startDate || !params.endDate) return { ok: false, error: 'date_range_required' };
+  const deltaPartition = buildDeltaPartitionWhere(params.startDate, params.endDate);
+
+  const objects = await Promise.all(
+    objectNames.map(async (objectApiName): Promise<IDryRunObjectCount> => {
+      try {
+        const counts = await runDeltaCount(
+          databaseName,
+          buildDeltaCountSql(`${tableFor(objectApiName)}_delta`, {
+            startDate: params.startDate!,
+            endDate: params.endDate!,
+            deltaPartition,
+          })
+        );
+        return {
+          objectApiName,
+          ok: true,
+          count: counts.total,
+          updateCount: counts.update,
+          deleteCount: counts.delete,
+        };
+      } catch (e) {
+        return { objectApiName, ok: false, count: 0, updateCount: 0, deleteCount: 0, error: errorMessage(e) };
+      }
+    })
+  );
+
+  return {
+    ok: true,
+    value: {
+      type: 'CHANGED_BETWEEN',
+      totalCount: objects.reduce((sum, o) => sum + o.count, 0),
+      totalUpdateCount: objects.reduce((sum, o) => sum + (o.updateCount ?? 0), 0),
+      totalDeleteCount: objects.reduce((sum, o) => sum + (o.deleteCount ?? 0), 0),
+      objects,
+    },
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Fetch object schema (fields) from S3
 // ---------------------------------------------------------------------------
 
@@ -802,4 +1023,5 @@ export {
   retrieveMissingFields,
   fetchObjectFields,
   fetchPicklistValues,
+  dryRunRestore,
 };
