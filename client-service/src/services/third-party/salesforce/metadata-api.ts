@@ -35,17 +35,17 @@ export const deployMetadata = async (
   // multi-file deploy (this function's first real multi-file caller,
   // restore-fields.ts's per-object field batches) failed 100% of the time
   // with exactly that error until this was set.
-  // ponytail: experimental — wrapping everything under unpackaged/ to test
+  // ponytail: experimental — wrapping everything under  to test
   // whether the deploy parser expects the single-package root under that name
   // despite singlePackage:true. Revert (drop the prefix) if this doesn't fix
   // the "not found in zipped directory" error.
   const zip = new JSZip();
   for (const file of files) {
-    zip.file(`unpackaged/${file.path}`, file.content, { createFolders: false });
+    zip.file(`${file.path}`, file.content, { createFolders: false });
   }
-  zip.file('unpackaged/package.xml', packageXml);
+  zip.file('package.xml', packageXml);
   if (destructiveChangesXml) {
-    zip.file('unpackaged/destructiveChanges.xml', destructiveChangesXml, { createFolders: false });
+    zip.file('destructiveChanges.xml', destructiveChangesXml, { createFolders: false });
   }
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
 
