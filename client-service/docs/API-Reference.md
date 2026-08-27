@@ -410,6 +410,9 @@ Triggers execution of a restore job that was previously created (in `PENDING` st
   },
   "conflict": {
     "restoreMode": "OVERWRITE",
+    "isIncludeChild": false,
+    "isIncludeParent": false,
+    "relationshipDepth": 0,
     "edgeCases": {
       "onDuplicateRecord": "SKIP",
       "parentMissing": "SKIP"
@@ -2316,7 +2319,7 @@ Paginated list of restore/retrieve jobs, scoped to a backup config or the whole 
 ```
 
 ### GET /api/v1/restore/get-objectlist-by-configid
-Returns the object list selected on a given backup/archival config. Each object also carries `autoSelectChildren` — the child objects (present in this same config) whose relationship back to it is `cascadeDelete` or `restrictedDelete` — so the restore UI can automatically select and lock in an object's cascade-tied children when it's selected. An ordinary lookup child (neither flag set) is never included.
+Returns the object list selected on a given backup/archival config.
 
 **Query params**
 
@@ -2330,11 +2333,7 @@ Returns the object list selected on a given backup/archival config. Each object 
 {
   "success": true,
   "message": "Fetched successfully",
-  "data": [
-    { "name": "Account", "type": "STANDARD", "autoSelectChildren": ["Case", "Opportunity"] },
-    { "name": "Case", "type": "STANDARD", "autoSelectChildren": [] },
-    { "name": "My_Custom__c", "type": "CUSTOM", "autoSelectChildren": [] }
-  ],
+  "data": [ { "name": "Contact", "type": "STANDARD" }, { "name": "My_Custom__c", "type": "CUSTOM" } ],
   "meta": {}
 }
 ```
