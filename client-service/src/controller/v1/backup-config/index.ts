@@ -28,6 +28,7 @@ import {
   getApexObjectsCount,
   getSalesforceProfile,
   initalizePayloadTransform,
+  hasActiveBackupJob,
   syncMetadataAndTriggers,
   unwrapApex,
   getUser,
@@ -490,6 +491,16 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
     makeResponse(req, res, 400, false, 'backup_config_not_found');
     return;
   }
+
+  // Same dedup guard triggerBackupJob/triggerArchivalBackupJob already apply —
+  // without it, repeated triggers (retries, re-tests) stack concurrent EMR
+  // Serverless applications on top of each other, each demanding its own
+  // driver+executor vCPU allocation.
+  if (await hasActiveBackupJob(config.backupConfigId)) {
+    makeResponse(req, res, 400, false, 'job_already_invoked');
+    return;
+  }
+
   makeResponse(req, res, 201, true, 'create');
   initalizePayloadTransform(config.backupConfigId).catch((err) => {
     logger.error('EMR job failed after response sent:', err?.message ?? err);

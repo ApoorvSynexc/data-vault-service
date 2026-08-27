@@ -551,7 +551,9 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             },
         });
 
+        console.log('COMMAND ==> ' + JSON.stringify(command));
         const response = await client.send(command);
+        console.log('RESPONSE ==> ' + JSON.stringify(response));
         logger.info('EMR job initialized.');
         return response;
     } catch (error) {
