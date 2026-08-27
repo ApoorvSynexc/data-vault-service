@@ -29,7 +29,6 @@ import {
   computeRestoreJobStats,
   CursorError,
   PAGE_SIZE,
-  initalizeRestoreTransform,
   getUser,
   getDestinationById,
   getBackupJobById,
@@ -984,20 +983,23 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
  *
  * Creates the restore request and, unless it was saved as a DRAFT, runs it:
  *
- *   1. createRestoreJob          — the job row (status IN_PROGRESS, every
- *                                  object IN_PROGRESS), which fixes the
- *                                  destination `csvFilePath` the transform
- *                                  writes to. Cheap DynamoDB writes, so this
- *                                  still happens before the response.
- *   2. initalizeRestoreTransform — submits the EMR/Spark job — the actual
- *                                  long-running work — so it's kicked off
- *                                  only after the response, fire-and-forget.
- *                                  Spark calls back into /build-payload
- *                                  (buildRestorePayload) for the full
- *                                  payload, writes the ingest CSVs, then
- *                                  reports to /update-spark-job-status, which
- *                                  is where tiggerRestoreJob hands the job to
- *                                  backup-service's Bulk API ingest.
+ *   1. createRestoreJob   — the job row (status IN_PROGRESS, every object
+ *                           IN_PROGRESS), which fixes the destination
+ *                           `csvFilePath` the transform writes to. Cheap
+ *                           DynamoDB writes, so this still happens before
+ *                           the response.
+ *   2. tiggerRestoreJob   — the actual long-running work, kicked off only
+ *                           after the response, fire-and-forget. For a
+ *                           BACKUP/NORMAL-sourced restore this runs the
+ *                           RESTORN FIELD JOB (custom fields + Permission
+ *                           Set) and RUN BACKUP JOB stages first; every
+ *                           restore then submits the EMR/Spark job. Spark
+ *                           calls back into /build-payload
+ *                           (buildRestorePayload) for the full payload,
+ *                           writes the ingest CSVs, then reports to
+ *                           /update-spark-job-status, which is where
+ *                           runRestoreIngestJob hands the job to
+ *                           backup-service's Bulk API ingest.
  *
  * Same path activateRestoreHandler uses, so a DRAFT and a non-DRAFT restore
  * run identically.
@@ -1038,9 +1040,9 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   makeResponse(req, res, 201, true, 'create');
 
   if (restoreJob) {
-    initalizeRestoreTransform(restoreJob.restoreJobId).catch((error) => {
+    tiggerRestoreJob(restoreJob).catch((error) => {
       logger.error(
-        `[restore] EMR trigger failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
+        `[restore] restore workflow failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
       );
     });
   }
@@ -1084,9 +1086,9 @@ const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<vo
 
   makeResponse(req, res, 200, true, 'update');
 
-  initalizeRestoreTransform(restoreJob.restoreJobId).catch((error) => {
+  tiggerRestoreJob(restoreJob).catch((error) => {
     logger.error(
-      `[restore] EMR trigger failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
+      `[restore] restore workflow failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
     );
   });
 };

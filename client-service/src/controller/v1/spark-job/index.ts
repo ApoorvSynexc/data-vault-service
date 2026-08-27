@@ -7,7 +7,7 @@ import { COMPRESSION_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant'
 import { wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, tiggerRestoreJob, updateRestoreJob, getUsersByCrmId, getUser } from '../../../services';
+import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -229,6 +229,21 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
+    // EMR/Spark itself failed to produce the restore CSV — nothing to ingest.
+    // Surfaces the real EMR error rather than proceeding as if it succeeded,
+    // which is what this handler did before (success was read but never checked).
+    if (!success) {
+      const failureMessage = errorMessage ?? 'emr_restore_job_failed';
+      logger.error(
+        `[restore-csv] EMR reported failure | restoreJobId=${restoreConfigId} err:${failureMessage}`
+      );
+      await Promise.all([
+        updateRestoreJob({ restoreJobId: restoreConfigId, status: 'FAILED', errorMessage: failureMessage }),
+        updateRestore({ restoreId: restoreJob.restoreId, status: 'FAILED', errorMessage: failureMessage }),
+      ]);
+      return makeResponse(req, res, 200, true, 'update');
+    }
+
     if (restore.source.type !== 'ENTIRE') {
       const updatedObjects: { id: string; name: string; status: "PENDING" }[] = objects.map((object) => ({
         id: uuidv4(),
@@ -245,7 +260,14 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     console.log(JSON.stringify({ restoreJob, restore, decrypted }));
-    tiggerRestoreJob(restoreJob);
+    // EMR succeeded — continue automatically to the ingest stage. Background,
+    // fire-and-forget (the response below doesn't wait on it), same as every
+    // other restore stage transition in this workflow.
+    runRestoreIngestJob(restoreJob).catch((error) => {
+      logger.error(
+        `[restore-ingest] failed | restoreJobId=${restoreConfigId} err:${error?.message ?? error}`
+      );
+    });
     return makeResponse(req, res, 200, true, 'update');
   }
 };
