@@ -112,5 +112,6 @@
   "admin_provisioning_failed": "Failed to provision admin permissions in Salesforce. Please try again",
   "invalid_record_id": "The record Id you entered is not valid. Please double-check it and try again",
   "trigger_recovery_record_not_found": "We couldn't find a record with that Id in your Salesforce org. Please verify the record exists and try again",
-  "trigger_recovery_failed": "We couldn't recover this trigger. Please try again, and contact support if the issue persists"
+  "trigger_recovery_failed": "We couldn't recover this trigger. Please try again, and contact support if the issue persists",
+  "invalid_notification_status": "status must be one of UNREAD, READ, or DELETED"
 }

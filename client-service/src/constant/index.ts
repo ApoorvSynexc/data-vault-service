@@ -70,6 +70,7 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
+const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
 
 // S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
@@ -138,6 +139,11 @@ const STATUS = {
   inactive: 'INACTIVE',
   deleted: 'DELETED',
   notAuthorized: 'NOT_AUTHORIZED',
+};
+const NOTIFICATION_STATUS = {
+  unread: 'UNREAD',
+  read: 'READ',
+  deleted: 'DELETED',
 };
 const BACKUP_STATUS = {
   // draft: 'DRAFT',
@@ -309,10 +315,12 @@ export {
   BACKUP_SERVICE,
   BACKUP_JOB_TABLE,
   SETTINGS_TABLE,
+  NOTIFICATION_TABLE,
   AWS_S3_LOGS_BUCKET,
 
   // Enums
   STATUS,
+  NOTIFICATION_STATUS,
   AUTH_PROVIDER,
   LANGUAGE,
   GENDER,

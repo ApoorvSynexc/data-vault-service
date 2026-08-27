@@ -8,6 +8,7 @@ export * from './destination';
 export * from './crm';
 export * from './crm-meatadata';
 export * from './internal';
+export * from './notification';
 export * from './public';
 export * from './salesforce';
 export * from './settings';

@@ -9,5 +9,6 @@ export * from './restore-job';
 export * from './role';
 export * from './session';
 export * from './settings';
+export * from './notification';
 export * from './shared';
 export * from './user';
