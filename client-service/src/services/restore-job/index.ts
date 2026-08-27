@@ -17,6 +17,7 @@ import { ensureRestoreTrackingFields } from '../third-party/salesforce/restore-f
 import { provisionRestorePermissionSet } from '../third-party/salesforce/restore-permission-set';
 import { runBackupNow, getBackupJobById, isBackupCompleted, triggerBackupJob } from '../backup-job';
 import { runMetadataComparisonForConfig, hasMetadataChanged, IMetadataComparisonResult } from '../metadata-sync';
+import { initalizeRestoreTransform } from '../payload';
 import { logger } from '../../middlewares';
 
 const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
@@ -705,10 +706,49 @@ const runRestoreBackupJob = async (
   return runScheduleBackupStage(restorejob, backupConfig, objectNames);
 };
 
-// Sends the restore straight to backup-service's ingest endpoint, unchanged
-// from this function's pre-existing behavior — the path an ARCHIVAL restore
-// (or any configType outside RESTORE_FIELD_JOB_CONFIG_TYPES) still takes,
-// since none of the field/permission-set/backup stages above apply to it.
+export const RESTORE_CSV_STATUS = {
+  creating: "CREATING CSV's",
+};
+
+// Stage 3 (CSV creation): submits the EMR/Spark job via the exact same
+// initalizeRestoreTransform → submitEMR path createRestoreHandler used to
+// call directly — no second EMR client, no new polling. StartJobRunCommand
+// only enqueues the run; it returns long before Spark finishes. Actual
+// completion is reported later through the pre-existing
+// /spark-job/update-spark-job-status webhook (see updateSparkJobStatusHandler
+// in controller/v1/spark-job), which is where success/failure is detected —
+// this function never waits for or polls EMR itself.
+//
+// Runs for every configType, not just BACKUP/NORMAL: EMR/CSV generation from
+// Hudi was never gated by configType (see ARCHITECTURE.md — "Restore is
+// Hudi-sourced end-to-end" for both backup and archival sources), only the
+// RESTORN FIELD JOB / RUN BACKUP JOB stages ahead of it are.
+const startCsvCreationStage = async (restorejob: IRestoreJob, objectNames: string[]): Promise<void> => {
+  await Promise.all([
+    updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_CSV_STATUS.creating }),
+    updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_CSV_STATUS.creating }),
+  ]);
+
+  try {
+    await initalizeRestoreTransform(restorejob.restoreJobId);
+  } catch (error: any) {
+    const message = error?.message ?? String(error);
+    logger.error(
+      `[restore-csv] EMR submit failed | restoreJobId=${restorejob.restoreJobId} err:${message}`
+    );
+    await Promise.all([
+      updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: 'FAILED', errorMessage: message }),
+      updateRestore({ restoreId: restorejob.restoreId, status: 'FAILED', errorMessage: message }),
+      failObjects(restorejob.restoreJobId, objectNames, 'FAILED', message),
+    ]);
+  }
+};
+
+// Hands the restore to backup-service's existing ingest endpoint — the same
+// POST this function has always made, now called from two places: this
+// module's own pipeline used to call it directly once the field/backup
+// stages were done, but ingest only actually starts once EMR reports success
+// (see runRestoreIngestJob below, called from updateSparkJobStatusHandler).
 const sendRestoreToBackupService = async (
   restorejob: IRestoreJob,
   objects: IRestoreJob['destination']['objects']
@@ -737,6 +777,113 @@ const sendRestoreToBackupService = async (
   return result;
 };
 
+export const RESTORE_INGEST_STATUS = {
+  inProgress: 'INGEST IN PROGRESS',
+};
+
+const isTerminalIngestJobStatus = (status: string): boolean =>
+  status === JOB_STATUS.success || status === JOB_STATUS.failed;
+
+// Polls the very same RESTORE_JOB_TABLE row backup-service's own ingest
+// runner (services/common/runner.ts's runRestoreJob, on the backup-service
+// side) writes to directly — client-service and backup-service share this
+// DynamoDB table (the same cross-service read pattern hasActiveBackupJob
+// already relies on for BACKUP_JOB_TABLE), so there is no second
+// polling/status architecture here: this just reads the row backup-service
+// is already updating, the same way pollBackupJobUntilTerminal reads a
+// BackupJob row above.
+const pollRestoreJobUntilIngestTerminal = async (restoreJobId: string): Promise<IRestoreJob | null> => {
+  while (true) {
+    const job = await getRestoreJobById(restoreJobId);
+    if (!job) {
+      return null;
+    }
+    if (isTerminalIngestJobStatus(job.status)) {
+      return job;
+    }
+    await timer(5000);
+  }
+};
+
+// Stage 4 (INGEST): reuses backup-service's existing Bulk API 2.0 ingest —
+// the exact same POST /v1/restore -> runRestoreJob path this module always
+// used, never a second ingest implementation. Called once EMR reports
+// success via /spark-job/update-spark-job-status.
+//
+// completedCount/errorCount/object status/object-specific error message are
+// never written here — backup-service's own ingest runner already writes
+// each object's processedRecordCount/failedRecordCount/status/errorMessage
+// directly onto this same row after every chunk (see backup-service's
+// updateRestoreObject), continuously, for the whole run. This function only
+// triggers that run and waits for the job-level status to go terminal, then
+// reads the final per-object array to decide the overall verdict — it never
+// overwrites an individual object's own recorded outcome, so one object's
+// ingest failure can't bleed into another's status.
+export const runRestoreIngestJob = async (restorejob: IRestoreJob): Promise<void> => {
+  // backup-service's own createRestoreJobHandler (POST /v1/restore) only
+  // proceeds when this row's status is exactly PENDING — its existing
+  // validity/dedup gate (backup-service/src/controller/v1/restore-job).
+  // Every stage before this one has already moved status through this
+  // workflow's own vocabulary (RESTORN FIELD JOB..., BACKUP...,
+  // CREATING CSV's), so it's reset to PENDING right before the handoff or
+  // backup-service rejects the request as not_exist. INGEST IN PROGRESS is
+  // written immediately after, once backup-service has accepted the row —
+  // moments later backup-service's own runRestoreJob flips it to RUNNING and
+  // eventually SUCCESS/FAILED, which pollRestoreJobUntilIngestTerminal below
+  // is what actually watches for.
+  await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: 'PENDING' });
+
+  try {
+    await sendRestoreToBackupService(restorejob, restorejob.destination.objects);
+  } catch (error: any) {
+    const message = error?.message ?? String(error);
+    logger.error(
+      `[restore-ingest] backup-service handoff failed | restoreJobId=${restorejob.restoreJobId} err:${message}`
+    );
+    await Promise.all([
+      updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: 'FAILED', errorMessage: message }),
+      updateRestore({ restoreId: restorejob.restoreId, status: 'FAILED', errorMessage: message }),
+    ]);
+    return;
+  }
+
+  await Promise.all([
+    updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_INGEST_STATUS.inProgress }),
+    updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_INGEST_STATUS.inProgress }),
+  ]);
+
+  const finishedJob = await pollRestoreJobUntilIngestTerminal(restorejob.restoreJobId);
+  if (!finishedJob) {
+    const message = `restore_job_disappeared_during_ingest:${restorejob.restoreJobId}`;
+    logger.error(`[restore-ingest] ${message}`);
+    await updateRestore({ restoreId: restorejob.restoreId, status: 'FAILED', errorMessage: message });
+    return;
+  }
+
+  // Do NOT finalize until every object backup-service touched has its own
+  // terminal per-object status — job-level SUCCESS/FAILED from
+  // pollRestoreJobUntilIngestTerminal already guarantees the run itself is
+  // done (backup-service's runRestoreJob only reaches that status after
+  // every object's ingest completes), so this is reading final state, not a
+  // mid-run snapshot.
+  const objects = finishedJob.destination.objects ?? [];
+  const allSucceeded = objects.length > 0 && objects.every((object) => object.status === JOB_STATUS.success);
+  const overallStatus = finishedJob.status === JOB_STATUS.success && allSucceeded ? 'COMPLETED' : 'FAILED';
+  const errorMessage =
+    overallStatus === 'FAILED'
+      ? finishedJob.errorMessage ?? 'one_or_more_objects_failed_ingest'
+      : undefined;
+
+  await Promise.all([
+    updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: overallStatus, ...(errorMessage && { errorMessage }) }),
+    updateRestore({ restoreId: restorejob.restoreId, status: overallStatus, ...(errorMessage && { errorMessage }) }),
+  ]);
+
+  logger.info(
+    `[restore-ingest] finished | restoreJobId=${restorejob.restoreJobId} overallStatus=${overallStatus} objects=${objects.length}`
+  );
+};
+
 const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
   const restore = await getRestoreById(restorejob.restoreId);
   const configType = restore?.source?.configType;
@@ -744,9 +891,9 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
 
   if (!runsFieldJob) {
     logger.info(
-      `[restore-field-job] skipped — configType=${configType ?? 'unknown'} is not BACKUP/NORMAL | restoreJobId=${restorejob.restoreJobId}`
+      `[restore-field-job] skipped — configType=${configType ?? 'unknown'} is not BACKUP/NORMAL, going straight to CSV creation | restoreJobId=${restorejob.restoreJobId}`
     );
-    return sendRestoreToBackupService(restorejob, restorejob.destination.objects);
+    return startCsvCreationStage(restorejob, restorejob.destination.objects.map((object) => object.name));
   }
 
   const { succeededObjectNames: fieldJobSucceededNames } = await runRestoreFieldJob(restorejob);
@@ -769,7 +916,7 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
 
   if (!backupSucceededNames.length) {
     logger.error(
-      `[restore-backup-job] every object failed — stopping before EMR/ingest | restoreJobId=${restorejob.restoreJobId}`
+      `[restore-backup-job] every object failed — stopping before CSV creation | restoreJobId=${restorejob.restoreJobId}`
     );
     const errorMessage = 'restore_backup_job_failed_for_every_object';
     await Promise.all([
@@ -779,11 +926,7 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
     return;
   }
 
-  // EMR/CSV-generation and the final ingest handoff are implemented in a
-  // later stage — objects that made it this far are left at BACKUP COMPLETED.
-  logger.info(
-    `[restore-backup-job] backup stage complete | restoreJobId=${restorejob.restoreJobId} objects=${backupSucceededNames.join(',')}`
-  );
+  return startCsvCreationStage(restorejob, backupSucceededNames);
 }
 
 export {
