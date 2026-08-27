@@ -195,6 +195,27 @@ const inWindow = (expr: string, from: string, to: string): string =>
   `AND from_iso8601_timestamp(${lit(to)})`;
 
 /**
+ * Parses a schema-change delta's change_time — a DIFFERENT writer from record
+ * deltas, and unlike them, not ambiguous: confirmed always full ISO 8601 with
+ * milliseconds and a Z suffix (e.g. "2026-08-27T12:55:07.244Z"), never the
+ * plain space-separated SQL timestamp shape (e.g. "2026-08-27 12:58:20")
+ * record deltas use.
+ *
+ * Deliberately ONE parse, not asInstant's COALESCE/TRY fallback chain: a bare
+ * `CAST(expr AS timestamp)` is meant for that plain shape, and Trino is not
+ * guaranteed to reject the ISO-with-T-and-Z shape outright — if it coerces or
+ * truncates instead of erroring, TRY never falls through to
+ * from_iso8601_timestamp, and the schema-change window silently uses a wrong
+ * instant instead of the right one. Since the shape here is known and fixed,
+ * skip the ambiguity entirely rather than hope the fallback chain behaves.
+ */
+const asSchemaInstant = (expr: string): string => `from_iso8601_timestamp(CAST(${expr} AS varchar))`;
+
+const inSchemaWindow = (expr: string, from: string, to: string): string =>
+  `${asSchemaInstant(expr)} BETWEEN from_iso8601_timestamp(${lit(from)}) ` +
+  `AND from_iso8601_timestamp(${lit(to)})`;
+
+/**
  * Restricts a delta scan to RECORD rows. Applies to every read of the delta
  * table — record retrieval never wants the other kind.
  *
@@ -423,7 +444,7 @@ const buildSchemaChangeDeltaSql = (
       `schema_change_type = ${lit(schemaChangeType)}`,
       `is_schema_change = true`,
       `change_type IN (${changeTypes.map(lit).join(', ')})`,
-      p.startDate && p.endDate ? inWindow('change_time', p.startDate, p.endDate) : null,
+      p.startDate && p.endDate ? inSchemaWindow('change_time', p.startDate, p.endDate) : null,
       p.deltaPartition,
     ],
     'WHERE'
@@ -638,6 +659,18 @@ if (require.main === module) {
   assert.ok(recordTypeSql.includes(`change_type IN ('UPDATE', 'DELETE')`));
   assert.ok(recordTypeSql.includes(prune), 'prunes to the window’s months like every other delta scan');
   assert.ok(!recordTypeSql.includes('ORDER BY') && !recordTypeSql.includes('LIMIT'), 'whole window, no paging');
+  // Schema-change deltas parse change_time as plain from_iso8601_timestamp —
+  // NOT asInstant's COALESCE/TRY(CAST(... AS timestamp)) chain built for
+  // record deltas' different (and ambiguous-across-writers) timestamp shape.
+  assert.ok(
+    recordTypeSql.includes(`from_iso8601_timestamp(CAST(change_time AS varchar)) BETWEEN from_iso8601_timestamp('${START}') AND from_iso8601_timestamp('${END}')`),
+    'schema deltas always write full ISO 8601 change_time — one unambiguous parse, no fallback chain'
+  );
+  assert.ok(!recordTypeSql.includes('TRY(CAST'), 'never falls back through the record-delta timestamp chain');
+  // No window (ENTIRE) → no time predicate at all, same "no window to prune
+  // with" idiom the partition WHERE already uses.
+  const recordTypeSqlNoWindow = buildRecordTypeDeltaSql('t_delta', { deltaPartition: null });
+  assert.ok(!recordTypeSqlNoWindow.includes('from_iso8601_timestamp'), 'omitted window → no time predicate');
 
   // ── Injection defence ──────────────────────────────────────────────────────
   assert.ok(buildWindowDeltasSql('t', ["r'1"], win).includes(`'r''1'`));
