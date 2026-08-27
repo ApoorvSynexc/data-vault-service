@@ -1,5 +1,6 @@
 export * from './backup-config';
 export * from './backup-job';
+export * from './metadata-sync';
 export * from './restore';
 export * from './restore-job';
 export * from './restore-retrieve';
