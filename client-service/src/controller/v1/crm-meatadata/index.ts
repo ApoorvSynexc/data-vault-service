@@ -106,21 +106,21 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
     .map((field) => ({ label: field.label, referenceTo: field.referenceTo, name: field.name, nillable: field.nillable, cascadeDelete: field.cascadeDelete }));
 
 
-  if(relationshipDepth){
+  if (relationshipDepth && typeof relationshipDepth === 'number' && relationshipDepth > 1) {
     // Polymorphic lookups (referenceTo.length > 1, e.g. WhatId/OwnerId) point at
     // more than one possible object type — any of those targets showing up in
     // children would be misleading (a possible polymorphic target, not a real
     // cascade-delete child), so they're excluded below.
     const PolymorphicObjects = new Set<string>();
     for (const field of objectDescription.fields) {
-    if (
+      if (
         field.type === "reference" &&
         field.referenceTo &&
         field.referenceTo.length > 1
-    ) {
+      ) {
         field.referenceTo.forEach((ref) => PolymorphicObjects.add(ref));
+      }
     }
-}
 
     if (PolymorphicObjects.size) {
       children = children.filter((child) => !PolymorphicObjects.has(child.name));
