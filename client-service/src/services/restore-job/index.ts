@@ -124,6 +124,12 @@ interface UpdateRestoreJobParams {
   // name (names are unique within that array). Any number of objects can be
   // updated in the same write.
   objects?: UpdateRestoreObjectParams[];
+  // When set, the write is rejected (ConditionalCheckFailedException,
+  // reported back as a `false` return rather than thrown) unless the
+  // condition holds — used for atomic check-and-set stage transitions, same
+  // pattern backup-service's own updateRestoreJobStatus already uses.
+  conditionExpression?: string;
+  conditionExpressionValues?: Record<string, any>;
 }
 
 // Updates job-level fields (status/timestamps/errorMessage) and, optionally,
@@ -138,8 +144,8 @@ interface UpdateRestoreJobParams {
 // write), and if_not_exists() is unreliable once the path includes a list index
 // (objects[n].field). Reading the job first to resolve each object's index and
 // current counts sidesteps both restrictions with a plain literal SET.
-const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<void> => {
-  const { restoreJobId, status, startedAt, completedAt, errorMessage, objects } = params;
+const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean> => {
+  const { restoreJobId, status, startedAt, completedAt, errorMessage, objects, conditionExpression, conditionExpressionValues } = params;
   const now = new Date().toISOString();
 
   const job = objects?.length ? await getRestoreJobById(restoreJobId) : null;
@@ -217,6 +223,11 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<void> =
     ...(removeParts.length ? [`REMOVE ${removeParts.join(', ')}`] : []),
   ].join(' ');
 
+  let finalCondition = 'attribute_exists(restoreJobId)';
+  if (conditionExpression) {
+    finalCondition = `${finalCondition} AND ${conditionExpression}`;
+  }
+
   try {
     await docClient.send(
       new UpdateCommand({
@@ -224,13 +235,14 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<void> =
         Key: { restoreJobId },
         UpdateExpression: updateExpression,
         ...(Object.keys(expressionNames).length > 0 && { ExpressionAttributeNames: expressionNames }),
-        ExpressionAttributeValues: expressionValues,
-        ConditionExpression: 'attribute_exists(restoreJobId)',
+        ExpressionAttributeValues: { ...expressionValues, ...conditionExpressionValues },
+        ConditionExpression: finalCondition,
       })
     );
+    return true;
   } catch (error: any) {
     if (error.name === 'ConditionalCheckFailedException') {
-      return;
+      return false;
     }
     throw error;
   }
@@ -805,6 +817,12 @@ const pollRestoreJobUntilIngestTerminal = async (restoreJobId: string): Promise<
   }
 };
 
+// Objects already marked FAILED by an earlier stage (RESTORN FIELD JOB FAILED
+// / BACKUP JOB FAILED) must never reach ingest — "if an object failed here it
+// will not go to further steps" applies just as much at this final handoff as
+// it did at each earlier stage.
+const PRE_INGEST_FAILURE_STATUSES = new Set([RESTORE_FIELD_JOB_STATUS.failed, RESTORE_BACKUP_STATUS.failed]);
+
 // Stage 4 (INGEST): reuses backup-service's existing Bulk API 2.0 ingest —
 // the exact same POST /v1/restore -> runRestoreJob path this module always
 // used, never a second ingest implementation. Called once EMR reports
@@ -820,21 +838,53 @@ const pollRestoreJobUntilIngestTerminal = async (restoreJobId: string): Promise<
 // overwrites an individual object's own recorded outcome, so one object's
 // ingest failure can't bleed into another's status.
 export const runRestoreIngestJob = async (restorejob: IRestoreJob): Promise<void> => {
+  // Atomic guard against a duplicate/retried EMR webhook delivery: this stage
+  // is only meant to start once, right after CREATING CSV's. A plain
+  // read-then-check has a TOCTOU gap if two callbacks land close together, so
+  // this uses a DynamoDB conditional write instead — only the call that
+  // actually flips status away from CREATING CSV's (atomically, in the same
+  // write backup-service's own PENDING precondition needs anyway — see below)
+  // gets to proceed; every other concurrent/duplicate call sees `false` and
+  // backs off. Same conditionExpression pattern backup-service's own
+  // updateRestoreJobStatus already uses for its RUNNING-transition guard.
+  const claimed = await updateRestoreJob({
+    restoreJobId: restorejob.restoreJobId,
+    status: 'PENDING',
+    conditionExpression: '#status = :expectedStatus',
+    conditionExpressionValues: { ':expectedStatus': RESTORE_CSV_STATUS.creating },
+  });
+
+  if (!claimed) {
+    logger.warn(
+      `[restore-ingest] skipped — status was not '${RESTORE_CSV_STATUS.creating}' (already handled, or a duplicate EMR callback) | restoreJobId=${restorejob.restoreJobId}`
+    );
+    return;
+  }
+
+  // Only objects that survived every earlier stage are eligible — an object
+  // still carrying an earlier stage's FAILED status must not be sent to
+  // backup-service just because EMR/Spark's own object resolution included it.
+  const currentJob = await getRestoreJobById(restorejob.restoreJobId);
+  const eligibleObjects = (currentJob?.destination.objects ?? []).filter(
+    (object) => !PRE_INGEST_FAILURE_STATUSES.has(object.status)
+  );
+
+  if (!eligibleObjects.length) {
+    const message = 'no_eligible_objects_for_ingest';
+    logger.error(`[restore-ingest] ${message} | restoreJobId=${restorejob.restoreJobId}`);
+    await Promise.all([
+      updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: 'FAILED', errorMessage: message }),
+      updateRestore({ restoreId: restorejob.restoreId, status: 'FAILED', errorMessage: message }),
+    ]);
+    return;
+  }
+
   // backup-service's own createRestoreJobHandler (POST /v1/restore) only
   // proceeds when this row's status is exactly PENDING — its existing
-  // validity/dedup gate (backup-service/src/controller/v1/restore-job).
-  // Every stage before this one has already moved status through this
-  // workflow's own vocabulary (RESTORN FIELD JOB..., BACKUP...,
-  // CREATING CSV's), so it's reset to PENDING right before the handoff or
-  // backup-service rejects the request as not_exist. INGEST IN PROGRESS is
-  // written immediately after, once backup-service has accepted the row —
-  // moments later backup-service's own runRestoreJob flips it to RUNNING and
-  // eventually SUCCESS/FAILED, which pollRestoreJobUntilIngestTerminal below
-  // is what actually watches for.
-  await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: 'PENDING' });
-
+  // validity/dedup gate (backup-service/src/controller/v1/restore-job) —
+  // which the atomic claim above already satisfied.
   try {
-    await sendRestoreToBackupService(restorejob, restorejob.destination.objects);
+    await sendRestoreToBackupService(restorejob, eligibleObjects);
   } catch (error: any) {
     const message = error?.message ?? String(error);
     logger.error(

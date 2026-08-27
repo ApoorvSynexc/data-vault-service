@@ -1052,7 +1052,7 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
  * POST /activate
  * Body: { restoreId: string }
  *
- * Transitions a DRAFT restore to PENDING and kicks off the restore job — the
+ * Transitions a DRAFT restore to IN_PROGRESS and kicks off the restore job — the
  * step createRestoreHandler intentionally skips when a restore is created with
  * status: 'DRAFT' (see the `if (body.status !== 'DRAFT')` branch there).
  *
