@@ -26,22 +26,24 @@ export const deployMetadata = async (
   tokens: SalesforceTokens,
   { files, packageXml, destructiveChangesXml, allowMissingFiles = false }: DeployOptions
 ): Promise<void> => {
+  // createFolders: false — JSZip's default (true) additionally writes explicit
+  // directory entries ("objects/", "objects/Account/", ...) into the zip for
+  // every nested file path. Salesforce's deploy-zip scanner chokes on those:
+  // it reports the real file as "named in package.xml, but was not found in
+  // zipped directory" even though the file is genuinely present, because the
+  // directory entries confuse its component lookup. Confirmed live — a
+  // multi-file deploy (this function's first real multi-file caller,
+  // restore-fields.ts's per-object field batches) failed 100% of the time
+  // with exactly that error until this was set.
   const zip = new JSZip();
   for (const file of files) {
-    zip.file(file.path, file.content);
+    zip.file(file.path, file.content, { createFolders: false });
   }
   zip.file('package.xml', packageXml);
   if (destructiveChangesXml) {
-    zip.file('destructiveChanges.xml', destructiveChangesXml);
+    zip.file('destructiveChanges.xml', destructiveChangesXml, { createFolders: false });
   }
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
-
-  // ponytail: temporary diagnostics for the "named in package.xml but not
-  // found in zipped directory" failures — remove once the cause is confirmed
-  // from real deploy output (see restore-fields.ts callers).
-  console.log('[deployMetadata] zip entries:', Object.keys(zip.files));
-  console.log('[deployMetadata] package.xml:\n' + packageXml);
-  console.log('[deployMetadata] zip byte length:', zipBuffer.length);
 
   const deployOptions = JSON.stringify({
     deployOptions: {
