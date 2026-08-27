@@ -15,6 +15,7 @@ const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE ||
 const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters'}`;
 const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
+const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
 
 // AWS Glue / Athena
 // Dedicated IAM credentials scoped to Glue (separate from the default AWS creds).
@@ -128,6 +129,15 @@ const FILTER_OPERATOR = {
   like: 'LIKE',
 };
 
+// Mirrors client-service/src/constant/index.ts's NOTIFICATION_STATUS — only
+// `unread` is used here (createNotification always seeds a new row as unread);
+// read/deleted transitions are owned by client-service's notification API.
+const NOTIFICATION_STATUS = {
+  unread: 'UNREAD',
+  read: 'READ',
+  deleted: 'DELETED',
+};
+
 const STANDARD_OBJECT_LIST = [
   'Account',
   'Contact',
@@ -173,6 +183,7 @@ export {
   TABLE_COUNTER_TABLE,
   CRM_TABLE,
   SETTINGS_TABLE,
+  NOTIFICATION_TABLE,
 
   // Salesforce Config
   SALESFORCE_CLIENT_ID,
@@ -195,5 +206,6 @@ export {
   CONDITION_TYPE,
   FILTER_OPERATOR,
   SYSTEM_FIELDS,
-  STANDARD_OBJECT_LIST
+  STANDARD_OBJECT_LIST,
+  NOTIFICATION_STATUS
 };
