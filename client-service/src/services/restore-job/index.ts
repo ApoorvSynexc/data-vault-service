@@ -132,10 +132,19 @@ interface UpdateRestoreJobParams {
   startedAt?: string;
   completedAt?: string;
   errorMessage?: string;
-  // Per-object updates, each targeting one entry in destination.objects[] by
-  // name (names are unique within that array). Any number of objects can be
-  // updated in the same write.
+  // Per-object updates, each targeting one node in destination.objects by
+  // name — resolved by searching the top-level array AND recursively through
+  // every node's children (see findObjectPath), so this reaches a node at any
+  // depth of an ARCHIVAL object tree exactly the same way it already reached
+  // a top-level BACKUP object. Any number of nodes can be updated in one write.
   objects?: UpdateRestoreObjectParams[];
+  // Wholesale replacement of destination.objects — used once, at the ingest
+  // handoff, to collapse an ARCHIVAL restore's tree into the flat list
+  // backup-service's (unmodified) ingest runner expects; a no-op-shaped
+  // overwrite for BACKUP, which is already flat. Mutually exclusive with
+  // `objects` in practice (both target the same attribute) — pass one or the
+  // other, not both.
+  replaceObjects?: IRestoreJobObject[];
   // When set, the write is rejected (ConditionalCheckFailedException,
   // reported back as a `false` return rather than thrown) unless the
   // condition holds — used for atomic check-and-set stage transitions, same
@@ -143,6 +152,37 @@ interface UpdateRestoreJobParams {
   conditionExpression?: string;
   conditionExpressionValues?: Record<string, any>;
 }
+
+// Finds the index-path to reach a node by name — the top-level array first,
+// then recursively through every node's `children`. [i] for a top-level match
+// (the only shape a flat BACKUP object list ever produces, identical to the
+// plain findIndex this replaces); [i, j, ...] for a node nested j levels deep
+// in an ARCHIVAL object tree. Depth-first, so the first match by name wins,
+// same tie-breaking a flat array's findIndex already had.
+const findObjectPath = (nodes: IRestoreJobObject[], name: string): number[] | null => {
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].name === name) {
+      return [i];
+    }
+    const childPath = nodes[i].children?.length ? findObjectPath(nodes[i].children!, name) : null;
+    if (childPath) {
+      return [i, ...childPath];
+    }
+  }
+  return null;
+};
+
+const getObjectAtPath = (nodes: IRestoreJobObject[], path: number[]): IRestoreJobObject => {
+  let current = nodes[path[0]];
+  for (let depth = 1; depth < path.length; depth++) {
+    current = current.children![path[depth]];
+  }
+  return current;
+};
+
+// [0] -> "#objects[0]"; [0, 2, 1] -> "#objects[0].#children[2].#children[1]".
+const buildObjectPathExpression = (path: number[]): string =>
+  path.map((index, depth) => `${depth === 0 ? '#objects' : '#children'}[${index}]`).join('.');
 
 // Updates job-level fields (status/timestamps/errorMessage) and, optionally,
 // any number of objects' progress in the same write.
@@ -157,7 +197,7 @@ interface UpdateRestoreJobParams {
 // (objects[n].field). Reading the job first to resolve each object's index and
 // current counts sidesteps both restrictions with a plain literal SET.
 const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean> => {
-  const { restoreJobId, status, startedAt, completedAt, errorMessage, objects, conditionExpression, conditionExpressionValues } = params;
+  const { restoreJobId, status, startedAt, completedAt, errorMessage, objects, replaceObjects, conditionExpression, conditionExpressionValues } = params;
   const now = new Date().toISOString();
 
   const job = objects?.length ? await getRestoreJobById(restoreJobId) : null;
@@ -188,9 +228,16 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
     removeParts.push('errorMessage');
   }
 
+  if (replaceObjects) {
+    setParts.push('#destination.#objects = :replaceObjects');
+    expressionNames['#destination'] = 'destination';
+    expressionNames['#objects'] = 'objects';
+    expressionValues[':replaceObjects'] = replaceObjects;
+  }
+
   if (job && objects?.length) {
     // objects[] lives at destination.objects, not at the item's top level —
-    // both segments need aliasing for the list-index SET path below.
+    // both segments need aliasing for the path-based SET below.
     expressionNames['#destination'] = 'destination';
     expressionNames['#objects'] = 'objects';
 
@@ -199,30 +246,34 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
     // expression — name aliases (#objectStatus etc.) can be reused across
     // objects since they just alias the same underlying attribute name.
     objects.forEach((object, position) => {
-      const objectIndex = job.destination.objects.findIndex((o) => o.name === object.name);
-      if (objectIndex === -1) {
+      const path = findObjectPath(job.destination.objects, object.name);
+      if (!path) {
         return;
       }
-      const currentObject = job.destination.objects[objectIndex];
+      const currentObject = getObjectAtPath(job.destination.objects, path);
+      const objectPath = `#destination.${buildObjectPathExpression(path)}`;
+      if (path.length > 1) {
+        expressionNames['#children'] = 'children';
+      }
 
       if (object.status !== undefined) {
-        setParts.push(`#destination.#objects[${objectIndex}].#objectStatus = :objectStatus${position}`);
+        setParts.push(`${objectPath}.#objectStatus = :objectStatus${position}`);
         expressionNames['#objectStatus'] = 'status';
         expressionValues[`:objectStatus${position}`] = object.status;
       }
       if (object.errorMessage !== undefined) {
-        setParts.push(`#destination.#objects[${objectIndex}].#objectErrorMessage = :objectErrorMessage${position}`);
+        setParts.push(`${objectPath}.#objectErrorMessage = :objectErrorMessage${position}`);
         expressionNames['#objectErrorMessage'] = 'errorMessage';
         expressionValues[`:objectErrorMessage${position}`] = object.errorMessage;
       }
       if (object.processedRecordCount) {
-        setParts.push(`#destination.#objects[${objectIndex}].#processedRecordCount = :processedRecordCount${position}`);
+        setParts.push(`${objectPath}.#processedRecordCount = :processedRecordCount${position}`);
         expressionNames['#processedRecordCount'] = 'processedRecordCount';
         expressionValues[`:processedRecordCount${position}`] =
           (currentObject?.processedRecordCount ?? 0) + object.processedRecordCount;
       }
       if (object.failedRecordCount) {
-        setParts.push(`#destination.#objects[${objectIndex}].#failedRecordCount = :failedRecordCount${position}`);
+        setParts.push(`${objectPath}.#failedRecordCount = :failedRecordCount${position}`);
         expressionNames['#failedRecordCount'] = 'failedRecordCount';
         expressionValues[`:failedRecordCount${position}`] =
           (currentObject?.failedRecordCount ?? 0) + object.failedRecordCount;
@@ -366,14 +417,21 @@ export const RESTORE_FIELD_JOB_STATUS = {
   failed: 'RESTORN FIELD JOB FAILED',
 };
 
+// Every object name in a destination.objects tree, at any depth — a no-op
+// flatten for BACKUP's already-flat array, a full walk for an ARCHIVAL
+// hierarchy. Shared by every place that needs "every object this job touches"
+// regardless of which shape produced it.
+const collectAllObjectNames = (nodes: IRestoreJobObject[]): string[] =>
+  nodes.flatMap((node) => [node.name, ...collectAllObjectNames(node.children ?? [])]);
+
 // Marks every object FAILED with the same reason — used when something
 // upstream of the per-object loop (destination user/credentials) is broken, so
 // there's no per-object work to even attempt.
 const failAllObjects = async (restorejob: IRestoreJob, errorMessage: string): Promise<void> => {
   await updateRestoreJob({
     restoreJobId: restorejob.restoreJobId,
-    objects: restorejob.destination.objects.map((object) => ({
-      name: object.name,
+    objects: collectAllObjectNames(restorejob.destination.objects).map((name) => ({
+      name,
       status: RESTORE_FIELD_JOB_STATUS.failed,
       errorMessage,
     })),
@@ -392,6 +450,55 @@ const failObjects = async (restoreJobId: string, objectNames: string[], status: 
   });
 };
 
+// ARCHIVAL configType only. A node whose own field creation fails, or that
+// sits under one that has, is written FAILED and never touches Salesforce —
+// "avoid unnecessary Metadata API operations for a branch that can no longer
+// participate." `blockedByAncestor` names the ORIGINAL failed ancestor (not
+// necessarily the immediate parent), so a message stays accurate however many
+// failed levels sit above a given descendant, and the parent's own real error
+// is never overwritten by the propagated one. Siblings are independent, so
+// they run in parallel (Promise.all) — only the parent-before-child edge is
+// actually ordered, via the recursion itself.
+interface ArchivalFieldJobOutcome {
+  updates: UpdateRestoreObjectParams[];
+  succeededNames: string[];
+}
+
+const processArchivalFieldJobTree = async (
+  nodes: IRestoreJobObject[],
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  blockedByAncestor: string | null,
+  outcome: ArchivalFieldJobOutcome
+): Promise<void> => {
+  await Promise.all(
+    nodes.map(async (node) => {
+      if (blockedByAncestor) {
+        outcome.updates.push({
+          name: node.name,
+          status: RESTORE_FIELD_JOB_STATUS.failed,
+          errorMessage: `Restore Field Job failed because parent object ${blockedByAncestor} failed.`,
+        });
+        await processArchivalFieldJobTree(node.children ?? [], instanceUrl, tokens, blockedByAncestor, outcome);
+        return;
+      }
+
+      try {
+        await ensureRestoreTrackingFields(instanceUrl, tokens, node.name);
+        outcome.succeededNames.push(node.name);
+        await processArchivalFieldJobTree(node.children ?? [], instanceUrl, tokens, null, outcome);
+      } catch (error: any) {
+        const message = error?.message ?? String(error);
+        logger.error(
+          `[restore-field-job] archival field creation failed | object=${node.name} err:${message}`
+        );
+        outcome.updates.push({ name: node.name, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage: message });
+        await processArchivalFieldJobTree(node.children ?? [], instanceUrl, tokens, node.name, outcome);
+      }
+    })
+  );
+};
+
 // Stage 1 of the restore workflow (RESTORN FIELD JOB): ensure the 3 Data Craft
 // restore-tracking custom fields exist on every restore object, then grant
 // the restore Permission Set object/field access for those same objects and
@@ -403,13 +510,22 @@ const failObjects = async (restoreJobId: string, objectNames: string[], status: 
 // An object only reaches RESTORN FIELD JOB SUCCESS once BOTH steps have
 // completed for it — the Permission Set deploy is what actually makes the new
 // fields usable, so "fields created but no access granted" is not a success.
-// Field creation is isolated per object (Promise.allSettled); the Permission
-// Set deploy is one Salesforce transaction covering every object whose fields
-// were created, so a failure there fails all of them together — that's
-// Salesforce's own deploy atomicity, not a design choice to skip isolation.
+//
+// BACKUP/NORMAL: destination.objects is flat, and every object is independent
+// — field creation runs via Promise.allSettled, exactly as before. ARCHIVAL:
+// destination.objects is a single-root tree, and a parent's failure must fail
+// its whole subtree without attempting Salesforce calls for it — see
+// processArchivalFieldJobTree. The Permission Set deploy itself is one
+// Salesforce transaction covering every object that survived the field stage,
+// so a failure there fails all of them together — that's Salesforce's own
+// deploy atomicity, not a design choice to skip isolation.
+//
 // Returns only the object names that fully succeeded — callers must not carry
 // a FAILED object into any later stage.
-const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededObjectNames: string[] }> => {
+const runRestoreFieldJob = async (
+  restorejob: IRestoreJob,
+  configType: string
+): Promise<{ succeededObjectNames: string[] }> => {
   await Promise.all([
     updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_FIELD_JOB_STATUS.inProgress }),
     updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_FIELD_JOB_STATUS.inProgress }),
@@ -438,33 +554,45 @@ const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededO
     customUrl: user.customUrl,
   };
 
-  const fieldResults = await Promise.allSettled(
-    restorejob.destination.objects.map((object) =>
-      ensureRestoreTrackingFields(instanceUrl, tokens, object.name)
-    )
-  );
+  let fieldsCreatedObjectNames: string[];
 
-  const fieldsCreatedObjectNames: string[] = [];
-  const fieldFailures: UpdateRestoreObjectParams[] = [];
-  fieldResults.forEach((result, index) => {
-    const objectName = restorejob.destination.objects[index].name;
-    if (result.status === 'fulfilled') {
-      fieldsCreatedObjectNames.push(objectName);
-      return;
+  if (configType === 'ARCHIVAL') {
+    const outcome: ArchivalFieldJobOutcome = { updates: [], succeededNames: [] };
+    await processArchivalFieldJobTree(restorejob.destination.objects, instanceUrl, tokens, null, outcome);
+    if (outcome.updates.length) {
+      await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, objects: outcome.updates });
     }
-    const error: any = result.reason;
-    logger.error(
-      `[restore-field-job] field creation failed | restoreJobId=${restorejob.restoreJobId} object=${objectName} err:${error?.message ?? error}`
+    fieldsCreatedObjectNames = outcome.succeededNames;
+  } else {
+    const fieldResults = await Promise.allSettled(
+      restorejob.destination.objects.map((object) =>
+        ensureRestoreTrackingFields(instanceUrl, tokens, object.name)
+      )
     );
-    fieldFailures.push({
-      name: objectName,
-      status: RESTORE_FIELD_JOB_STATUS.failed,
-      errorMessage: error?.message ?? String(error),
-    });
-  });
 
-  if (fieldFailures.length) {
-    await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, objects: fieldFailures });
+    const succeededNames: string[] = [];
+    const fieldFailures: UpdateRestoreObjectParams[] = [];
+    fieldResults.forEach((result, index) => {
+      const objectName = restorejob.destination.objects[index].name;
+      if (result.status === 'fulfilled') {
+        succeededNames.push(objectName);
+        return;
+      }
+      const error: any = result.reason;
+      logger.error(
+        `[restore-field-job] field creation failed | restoreJobId=${restorejob.restoreJobId} object=${objectName} err:${error?.message ?? error}`
+      );
+      fieldFailures.push({
+        name: objectName,
+        status: RESTORE_FIELD_JOB_STATUS.failed,
+        errorMessage: error?.message ?? String(error),
+      });
+    });
+
+    if (fieldFailures.length) {
+      await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, objects: fieldFailures });
+    }
+    fieldsCreatedObjectNames = succeededNames;
   }
 
   if (!fieldsCreatedObjectNames.length) {
@@ -496,15 +624,13 @@ const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededO
   return { succeededObjectNames: fieldsCreatedObjectNames };
 };
 
-// The RESTORN FIELD JOB stage (custom fields + Permission Set) — and every
-// stage layered on top of it (backup run, EMR/sync-schema, ingest) — only
-// applies to a BACKUP-sourced restore. An ARCHIVAL restore's destination
-// objects were never part of a live backup config, so there's no "restore
-// tracking field" story for them; those restores skip straight to the
-// pre-existing backup-service handoff, exactly as they did before this stage
-// existed. 'NORMAL' is accepted alongside 'BACKUP' since that's the synonym
-// used for the same concept elsewhere in this codebase (BACKUP_TYPE.normal).
-const RESTORE_FIELD_JOB_CONFIG_TYPES = new Set(['BACKUP', 'NORMAL']);
+// Which configTypes run the RESTORN FIELD JOB / Permission Set stages at all.
+// BACKUP/NORMAL then continue into RUN BACKUP JOB; ARCHIVAL skips straight to
+// CREATING CSV's (see tiggerRestoreJob) — there is no backup config to re-run
+// for data that's already sitting in an archival config's own store.
+// 'NORMAL' is accepted alongside 'BACKUP' since that's the synonym used for
+// the same concept elsewhere in this codebase (BACKUP_TYPE.normal).
+const RESTORE_FIELD_JOB_CONFIG_TYPES = new Set(['BACKUP', 'NORMAL', 'ARCHIVAL']);
 
 export const RESTORE_BACKUP_STATUS = {
   running: 'BACKUP RUNNING',
@@ -832,8 +958,137 @@ const pollRestoreJobUntilIngestTerminal = async (restoreJobId: string): Promise<
 // Objects already marked FAILED by an earlier stage (RESTORN FIELD JOB FAILED
 // / BACKUP JOB FAILED) must never reach ingest — "if an object failed here it
 // will not go to further steps" applies just as much at this final handoff as
-// it did at each earlier stage.
+// it did at each earlier stage. Filtering the top-level list is enough even
+// for an ARCHIVAL tree: a failed parent's whole subtree was already written
+// FAILED during the field job (propagation), so dropping the parent here
+// drops its nested children along with it — nothing underneath a dropped
+// node needs a separate check.
 const PRE_INGEST_FAILURE_STATUSES = new Set([RESTORE_FIELD_JOB_STATUS.failed, RESTORE_BACKUP_STATUS.failed]);
+const filterOutPreFailedNodes = (nodes: IRestoreJobObject[]): IRestoreJobObject[] =>
+  nodes.filter((node) => !PRE_INGEST_FAILURE_STATUSES.has(node.status));
+
+// Runs one ingest round for exactly the given flat batch: makes the shared
+// row's destination.objects exactly this batch (backup-service's own
+// runRestoreJob reads destination.objects fresh from that row, ignoring this
+// POST's body — see the PENDING-reset note below — so the round is scoped by
+// what's stored, not by what's sent), resets to PENDING (backup-service's own
+// precondition), then hands off and polls to terminal via the exact same
+// primitives every restore's ingest already used. Shared by the flat
+// (BACKUP) single-round path and every level of an ARCHIVAL hierarchy walk —
+// never a second ingest implementation, just a different number of rounds.
+const runIngestRound = async (
+  restorejob: IRestoreJob,
+  batch: IRestoreJobObject[]
+): Promise<IRestoreJob | null> => {
+  const flatBatch = batch.map(({ children, ...rest }) => rest);
+
+  await updateRestoreJob({
+    restoreJobId: restorejob.restoreJobId,
+    replaceObjects: flatBatch,
+    status: 'PENDING',
+  });
+
+  try {
+    await sendRestoreToBackupService(restorejob, flatBatch);
+  } catch (error: any) {
+    const message = error?.message ?? String(error);
+    logger.error(
+      `[restore-ingest] backup-service handoff failed | restoreJobId=${restorejob.restoreJobId} objects=${flatBatch.map((o) => o.name).join(',')} err:${message}`
+    );
+    await updateRestoreJob({
+      restoreJobId: restorejob.restoreJobId,
+      objects: flatBatch.map((o) => ({ name: o.name, status: JOB_STATUS.failed, errorMessage: message })),
+    });
+    return null;
+  }
+
+  return pollRestoreJobUntilIngestTerminal(restorejob.restoreJobId);
+};
+
+// Marks an entire subtree FAILED with a hierarchy-specific reason, without
+// ever attempting to ingest it — mirrors the field job's ancestor-failure
+// propagation, one stage later.
+const markIngestBlockedSubtree = (nodes: IRestoreJobObject[], failedAncestorName: string): void => {
+  for (const node of nodes) {
+    node.status = JOB_STATUS.failed;
+    node.errorMessage = `Ingest skipped because parent object ${failedAncestorName} failed ingestion.`;
+    if (node.children?.length) {
+      markIngestBlockedSubtree(node.children, failedAncestorName);
+    }
+  }
+};
+
+// BACKUP/NORMAL: one round for the whole (already-flat) object list — same
+// single-shot behavior this stage always had.
+const runFlatIngest = async (
+  restorejob: IRestoreJob,
+  objects: IRestoreJobObject[]
+): Promise<{ objects: IRestoreJobObject[]; allSucceeded: boolean }> => {
+  const finishedJob = await runIngestRound(restorejob, objects);
+  const resultsByName = new Map((finishedJob?.destination.objects ?? []).map((o) => [o.name, o]));
+
+  const finalObjects = objects.map((node) => {
+    const result = resultsByName.get(node.name);
+    return {
+      ...node,
+      status: result?.status ?? JOB_STATUS.failed,
+      errorMessage:
+        result?.errorMessage ?? (finishedJob ? `object_not_found_in_ingest_result:${node.name}` : 'ingest_round_failed'),
+      processedRecordCount: result?.processedRecordCount,
+      failedRecordCount: result?.failedRecordCount,
+    };
+  });
+
+  const allSucceeded = finalObjects.length > 0 && finalObjects.every((o) => o.status === JOB_STATUS.success);
+  return { objects: finalObjects, allSucceeded };
+};
+
+// ARCHIVAL only: ingests strictly top-to-bottom, one hierarchy level per
+// round. Siblings at the same level are batched into that single round
+// together (backup-service processes a round's objects concurrently, so this
+// is where "siblings run in parallel" actually happens) — only the
+// parent-level -> child-level edge is ordered, by waiting for the whole
+// round to reach a terminal state before the next level's round starts. A
+// parent that fails ingestion blocks its entire subtree, which is marked
+// FAILED with a hierarchy-specific reason and never attempted.
+const runHierarchicalIngest = async (
+  restorejob: IRestoreJob,
+  roots: IRestoreJobObject[]
+): Promise<{ objects: IRestoreJobObject[]; allSucceeded: boolean }> => {
+  let currentLevel = roots;
+  let allSucceeded = true;
+
+  while (currentLevel.length) {
+    const finishedJob = await runIngestRound(restorejob, currentLevel);
+    const resultsByName = new Map((finishedJob?.destination.objects ?? []).map((o) => [o.name, o]));
+
+    const nextLevel: IRestoreJobObject[] = [];
+    for (const node of currentLevel) {
+      const result = resultsByName.get(node.name);
+      node.status = result?.status ?? JOB_STATUS.failed;
+      node.errorMessage =
+        result?.errorMessage ?? (finishedJob ? `object_not_found_in_ingest_result:${node.name}` : 'ingest_round_failed');
+      node.processedRecordCount = result?.processedRecordCount;
+      node.failedRecordCount = result?.failedRecordCount;
+
+      const succeeded = node.status === JOB_STATUS.success;
+      if (!succeeded) {
+        allSucceeded = false;
+      }
+
+      if (node.children?.length) {
+        if (succeeded) {
+          nextLevel.push(...node.children);
+        } else {
+          markIngestBlockedSubtree(node.children, node.name);
+        }
+      }
+    }
+    currentLevel = nextLevel;
+  }
+
+  return { objects: roots, allSucceeded };
+};
 
 // Stage 4 (INGEST): reuses backup-service's existing Bulk API 2.0 ingest —
 // the exact same POST /v1/restore -> runRestoreJob path this module always
@@ -841,24 +1096,28 @@ const PRE_INGEST_FAILURE_STATUSES = new Set([RESTORE_FIELD_JOB_STATUS.failed, RE
 // success via /spark-job/update-spark-job-status.
 //
 // completedCount/errorCount/object status/object-specific error message are
-// never written here — backup-service's own ingest runner already writes
-// each object's processedRecordCount/failedRecordCount/status/errorMessage
-// directly onto this same row after every chunk (see backup-service's
-// updateRestoreObject), continuously, for the whole run. This function only
-// triggers that run and waits for the job-level status to go terminal, then
-// reads the final per-object array to decide the overall verdict — it never
-// overwrites an individual object's own recorded outcome, so one object's
-// ingest failure can't bleed into another's status.
-export const runRestoreIngestJob = async (restorejob: IRestoreJob): Promise<void> => {
+// never written by client-service mid-round — backup-service's own ingest
+// runner already writes each object's processedRecordCount/failedRecordCount
+// /status/errorMessage directly onto the shared row after every chunk (see
+// backup-service's updateRestoreObject), continuously, for the whole round.
+// This function triggers each round and waits for it to go terminal, then
+// reads the round's per-object results to decide what happens next — it
+// never overwrites an individual object's own recorded outcome, so one
+// object's ingest failure can't bleed into an unrelated one's status.
+//
+// BACKUP/NORMAL: destination.objects is flat and independent — one round,
+// same as always (runFlatIngest). ARCHIVAL: destination.objects is a tree
+// that must ingest strictly top-to-bottom — parent before child, siblings
+// together — handled level-by-level (runHierarchicalIngest).
+export const runRestoreIngestJob = async (restorejob: IRestoreJob, configType?: string): Promise<void> => {
   // Atomic guard against a duplicate/retried EMR webhook delivery: this stage
   // is only meant to start once, right after CREATING CSV's. A plain
   // read-then-check has a TOCTOU gap if two callbacks land close together, so
   // this uses a DynamoDB conditional write instead — only the call that
-  // actually flips status away from CREATING CSV's (atomically, in the same
-  // write backup-service's own PENDING precondition needs anyway — see below)
-  // gets to proceed; every other concurrent/duplicate call sees `false` and
-  // backs off. Same conditionExpression pattern backup-service's own
-  // updateRestoreJobStatus already uses for its RUNNING-transition guard.
+  // actually flips status away from CREATING CSV's gets to proceed; every
+  // other concurrent/duplicate call sees `false` and backs off. Same
+  // conditionExpression pattern backup-service's own updateRestoreJobStatus
+  // already uses for its RUNNING-transition guard.
   const claimed = await updateRestoreJob({
     restoreJobId: restorejob.restoreJobId,
     status: 'PENDING',
@@ -877,31 +1136,11 @@ export const runRestoreIngestJob = async (restorejob: IRestoreJob): Promise<void
   // still carrying an earlier stage's FAILED status must not be sent to
   // backup-service just because EMR/Spark's own object resolution included it.
   const currentJob = await getRestoreJobById(restorejob.restoreJobId);
-  const eligibleObjects = (currentJob?.destination.objects ?? []).filter(
-    (object) => !PRE_INGEST_FAILURE_STATUSES.has(object.status)
-  );
+  const eligibleRoots = filterOutPreFailedNodes(currentJob?.destination.objects ?? []);
 
-  if (!eligibleObjects.length) {
+  if (!eligibleRoots.length) {
     const message = 'no_eligible_objects_for_ingest';
     logger.error(`[restore-ingest] ${message} | restoreJobId=${restorejob.restoreJobId}`);
-    await Promise.all([
-      updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: 'FAILED', errorMessage: message }),
-      updateRestore({ restoreId: restorejob.restoreId, status: 'FAILED', errorMessage: message }),
-    ]);
-    return;
-  }
-
-  // backup-service's own createRestoreJobHandler (POST /v1/restore) only
-  // proceeds when this row's status is exactly PENDING — its existing
-  // validity/dedup gate (backup-service/src/controller/v1/restore-job) —
-  // which the atomic claim above already satisfied.
-  try {
-    await sendRestoreToBackupService(restorejob, eligibleObjects);
-  } catch (error: any) {
-    const message = error?.message ?? String(error);
-    logger.error(
-      `[restore-ingest] backup-service handoff failed | restoreJobId=${restorejob.restoreJobId} err:${message}`
-    );
     await Promise.all([
       updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: 'FAILED', errorMessage: message }),
       updateRestore({ restoreId: restorejob.restoreId, status: 'FAILED', errorMessage: message }),
@@ -914,27 +1153,18 @@ export const runRestoreIngestJob = async (restorejob: IRestoreJob): Promise<void
     updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_INGEST_STATUS.inProgress }),
   ]);
 
-  const finishedJob = await pollRestoreJobUntilIngestTerminal(restorejob.restoreJobId);
-  if (!finishedJob) {
-    const message = `restore_job_disappeared_during_ingest:${restorejob.restoreJobId}`;
-    logger.error(`[restore-ingest] ${message}`);
-    await updateRestore({ restoreId: restorejob.restoreId, status: 'FAILED', errorMessage: message });
-    return;
-  }
+  const { objects: finalObjects, allSucceeded } =
+    configType === 'ARCHIVAL'
+      ? await runHierarchicalIngest(restorejob, eligibleRoots)
+      : await runFlatIngest(restorejob, eligibleRoots);
 
-  // Do NOT finalize until every object backup-service touched has its own
-  // terminal per-object status — job-level SUCCESS/FAILED from
-  // pollRestoreJobUntilIngestTerminal already guarantees the run itself is
-  // done (backup-service's runRestoreJob only reaches that status after
-  // every object's ingest completes), so this is reading final state, not a
-  // mid-run snapshot.
-  const objects = finishedJob.destination.objects ?? [];
-  const allSucceeded = objects.length > 0 && objects.every((object) => object.status === JOB_STATUS.success);
-  const overallStatus = finishedJob.status === JOB_STATUS.success && allSucceeded ? 'COMPLETED' : 'FAILED';
-  const errorMessage =
-    overallStatus === 'FAILED'
-      ? finishedJob.errorMessage ?? 'one_or_more_objects_failed_ingest'
-      : undefined;
+  // Each round along the way only ever left destination.objects holding that
+  // one round's batch (see runIngestRound) — this restores the full picture
+  // (every object's real final outcome) onto the job record.
+  await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, replaceObjects: finalObjects });
+
+  const overallStatus = allSucceeded ? 'COMPLETED' : 'FAILED';
+  const errorMessage = allSucceeded ? undefined : 'one_or_more_objects_failed_ingest';
 
   await Promise.all([
     updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: overallStatus, ...(errorMessage && { errorMessage }) }),
@@ -942,7 +1172,7 @@ export const runRestoreIngestJob = async (restorejob: IRestoreJob): Promise<void
   ]);
 
   logger.info(
-    `[restore-ingest] finished | restoreJobId=${restorejob.restoreJobId} overallStatus=${overallStatus} objects=${objects.length}`
+    `[restore-ingest] finished | restoreJobId=${restorejob.restoreJobId} overallStatus=${overallStatus} objects=${finalObjects.length}`
   );
 };
 
@@ -952,19 +1182,24 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
   const runsFieldJob = !!configType && RESTORE_FIELD_JOB_CONFIG_TYPES.has(configType);
 
   if (!runsFieldJob) {
+    // Legacy/unrecognized configType only — every real restore now runs the
+    // field job (BACKUP, NORMAL, and ARCHIVAL are all in
+    // RESTORE_FIELD_JOB_CONFIG_TYPES), so this is a defensive fallback for a
+    // record with no configType at all, not a normal path.
     logger.info(
-      `[restore-field-job] skipped — configType=${configType ?? 'unknown'} is not BACKUP/NORMAL, going straight to CSV creation | restoreJobId=${restorejob.restoreJobId}`
+      `[restore-field-job] skipped — configType=${configType ?? 'unknown'} is not recognized, going straight to CSV creation | restoreJobId=${restorejob.restoreJobId}`
     );
-    return startCsvCreationStage(restorejob, restorejob.destination.objects.map((object) => object.name));
+    return startCsvCreationStage(restorejob, collectAllObjectNames(restorejob.destination.objects));
   }
 
-  const { succeededObjectNames: fieldJobSucceededNames } = await runRestoreFieldJob(restorejob);
+  const { succeededObjectNames: fieldJobSucceededNames } = await runRestoreFieldJob(restorejob, configType!);
 
   // Objects that failed the field job stop here — they never reach the
-  // backup stage, and are already persisted as RESTORN FIELD JOB FAILED.
+  // backup stage (or CSV creation, for ARCHIVAL), and are already persisted
+  // as RESTORN FIELD JOB FAILED.
   if (!fieldJobSucceededNames.length) {
     logger.error(
-      `[restore-field-job] every object failed — stopping before RUN BACKUP JOB | restoreJobId=${restorejob.restoreJobId}`
+      `[restore-field-job] every object failed — stopping before the next stage | restoreJobId=${restorejob.restoreJobId}`
     );
     const errorMessage = 'restore_field_job_failed_for_every_object';
     await Promise.all([
@@ -972,6 +1207,13 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
       updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage }),
     ]);
     return;
+  }
+
+  // ARCHIVAL: no RUN BACKUP JOB stage — the archived data already lives in
+  // the archival config's own store, so once fields/Permission Set are ready
+  // for the objects that survived the field job, go straight to CSV creation.
+  if (configType === 'ARCHIVAL') {
+    return startCsvCreationStage(restorejob, fieldJobSucceededNames);
   }
 
   const { succeededObjectNames: backupSucceededNames } = await runRestoreBackupJob(restorejob, fieldJobSucceededNames);

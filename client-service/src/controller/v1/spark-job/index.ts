@@ -244,7 +244,13 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       return makeResponse(req, res, 200, true, 'update');
     }
 
-    if (restore.source.type !== 'ENTIRE') {
+    // ARCHIVAL never rebuilds destination.objects here — it's a tree, and this
+    // rebuild flattens EMR's reported object list into flat sibling entries,
+    // which would destroy the hierarchy right before the ingest stage needs
+    // it. ARCHIVAL restores currently only support source.type ENTIRE anyway
+    // (see ARCHIVAL_SOURCE_TYPE), so this branch is BACKUP/NORMAL-only in
+    // practice; guarded explicitly rather than relying on that staying true.
+    if (restore.source.configType !== 'ARCHIVAL' && restore.source.type !== 'ENTIRE') {
       // EMR/Spark resolves its own object list independently of this
       // workflow's per-object pass/fail tracking, so it can include an object
       // that already failed the RESTORN FIELD JOB or RUN BACKUP JOB stage —
@@ -280,7 +286,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     // EMR succeeded — continue automatically to the ingest stage. Background,
     // fire-and-forget (the response below doesn't wait on it), same as every
     // other restore stage transition in this workflow.
-    runRestoreIngestJob(restoreJob).catch((error) => {
+    runRestoreIngestJob(restoreJob, restore.source.configType).catch((error) => {
       logger.error(
         `[restore-ingest] failed | restoreJobId=${restoreConfigId} err:${error?.message ?? error}`
       );
