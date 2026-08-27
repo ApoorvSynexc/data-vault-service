@@ -76,11 +76,6 @@ const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE 
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
 const AWS_S3_LOGS_BUCKET = String(process.env.AWS_S3_LOGS_BUCKET);
 
-// Platform-owned bucket every Athena query writes its results into (see
-// services/third-party/athena/query.ts) — not a client's own bucket, so no
-// per-client S3Config resolution or bucket-policy grant is needed for it.
-const AWS_ATHENA_RESULTS_BUCKET = String(process.env.AWS_ATHENA_RESULTS_BUCKET || 'qa-data-vault-athena-results');
-
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
   schedule: 'SCHEDULE',
@@ -322,7 +317,6 @@ export {
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
   AWS_S3_LOGS_BUCKET,
-  AWS_ATHENA_RESULTS_BUCKET,
 
   // Enums
   STATUS,

@@ -7,7 +7,7 @@ import {
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
 import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN, AWS_ATHENA_RESULTS_BUCKET } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 // Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
@@ -75,21 +75,21 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
   QueryExecutionState.CANCELLED,
 ]);
 
-// Every query's results land in AWS_ATHENA_RESULTS_BUCKET — a bucket we own,
-// not a client's. Fixed and unconditional, not per-request: the workgroup
-// has Managed Query Results turned off specifically so this can be set (the
-// two are mutually exclusive — AWS rejects the request outright with
-// "ManagedQueryResultsConfiguration and ResultConfiguration cannot be set
-// together" otherwise, confirmed the hard way). A client's own bucket was
-// tried first and reverted — see git history — since routing results through
-// a client-owned location would have meant granting that bucket's Athena
-// role write access and resolving a destination per backupConfigId on every
-// query; a single owned bucket needs neither.
+// Submits a query to Athena and returns the queryExecutionId.
+// No ResultConfiguration.OutputLocation — omitting it makes Athena store
+// results in Athena-owned managed storage (engine v3+) instead of a bucket we
+// have to own, secure, and keep in the workgroup's region. We only ever read
+// results back through GetQueryResults, never touch the underlying files
+// directly, so managed storage is a strict improvement here.
+//
+// No ResultReuseConfiguration either — AWS does not support query result
+// reuse on workgroups with managed query results enabled ("Query Result Reuse
+// is not supported in workgroups with ManagedQueryResultsConfiguration
+// enabled"), so the two features are mutually exclusive here.
 const startQuery = async (sql: string, database: string): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ResultConfiguration: { OutputLocation: `s3://${AWS_ATHENA_RESULTS_BUCKET}/` },
   };
 
   logger.info(`[athena] StartQueryExecution request | ${JSON.stringify(input)}`);
