@@ -2,7 +2,7 @@ import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/li
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, INTERNAL_SECRET, RESTORE_JOB_TABLE, SCHEDULE_MODE, JOB_STATUS, BACKUP_STATUS } from '../../constant';
-import { IRestore, IRestoreConflict, IRestoreJob, IBackupConfig, IBackupJob } from '../../models';
+import { IRestore, IRestoreConflict, IRestoreJob, IBackupConfig, IBackupJob, IRestoreArchivalChildObject, IRestoreJobObject } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
 import { getBackupConfigById } from '../backup-config';
@@ -25,7 +25,7 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   const now = new Date().toISOString();
   let destinationCrmId = crmId!;
   const restoreJobId = uuidv4();
-  let destinationObjects: Array<{ id: string, name: string, status: "IN_PROGRESS" }> = [];
+  let destinationObjects: IRestoreJobObject[] = [];
 
   const sourceBackupConfig = await getBackupConfigById(source?.backupConfigId);
   if (!sourceBackupConfig) throw new Error(`backup_config_not_found:${source?.backupConfigId}`);
@@ -56,6 +56,18 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
     destinationObjects = selection.restoreScope.objects.map(name => ({ id: uuidv4(), name, status: "IN_PROGRESS" }));
   } else if (selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
     destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "IN_PROGRESS" }));
+  } else if (selection.restoreScope.type === 'OBJECT_TREE' && selection.restoreScope.objectTree) {
+    // ARCHIVAL restore: the hierarchy is preserved as-is, not flattened —
+    // destination.objects holds exactly one entry (the root), and every
+    // descendant lives nested under it via `children`, recursively, mirroring
+    // the shape submitted in selection.restoreScope.objectTree.
+    const toJobObject = (node: IRestoreArchivalChildObject): IRestoreJobObject => ({
+      id: uuidv4(),
+      name: node.name,
+      status: "IN_PROGRESS",
+      ...((node.children?.length ?? 0) > 0 && { children: node.children!.map(toJobObject) }),
+    });
+    destinationObjects = [toJobObject(selection.restoreScope.objectTree)];
   } else {
     destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "IN_PROGRESS" })) ?? [];
   }

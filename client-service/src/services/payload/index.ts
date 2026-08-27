@@ -297,7 +297,7 @@ function mapRestoreSource(source: IRestoreSource) {
 // Same rule as mapRestoreSource: only the selection field the scope type reads.
 // Unrecognised type (legacy, e.g. INSERTS_ONLY): forward as stored.
 function mapRestoreScope(restoreScope: IRestoreScope) {
-    const { type, objects, records, fields, filters, changeSince, bulkCsvIds, deletedOnly } = restoreScope;
+    const { type, objects, records, fields, filters, changeSince, bulkCsvIds, deletedOnly, objectTree } = restoreScope;
     switch (type) {
         case 'ALL':
             return { type };
@@ -315,6 +315,13 @@ function mapRestoreScope(restoreScope: IRestoreScope) {
             return { type, bulkCsvIds };
         case 'DELETED_ONLY':
             return { type, deletedOnly: deletedOnly ?? true };
+        // ARCHIVAL restore — the whole hierarchy (root filters/recordIds +
+        // recursive children) passes through as-is. Note: interpreting this
+        // tree during actual CSV generation is Spark-side (RestoreService.java)
+        // work not yet wired up — this only ensures the shape reaches the
+        // payload unchanged rather than being dropped by the default case.
+        case 'OBJECT_TREE':
+            return { type, objectTree };
         default:
             return restoreScope;
     }

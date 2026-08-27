@@ -246,11 +246,47 @@ const flattenObjects = (objects: INamedTreeNode[]): IObjectSummary[] => {
   return result;
 };
 
+// ARCHIVAL restore's object tree grid — same node shape the flat IObjectSummary
+// walker already reads (name + STANDARD/CUSTOM type), just keeping `children`
+// intact instead of flattening them into siblings.
+export interface IObjectTreeSummary {
+  name: string;
+  type: string; // STANDARD | CUSTOM
+  children?: IObjectTreeSummary[];
+}
+
+const toTreeSummary = (objects: INamedTreeNode[]): IObjectTreeSummary[] =>
+  objects.map((obj) => ({
+    name: obj.name,
+    type: obj.type ?? 'STANDARD',
+    ...(obj.children?.length ? { children: toTreeSummary(obj.children) } : {}),
+  }));
+
+// Recursively narrows an object tree to restorableNames — same set the flat
+// BACKUP path filters `objects` against below. A node not in the set is
+// dropped along with its whole subtree without descending into it: a child
+// can't be restored independently once the parent relationship above it is
+// gone, so there is nothing under a filtered-out parent worth keeping.
+const filterObjectTree = (
+  nodes: IObjectTreeSummary[],
+  restorableNames: Set<string>
+): IObjectTreeSummary[] => {
+  const result: IObjectTreeSummary[] = [];
+  for (const node of nodes) {
+    if (!restorableNames.has(node.name)) {
+      continue;
+    }
+    const children = node.children?.length ? filterObjectTree(node.children, restorableNames) : undefined;
+    result.push({ name: node.name, type: node.type, ...(children?.length ? { children } : {}) });
+  }
+  return result;
+};
+
 const getObjectListByConfigId = async (
   backupConfigId: string,
   configType: ConfigType,
   userId: string
-): Promise<{ objects: IObjectSummary[]; found: boolean }> => {
+): Promise<{ objects: IObjectSummary[]; objectTree?: IObjectTreeSummary[]; found: boolean }> => {
   const config = await getBackupConfigById(backupConfigId);
 
   // BACKUP maps to the stored type 'NORMAL' in DynamoDB.
@@ -259,10 +295,19 @@ const getObjectListByConfigId = async (
     return { objects: [], found: false };
   }
 
-  const all = flattenObjects((config.objects ?? []) as IObject[]);
+  const rawObjects = (config.objects ?? []) as IObject[];
+  const all = flattenObjects(rawObjects);
   const uniqueByName = new Map<string, IObjectSummary>();
   for (const obj of all) if (!uniqueByName.has(obj.name)) uniqueByName.set(obj.name, obj);
-  return { objects: [...uniqueByName.values()], found: true };
+  const objects = [...uniqueByName.values()];
+
+  // ARCHIVAL restore wants the object tree grid, not a flattened list —
+  // BACKUP/NORMAL behavior above (objects) is unchanged either way.
+  if (configType === 'ARCHIVAL') {
+    return { objects, objectTree: toTreeSummary(rawObjects), found: true };
+  }
+
+  return { objects, found: true };
 };
 
 /**
@@ -271,13 +316,17 @@ const getObjectListByConfigId = async (
  * restore-eligible set from the existing Object List API (salesforceObjectFilteredList,
  * apexMode: 'restore' — already applies createable/updateable on top of its
  * shared backup/archival filters, see that function).
+ *
+ * For ARCHIVAL, the same restorable-names set additionally prunes objectTree
+ * (see filterObjectTree) — a parent no longer restorable takes its whole
+ * subtree out with it, rather than leaving orphaned children behind.
  */
 const getRestoreObjectListByConfigId = async (
   backupConfigId: string,
   configType: ConfigType,
   userId: string
-): Promise<{ objects: IObjectSummary[]; found: boolean }> => {
-  const { objects, found } = await getObjectListByConfigId(backupConfigId, configType, userId);
+): Promise<{ objects: IObjectSummary[]; objectTree?: IObjectTreeSummary[]; found: boolean }> => {
+  const { objects, objectTree, found } = await getObjectListByConfigId(backupConfigId, configType, userId);
   if (!found) return { objects: [], found: false };
 
   const user = await getUser({ userId });
@@ -285,7 +334,13 @@ const getRestoreObjectListByConfigId = async (
 
   const restorable = await salesforceObjectFilteredList({ user, apexMode: 'restore' });
   const restorableNames = new Set(restorable.map((obj) => obj.name));
-  return { objects: objects.filter((obj) => restorableNames.has(obj.name)), found: true };
+  const filteredObjects = objects.filter((obj) => restorableNames.has(obj.name));
+
+  if (configType === 'ARCHIVAL' && objectTree) {
+    return { objects: filteredObjects, objectTree: filterObjectTree(objectTree, restorableNames), found: true };
+  }
+
+  return { objects: filteredObjects, found: true };
 };
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
