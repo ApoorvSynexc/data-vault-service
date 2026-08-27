@@ -1,4 +1,5 @@
 import { salesforceRequest } from "..";
+import { STANDARD_OBJECT_LIST } from "../../../../constant";
 import { logger } from "../../../../middlewares";
 import { IUser } from "../../../../models";
 import { getCrmById } from "../../../crm";
@@ -147,6 +148,8 @@ export const salesforceObjectFilteredList = async (params: ISalesforceObjectList
         if(settings && settings.standardObjects.length) {
             const standardObjectNames = settings.standardObjects.map(s => s.name);
             standardObjects.push(...standardObjectNames);
+        } else {
+            standardObjects.push(...STANDARD_OBJECT_LIST);
         }
 
         const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
