@@ -9,10 +9,11 @@ import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDecryptedDestinationConfig, getDestinationById } from '../destination';
 import { getUser, getDecryptedCrmCredential } from '../user';
-import { updateRestore } from '../restore';
+import { updateRestore, getRestoreById } from '../restore';
 import { httpRequest } from '../../utils/http-request';
 import { SalesforceTokens } from '../third-party/salesforce';
 import { ensureRestoreTrackingFields } from '../third-party/salesforce/restore-fields';
+import { provisionRestorePermissionSet } from '../third-party/salesforce/restore-permission-set';
 import { logger } from '../../middlewares';
 
 const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
@@ -351,14 +352,34 @@ const failAllObjects = async (restorejob: IRestoreJob, errorMessage: string): Pr
   });
 };
 
-// Stage 1 of the restore workflow: ensure the 3 Data Craft restore-tracking
-// custom fields exist on every restore object, via Metadata API (Tooling API
-// rejects field creation in production orgs). Runs one object at a time in
-// isolation (Promise.allSettled) so a Metadata API failure on one object
-// (bad permissions, a name collision, an org limit) never blocks the rest —
-// each object gets its own persisted SUCCESS/FAILED + real error message.
-// Returns only the object names that succeeded — callers must not carry a
-// FAILED object into any later stage.
+// Marks the given objects FAILED with the same reason, in one write.
+const failObjects = async (restoreJobId: string, objectNames: string[], errorMessage: string): Promise<void> => {
+  if (!objectNames.length) {
+    return;
+  }
+  await updateRestoreJob({
+    restoreJobId,
+    objects: objectNames.map((name) => ({ name, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage })),
+  });
+};
+
+// Stage 1 of the restore workflow (RESTORN FIELD JOB): ensure the 3 Data Craft
+// restore-tracking custom fields exist on every restore object, then grant
+// the restore Permission Set object/field access for those same objects and
+// assign it to the destination org's connected user. Both parts run via
+// Metadata API — Tooling API rejects field creation in production orgs, and a
+// Permission Set deploy merges additively rather than needing a fetch/patch
+// dance to preserve existing permissions.
+//
+// An object only reaches RESTORN FIELD JOB SUCCESS once BOTH steps have
+// completed for it — the Permission Set deploy is what actually makes the new
+// fields usable, so "fields created but no access granted" is not a success.
+// Field creation is isolated per object (Promise.allSettled); the Permission
+// Set deploy is one Salesforce transaction covering every object whose fields
+// were created, so a failure there fails all of them together — that's
+// Salesforce's own deploy atomicity, not a design choice to skip isolation.
+// Returns only the object names that fully succeeded — callers must not carry
+// a FAILED object into any later stage.
 const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededObjectNames: string[] }> => {
   await Promise.all([
     updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_FIELD_JOB_STATUS.inProgress }),
@@ -388,49 +409,105 @@ const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededO
     customUrl: user.customUrl,
   };
 
-  const results = await Promise.allSettled(
+  const fieldResults = await Promise.allSettled(
     restorejob.destination.objects.map((object) =>
       ensureRestoreTrackingFields(instanceUrl, tokens, object.name)
     )
   );
 
-  const succeededObjectNames: string[] = [];
-  const objectUpdates: UpdateRestoreObjectParams[] = results.map((result, index) => {
+  const fieldsCreatedObjectNames: string[] = [];
+  const fieldFailures: UpdateRestoreObjectParams[] = [];
+  fieldResults.forEach((result, index) => {
     const objectName = restorejob.destination.objects[index].name;
     if (result.status === 'fulfilled') {
-      succeededObjectNames.push(objectName);
-      return { name: objectName, status: RESTORE_FIELD_JOB_STATUS.success };
+      fieldsCreatedObjectNames.push(objectName);
+      return;
     }
     const error: any = result.reason;
     logger.error(
       `[restore-field-job] field creation failed | restoreJobId=${restorejob.restoreJobId} object=${objectName} err:${error?.message ?? error}`
     );
-    return {
+    fieldFailures.push({
       name: objectName,
       status: RESTORE_FIELD_JOB_STATUS.failed,
       errorMessage: error?.message ?? String(error),
-    };
+    });
   });
 
-  await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, objects: objectUpdates });
+  if (fieldFailures.length) {
+    await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, objects: fieldFailures });
+  }
 
-  return { succeededObjectNames };
+  if (!fieldsCreatedObjectNames.length) {
+    return { succeededObjectNames: [] };
+  }
+
+  const salesforceUserId = user.crmProfile?.userId;
+  if (!salesforceUserId) {
+    await failObjects(restorejob.restoreJobId, fieldsCreatedObjectNames, 'destination_salesforce_user_id_missing');
+    return { succeededObjectNames: [] };
+  }
+
+  try {
+    await provisionRestorePermissionSet(instanceUrl, tokens, salesforceUserId, fieldsCreatedObjectNames);
+  } catch (error: any) {
+    const message = error?.message ?? String(error);
+    logger.error(
+      `[restore-field-job] permission set provisioning failed | restoreJobId=${restorejob.restoreJobId} objects=${fieldsCreatedObjectNames.join(',')} err:${message}`
+    );
+    await failObjects(restorejob.restoreJobId, fieldsCreatedObjectNames, message);
+    return { succeededObjectNames: [] };
+  }
+
+  await updateRestoreJob({
+    restoreJobId: restorejob.restoreJobId,
+    objects: fieldsCreatedObjectNames.map((name) => ({ name, status: RESTORE_FIELD_JOB_STATUS.success })),
+  });
+
+  return { succeededObjectNames: fieldsCreatedObjectNames };
 };
 
+// The RESTORN FIELD JOB stage (custom fields + Permission Set) — and every
+// stage layered on top of it (backup run, EMR/sync-schema, ingest) — only
+// applies to a BACKUP-sourced restore. An ARCHIVAL restore's destination
+// objects were never part of a live backup config, so there's no "restore
+// tracking field" story for them; those restores skip straight to the
+// pre-existing backup-service handoff, exactly as they did before this stage
+// existed. 'NORMAL' is accepted alongside 'BACKUP' since that's the synonym
+// used for the same concept elsewhere in this codebase (BACKUP_TYPE.normal).
+const RESTORE_FIELD_JOB_CONFIG_TYPES = new Set(['BACKUP', 'NORMAL']);
+
 const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
-  const { succeededObjectNames } = await runRestoreFieldJob(restorejob);
+  const restore = await getRestoreById(restorejob.restoreId);
+  const configType = restore?.source?.configType;
+  const runsFieldJob = !!configType && RESTORE_FIELD_JOB_CONFIG_TYPES.has(configType);
 
-  // Objects that failed the field job stop here — they never reach
-  // backup-service, and are already persisted as RESTORN FIELD JOB FAILED.
-  const succeededObjects = restorejob.destination.objects.filter((object) =>
-    succeededObjectNames.includes(object.name)
-  );
+  let succeededObjects = restorejob.destination.objects;
 
-  if (!succeededObjects.length) {
-    logger.error(
-      `[restore-field-job] every object failed — nothing to hand off to backup-service | restoreJobId=${restorejob.restoreJobId}`
+  if (runsFieldJob) {
+    const { succeededObjectNames } = await runRestoreFieldJob(restorejob);
+
+    // Objects that failed the field job stop here — they never reach
+    // backup-service, and are already persisted as RESTORN FIELD JOB FAILED.
+    succeededObjects = restorejob.destination.objects.filter((object) =>
+      succeededObjectNames.includes(object.name)
     );
-    return;
+
+    if (!succeededObjects.length) {
+      logger.error(
+        `[restore-field-job] every object failed — nothing to hand off to backup-service | restoreJobId=${restorejob.restoreJobId}`
+      );
+      const errorMessage = 'restore_field_job_failed_for_every_object';
+      await Promise.all([
+        updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage }),
+        updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage }),
+      ]);
+      return;
+    }
+  } else {
+    logger.info(
+      `[restore-field-job] skipped — configType=${configType ?? 'unknown'} is not BACKUP/NORMAL | restoreJobId=${restorejob.restoreJobId}`
+    );
   }
 
   let result;
