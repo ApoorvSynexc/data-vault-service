@@ -4,6 +4,7 @@ import { IBackupConfig } from "../models";
 import { salesforceMetadataHandler } from '../services/third-party/salesforce/metadata/index';
 import { getBackupConfigsInBatches, getCrmById, getUser, initalizePayloadTransform, triggerBackupJob } from "../services";
 import { ISalesforceMetadataHandler } from "../services/third-party/salesforce/metadata/common";
+import { BACKUP_STATUS } from '../constant';
 
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
@@ -96,6 +97,10 @@ const runEmrJob = async () => {
       async (configs) => {
         for (let index = 0; index < configs.length; index++) {
           const config = configs[index];
+
+          if ([BACKUP_STATUS.pending].includes(config.backupStatus ?? '')) {
+            continue;
+          }
 
           // Check realtime configs for metadata comparison
           if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
