@@ -18,17 +18,25 @@ export const RESTORE_TRACKING_FIELDS: IRestoreTrackingField[] = [
 // DC_External_Id__c doubles as the upsert key for the ingest stage, so it's the
 // only one of the three marked externalId/unique.
 const fieldXml = (field: IRestoreTrackingField): string =>
-  `<?xml version="1.0" encoding="UTF-8"?>\n` +
-  `<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
-  `    <fullName>${field.apiName}</fullName>\n` +
-  `    <label>${field.label}</label>\n` +
-  `    <length>255</length>\n` +
-  `    <required>false</required>\n` +
+  `    <fields>\n` +
+  `        <fullName>${field.apiName}</fullName>\n` +
+  `        <label>${field.label}</label>\n` +
+  `        <length>255</length>\n` +
+  `        <required>false</required>\n` +
   (field.apiName === 'DC_External_Id__c'
-    ? `    <externalId>true</externalId>\n    <unique>true</unique>\n`
+    ? `        <externalId>true</externalId>\n        <unique>true</unique>\n`
     : '') +
-  `    <type>Text</type>\n` +
-  `</CustomField>`;
+  `        <type>Text</type>\n` +
+  `    </fields>`;
+
+// MDAPI zip format has no per-field decomposed files — new fields on an
+// existing object are declared as <fields> blocks inside a single
+// objects/<Object>.object, and only the new fields need to be listed.
+const objectXml = (fields: IRestoreTrackingField[]): string =>
+  `<?xml version="1.0" encoding="UTF-8"?>\n` +
+  `<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+  `${fields.map(fieldXml).join('\n')}\n` +
+  `</CustomObject>`;
 
 const describeFieldNames = async (
   instanceUrl: string,
@@ -62,10 +70,12 @@ export const ensureRestoreTrackingFields = async (
   }
 
   await deployMetadata(instanceUrl, tokens, {
-    files: missing.map((field) => ({
-      path: `objects/${objectApiName}/fields/${field.apiName}.field-meta.xml`,
-      content: fieldXml(field),
-    })),
+    files: [
+      {
+        path: `objects/${objectApiName}.object`,
+        content: objectXml(missing),
+      },
+    ],
     packageXml: buildPackageXml(
       'CustomField',
       missing.map((field) => `${objectApiName}.${field.apiName}`)
