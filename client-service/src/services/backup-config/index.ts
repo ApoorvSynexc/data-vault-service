@@ -9,7 +9,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS } from '../../constant';
-import { IBackupConfig, IObject, IScheduleConfig, ITriggerResult, IUpcomingJob } from '../../models';
+import { IBackupConfig, IObject, IScheduleConfig, ITriggerResult, IUpcomingJob, IDeletedRecordsCacheEntry } from '../../models';
 import { toSlug, buildSlug } from '../../utils/helper';
 import { logger } from '../../middlewares';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
@@ -49,6 +49,7 @@ interface UpdateBackupConfigParams {
   type?: string;
   status?: string;
   upcomingJob?: IUpcomingJob;
+  deletedRecordsCache?: Record<string, IDeletedRecordsCacheEntry>;
 }
 
 const createBackupConfig = async (params: CreateBackupConfigParams): Promise<IBackupConfig> => {
@@ -260,6 +261,9 @@ const updateBackupConfig = async (
   }
   if (params.upcomingJob !== undefined) {
     updates.upcomingJob = params.upcomingJob;
+  }
+  if (params.deletedRecordsCache !== undefined) {
+    updates.deletedRecordsCache = params.deletedRecordsCache;
   }
 
   const setExpr = Object.keys(updates)

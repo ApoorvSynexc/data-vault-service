@@ -86,6 +86,18 @@ export interface ITriggerResult {
   needsRecoveryRecordId?: boolean;
 }
 
+// One object's cached first-block "deleted records" Athena execution — see
+// restore-retrieve's retrieveRecords. fingerprint pins it to the exact
+// columnNames the query was built with, so a differently-shaped request never
+// replays another request's columns. Cleared wholesale on the next successful
+// compression (updateSparkJobStatusHandler), since that's when the delta
+// table this query scans actually changes.
+export interface IDeletedRecordsCacheEntry {
+  fingerprint: string;
+  queryExecutionId: string;
+  cachedAt: string;
+}
+
 export interface IBackupConfig {
   backupConfigId: string; // PK
   userId: string; // GSI: userId-index
@@ -111,6 +123,8 @@ export interface IBackupConfig {
   triggerResults?: ITriggerResult[];
   createdAt: string;
   updatedAt: string;
+  // Keyed by objectApiName. See IDeletedRecordsCacheEntry.
+  deletedRecordsCache?: Record<string, IDeletedRecordsCacheEntry>;
 
   // Additional
   crm?: object;
