@@ -466,13 +466,13 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
       return makeResponse(req, res, 400, false, 'job_already_invoked');
     }
 
-    await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup' });
+    await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup', lastUpdatedAt: backupConfig.lastBackupAt });
     await deleteAwsEventScheduler(buildBackupScheduleName(backupConfig.backupConfigId));
     return makeResponse(req, res, 200, true, 'fetch');
   }
 
   if (backupConfig.schedule === SCHEDULE_MODE.schedule && backupConfig.scheduleConfig?.type === 'INCREMENTAL') {
-    await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup' });
+    await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup', lastUpdatedAt: backupConfig.lastBackupAt });
     const upcomingJob = {
       skip: true,
       skipReason: 'This backup was started manually, so its next automatic run has been skipped to avoid running it twice',
