@@ -99,7 +99,7 @@ const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<v
         return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    const result = await previewRecords({ user, objectName: name, fieldNames, soql });
+    const result = await previewRecords({ user, objectName: name, fieldNames, soql, limit: 50 });
     makeResponse(req, res, 200, true, 'fetch', result);
 };
 

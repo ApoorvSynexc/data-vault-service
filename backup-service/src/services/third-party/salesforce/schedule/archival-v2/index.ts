@@ -438,13 +438,13 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
       s3Urls,
     });
 
-    await updateArchivalObject({
-      backupJobId,
-      object: {
-        id: object.id,
-        status: OBJECT_STATUS.completed,
-      },
-    });
+    // await updateArchivalObject({
+    //   backupJobId,
+    //   object: {
+    //     id: object.id,
+    //     status: OBJECT_STATUS.completed,
+    //   },
+    // });
   } catch (error: any) {
     logger.error(
       `Archival job ${backupJobId}: failed to delete ${object.name} - ${error?.message}`
