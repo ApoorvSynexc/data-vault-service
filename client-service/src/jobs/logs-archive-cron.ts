@@ -75,12 +75,4 @@ const runLogsArchive = async (): Promise<void> => {
   logger.info(`[LOGS-CRON] tick END | archived ${archived}/${folders.length} folder(s)`);
 };
 
-const startLogsArchiveCron = async() => {
-  // 3:00 AM server time, every day
-  cron.schedule('0 3 * * *', async () => {
-    await runLogsArchive();
-  });
-  logger.info('[LOGS-CRON] cron registered | expression=0 3 * * *');
-};
-
-export { startLogsArchiveCron };
+export { runLogsArchive };
