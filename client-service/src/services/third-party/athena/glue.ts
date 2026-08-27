@@ -1,5 +1,5 @@
 import { GlueClient, GetTableCommand, EntityNotFoundException } from '@aws-sdk/client-glue';
-import { AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, NODE_ENV } from '../../../constant';
+import { AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { IAwsCredentials } from '../../../models';
 
@@ -7,10 +7,10 @@ const awsCredentials: IAwsCredentials = {
   region: AWS_REGION,
 };
 
-if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+if (AWS_ACCESS_KEY && AWS_SECRET_KEY) {
   awsCredentials.credentials = {
-    accessKeyId: AWS_ACCESS_KEY_ID,
-    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+    accessKeyId: AWS_ACCESS_KEY,
+    secretAccessKey: AWS_SECRET_KEY,
   };
 }
 
