@@ -158,12 +158,19 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
 
 /**
  * GET /get-objectlist-by-configid?backupConfigId=&configType=
- * Returns the objects[] the user selected when creating the config, narrowed to
+ * Returns the objects the user selected when creating the config, narrowed to
  * what a restore can actually write back to — the existing Object List API
  * (salesforceObjectFilteredList, apexMode: 'restore') already filters that set
  * down to createable && updateable on top of its shared backup/archival filters.
  * configType is validated against the config's stored type to prevent cross-type access
  * (e.g. a NORMAL configType cannot return an ARCHIVAL config's objects).
+ *
+ * BACKUP/NORMAL: flat list (unchanged) — { name, type }[].
+ * ARCHIVAL: the object tree grid instead — { name, type, children? }[] —
+ * pruned to restorable objects with filterObjectTree's parent-takes-subtree
+ * rule (a parent no longer restorable removes its whole subtree, not just
+ * itself).
+ *
  * Returns not_exist if the config doesn't exist, belongs to another user, or its type mismatches.
  */
 const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -180,7 +187,7 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
     return;
   }
 
-  const { objects, found } = await getRestoreObjectListByConfigId(
+  const { objects, objectTree, found } = await getRestoreObjectListByConfigId(
     backupConfigId,
     configType as ConfigType,
     userId
@@ -191,7 +198,7 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
     return;
   }
 
-  makeResponse(req, res, 200, true, 'fetch', objects);
+  makeResponse(req, res, 200, true, 'fetch', configType === 'ARCHIVAL' ? objectTree : objects);
 };
 
 /**
@@ -1019,6 +1026,29 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   );
   if (!configTypeMatches) {
     makeResponse(req, res, 400, false, 'invalid_config_type');
+    return;
+  }
+
+  // includeChilds only means something for a BACKUP/NORMAL-sourced restore —
+  // an ARCHIVAL restore's object tree already states its own child hierarchy
+  // explicitly, so this would be redundant (or contradictory) there.
+  if (body.conflict?.edgeCases?.includeChilds && body.source.configType === 'ARCHIVAL') {
+    makeResponse(req, res, 400, false, 'include_childs_not_supported_for_archival');
+    return;
+  }
+
+  // ARCHIVAL restores must express their scope as the object tree (root
+  // filters/recordIds + recursive children) — every other scope type assumes
+  // a flat, independently-filterable object list, which doesn't fit how an
+  // archival hierarchy is restored. Joi validates OBJECT_TREE's own shape;
+  // this is the cross-check against source.configType Joi can't reach.
+  const restoreScopeType = body.selection?.restoreScope?.type;
+  if (body.source.configType === 'ARCHIVAL' && restoreScopeType !== 'OBJECT_TREE') {
+    makeResponse(req, res, 400, false, 'archival_restore_requires_object_tree_scope');
+    return;
+  }
+  if (body.source.configType !== 'ARCHIVAL' && restoreScopeType === 'OBJECT_TREE') {
+    makeResponse(req, res, 400, false, 'object_tree_scope_requires_archival');
     return;
   }
 

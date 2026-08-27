@@ -3,10 +3,17 @@ import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 import { DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_TYPE, STATUS, WEEK_DAY } from '../../../constant';
 
-const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'INSERTS_ONLY', 'CHANGE_SINCE', 'BULK_CSV'];
+// OBJECT_TREE is ARCHIVAL-only (enforced in createRestoreHandler, not here —
+// see the cross-check note above restoreScopeSchema's objectTree field).
+const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'INSERTS_ONLY', 'CHANGE_SINCE', 'BULK_CSV', 'OBJECT_TREE'];
 const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
 const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT'];
 const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP'];
+// MASTER_DETAIL_ONLY: Include Master-Detail Child Objects
+// REQUIRED_AND_MASTER_DETAIL: Include Required AND Master-Detail Child Objects
+// ALL_CHILDREN: Include All Child Objects
+// SKIP_CHILDREN: Skip Child Objects
+const RESTORE_INCLUDE_CHILDS = ['MASTER_DETAIL_ONLY', 'REQUIRED_AND_MASTER_DETAIL', 'ALL_CHILDREN', 'SKIP_CHILDREN'];
 const RESTORE_CONFIG_TYPE = ['BACKUP', 'ARCHIVAL'];
 // Each configType has its own restore type set — see the configType-conditional
 // `type` field below. BACKUP never accepts DELETED_BETWEEN; ARCHIVAL never accepts CHANGED_BETWEEN.
@@ -62,6 +69,26 @@ const scopeFilterSchema = Joi.object({
   filter: filtersSchema.required(),
 });
 
+// ARCHIVAL restore object tree — mirrors archival-config's own recursive
+// objectChildrenSchema (Joi.link) pattern, deliberately narrower: a live
+// archival config lets every node carry field/condition, but a child here is
+// pure hierarchy (name + children only) — no filters, no record selection.
+const archivalChildObjectSchema = Joi.object({
+  name: Joi.string().required(),
+  children: Joi.array().items(Joi.link('#archivalChildObject')).optional(),
+}).id('archivalChildObject');
+
+// The root reuses this codebase's own existing filter (filtersSchema, same
+// AND/OR/SOQL shape restoreScope's FILTER type already validates) and record
+// selection (recordIds, same naming scopeRecordSchema already uses) — only
+// the root carries either; every descendant is an archivalChildObjectSchema.
+const archivalObjectTreeSchema = Joi.object({
+  name: Joi.string().required(),
+  filters: filtersSchema.optional(),
+  recordIds: Joi.array().items(Joi.string()).min(1).optional(),
+  children: Joi.array().items(archivalChildObjectSchema).optional(),
+});
+
 const restoreScopeSchema = Joi.object({
   type: Joi.string()
     .valid(...RESTORE_SCOPE_TYPE)
@@ -104,6 +131,15 @@ const restoreScopeSchema = Joi.object({
   insertsOnly: Joi.when('type', {
     is: 'INSERTS_ONLY',
     then: Joi.boolean().required(),
+    otherwise: Joi.forbidden(),
+  }),
+  // ARCHIVAL-only in practice — createRestoreHandler cross-checks type
+  // 'OBJECT_TREE' against source.configType === 'ARCHIVAL' (and rejects it
+  // for BACKUP), since Joi.when here can't reach across into the sibling
+  // `source` branch of the top-level createRestoreValidation schema.
+  objectTree: Joi.when('type', {
+    is: 'OBJECT_TREE',
+    then: archivalObjectTreeSchema.required(),
     otherwise: Joi.forbidden(),
   }),
 });
@@ -175,6 +211,12 @@ const edgeCasesSchema = Joi.object({
   parentMissing: Joi.string().allow('').optional(),
   recordTypeMissing: recordTypeMissingSchema.optional(),
   missingRequiredFieldValue: missingRequiredFieldValueSchema.optional(),
+  // BACKUP/NORMAL-sourced restores only — cross-checked against
+  // source.configType in createRestoreHandler, not here (Joi refs can't
+  // cleanly reach across the source/conflict branches of this schema).
+  includeChilds: Joi.string()
+    .valid(...RESTORE_INCLUDE_CHILDS)
+    .optional(),
 });
 
 const mergeRuleFieldSchema = Joi.object({
