@@ -16,11 +16,17 @@ import { SCHEMA_KIND_FILE } from '../../../utils/helper';
 import { listS3Prefixes } from '../../destination/s3';
 import { getStoredEntries } from '../salesforce/metadata/common';
 
+// constant/index.ts builds these with String(process.env.X), so an unset var
+// reads back as the literal string "undefined" rather than undefined itself —
+// excluded here so a deployed environment without these set doesn't send AWS
+// a literal accessKeyId of "undefined" (a real, previously-hit QA bug).
+const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
+
 const awsCredentials: IAwsCredentials = {
   region: AWS_REGION,
 };
 
-if (AWS_ACCESS_KEY && AWS_SECRET_KEY) {
+if (isSet(AWS_ACCESS_KEY) && isSet(AWS_SECRET_KEY)) {
   awsCredentials.credentials = {
     accessKeyId: AWS_ACCESS_KEY,
     secretAccessKey: AWS_SECRET_KEY,

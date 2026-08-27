@@ -6,23 +6,24 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import {
-  AWS_REGION,
-  AWS_ACCESS_KEY_ID,
-  AWS_SECRET_ACCESS_KEY,
-  AWS_ATHENA_ROLE_ARN,
-} from '../../../constant';
+import { AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { IAwsCredentials } from '../../../models';
+
+// constant/index.ts builds these with String(process.env.X), so an unset var
+// reads back as the literal string "undefined" rather than undefined itself —
+// excluded here so a deployed environment without these set doesn't send AWS
+// a literal accessKeyId of "undefined" (a real, previously-hit QA bug).
+const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
 
 const awsCredentials: IAwsCredentials = {
   region: AWS_REGION,
 };
 
-if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+if (isSet(AWS_ACCESS_KEY) && isSet(AWS_SECRET_KEY)) {
   awsCredentials.credentials = {
-    accessKeyId: AWS_ACCESS_KEY_ID,
-    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+    accessKeyId: AWS_ACCESS_KEY,
+    secretAccessKey: AWS_SECRET_KEY,
   };
 }
 
