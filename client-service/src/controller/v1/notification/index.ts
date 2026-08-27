@@ -2,6 +2,7 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   getNotificationById,
   getNotificationsByUser,
+  getUnreadNotificationCount,
   markAllNotificationsAsRead,
   updateNotification,
 } from '../../../services';
@@ -59,8 +60,16 @@ const markAllAsReadHandler = async (req: IRequest, res: IResponse): Promise<void
   makeResponse(req, res, 200, true, 'update', { updatedCount });
 };
 
+// GET /notification/unread-count — count of the caller's UNREAD notifications.
+const getUnreadCountHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const userId = req.user!.userId;
+  const count = await getUnreadNotificationCount(userId);
+  makeResponse(req, res, 200, true, 'fetch', { count });
+};
+
 export const notificationController = wrapController({
   listNotificationHandler,
   updateNotificationStatusHandler,
   markAllAsReadHandler,
+  getUnreadCountHandler,
 });

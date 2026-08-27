@@ -150,10 +150,38 @@ const markAllNotificationsAsRead = async (userId: string): Promise<number> => {
   return updatedCount;
 };
 
+// Select: 'COUNT' avoids paying for item payloads — only Count/ScannedCount come
+// back per page. Still has to walk every page (DynamoDB paginates internally at
+// ~1MB regardless of Limit), since Count only reflects the current page.
+const getUnreadNotificationCount = async (userId: string): Promise<number> => {
+  let count = 0;
+  let exclusiveStartKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: NOTIFICATION_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
+        FilterExpression: '#status = :status',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':userId': userId, ':status': NOTIFICATION_STATUS.unread },
+        Select: 'COUNT',
+        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+      })
+    );
+    count += result.Count ?? 0;
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return count;
+};
+
 export {
   createNotification,
   getNotificationById,
   updateNotification,
   getNotificationsByUser,
   markAllNotificationsAsRead,
+  getUnreadNotificationCount,
 };

@@ -38,8 +38,8 @@ const objectSchema = Joi.object({
   fieldApiName: Joi.string().optional(),
   condition: conditionSchema.optional(),
   type: Joi.string().optional(),
-  completedRecordCount: Joi.string().optional(),
-  sizeInBytes: Joi.string().optional(),
+  completedRecordCount: Joi.number().optional(),
+  sizeInBytes: Joi.number().optional(),
   field: Joi.array().items(objectFieldSchema).required(),
   children: Joi.array().items(Joi.link('#object')).optional(),
 }).id('object');

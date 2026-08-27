@@ -4,6 +4,7 @@ import { notificationController } from '../../controller';
 const router = Router();
 
 router.get('/list', notificationController.listNotificationHandler);
+router.get('/unread-count', notificationController.getUnreadCountHandler);
 router.put('/', notificationController.updateNotificationStatusHandler);
 router.put('/mark-all-read', notificationController.markAllAsReadHandler);
 
