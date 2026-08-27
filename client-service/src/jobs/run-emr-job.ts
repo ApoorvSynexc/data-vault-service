@@ -1,9 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
-import { getBackupConfigsInBatches, getCrmById, getUser } from '../services';
+import { logger } from "../middlewares";
+import { IBackupConfig } from "../models";
 import { salesforceMetadataHandler } from '../services/third-party/salesforce/metadata/index';
-import { logger } from '../middlewares';
-import { IBackupConfig } from '../models';
-import { ISalesforceMetadataHandler } from '../services/third-party/salesforce/metadata/common';
+import { getBackupConfigsInBatches, getCrmById, getUser, initalizePayloadTransform } from "../services";
+import { ISalesforceMetadataHandler } from "../services/third-party/salesforce/metadata/common";
+
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
   'fields',
@@ -64,40 +65,25 @@ const runMetadataComparisonForConfig = async (
   );
 };
 
-const metadataComparisonJob = async (): Promise<void> => {
-  const tickStartMs = Date.now();
-  const tickStartIso = new Date(tickStartMs).toISOString();
-  logger.info(`[metadata comparison - CRON] tick START | now=${tickStartIso}`);
-
-  let configCount = 0;
-
-  try {
-    // REALTIME + NORMAL only — ARCHIVAL configs and scheduled (non-realtime)
-    // configs get their metadata refreshed by the scheduled backup job itself.
-    await getBackupConfigsInBatches(
-      async (configs) => {
-        configCount += configs.length;
-        for (const config of configs) {
-          try {
-            await runMetadataComparisonForConfig(config);
-          } catch (error) {
-            logger.error(
-              `[metadata comparison - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`
-            );
-          }
-        }
-      },
-      { type: 'NORMAL', schedule: 'REALTIME' }
-    );
-  } catch (error) {
-    logger.error(
-      `[metadata comparison - CRON] tick threw error: ${(error as Error)?.message ?? String(error)}`
-    );
-  } finally {
-    logger.info(
-      `[metadata comparison - CRON] tick END | durationMs=${Date.now() - tickStartMs} configs=${configCount}`
-    );
-  }
-};
-
-export { metadataComparisonJob };
+const runEmrJob = async() => {
+    try {
+        await getBackupConfigsInBatches(
+            async (configs) => {
+                for (let index = 0; index < configs.length; index++) {
+                    const config = configs[index];
+                    if(config.type === 'REALTIME'){
+                        
+                    } else {
+                        try {
+                            await initalizePayloadTransform(config.backupConfigId);
+                        } catch (error) {
+                            logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+                        }
+                    }
+                }
+            },
+        );
+    } catch (error) {
+        logger.error(`[emr job - CRON] tick threw error: ${(error as Error)?.message ?? String(error)}`);
+    }
+}
