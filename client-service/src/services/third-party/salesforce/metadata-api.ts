@@ -36,6 +36,13 @@ export const deployMetadata = async (
   }
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
 
+  // ponytail: temporary diagnostics for the "named in package.xml but not
+  // found in zipped directory" failures — remove once the cause is confirmed
+  // from real deploy output (see restore-fields.ts callers).
+  console.log('[deployMetadata] zip entries:', Object.keys(zip.files));
+  console.log('[deployMetadata] package.xml:\n' + packageXml);
+  console.log('[deployMetadata] zip byte length:', zipBuffer.length);
+
   const deployOptions = JSON.stringify({
     deployOptions: {
       allowMissingFiles,
