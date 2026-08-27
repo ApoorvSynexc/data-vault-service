@@ -42,6 +42,7 @@ interface UpdateBackupConfigParams {
   destinationId?: string;
   backupStatus?: string;
   lastBackupAt?: string;
+  lastSchemaSyncAt?: string;
   lastEventId?: string;
   schemaChange?: boolean;
   sizeInBytes?: number;
@@ -231,6 +232,9 @@ const updateBackupConfig = async (
   }
   if (params.lastBackupAt !== undefined) {
     updates.lastBackupAt = params.lastBackupAt;
+  }
+  if (params.lastSchemaSyncAt !== undefined) {
+    updates.lastSchemaSyncAt = params.lastSchemaSyncAt;
   }
   if (params.lastEventId !== undefined) {
     updates.lastEventId = params.lastEventId;

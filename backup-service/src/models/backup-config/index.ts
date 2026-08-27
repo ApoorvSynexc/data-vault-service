@@ -33,6 +33,7 @@ export interface IBackupConfig {
   status: string;
   backupStatus: string;
   lastBackupAt?: string;
+  lastSchemaSyncAt?: string;
   lastEventId?: string;
   schemaChange?: boolean;
   uploadedRecords?: number;

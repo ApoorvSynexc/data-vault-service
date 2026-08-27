@@ -166,7 +166,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      await triggerBackupJob({ user, config, type: 'backup' });
+      await triggerBackupJob({ user, config, type: 'backup', lastSchemaSyncAt: true });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
       const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
