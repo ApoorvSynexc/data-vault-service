@@ -51,7 +51,14 @@ const runEnsureCompressionTables = async (params: {
 
   const results = await Promise.allSettled(
     objectNames.map(async (objectName) => {
-      const tableParams = { crmId, crmName, backupConfigId, objectName, destConfig };
+      const tableParams = {
+        crmId,
+        crmName,
+        backupConfigId,
+        objectName,
+        destConfig,
+        policyConfigType: (isArchival ? 'archival' : 'backup') as 'backup' | 'archival',
+      };
       // All independent; a missing/not-yet-written dataset must not block the others.
       const tasks: [string, Promise<boolean>][] = [
         ['hudi', ensureHudiCurrentStateTable(tableParams)],

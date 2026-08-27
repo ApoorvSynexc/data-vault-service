@@ -144,7 +144,6 @@ export interface IRestoreMergeRule {
 export interface IRestoreConflict {
   restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
   isIncludeChild?: boolean;
-  isIncludeParent?: boolean;
   relationshipDepth?: number;
   edgeCases?: IRestoreEdgeCases;
   mergeRule?: IRestoreMergeRule;

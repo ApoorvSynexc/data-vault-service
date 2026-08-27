@@ -12,8 +12,9 @@ import {
 import { AWS_REGION, AWS_GLUE_ACCESS_KEY, AWS_GLUE_SECRET_KEY, NODE_ENV } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
-import { readHudiTableSchema } from './hudi-schema';
+import { SCHEMA_KIND_FILE } from '../../../utils/helper';
 import { listS3Prefixes } from '../../destination/s3';
+import { getStoredEntries } from '../salesforce/metadata/common';
 
 const glue = new GlueClient({
   region: AWS_REGION,
@@ -83,8 +84,11 @@ export interface IGlueColumnDef {
   comment?: string;
 }
 
-const HUDI_STORAGE_DESCRIPTOR_BASE = {
-  InputFormat: 'org.apache.hudi.hadoop.HoodieParquetInputFormat',
+// Plain Parquet — both the current-state and delta tables are read as ordinary
+// Parquet files, not through the Hudi connector (no HoodieParquetInputFormat,
+// no athena_enable_native_hudi_connector_implementation / hudi.* table params).
+const PARQUET_STORAGE_DESCRIPTOR_BASE = {
+  InputFormat: 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',
   OutputFormat: 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
   SerdeInfo: {
     SerializationLibrary: 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe',
@@ -93,10 +97,63 @@ const HUDI_STORAGE_DESCRIPTOR_BASE = {
   NumberOfBuckets: -1,
 } as const;
 
-// Table parameter keys for Athena performance optimizations
-const NATIVE_HUDI_CONNECTOR_PARAM = 'athena_enable_native_hudi_connector_implementation';
-const HUDI_METADATA_LISTING_PARAM = 'hudi.metadata-listing-enabled';
-const HUDI_USE_METADATA_TABLE_PARAM = 'hudi.use.metadata.table';
+// Fixed schema for every object's delta table — same columns regardless of the
+// Salesforce object, so there is nothing to derive from S3.
+const DELTA_TABLE_COLUMNS: IGlueColumnDef[] = [
+  { name: 'delta_id', type: 'string' },
+  { name: 'change_time', type: 'string' },
+  { name: 'record_id', type: 'string' },
+  { name: 'change_type', type: 'string' },
+  { name: 'change_data', type: 'string' },
+  { name: 'is_schema_change', type: 'boolean' },
+  { name: 'schema_change_type', type: 'string' },
+  { name: 'schema_field_api_name', type: 'string' },
+];
+
+// Same key formula as metadata/field/index.ts:buildS3Key (metadataType 'fields')
+// — that module is the writer, this just needs to land on the identical key.
+export const buildMainFieldSchemaKey = (identity: {
+  crmName: string;
+  crmId: string;
+  policyConfigType: 'backup' | 'archival';
+  backupConfigId: string;
+  objectName: string;
+}): string => {
+  const { crmName, crmId, policyConfigType, backupConfigId, objectName } = identity;
+  return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${objectName}/fields/${SCHEMA_KIND_FILE.fields}`;
+};
+
+// Picks the 'main' entry out of the stored schema-version history — never the
+// latest 'changes' entry — and types every column as string (no Salesforce
+// type inference). Pure: exported for the self-check below.
+export const pickMainTableColumns = (
+  entries: Array<{ sourceType?: string; context: Array<{ name: string }> }>,
+  key: string
+): IGlueColumnDef[] => {
+  const mainEntry = entries.find((entry) => entry.sourceType === 'main');
+  if (!mainEntry) {
+    throw new Error(`no stored 'main' field schema under ${key}`);
+  }
+  return mainEntry.context.map((field) => ({ name: field.name, type: 'string' }));
+};
+
+// The current-state table's columns come from the client's S3-stored field
+// schema instead — one entry per schema version, tagged sourceType 'main' |
+// 'changes' (see metadata/field/index.ts:schemaHandler, the writer).
+const resolveMainTableColumns = async (
+  destConfig: IDestinationConfig,
+  identity: {
+    crmName: string;
+    crmId: string;
+    policyConfigType: 'backup' | 'archival';
+    backupConfigId: string;
+    objectName: string;
+  }
+): Promise<IGlueColumnDef[]> => {
+  const key = buildMainFieldSchemaKey(identity);
+  const entries = await getStoredEntries<Array<{ name: string }>>(destConfig, key);
+  return pickMainTableColumns(entries, key);
+};
 
 const buildHudiTableName = (backupConfigId: string, objectName: string): string =>
   `${buildGlueTableName(backupConfigId, objectName)}_hudi`;
@@ -124,6 +181,9 @@ export interface IEnsureCompressionTableParams {
   backupConfigId: string;
   objectName: string;
   destConfig: IDestinationConfig;
+  // 'backup' | 'archival' — which schema/ S3 prefix to read the current-state
+  // table's column list from (see resolveMainTableColumns).
+  policyConfigType: 'backup' | 'archival';
 }
 
 const syncHudiTablePartitions = async (
@@ -147,7 +207,7 @@ const syncHudiTablePartitions = async (
       partitionInputs.push({
         Values: [year, month],
         StorageDescriptor: {
-          ...HUDI_STORAGE_DESCRIPTOR_BASE,
+          ...PARQUET_STORAGE_DESCRIPTOR_BASE,
           Location: `s3://${destConfig.bucketName}/${monthPrefix}`,
         },
       });
@@ -183,15 +243,25 @@ const syncHudiTablePartitions = async (
   );
 };
 
-const resolveHudiTableShape = async (
-  destConfig: IDestinationConfig,
-  rootKey: string
-): Promise<{ glueColumns: Column[]; finalPartitionKeys: { name: string; type: string }[] }> => {
-  const { columns, partitionKeys } = await readHudiTableSchema(destConfig, rootKey);
+interface ITableIdentity {
+  crmName: string;
+  crmId: string;
+  policyConfigType: 'backup' | 'archival';
+  backupConfigId: string;
+  objectName: string;
+}
 
-  const PARTITION_NAMES = new Set(['year', 'month']);
+const resolveTableShape = async (
+  destConfig: IDestinationConfig,
+  identity: ITableIdentity,
+  dataset: 'main_backup_files' | 'delta'
+): Promise<{ glueColumns: Column[]; finalPartitionKeys: { name: string; type: string }[] }> => {
+  const columns =
+    dataset === 'delta' ? DELTA_TABLE_COLUMNS : await resolveMainTableColumns(destConfig, identity);
+
+  // Both tables are always laid out on S3 as year=/month= partitions — see
+  // buildCompressionRootKey / syncHudiTablePartitions.
   const finalPartitionKeys = [
-    ...partitionKeys.filter((p) => !PARTITION_NAMES.has(p.name.toLowerCase())),
     { name: 'year', type: 'string' },
     { name: 'month', type: 'string' },
   ];
@@ -215,9 +285,11 @@ const syncHudiTableSchema = async (
   databaseName: string,
   tableName: string,
   destConfig: IDestinationConfig,
-  rootKey: string
+  rootKey: string,
+  identity: ITableIdentity,
+  dataset: 'main_backup_files' | 'delta'
 ): Promise<void> => {
-  const { glueColumns } = await resolveHudiTableShape(destConfig, rootKey);
+  const { glueColumns } = await resolveTableShape(destConfig, identity, dataset);
   const { Table } = await glue.send(
     new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
   );
@@ -225,14 +297,9 @@ const syncHudiTableSchema = async (
   const signature = (cols: Column[] = []): string =>
     cols.map((c) => `${c.Name}:${c.Type}`).join(',');
   const columnsMatch = signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns);
-
-  // Updated parameter checks to strict lowercase
-  const hasNativeConnector = Table?.Parameters?.[NATIVE_HUDI_CONNECTOR_PARAM] === 'true';
-  const hasMetadataListing = Table?.Parameters?.[HUDI_METADATA_LISTING_PARAM] === 'true';
-  const hasUseMetadata = Table?.Parameters?.[HUDI_USE_METADATA_TABLE_PARAM] === 'true';
   const hasProjection = Table?.Parameters?.['projection.enabled'] === 'true';
 
-  if (columnsMatch && hasNativeConnector && hasMetadataListing && hasUseMetadata && hasProjection) {
+  if (columnsMatch && hasProjection) {
     return;
   }
 
@@ -243,15 +310,13 @@ const syncHudiTableSchema = async (
         Name: tableName,
         PartitionKeys: Table?.PartitionKeys ?? [],
         StorageDescriptor: {
-          ...HUDI_STORAGE_DESCRIPTOR_BASE,
+          ...PARQUET_STORAGE_DESCRIPTOR_BASE,
           Columns: glueColumns,
           Location: Table?.StorageDescriptor?.Location ?? '',
         },
         Parameters: {
           ...(Table?.Parameters ?? {}),
-          [NATIVE_HUDI_CONNECTOR_PARAM]: 'true',
-          [HUDI_METADATA_LISTING_PARAM]: 'true',
-          [HUDI_USE_METADATA_TABLE_PARAM]: 'true',
+          classification: 'parquet',
           // Partition Projection to skip Glue API partition fetches
           'projection.enabled': 'true',
           'projection.year.type': 'integer',
@@ -277,7 +342,9 @@ const ensureHudiFormatTable = async (
     dataset: 'main_backup_files' | 'delta';
   }
 ): Promise<boolean> => {
-  const { crmId, crmName, backupConfigId, objectName, destConfig, tableName, dataset } = params;
+  const { crmId, crmName, policyConfigType, backupConfigId, objectName, destConfig, tableName, dataset } =
+    params;
+  const identity: ITableIdentity = { crmId, crmName, policyConfigType, backupConfigId, objectName };
 
   const databaseName = buildGlueDatabaseName(backupConfigId);
   const label = dataset === 'main_backup_files' ? 'hudi' : dataset;
@@ -299,14 +366,16 @@ const ensureHudiFormatTable = async (
     logger.info(
       `[glue] ${label} table already exists, syncing schema + partitions | db:${databaseName} table:${tableName}`
     );
-    await syncHudiTableSchema(databaseName, tableName, destConfig, rootKey).catch((err: any) => {
-      logger.warn(`[glue] schema sync failed | table:${tableName} err:${err.name}: ${err.message}`);
-    });
+    await syncHudiTableSchema(databaseName, tableName, destConfig, rootKey, identity, dataset).catch(
+      (err: any) => {
+        logger.warn(`[glue] schema sync failed | table:${tableName} err:${err.name}: ${err.message}`);
+      }
+    );
     await syncPartitions();
     return false;
   }
 
-  const { glueColumns, finalPartitionKeys } = await resolveHudiTableShape(destConfig, rootKey);
+  const { glueColumns, finalPartitionKeys } = await resolveTableShape(destConfig, identity, dataset);
 
   try {
     await glue.send(
@@ -316,15 +385,12 @@ const ensureHudiFormatTable = async (
           Name: tableName,
           PartitionKeys: finalPartitionKeys.map((p) => ({ Name: p.name, Type: p.type })),
           StorageDescriptor: {
-            ...HUDI_STORAGE_DESCRIPTOR_BASE,
+            ...PARQUET_STORAGE_DESCRIPTOR_BASE,
             Columns: glueColumns,
             Location: `s3://${destConfig.bucketName}/${rootKey}`,
           },
           Parameters: {
             classification: 'parquet',
-            [HUDI_METADATA_LISTING_PARAM]: 'true',
-            [HUDI_USE_METADATA_TABLE_PARAM]: 'true',
-            [NATIVE_HUDI_CONNECTOR_PARAM]: 'true',
             // Enable Partition Projection to calculate partition locations in-memory
             'projection.enabled': 'true',
             'projection.year.type': 'integer',
