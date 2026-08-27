@@ -1,5 +1,6 @@
 import { logger } from '../../../../middlewares';
 import { salesforceRequest, SalesforceTokens } from '../api-request';
+import { getSettingsByUser } from '../../../settings';
 import { childHandler, ISalesforceChildRelationship } from './child';
 import { ISalesforceMetadataHandler } from './common';
 import { isQueryableField, ISalesforceFieldDescribe, schemaHandler } from './field';
@@ -38,7 +39,11 @@ export const salesforceMetadataHandler = async (
     );
 
     if (!objectNames || !objectNames.length) {
-      const filteredObjects = await salesforceObjectFilteredList(salesforceContext?.instanceUrl, salesforceContext?.tokens);
+      const filteredObjects = await salesforceObjectFilteredList(
+        salesforceContext?.instanceUrl,
+        salesforceContext?.tokens,
+        backupConfig.userId,
+      );
       objectNames = filteredObjects.map(o => o.name);
     }
 
@@ -129,9 +134,18 @@ export const salesforceObjectList = async (
 export const salesforceObjectFilteredList = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
+  userId: string,
   apexMode?: string,
   apexType?: string
 ): Promise<ISalesforceObjectResponse[]> => {
+
+  const standardObjects: string[] = [];
+  const settings = await getSettingsByUser(userId);
+  if (settings && settings.standardObjects.length) {
+    const standardObjectNames = settings.standardObjects.map(s => s.name);
+    standardObjects.push(...standardObjectNames);
+  }
+
   const excludeObjectSuffix = [
     '__x',
     '__hd',
