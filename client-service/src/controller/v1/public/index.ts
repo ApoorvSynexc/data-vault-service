@@ -17,6 +17,7 @@ import {
   BACKUP_STATUS,
   INTERNAL_SECRET,
   SCHEDULE_MODE,
+  STATUS,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
@@ -157,6 +158,11 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     const config = await getBackupConfigById(backupConfigId);
     if (!config) {
       return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    if(config.status === STATUS.paused) {
+      logger.info('Backup config is paused, skipping event');
+      return makeResponse(req, res, 200, true, 'fetch');
     }
 
     const user = await getUser({ userId });
