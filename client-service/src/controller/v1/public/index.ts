@@ -188,7 +188,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
     makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
-    logger.error('realtime webhook processing error:', error);
+    logger.error('Event bridge trigger error: ', error);
   }
 };
 
