@@ -147,62 +147,65 @@ const triggerBackupJob = async (params: {
   lastUpdatedAt?: string;
   type?: 'backup' | 'archival';
   schemaSync?: boolean;
+  lastSchemaSyncAt?: boolean;
 }) => {
-  const { config, lastUpdatedAt, type = 'backup', user, schemaSync } = params;
+  const { config, lastUpdatedAt, type = 'backup', user, lastSchemaSyncAt, schemaSync } = params;
   try {
-  const active = await hasActiveBackupJob(config.backupConfigId);
-  if (active) {
-    return null;
-  }
+    const active = await hasActiveBackupJob(config.backupConfigId);
+    if (active) {
+      return null;
+    }
 
-  const [crm, destination] = await Promise.all([
-    getCrmById(config.crmId),
-    getDestinationById(config.destinationId),
-  ]);
+    const [crm, destination] = await Promise.all([
+      getCrmById(config.crmId),
+      getDestinationById(config.destinationId),
+    ]);
 
-  if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
-  if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
+    if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
+    if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
-  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
-  const credentials = getDecryptedCrmCredential(user);
-  if (!credentials) throw new SalesforceAuthExpiredError();
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    const credentials = getDecryptedCrmCredential(user);
+    if (!credentials) throw new SalesforceAuthExpiredError();
 
-  // Master-Detail children are expanded (and persisted back onto the config) by
-  // backup-service at job creation — see expandWithMasterChildren there.
-  const payload = {
-    userId: config.userId,
-    backupConfigId: config.backupConfigId,
-    source: {
-      ...credentials,
-      crmId: crm.crmId,
-      crmName: crm.crmName,
-      instanceUrl: user?.crmProfile?.instanceUrl,
-      object: getSourceObjects(config?.objects),
-    },
-    destination: {
-      type: destination.type,
-      config: getDecryptedDestinationConfig(destination),
-    },
-    ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
-    ...(schemaSync ? { schemaSync: true } : {}),
-  };
+    // Master-Detail children are expanded (and persisted back onto the config) by
+    // backup-service at job creation — see expandWithMasterChildren there.
+    const currentDate = new Date().toISOString();
+    const payload = {
+      userId: config.userId,
+      backupConfigId: config.backupConfigId,
+      source: {
+        ...credentials,
+        crmId: crm.crmId,
+        crmName: crm.crmName,
+        instanceUrl: user?.crmProfile?.instanceUrl,
+        object: getSourceObjects(config?.objects),
+      },
+      destination: {
+        type: destination.type,
+        config: getDecryptedDestinationConfig(destination),
+      },
+      ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
+      ...(lastSchemaSyncAt ? { lastSchemaSyncAt: currentDate } : {}),
+      ...(schemaSync ? { schemaSync: true } : {}),
+    };
 
-  const endpoint = type === 'archival' ? '/archival' : '';
-  let result;
-  try {
-    result = await httpRequest({
-      url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
-      method: 'POST',
-      headers: { 'x-internal-secret': INTERNAL_SECRET },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
-    throw error;
-  }
+    const endpoint = type === 'archival' ? '/archival' : '';
+    let result;
+    try {
+      result = await httpRequest({
+        url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
+        method: 'POST',
+        headers: { 'x-internal-secret': INTERNAL_SECRET },
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
+      throw error;
+    }
 
-  await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
-  return result;
+    await updateBackupConfig(config.backupConfigId, { lastBackupAt: currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
+    return result;
   } catch (error) {
     logger.error(`triggerBackupJob failed configId=${config.backupConfigId} type=${type} error=${(error as Error)?.message ?? String(error)}`);
     throw error

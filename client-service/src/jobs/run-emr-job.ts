@@ -125,7 +125,7 @@ const runEmrJob = async () => {
                 continue;
               }
 
-              await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastBackupAt, schemaSync: true });
+              await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
             } else {
               await initalizePayloadTransform(config.backupConfigId);
             }
