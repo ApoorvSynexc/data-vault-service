@@ -15,10 +15,12 @@ const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
 // One id per config per tick, tagging every entry this run appends across all
 // of that config's objects/metadataTypes — there is no real backup job behind
 // this comparison, so it stands in for backupJobId purely as an audit trail.
-const runMetadataComparisonForConfig = async (config: IBackupConfig): Promise<void> => {
+const runMetadataComparisonForConfig = async (
+  config: IBackupConfig
+): Promise<Awaited<ReturnType<typeof salesforceMetadataHandler>>[]> => {
   const objects = config.objects ?? [];
   if (!objects.length) {
-    return;
+    return [];
   }
 
   const crm = await getCrmById(config.crmId);
@@ -26,7 +28,7 @@ const runMetadataComparisonForConfig = async (config: IBackupConfig): Promise<vo
     logger.warn(
       `[metadata comparison - CRON] config ${config.backupConfigId} SKIP | reason=crm_not_found`
     );
-    return;
+    return [];
   }
 
   const user = await getUser({userId: config.userId});
@@ -34,14 +36,14 @@ const runMetadataComparisonForConfig = async (config: IBackupConfig): Promise<vo
     logger.warn(
       `[metadata comparison - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
     );
-    return;
+    return [];
   }
 
   const backupJobId = uuidv4();
 
   // salesforceMetadataHandler swallows its own errors (logs, never rethrows), so
   // one object/metadataType failing never stops the rest.
-  await Promise.all(
+  return Promise.all(
     objects.flatMap((object) =>
       METADATA_TYPES.map((metadataType) =>
         salesforceMetadataHandler(
