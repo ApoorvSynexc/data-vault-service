@@ -44,6 +44,7 @@ import {
   buildAthenaFilterWhere,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
+import { logger } from '../../../middlewares';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
 import { IBackupJob, IRestoreScope, IRestoreFilters } from '../../../models';
@@ -983,22 +984,23 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
  *
  * Creates the restore request and, unless it was saved as a DRAFT, runs it:
  *
- *   1. createRestoreJob          — the job row, which fixes the destination
- *                                  `csvFilePath` the transform writes to.
- *   2. initalizeRestoreTransform — submits the EMR/Spark job. Spark calls back
- *                                  into /build-payload (buildRestorePayload)
- *                                  for the full payload, writes the ingest
- *                                  CSVs, then reports to
- *                                  /update-spark-job-status, which is where
- *                                  tiggerRestoreJob hands the job to
+ *   1. createRestoreJob          — the job row (status IN_PROGRESS, every
+ *                                  object IN_PROGRESS), which fixes the
+ *                                  destination `csvFilePath` the transform
+ *                                  writes to. Cheap DynamoDB writes, so this
+ *                                  still happens before the response.
+ *   2. initalizeRestoreTransform — submits the EMR/Spark job — the actual
+ *                                  long-running work — so it's kicked off
+ *                                  only after the response, fire-and-forget.
+ *                                  Spark calls back into /build-payload
+ *                                  (buildRestorePayload) for the full
+ *                                  payload, writes the ingest CSVs, then
+ *                                  reports to /update-spark-job-status, which
+ *                                  is where tiggerRestoreJob hands the job to
  *                                  backup-service's Bulk API ingest.
  *
  * Same path activateRestoreHandler uses, so a DRAFT and a non-DRAFT restore
  * run identically.
- *
- * Everything after the 201 is deliberately fire-and-forget with its own
- * try/catch — the response has already been sent, so a failure here is logged
- * and surfaced through the job's status, never thrown into a closed response.
  */
 const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -1019,21 +1021,28 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 
   const restoreId = uuidv4();
-  const payload = { restoreId, userId: user!.userId, ...body };
+  const isDraft = body.status === 'DRAFT';
+  const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? 'DRAFT' : 'IN_PROGRESS' };
   const created = await createRestore(payload);
   if (!created) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
   }
 
+  // Job row + per-object statuses are written before the response goes out —
+  // a DynamoDB Put plus a handful of Gets, not the slow part. If this throws,
+  // wrapController turns it into a 400 and the restore record above is left
+  // IN_PROGRESS with no job — see architectural notes on this in the report.
+  const restoreJob = isDraft ? null : await createRestoreJob(payload);
+
   makeResponse(req, res, 201, true, 'create');
-  if (body.status !== 'DRAFT') {
-    try {
-      const restoreJob = await createRestoreJob(payload);
-      await initalizeRestoreTransform(restoreJob.restoreJobId);
-    } catch (error) {
-      console.error('Error creating restore job:', error);
-    }
+
+  if (restoreJob) {
+    initalizeRestoreTransform(restoreJob.restoreJobId).catch((error) => {
+      logger.error(
+        `[restore] EMR trigger failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
+      );
+    });
   }
 };
 
@@ -1070,16 +1079,16 @@ const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
 
-  await updateRestore({ restoreId, status: 'PENDING' });
+  await updateRestore({ restoreId, status: 'IN_PROGRESS' });
+  const restoreJob = await createRestoreJob({ ...restore!, status: 'IN_PROGRESS' });
+
   makeResponse(req, res, 200, true, 'update');
 
-  try {
-    const restoreJob = await createRestoreJob({ ...restore!, status: 'PENDING' });
-    await initalizeRestoreTransform(restoreJob.restoreJobId);
-    // await tiggerRestoreJob(restoreJob);
-  } catch (error) {
-    console.error('Error creating restore job:', error);
-  }
+  initalizeRestoreTransform(restoreJob.restoreJobId).catch((error) => {
+    logger.error(
+      `[restore] EMR trigger failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
+    );
+  });
 };
 
 const listRestoresHandler = async (req: IRequest, res: IResponse): Promise<void> => {

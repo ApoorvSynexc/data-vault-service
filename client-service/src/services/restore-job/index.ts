@@ -12,11 +12,11 @@ import { getUser } from '../user';
 import { httpRequest } from '../../utils/http-request';
 
 const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
-  const { userId, crmId, restoreId, status = 'PENDING', source, destination, conflict, selection } = params;
+  const { userId, crmId, restoreId, status = 'IN_PROGRESS', source, destination, conflict, selection } = params;
   const now = new Date().toISOString();
   let destinationCrmId = crmId!;
   const restoreJobId = uuidv4();
-  let destinationObjects: Array<{ id: string, name: string, status: "PENDING" }> = [];
+  let destinationObjects: Array<{ id: string, name: string, status: "IN_PROGRESS" }> = [];
 
   const sourceBackupConfig = await getBackupConfigById(source?.backupConfigId);
   if (!sourceBackupConfig) throw new Error(`backup_config_not_found:${source?.backupConfigId}`);
@@ -42,13 +42,13 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   if (!destinationCrm) throw new Error(`crm_not_found:${destinationCrmId}`);
 
   if (selection.restoreScope.type === 'ALL') {
-    destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "PENDING" })) ?? [];
+    destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "IN_PROGRESS" })) ?? [];
   } else if (selection.restoreScope.type === 'OBJECT' && selection.restoreScope.objects) {
-    destinationObjects = selection.restoreScope.objects.map(name => ({ id: uuidv4(), name, status: "PENDING" }));
+    destinationObjects = selection.restoreScope.objects.map(name => ({ id: uuidv4(), name, status: "IN_PROGRESS" }));
   } else if (selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
-    destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "PENDING" }));
+    destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "IN_PROGRESS" }));
   } else {
-    destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "PENDING" })) ?? [];
+    destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "IN_PROGRESS" })) ?? [];
   }
 
   const updatedSource = {

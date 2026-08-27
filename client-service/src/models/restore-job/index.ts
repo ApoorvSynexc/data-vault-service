@@ -22,7 +22,7 @@ export interface IRestoreJobDestination {
   objects: Array<{
     id: string;
     name: string;
-    status: "PENDING" | "SUCCESS" | "FAILED";
+    status: "PENDING" | "IN_PROGRESS" | "SUCCESS" | "FAILED";
     processedRecordCount?: number;
     failedRecordCount?: number;
     errorMessage?: string;
@@ -42,7 +42,7 @@ export interface IRestoreJob {
   source: IRestoreJobSource; // encrypted — never expose
   destination: IRestoreJobDestination; // encrypted — never expose
   conflict: IRestoreConflict;
-  status: string; // PENDING | RUNNING | SUCCESS | FAILED
+  status: string; // PENDING | IN_PROGRESS | RUNNING | SUCCESS | FAILED
   startedAt?: string;
   completedAt?: string;
   errorMessage?: string;

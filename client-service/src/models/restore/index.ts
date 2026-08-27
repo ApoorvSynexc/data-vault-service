@@ -143,8 +143,6 @@ export interface IRestoreMergeRule {
 
 export interface IRestoreConflict {
   restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
-  isIncludeChild?: boolean;
-  relationshipDepth?: number;
   edgeCases?: IRestoreEdgeCases;
   mergeRule?: IRestoreMergeRule;
 }
@@ -159,7 +157,7 @@ export interface IRestore {
   restoreId: string; // PK
   userId: string; // GSI: userId-index
   crmId?: string; // GSI: crmId-index
-  status: string; // DRAFT | PENDING | RUNNING | SUCCESS | FAILED
+  status: string; // DRAFT | PENDING | IN_PROGRESS | RUNNING | SUCCESS | FAILED
   errorMessage?: string;
 
   source: IRestoreSource;
