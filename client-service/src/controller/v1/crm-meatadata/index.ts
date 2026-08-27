@@ -85,7 +85,7 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
 
 const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
-  const { objectName, mode, type } = req.query;
+  const { objectName, relationshipDepth, mode, type } = req.query;
 
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
@@ -97,13 +97,31 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
-  const children = objectDescription.childRelationships
+  let children = objectDescription.childRelationships
     .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && (filteredObjectNames.includes(child.childSObject) && child.cascadeDelete))))
     .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
 
   const fields = objectDescription.fields
     .filter((field) => field.type === 'reference')
     .map((field) => ({ label: field.label, referenceTo: field.referenceTo, name: field.name, nillable: field.nillable, cascadeDelete: field.cascadeDelete }));
+
+
+  if (relationshipDepth && typeof relationshipDepth === 'number' && relationshipDepth > 0) {
+    const PolymorphicObjects = new Set<string>();
+    for (const field of objectDescription.fields) {
+      if (
+        field.type === "reference" &&
+        field.referenceTo &&
+        field.referenceTo.length > 1
+      ) {
+        field.referenceTo.forEach((ref) => PolymorphicObjects.add(ref));
+      }
+    }
+
+    if (PolymorphicObjects.size) {
+      children = children.filter((child) => !PolymorphicObjects.has(child.name));
+    }
+  }
 
   // const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
   // const parent: { [key: string]: string | boolean }[] = [];
