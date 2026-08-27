@@ -14,6 +14,8 @@ import { ICrmBackupHandler } from '../types';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getBackupJob } from '../../backup-job';
 import { createNotification } from '../../notification';
+import { getRestoreById } from '../../restore';
+import { getRestoreJobById } from '../../restore-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
@@ -507,6 +509,42 @@ const salesforceHandler: ICrmBackupHandler = {
       logger.info(
         `Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, result=${finalStatus}`
       );
+
+      const freshJob = await getRestoreJobById(restoreJobId);
+      const failedObjects = (freshJob?.destination.objects ?? []).filter(
+        (obj) => obj.status === 'FAILED'
+      );
+
+      if (failedObjects.length) {
+        const restore = await getRestoreById(restoreId);
+        if (restore) {
+          const objectNames = failedObjects.map((obj) => obj.name).join(', ');
+          const configLabel = restore.jobDetail?.name ?? restoreId;
+
+          try {
+            await createNotification({
+              userId: restore.userId,
+              crmId: destination.crmId,
+              title:
+                failedObjects.length === 1
+                  ? `1 object failed to restore`
+                  : `${failedObjects.length} objects failed to restore`,
+              body: `Your restore "${configLabel}" finished, but ${objectNames} could not be restored. Please check the logs for more details.`,
+              targetScreen: 'restore',
+              targetId: restoreId,
+            });
+          } catch (err: any) {
+            logger.error(
+              `Failed to notify user about failed objects | restoreJobId:${restoreJobId} err:${err?.message ?? err}`
+            );
+          }
+
+          logger.info(
+            `Restore job notify to user, restoreJobId=${restoreJobId}, restoreId=${restoreId}, failedObjects=${failedObjects.length}`
+          );
+        }
+      }
+
       return finalStatus;
     } catch (err: any) {
       logger.error(
