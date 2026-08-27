@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, INTERNAL_SECRET, JOB_STATUS } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, INTERNAL_SECRET, JOB_STATUS, SCHEDULE_MODE } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
@@ -13,6 +13,8 @@ import { flattenBackupObjects } from '../../utils/helper';
 import { logger } from '../../middlewares';
 import { getDecryptedCrmCredential } from '../user';
 import { SalesforceAuthExpiredError } from '../third-party';
+import { deleteAwsEventScheduler } from '../third-party/event-bridge';
+import { buildBackupScheduleName, computeNextScheduledRun } from '../../utils/event-bridge';
 
 const getSourceObjects = (objects?: IObject[]) => {
   if (objects?.length) {
@@ -210,6 +212,51 @@ const triggerBackupJob = async (params: {
     logger.error(`triggerBackupJob failed configId=${config.backupConfigId} type=${type} error=${(error as Error)?.message ?? String(error)}`);
     throw error
   }
+};
+
+interface RunBackupNowResult {
+  ok: boolean;
+  reason?: 'realtime_not_supported' | 'job_already_invoked' | 'invalid_schedule_config';
+  backupJobId?: string;
+}
+
+// Extracted from the backup-config controller's GET /run-now handler so the
+// restore workflow (RUN BACKUP JOB stage) can trigger the exact same
+// immediate-backup behavior instead of duplicating it: a schedule-mode
+// config's backup runs right now rather than waiting for its next scheduled
+// tick, and that upcoming tick is skipped so the config doesn't back up twice.
+// Same validations as the route: realtime configs are rejected, a ONE_TIME
+// config that already ran once is rejected, an INCREMENTAL config marks its
+// next EventBridge-scheduled run to skip.
+const runBackupNow = async (params: { user?: IUser; config: IBackupConfig }): Promise<RunBackupNowResult> => {
+  const { user, config } = params;
+
+  if (config.schedule === SCHEDULE_MODE.realtime) {
+    return { ok: false, reason: 'realtime_not_supported' };
+  }
+
+  if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'ONE_TIME') {
+    if (config.lastBackupAt) {
+      return { ok: false, reason: 'job_already_invoked' };
+    }
+
+    const result: any = await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastBackupAt });
+    await deleteAwsEventScheduler(buildBackupScheduleName(config.backupConfigId));
+    return { ok: true, backupJobId: result?.data?.backupJobId };
+  }
+
+  if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL') {
+    const result: any = await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastBackupAt });
+    const upcomingJob = {
+      skip: true,
+      skipReason: 'This backup was started manually, so its next automatic run has been skipped to avoid running it twice',
+      skipDateTime: computeNextScheduledRun(config.scheduleConfig).toISOString(),
+    };
+    await updateBackupConfig(config.backupConfigId, { upcomingJob });
+    return { ok: true, backupJobId: result?.data?.backupJobId };
+  }
+
+  return { ok: false, reason: 'invalid_schedule_config' };
 };
 
 // A job only enters the compression lifecycle once its backup has finished, so every
@@ -717,6 +764,7 @@ const getMonthlyStatsByCrmCurrentYear = async (crmId: string): Promise<Array<{ m
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
+  runBackupNow,
   hasActiveBackupJob,
   resumeBackupJob,
   getBackupJobById,

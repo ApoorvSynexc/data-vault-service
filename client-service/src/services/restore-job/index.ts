@@ -1,8 +1,8 @@
 import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, INTERNAL_SECRET, RESTORE_JOB_TABLE } from '../../constant';
-import { IRestore, IRestoreConflict, IRestoreJob } from '../../models';
+import { BACKUP_SERVICE, INTERNAL_SECRET, RESTORE_JOB_TABLE, SCHEDULE_MODE, JOB_STATUS, BACKUP_STATUS } from '../../constant';
+import { IRestore, IRestoreConflict, IRestoreJob, IBackupConfig, IBackupJob } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
 import { getBackupConfigById } from '../backup-config';
@@ -11,9 +11,12 @@ import { getDecryptedDestinationConfig, getDestinationById } from '../destinatio
 import { getUser, getDecryptedCrmCredential } from '../user';
 import { updateRestore, getRestoreById } from '../restore';
 import { httpRequest } from '../../utils/http-request';
+import { timer } from '../../utils/helper';
 import { SalesforceTokens } from '../third-party/salesforce';
 import { ensureRestoreTrackingFields } from '../third-party/salesforce/restore-fields';
 import { provisionRestorePermissionSet } from '../third-party/salesforce/restore-permission-set';
+import { runBackupNow, getBackupJobById, isBackupCompleted, triggerBackupJob } from '../backup-job';
+import { runMetadataComparisonForConfig, hasMetadataChanged, IMetadataComparisonResult } from '../metadata-sync';
 import { logger } from '../../middlewares';
 
 const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
@@ -352,14 +355,15 @@ const failAllObjects = async (restorejob: IRestoreJob, errorMessage: string): Pr
   });
 };
 
-// Marks the given objects FAILED with the same reason, in one write.
-const failObjects = async (restoreJobId: string, objectNames: string[], errorMessage: string): Promise<void> => {
+// Marks the given objects with one status/reason, in one write — shared by
+// every stage's failure paths so each just names its own status string.
+const failObjects = async (restoreJobId: string, objectNames: string[], status: string, errorMessage: string): Promise<void> => {
   if (!objectNames.length) {
     return;
   }
   await updateRestoreJob({
     restoreJobId,
-    objects: objectNames.map((name) => ({ name, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage })),
+    objects: objectNames.map((name) => ({ name, status, errorMessage })),
   });
 };
 
@@ -444,7 +448,7 @@ const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededO
 
   const salesforceUserId = user.crmProfile?.userId;
   if (!salesforceUserId) {
-    await failObjects(restorejob.restoreJobId, fieldsCreatedObjectNames, 'destination_salesforce_user_id_missing');
+    await failObjects(restorejob.restoreJobId, fieldsCreatedObjectNames, RESTORE_FIELD_JOB_STATUS.failed, 'destination_salesforce_user_id_missing');
     return { succeededObjectNames: [] };
   }
 
@@ -455,7 +459,7 @@ const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededO
     logger.error(
       `[restore-field-job] permission set provisioning failed | restoreJobId=${restorejob.restoreJobId} objects=${fieldsCreatedObjectNames.join(',')} err:${message}`
     );
-    await failObjects(restorejob.restoreJobId, fieldsCreatedObjectNames, message);
+    await failObjects(restorejob.restoreJobId, fieldsCreatedObjectNames, RESTORE_FIELD_JOB_STATUS.failed, message);
     return { succeededObjectNames: [] };
   }
 
@@ -477,45 +481,244 @@ const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededO
 // used for the same concept elsewhere in this codebase (BACKUP_TYPE.normal).
 const RESTORE_FIELD_JOB_CONFIG_TYPES = new Set(['BACKUP', 'NORMAL']);
 
-const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
-  const restore = await getRestoreById(restorejob.restoreId);
-  const configType = restore?.source?.configType;
-  const runsFieldJob = !!configType && RESTORE_FIELD_JOB_CONFIG_TYPES.has(configType);
+export const RESTORE_BACKUP_STATUS = {
+  running: 'BACKUP RUNNING',
+  completed: 'BACKUP COMPLETED',
+  failed: 'BACKUP JOB FAILED',
+};
 
-  let succeededObjects = restorejob.destination.objects;
+// Mirrors backup-service's own OBJECT_STATUS.completed value (backup-service's
+// constant module, a separate deployment with no shared constants) — an
+// object's own status entry inside IBackupJob.object[] reads exactly this
+// string once its extraction finishes successfully.
+const BACKUP_OBJECT_COMPLETED_STATUS = 'COMPLETED';
 
-  if (runsFieldJob) {
-    const { succeededObjectNames } = await runRestoreFieldJob(restorejob);
+const isTerminalBackupJobStatus = (status: string): boolean =>
+  isBackupCompleted(status) || status === JOB_STATUS.failed || status === BACKUP_STATUS.partialFailure;
 
-    // Objects that failed the field job stop here — they never reach
-    // backup-service, and are already persisted as RESTORN FIELD JOB FAILED.
-    succeededObjects = restorejob.destination.objects.filter((object) =>
-      succeededObjectNames.includes(object.name)
-    );
-
-    if (!succeededObjects.length) {
-      logger.error(
-        `[restore-field-job] every object failed — nothing to hand off to backup-service | restoreJobId=${restorejob.restoreJobId}`
-      );
-      const errorMessage = 'restore_field_job_failed_for_every_object';
-      await Promise.all([
-        updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage }),
-        updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage }),
-      ]);
-      return;
+// Same "poll until done" shape deployMetadata (Salesforce Metadata API) already
+// uses in this codebase — no callback exists for "a backup job finished", so
+// this polls the shared BACKUP_JOB_TABLE row directly until its status is
+// terminal one way or the other.
+const pollBackupJobUntilTerminal = async (backupJobId: string): Promise<IBackupJob | null> => {
+  while (true) {
+    const job = await getBackupJobById(backupJobId);
+    if (!job) {
+      return null;
     }
-  } else {
-    logger.info(
-      `[restore-field-job] skipped — configType=${configType ?? 'unknown'} is not BACKUP/NORMAL | restoreJobId=${restorejob.restoreJobId}`
+    if (isTerminalBackupJobStatus(job.status)) {
+      return job;
+    }
+    await timer(5000);
+  }
+};
+
+// Maps one finished IBackupJob's per-object statuses onto the given restore
+// objects — each restore object gets its own BACKUP COMPLETED/FAILED write
+// straight from that object's own entry, never a job-wide verdict, so one
+// object's backup failure never marks an unrelated object as failed.
+const applyBackupJobToObjects = async (
+  restoreJobId: string,
+  backupJob: IBackupJob,
+  objectNames: string[]
+): Promise<{ succeededObjectNames: string[] }> => {
+  const backupObjectsByName = new Map((backupJob.object ?? []).map((object) => [object.name, object]));
+
+  const succeededObjectNames: string[] = [];
+  const updates: UpdateRestoreObjectParams[] = objectNames.map((name) => {
+    const backupObject = backupObjectsByName.get(name);
+    if (backupObject?.status === BACKUP_OBJECT_COMPLETED_STATUS) {
+      succeededObjectNames.push(name);
+      return { name, status: RESTORE_BACKUP_STATUS.completed };
+    }
+    return {
+      name,
+      status: RESTORE_BACKUP_STATUS.failed,
+      errorMessage:
+        backupObject?.errorMessage ??
+        (backupObject
+          ? `backup_object_status:${backupObject.status}`
+          : `object_not_found_in_backup_job:${backupJob.backupJobId}`),
+    };
+  });
+
+  await updateRestoreJob({ restoreJobId, objects: updates });
+  return { succeededObjectNames };
+};
+
+// Schedule-mode backup configs: reuse runBackupNow (the same function the
+// backup-config route's GET /run-now calls) so "run this backup immediately,
+// skip the next scheduled tick" behaves identically here — then poll the
+// created BackupJob to completion and translate its per-object results into
+// restore object statuses.
+const runScheduleBackupStage = async (
+  restorejob: IRestoreJob,
+  backupConfig: IBackupConfig,
+  objectNames: string[]
+): Promise<{ succeededObjectNames: string[] }> => {
+  const user = await getUser({ userId: backupConfig.userId });
+
+  let runResult;
+  try {
+    runResult = await runBackupNow({ user: user ?? undefined, config: backupConfig });
+  } catch (error: any) {
+    const message = error?.message ?? String(error);
+    logger.error(
+      `[restore-backup-job] run-now threw | restoreJobId=${restorejob.restoreJobId} backupConfigId=${backupConfig.backupConfigId} err:${message}`
     );
+    await failObjects(restorejob.restoreJobId, objectNames, RESTORE_BACKUP_STATUS.failed, message);
+    return { succeededObjectNames: [] };
   }
 
+  if (!runResult.ok || !runResult.backupJobId) {
+    const message = `backup_run_now_failed:${runResult.reason ?? 'no_backup_job_id_returned'}`;
+    logger.error(
+      `[restore-backup-job] run-now rejected | restoreJobId=${restorejob.restoreJobId} backupConfigId=${backupConfig.backupConfigId} reason=${runResult.reason}`
+    );
+    await failObjects(restorejob.restoreJobId, objectNames, RESTORE_BACKUP_STATUS.failed, message);
+    return { succeededObjectNames: [] };
+  }
+
+  const backupJob = await pollBackupJobUntilTerminal(runResult.backupJobId);
+  if (!backupJob) {
+    await failObjects(
+      restorejob.restoreJobId,
+      objectNames,
+      RESTORE_BACKUP_STATUS.failed,
+      `backup_job_not_found:${runResult.backupJobId}`
+    );
+    return { succeededObjectNames: [] };
+  }
+
+  return applyBackupJobToObjects(restorejob.restoreJobId, backupJob, objectNames);
+};
+
+// Realtime backup configs: no scheduled run to reuse — instead, reuse the
+// exact metadata-comparison logic run-emr-job.ts's cron uses to decide
+// whether a realtime config's schema drifted (see services/metadata-sync).
+// If it did, the same schemaSync backup triggerBackupJob call the cron makes
+// is fired here too — but unlike the cron, this never calls
+// initalizePayloadTransform (EMR); CSV generation for realtime restores is a
+// later, not-yet-implemented stage.
+const runRealtimeSchemaSyncStage = async (
+  restorejob: IRestoreJob,
+  backupConfig: IBackupConfig,
+  objectNames: string[]
+): Promise<{ succeededObjectNames: string[] }> => {
+  let comparisonResults: IMetadataComparisonResult[];
+  try {
+    comparisonResults = await runMetadataComparisonForConfig(backupConfig);
+  } catch (error: any) {
+    const message = error?.message ?? String(error);
+    logger.error(
+      `[restore-backup-job] schema sync threw | restoreJobId=${restorejob.restoreJobId} backupConfigId=${backupConfig.backupConfigId} err:${message}`
+    );
+    await failObjects(restorejob.restoreJobId, objectNames, RESTORE_BACKUP_STATUS.failed, message);
+    return { succeededObjectNames: [] };
+  }
+
+  const resultsByObject = new Map<string, IMetadataComparisonResult[]>();
+  for (const entry of comparisonResults) {
+    const list = resultsByObject.get(entry.objectName) ?? [];
+    list.push(entry);
+    resultsByObject.set(entry.objectName, list);
+  }
+
+  const changedObjectNames = objectNames.filter((name) =>
+    (resultsByObject.get(name) ?? []).some((entry) => hasMetadataChanged(entry.result))
+  );
+
+  // Fire-and-forget, matching the EMR cron's own realtime branch — this
+  // schema-sync backup's own data-extraction completion isn't tracked here.
+  if (changedObjectNames.length) {
+    const user = await getUser({ userId: backupConfig.userId });
+    if (user) {
+      triggerBackupJob({
+        user,
+        config: backupConfig,
+        type: 'backup',
+        lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+        schemaSync: true,
+        lastSchemaSyncAt: true,
+      }).catch((error: any) => {
+        logger.error(
+          `[restore-backup-job] schema-sync backup trigger failed | restoreJobId=${restorejob.restoreJobId} backupConfigId=${backupConfig.backupConfigId} err:${error?.message ?? error}`
+        );
+      });
+    }
+  }
+
+  const succeededObjectNames: string[] = [];
+  const updates: UpdateRestoreObjectParams[] = objectNames.map((name) => {
+    const entries = resultsByObject.get(name) ?? [];
+    // salesforceMetadataHandler swallows its own per-call error internally
+    // (logs it, never rethrows), so the real error text never reaches this
+    // caller — an object whose every metadataType call came back undefined
+    // is the only failure signal available here; the underlying Salesforce
+    // error is only visible in server logs against this objectName.
+    const allCallsFailed = entries.length > 0 && entries.every((entry) => entry.result === undefined);
+    if (allCallsFailed) {
+      return {
+        name,
+        status: RESTORE_BACKUP_STATUS.failed,
+        errorMessage: `schema_sync_failed:${name} — see server logs for the underlying Salesforce error`,
+      };
+    }
+    succeededObjectNames.push(name);
+    return { name, status: RESTORE_BACKUP_STATUS.completed };
+  });
+
+  await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, objects: updates });
+  return { succeededObjectNames };
+};
+
+// Stage 2 of the restore workflow (RUN BACKUP JOB): re-run the source backup
+// config right now so its data is current before the (not-yet-implemented)
+// EMR/CSV stage reads it. Schedule-mode configs reuse the same run-now path
+// the backup-config route exposes; realtime configs have no schedule to
+// re-run, so this runs their schema-sync check instead — see
+// runScheduleBackupStage / runRealtimeSchemaSyncStage above.
+const runRestoreBackupJob = async (
+  restorejob: IRestoreJob,
+  objectNames: string[]
+): Promise<{ succeededObjectNames: string[] }> => {
+  await Promise.all([
+    updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_BACKUP_STATUS.running }),
+    updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_BACKUP_STATUS.running }),
+  ]);
+
+  const backupConfig = await getBackupConfigById(restorejob.source.backupConfigId);
+  if (!backupConfig) {
+    await failObjects(
+      restorejob.restoreJobId,
+      objectNames,
+      RESTORE_BACKUP_STATUS.failed,
+      `backup_config_not_found:${restorejob.source.backupConfigId}`
+    );
+    return { succeededObjectNames: [] };
+  }
+
+  if (backupConfig.schedule === SCHEDULE_MODE.realtime) {
+    return runRealtimeSchemaSyncStage(restorejob, backupConfig, objectNames);
+  }
+
+  return runScheduleBackupStage(restorejob, backupConfig, objectNames);
+};
+
+// Sends the restore straight to backup-service's ingest endpoint, unchanged
+// from this function's pre-existing behavior — the path an ARCHIVAL restore
+// (or any configType outside RESTORE_FIELD_JOB_CONFIG_TYPES) still takes,
+// since none of the field/permission-set/backup stages above apply to it.
+const sendRestoreToBackupService = async (
+  restorejob: IRestoreJob,
+  objects: IRestoreJob['destination']['objects']
+) => {
   let result;
   const payload = {
     userId: restorejob.userId,
     restoreJobId: restorejob.restoreJobId,
     source: restorejob.source,
-    destination: { ...restorejob.destination, objects: succeededObjects },
+    destination: { ...restorejob.destination, objects },
     conflict: restorejob.conflict
   }
   try {
@@ -527,14 +730,60 @@ const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
     });
   } catch (error) {
     console.log("Restore Job has been failed, ", { error });
-
-    // await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
     throw error;
   }
 
   console.log("Restore Job has been trigger to backup service");
-  // await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
   return result;
+};
+
+const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
+  const restore = await getRestoreById(restorejob.restoreId);
+  const configType = restore?.source?.configType;
+  const runsFieldJob = !!configType && RESTORE_FIELD_JOB_CONFIG_TYPES.has(configType);
+
+  if (!runsFieldJob) {
+    logger.info(
+      `[restore-field-job] skipped — configType=${configType ?? 'unknown'} is not BACKUP/NORMAL | restoreJobId=${restorejob.restoreJobId}`
+    );
+    return sendRestoreToBackupService(restorejob, restorejob.destination.objects);
+  }
+
+  const { succeededObjectNames: fieldJobSucceededNames } = await runRestoreFieldJob(restorejob);
+
+  // Objects that failed the field job stop here — they never reach the
+  // backup stage, and are already persisted as RESTORN FIELD JOB FAILED.
+  if (!fieldJobSucceededNames.length) {
+    logger.error(
+      `[restore-field-job] every object failed — stopping before RUN BACKUP JOB | restoreJobId=${restorejob.restoreJobId}`
+    );
+    const errorMessage = 'restore_field_job_failed_for_every_object';
+    await Promise.all([
+      updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage }),
+      updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_FIELD_JOB_STATUS.failed, errorMessage }),
+    ]);
+    return;
+  }
+
+  const { succeededObjectNames: backupSucceededNames } = await runRestoreBackupJob(restorejob, fieldJobSucceededNames);
+
+  if (!backupSucceededNames.length) {
+    logger.error(
+      `[restore-backup-job] every object failed — stopping before EMR/ingest | restoreJobId=${restorejob.restoreJobId}`
+    );
+    const errorMessage = 'restore_backup_job_failed_for_every_object';
+    await Promise.all([
+      updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_BACKUP_STATUS.failed, errorMessage }),
+      updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_BACKUP_STATUS.failed, errorMessage }),
+    ]);
+    return;
+  }
+
+  // EMR/CSV-generation and the final ingest handoff are implemented in a
+  // later stage — objects that made it this far are left at BACKUP COMPLETED.
+  logger.info(
+    `[restore-backup-job] backup stage complete | restoreJobId=${restorejob.restoreJobId} objects=${backupSucceededNames.join(',')}`
+  );
 }
 
 export {

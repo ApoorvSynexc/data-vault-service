@@ -18,6 +18,7 @@ import {
   getTableCounter,
   buildBackupConfigCounterKey,
   triggerBackupJob,
+  runBackupNow,
   getCrmById,
   getDestinationById,
   realTimeTriggerManagement,
@@ -44,7 +45,7 @@ const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
   'recordTypes',
 ];
 import { wrapController, isOwner } from '../../../utils/helper';
-import { buildEventScheduleInput, buildBackupScheduleName, computeNextScheduledRun } from '../../../utils/event-bridge';
+import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils/event-bridge';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 
@@ -465,32 +466,17 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return;
   }
 
-  if (backupConfig.schedule === SCHEDULE_MODE.realtime) {
-    return makeResponse(req, res, 400, false, 'backup_config_not_found');
+  const result = await runBackupNow({ user: req.user, config: backupConfig });
+  if (!result.ok) {
+    // realtime_not_supported keeps the route's original error code
+    // (backup_config_not_found) rather than leaking a new one the frontend
+    // doesn't already handle.
+    const errorCode = result.reason === 'realtime_not_supported' ? 'backup_config_not_found' : result.reason!;
+    makeResponse(req, res, 400, false, errorCode as Parameters<typeof makeResponse>[4]);
+    return;
   }
 
-  if (backupConfig.schedule === SCHEDULE_MODE.schedule && backupConfig.scheduleConfig?.type === 'ONE_TIME') {
-    if (backupConfig.lastBackupAt) {
-      return makeResponse(req, res, 400, false, 'job_already_invoked');
-    }
-
-    await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup', lastUpdatedAt: backupConfig.lastBackupAt });
-    await deleteAwsEventScheduler(buildBackupScheduleName(backupConfig.backupConfigId));
-    return makeResponse(req, res, 200, true, 'fetch');
-  }
-
-  if (backupConfig.schedule === SCHEDULE_MODE.schedule && backupConfig.scheduleConfig?.type === 'INCREMENTAL') {
-    await triggerBackupJob({ user: req.user, config: backupConfig, type: 'backup', lastUpdatedAt: backupConfig.lastBackupAt });
-    const upcomingJob = {
-      skip: true,
-      skipReason: 'This backup was started manually, so its next automatic run has been skipped to avoid running it twice',
-      skipDateTime: computeNextScheduledRun(backupConfig.scheduleConfig).toISOString(),
-    };
-    await updateBackupConfig(backupConfig.backupConfigId, { upcomingJob });
-    return makeResponse(req, res, 200, true, 'fetch');
-  }
-
-  return makeResponse(req, res, 400, false, 'invalid_schedule_config');
+  makeResponse(req, res, 200, true, 'fetch');
 }
 
 const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): Promise<void> => {
