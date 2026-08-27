@@ -78,14 +78,31 @@ const archivalChildObjectSchema = Joi.object({
   children: Joi.array().items(Joi.link('#archivalChildObject')).optional(),
 }).id('archivalChildObject');
 
-// The root reuses this codebase's own existing filter (filtersSchema, same
-// AND/OR/SOQL shape restoreScope's FILTER type already validates) and record
-// selection (recordIds, same naming scopeRecordSchema already uses) — only
-// the root carries either; every descendant is an archivalChildObjectSchema.
+// The root's own record selection — mirrors restoreScope's own
+// FILTER/RECORD/BULK_CSV mechanisms (same `type` discriminator idiom used
+// throughout this file), just scoped to this one root object. Reuses
+// restore's existing filter shape (filtersSchema, same AND/OR/SOQL restoreScope's
+// FILTER type already validates) and existing record-id naming (recordIds
+// per scopeRecordSchema, ids per bulkCsvIdsSchema) — only the root carries
+// any of this; every descendant is an archivalChildObjectSchema (hierarchy only).
 const archivalObjectTreeSchema = Joi.object({
   name: Joi.string().required(),
-  filters: filtersSchema.optional(),
-  recordIds: Joi.array().items(Joi.string()).min(1).optional(),
+  type: Joi.string().valid('FILTER', 'RECORD', 'BULK_CSV').optional(),
+  filters: Joi.when('type', {
+    is: 'FILTER',
+    then: filtersSchema.required(),
+    otherwise: Joi.forbidden(),
+  }),
+  recordIds: Joi.when('type', {
+    is: 'RECORD',
+    then: Joi.array().items(Joi.string()).min(1).required(),
+    otherwise: Joi.forbidden(),
+  }),
+  ids: Joi.when('type', {
+    is: 'BULK_CSV',
+    then: Joi.array().items(Joi.string()).min(1).required(),
+    otherwise: Joi.forbidden(),
+  }),
   children: Joi.array().items(archivalChildObjectSchema).optional(),
 });
 

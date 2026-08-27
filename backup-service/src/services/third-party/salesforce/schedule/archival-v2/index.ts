@@ -29,6 +29,9 @@ interface IArchiveObject {
   object: IBackupObject;
   parentWhereClause?: string;
   s3Keys?: IS3ObjectKey[];
+  // The config's whole tracked Object List — narrows the childs metadata scan
+  // to objects this archival config actually cares about. See runArchival.
+  objectNames?: string[];
 }
 
 const MAX_RETRIES = 3;
@@ -187,7 +190,7 @@ function transformWhereBodyForChild(whereBody: string, fkFieldName: string): str
 }
 
 const archiveObject = async (payload: IArchiveObject) => {
-  const { backupConfig, backupJobId, source, destConfig, object, s3Keys } = payload;
+  const { backupConfig, backupJobId, source, destConfig, object, s3Keys, objectNames } = payload;
   const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
   const backupConfigId = backupConfig.backupConfigId;
   const tokens: SalesforceTokens = {
@@ -206,11 +209,12 @@ const archiveObject = async (payload: IArchiveObject) => {
     const fieldsMetadata = await salesforceMetadataHandler(
       {
         metadataType: 'fields',
-        policyConfigType: 'backup',
+        policyConfigType: 'archival',
         backupConfig,
         backupJobId,
         crmId,
         crmName,
+        objectNames,
         object,
         isInitialBackup: true,
       },
@@ -218,6 +222,51 @@ const archiveObject = async (payload: IArchiveObject) => {
     );
     const allFieldNames = withSystemFields(
       fieldsMetadata?.metadataType === 'fields' ? fieldsMetadata.fields.map((f) => f.name) : []
+    );
+    // Same schema-metadata set the backup flow stores (fields already ran
+    // above) — picklist values, record types, and child relationships,
+    // scoped to this config's own Object List via objectNames.
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'picklist',
+        policyConfigType: 'archival',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'recordTypes',
+        policyConfigType: 'archival',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'childs',
+        policyConfigType: 'archival',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
     );
 
     if (object.bulkJobId) {
@@ -347,6 +396,7 @@ const archiveObject = async (payload: IArchiveObject) => {
             object: childObject,
             parentWhereClause,
             s3Keys,
+            objectNames,
           });
         } catch (error: any) {
           logger.error(
@@ -470,6 +520,7 @@ const exportWithRetryArchivalV2 = async (data: {
   object: IBackupObject;
   parentWhereClause?: string;
   s3Keys?: IS3ObjectKey[];
+  objectNames?: string[];
 }): Promise<void> => {
   const { type, ...payload } = data;
   const objectName = payload.object.name;

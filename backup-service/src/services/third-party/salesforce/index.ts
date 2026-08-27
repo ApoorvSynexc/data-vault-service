@@ -310,6 +310,11 @@ const salesforceHandler: ICrmBackupHandler = {
       return 'PARTIAL_FAILURE';
     }
 
+    // The config's whole tracked Object List (every node in the tree, not just
+    // this run's roots) — schema metadata (childs/picklist/recordTypes/fields)
+    // scopes itself to this set, same as the backup flow's own objectNames.
+    const objectNames = recursivelyFlatten(backupConfig.objects ?? object).map((obj) => obj.name);
+
     const s3Keys: IS3ObjectKey[] = [];
     for (let index = 0; index < object.length; index++) {
       const objectDetail = object[index];
@@ -320,6 +325,7 @@ const salesforceHandler: ICrmBackupHandler = {
         source,
         destConfig,
         object: objectDetail,
+        objectNames,
         s3Keys,
       });
     }
