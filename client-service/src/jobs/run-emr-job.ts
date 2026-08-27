@@ -136,3 +136,5 @@ const runEmrJob = async () => {
     logger.error(`[emr job - CRON] tick threw error: ${(error as Error)?.message ?? String(error)}`);
   }
 }
+
+export { runEmrJob };
