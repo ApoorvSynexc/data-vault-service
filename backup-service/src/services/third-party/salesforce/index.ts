@@ -12,6 +12,10 @@ import {
 } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
+import { getBackupJob } from '../../backup-job';
+import { createNotification } from '../../notification';
+import { getRestoreById } from '../../restore';
+import { getRestoreJobById } from '../../restore-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
@@ -257,7 +261,37 @@ const salesforceHandler: ICrmBackupHandler = {
       sizeInBytes,
       completedRecordCount,
     });
+
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
+
+    const completedJob = await getBackupJob(backupJobId);
+    const failedStatus = [OBJECT_STATUS.failed, OBJECT_STATUS.deletionJobFailed, OBJECT_STATUS.deletionRecordsFailed];
+    const failedObjects = (completedJob?.object ?? []).filter((obj) => failedStatus.includes(obj.status ?? ''));
+
+    if (failedObjects.length) {
+      const objectNames = failedObjects.map((obj) => obj.name).join(', ');
+      const configLabel = backupConfig.name ?? backupConfigId;
+
+      try {
+        await createNotification({
+          userId: backupConfig.userId,
+          crmId: backupConfig.crmId,
+          title:
+            failedObjects.length === 1
+              ? `1 object failed to back up`
+              : `${failedObjects.length} objects failed to back up`,
+          body: `Your backup "${configLabel}" finished, but ${objectNames} could not be backed up. Please check the logs for more details.`,
+          targetScreen: 'backup-config',
+          targetId: backupConfigId,
+        });
+      } catch (err: any) {
+        logger.error(
+          `Failed to notify user about failed objects | backupJobId:${backupJobId} err:${err?.message ?? err}`
+        );
+      }
+
+      logger.info(`Backup job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`);
+    }
   },
   runArchival: async (
     backupConfigId: string,
@@ -322,6 +356,43 @@ const salesforceHandler: ICrmBackupHandler = {
       sizeInBytes,
       completedRecordCount,
     });
+
+    logger.info(`Archival job completed, backupJobId=${backupJobId}`);
+
+    const freshJob = await getBackupJob(backupJobId);
+    const ARCHIVAL_FAILURE_STATUSES = new Set([
+      OBJECT_STATUS.failed,
+      OBJECT_STATUS.deletionJobFailed,
+      OBJECT_STATUS.deletionRecordsFailed,
+    ]);
+    const failedObjects = recursivelyFlatten(freshJob?.object ?? []).filter((obj) =>
+      ARCHIVAL_FAILURE_STATUSES.has(obj.status ?? '')
+    );
+
+    if (failedObjects.length) {
+      const objectNames = failedObjects.map((obj) => obj.name).join(', ');
+      const configLabel = backupConfig.name ?? backupConfigId;
+
+      try {
+        await createNotification({
+          userId: backupConfig.userId,
+          crmId: backupConfig.crmId,
+          title:
+            failedObjects.length === 1
+              ? `1 object failed to archive`
+              : `${failedObjects.length} objects failed to archive`,
+          body: `Your archival "${configLabel}" finished, but ${objectNames} could not be archived. Please check the logs for more details.`,
+          targetScreen: 'archival-config',
+          targetId: backupConfigId,
+        });
+      } catch (err: any) {
+        logger.error(
+          `Failed to notify user about failed objects | backupJobId:${backupJobId} err:${err?.message ?? err}`
+        );
+      }
+
+      logger.info(`Archival job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`);
+    }
 
     return 'SUCCESS';
     // for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
@@ -438,6 +509,42 @@ const salesforceHandler: ICrmBackupHandler = {
       logger.info(
         `Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, result=${finalStatus}`
       );
+
+      const freshJob = await getRestoreJobById(restoreJobId);
+      const failedObjects = (freshJob?.destination.objects ?? []).filter(
+        (obj) => obj.status === 'FAILED'
+      );
+
+      if (failedObjects.length) {
+        const restore = await getRestoreById(restoreId);
+        if (restore) {
+          const objectNames = failedObjects.map((obj) => obj.name).join(', ');
+          const configLabel = restore.jobDetail?.name ?? restoreId;
+
+          try {
+            await createNotification({
+              userId: restore.userId,
+              crmId: destination.crmId,
+              title:
+                failedObjects.length === 1
+                  ? `1 object failed to restore`
+                  : `${failedObjects.length} objects failed to restore`,
+              body: `Your restore "${configLabel}" finished, but ${objectNames} could not be restored. Please check the logs for more details.`,
+              targetScreen: 'restore',
+              targetId: restoreId,
+            });
+          } catch (err: any) {
+            logger.error(
+              `Failed to notify user about failed objects | restoreJobId:${restoreJobId} err:${err?.message ?? err}`
+            );
+          }
+
+          logger.info(
+            `Restore job notify to user, restoreJobId=${restoreJobId}, restoreId=${restoreId}, failedObjects=${failedObjects.length}`
+          );
+        }
+      }
+
       return finalStatus;
     } catch (err: any) {
       logger.error(
