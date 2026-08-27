@@ -149,6 +149,7 @@ const triggerBackupJob = async (params: {
   schemaSync?: boolean;
 }) => {
   const { config, lastUpdatedAt, type = 'backup', user, schemaSync } = params;
+  try {
   const active = await hasActiveBackupJob(config.backupConfigId);
   if (active) {
     return null;
@@ -202,6 +203,10 @@ const triggerBackupJob = async (params: {
 
   await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
   return result;
+  } catch (error) {
+    logger.error(`triggerBackupJob failed configId=${config.backupConfigId} type=${type} error=${(error as Error)?.message ?? String(error)}`);
+    throw error
+  }
 };
 
 // A job only enters the compression lifecycle once its backup has finished, so every
