@@ -7,7 +7,7 @@ import { COMPRESSION_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant'
 import { wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser } from '../../../services';
+import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, RESTORE_FIELD_JOB_STATUS, RESTORE_BACKUP_STATUS } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -245,11 +245,28 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     if (restore.source.type !== 'ENTIRE') {
-      const updatedObjects: { id: string; name: string; status: "PENDING" }[] = objects.map((object) => ({
-        id: uuidv4(),
-        name: object,
-        status: "PENDING",
-      }));
+      // EMR/Spark resolves its own object list independently of this
+      // workflow's per-object pass/fail tracking, so it can include an object
+      // that already failed the RESTORN FIELD JOB or RUN BACKUP JOB stage —
+      // exclude those here, using the pre-rebuild snapshot's own statuses,
+      // rather than letting the rebuild silently resurrect a failed object
+      // back to PENDING and send it on to ingest.
+      const failedObjectNames = new Set(
+        (restoreJob.destination.objects ?? [])
+          .filter(
+            (object) =>
+              object.status === RESTORE_FIELD_JOB_STATUS.failed || object.status === RESTORE_BACKUP_STATUS.failed
+          )
+          .map((object) => object.name)
+      );
+
+      const updatedObjects: { id: string; name: string; status: "PENDING" }[] = objects
+        .filter((object) => !failedObjectNames.has(object))
+        .map((object) => ({
+          id: uuidv4(),
+          name: object,
+          status: "PENDING",
+        }));
 
       await updateRestoreJob({
         restoreJobId: restoreConfigId,
