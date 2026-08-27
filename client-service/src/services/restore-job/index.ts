@@ -8,8 +8,12 @@ import { incrementTableCounter } from '../counter';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDecryptedDestinationConfig, getDestinationById } from '../destination';
-import { getUser } from '../user';
+import { getUser, getDecryptedCrmCredential } from '../user';
+import { updateRestore } from '../restore';
 import { httpRequest } from '../../utils/http-request';
+import { SalesforceTokens } from '../third-party/salesforce';
+import { ensureRestoreTrackingFields } from '../third-party/salesforce/restore-fields';
+import { logger } from '../../middlewares';
 
 const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   const { userId, crmId, restoreId, status = 'IN_PROGRESS', source, destination, conflict, selection } = params;
@@ -95,7 +99,9 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
 
 interface UpdateRestoreObjectParams {
   name: string;
-  status?: 'PENDING' | 'SUCCESS' | 'FAILED';
+  // Widened to string — each restore pipeline stage (field job, backup run,
+  // ingest, ...) writes its own object-level status vocabulary here.
+  status?: string;
   // Added to the object's running total, not overwritten — a single object
   // can span multiple ingest chunks reported across multiple calls.
   processedRecordCount?: number;
@@ -325,13 +331,114 @@ const getRestoreJobsByRestoreId = async (restoreId: string): Promise<IRestoreJob
   return (result.Items as IRestoreJob[] | undefined) ?? [];
 };
 
+export const RESTORE_FIELD_JOB_STATUS = {
+  inProgress: 'RESTORN FIELD JOB IN PROGRESS',
+  success: 'RESTORN FIELD JOB SUCCESS',
+  failed: 'RESTORN FIELD JOB FAILED',
+};
+
+// Marks every object FAILED with the same reason — used when something
+// upstream of the per-object loop (destination user/credentials) is broken, so
+// there's no per-object work to even attempt.
+const failAllObjects = async (restorejob: IRestoreJob, errorMessage: string): Promise<void> => {
+  await updateRestoreJob({
+    restoreJobId: restorejob.restoreJobId,
+    objects: restorejob.destination.objects.map((object) => ({
+      name: object.name,
+      status: RESTORE_FIELD_JOB_STATUS.failed,
+      errorMessage,
+    })),
+  });
+};
+
+// Stage 1 of the restore workflow: ensure the 3 Data Craft restore-tracking
+// custom fields exist on every restore object, via Metadata API (Tooling API
+// rejects field creation in production orgs). Runs one object at a time in
+// isolation (Promise.allSettled) so a Metadata API failure on one object
+// (bad permissions, a name collision, an org limit) never blocks the rest —
+// each object gets its own persisted SUCCESS/FAILED + real error message.
+// Returns only the object names that succeeded — callers must not carry a
+// FAILED object into any later stage.
+const runRestoreFieldJob = async (restorejob: IRestoreJob): Promise<{ succeededObjectNames: string[] }> => {
+  await Promise.all([
+    updateRestoreJob({ restoreJobId: restorejob.restoreJobId, status: RESTORE_FIELD_JOB_STATUS.inProgress }),
+    updateRestore({ restoreId: restorejob.restoreId, status: RESTORE_FIELD_JOB_STATUS.inProgress }),
+  ]);
+
+  const user = await getUser({ userId: restorejob.userId });
+  if (!user) {
+    await failAllObjects(restorejob, `destination_user_not_found:${restorejob.userId}`);
+    return { succeededObjectNames: [] };
+  }
+
+  const crm = await getCrmById(user.crmId!);
+  const instanceUrl = crm?.instanceUrl;
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+
+  if (!instanceUrl || !access_token) {
+    await failAllObjects(restorejob, 'destination_crm_not_connected');
+    return { succeededObjectNames: [] };
+  }
+
+  const tokens: SalesforceTokens = {
+    accessToken: access_token,
+    refreshToken: refresh_token,
+    userId: user.userId,
+    environment: crm!.environment,
+    customUrl: user.customUrl,
+  };
+
+  const results = await Promise.allSettled(
+    restorejob.destination.objects.map((object) =>
+      ensureRestoreTrackingFields(instanceUrl, tokens, object.name)
+    )
+  );
+
+  const succeededObjectNames: string[] = [];
+  const objectUpdates: UpdateRestoreObjectParams[] = results.map((result, index) => {
+    const objectName = restorejob.destination.objects[index].name;
+    if (result.status === 'fulfilled') {
+      succeededObjectNames.push(objectName);
+      return { name: objectName, status: RESTORE_FIELD_JOB_STATUS.success };
+    }
+    const error: any = result.reason;
+    logger.error(
+      `[restore-field-job] field creation failed | restoreJobId=${restorejob.restoreJobId} object=${objectName} err:${error?.message ?? error}`
+    );
+    return {
+      name: objectName,
+      status: RESTORE_FIELD_JOB_STATUS.failed,
+      errorMessage: error?.message ?? String(error),
+    };
+  });
+
+  await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, objects: objectUpdates });
+
+  return { succeededObjectNames };
+};
+
 const tiggerRestoreJob = async (restorejob: IRestoreJob) => {
+  const { succeededObjectNames } = await runRestoreFieldJob(restorejob);
+
+  // Objects that failed the field job stop here — they never reach
+  // backup-service, and are already persisted as RESTORN FIELD JOB FAILED.
+  const succeededObjects = restorejob.destination.objects.filter((object) =>
+    succeededObjectNames.includes(object.name)
+  );
+
+  if (!succeededObjects.length) {
+    logger.error(
+      `[restore-field-job] every object failed — nothing to hand off to backup-service | restoreJobId=${restorejob.restoreJobId}`
+    );
+    return;
+  }
+
   let result;
   const payload = {
     userId: restorejob.userId,
     restoreJobId: restorejob.restoreJobId,
     source: restorejob.source,
-    destination: restorejob.destination,
+    destination: { ...restorejob.destination, objects: succeededObjects },
     conflict: restorejob.conflict
   }
   try {
