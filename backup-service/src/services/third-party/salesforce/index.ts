@@ -259,7 +259,7 @@ const salesforceHandler: ICrmBackupHandler = {
       sizeInBytes,
       completedRecordCount,
     });
-    
+
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
 
     const completedJob = await getBackupJob(backupJobId);
@@ -354,6 +354,43 @@ const salesforceHandler: ICrmBackupHandler = {
       sizeInBytes,
       completedRecordCount,
     });
+
+    logger.info(`Archival job completed, backupJobId=${backupJobId}`);
+
+    const freshJob = await getBackupJob(backupJobId);
+    const ARCHIVAL_FAILURE_STATUSES = new Set([
+      OBJECT_STATUS.failed,
+      OBJECT_STATUS.deletionJobFailed,
+      OBJECT_STATUS.deletionRecordsFailed,
+    ]);
+    const failedObjects = recursivelyFlatten(freshJob?.object ?? []).filter((obj) =>
+      ARCHIVAL_FAILURE_STATUSES.has(obj.status ?? '')
+    );
+
+    if (failedObjects.length) {
+      const objectNames = failedObjects.map((obj) => obj.name).join(', ');
+      const configLabel = backupConfig.name ?? backupConfigId;
+
+      try {
+        await createNotification({
+          userId: backupConfig.userId,
+          crmId: backupConfig.crmId,
+          title:
+            failedObjects.length === 1
+              ? `1 object failed to archive`
+              : `${failedObjects.length} objects failed to archive`,
+          body: `Your archival "${configLabel}" finished, but ${objectNames} could not be archived. Please check the logs for more details.`,
+          targetScreen: 'archival-config',
+          targetId: backupConfigId,
+        });
+      } catch (err: any) {
+        logger.error(
+          `Failed to notify user about failed objects | backupJobId:${backupJobId} err:${err?.message ?? err}`
+        );
+      }
+
+      logger.info(`Archival job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`);
+    }
 
     return 'SUCCESS';
     // for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
