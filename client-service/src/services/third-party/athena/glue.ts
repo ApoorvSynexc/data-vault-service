@@ -1,8 +1,20 @@
 import { GlueClient, GetTableCommand, EntityNotFoundException } from '@aws-sdk/client-glue';
-import { AWS_REGION } from '../../../constant';
+import { AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, NODE_ENV } from '../../../constant';
 import { logger } from '../../../middlewares';
+import { IAwsCredentials } from '../../../models';
 
-const glue = new GlueClient({ region: AWS_REGION });
+const awsCredentials: IAwsCredentials = {
+  region: AWS_REGION,
+};
+
+if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+  awsCredentials.credentials = {
+    accessKeyId: AWS_ACCESS_KEY_ID,
+    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+  };
+}
+
+const glue = new GlueClient(awsCredentials);
 
 // Whether a Glue table exists — checked before counting records so an object
 // that simply hasn't been compressed yet (no backup job has run for it) reads

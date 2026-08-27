@@ -6,40 +6,28 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
+import {
+  AWS_REGION,
+  AWS_ACCESS_KEY_ID,
+  AWS_SECRET_ACCESS_KEY,
+  AWS_ATHENA_ROLE_ARN,
+  NODE_ENV,
+} from '../../../constant';
 import { logger } from '../../../middlewares';
+import { IAwsCredentials } from '../../../models';
 
-// Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
-// Principal) — only a caller that has actually assumed that role via STS can
-// satisfy it. The EC2 instance role is a SEPARATE identity from this role
-// (confirmed manually: `aws sts assume-role` from the instance succeeds), so
-// this must always assume it — there is no environment where skipping the
-// assume step is correct.
-//
-// masterCredentials is the base identity used to do the assuming: explicit
-// static keys when configured (local/dev), otherwise omitted so
-// fromTemporaryCredentials falls back to ITS OWN default provider chain (the
-// EC2 instance role in a deployed environment) as the base.
-//
-// constant/index.ts builds these with String(process.env.X), so an unset var
-// reads back as the literal string "undefined" rather than undefined itself —
-// excluded here so a deployed environment without these set assumes from the
-// default chain instead of assuming with garbage keys.
-const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
-
-const masterCredentials =
-  isSet(AWS_ATHENA_ACCESS_KEY) && isSet(AWS_ATHENA_SECRET_KEY)
-    ? { accessKeyId: AWS_ATHENA_ACCESS_KEY, secretAccessKey: AWS_ATHENA_SECRET_KEY }
-    : undefined;
-
-const athena = new AthenaClient({
+const awsCredentials: IAwsCredentials = {
   region: AWS_REGION,
-  // credentials: fromTemporaryCredentials({
-  //   masterCredentials,
-  //   params: { RoleArn: AWS_ATHENA_ROLE_ARN, RoleSessionName: 'datavault-athena' },
-  // }),
-});
+};
+
+if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+  awsCredentials.credentials = {
+    accessKeyId: AWS_ACCESS_KEY_ID,
+    secretAccessKey: AWS_SECRET_ACCESS_KEY,
+  };
+}
+
+const athena = new AthenaClient(awsCredentials);
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check, then
 // poll on a 250ms→2s backoff ladder. These compressed Hudi/delta tables are
@@ -63,8 +51,8 @@ const QUERY_TIMEOUT_MS = 300_000;
 // the top level can run before that cycle resolves and crash on `undefined`.
 setImmediate(() => {
   logger.info(
-    `[athena] settings | region:${AWS_REGION} roleArn:${AWS_ATHENA_ROLE_ARN} sessionName:datavault-athena ` +
-    `usingStaticMasterCredentials:${Boolean(masterCredentials)} ` +
+    `[athena] settings | region:${AWS_REGION} roleArn:${AWS_ATHENA_ROLE_ARN} ` +
+    `usingStaticCredentials:${Boolean(awsCredentials.credentials)} ` +
     `pollFirstMs:${POLL_FIRST_MS} pollInitialMs:${POLL_INITIAL_MS} pollMaxMs:${POLL_MAX_MS} queryTimeoutMs:${QUERY_TIMEOUT_MS}`
   );
 });
