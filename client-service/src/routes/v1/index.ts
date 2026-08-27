@@ -17,6 +17,7 @@ import { aclGateway } from '../../middlewares/gateway';
 import { storageRouter } from './storage.routes';
 import { crmMetadataRouter } from './crm-metadata.route';
 import { settingsRouter } from './settings.route';
+import { notificationRouter } from './notification.routes';
 
 const router = Router();
 
@@ -41,5 +42,6 @@ router.use('/destination', destinationRouter);
 router.use('/restore', restoreRetrieveRouter);
 router.use('/storage', storageRouter);
 router.use('/settings', settingsRouter);
+router.use('/notification', notificationRouter);
 
 export const v1Routers = router;
