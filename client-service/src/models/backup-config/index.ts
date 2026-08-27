@@ -118,6 +118,7 @@ export interface IBackupConfig {
   lastEventId?: string; // idempotency key — last processed backup-service event ID
   schemaChange?: boolean;
   completedRecordCount?: number;
+  deletedRecordCount?: number;
   sizeInBytes?: number;
   successRecordCount?: number;
   triggerResults?: ITriggerResult[];

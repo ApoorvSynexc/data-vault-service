@@ -554,7 +554,8 @@ const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup
     },
     archival: {
       sizeInBytes: 0,
-      completedRecordCount: 0
+      completedRecordCount: 0,
+      deletedRecordCount: 0
     }
   }
 
@@ -575,6 +576,7 @@ const getBackupConfigSizeRecordByCrmId = async (crmId: string): Promise<{ backup
       if (config.type === 'ARCHIVAL') {
         response.archival.sizeInBytes += config.sizeInBytes ?? 0;
         response.archival.completedRecordCount += config.completedRecordCount ?? 0;
+        response.archival.deletedRecordCount += config.deletedRecordCount ?? 0;
       } else {
         response.backup.sizeInBytes += config.sizeInBytes ?? 0;
         response.backup.completedRecordCount += config.completedRecordCount ?? 0;

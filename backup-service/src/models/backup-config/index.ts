@@ -38,6 +38,7 @@ export interface IBackupConfig {
   uploadedRecords?: number;
   sizeInBytes?: number;
   completedRecordCount?: number;
+  deletedRecordCount?: number;
   successRecordCount?: number;
   triggerResults?: ITriggerResult[];
   crm?: any;
