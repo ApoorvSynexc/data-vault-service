@@ -3,14 +3,16 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE } from '../../constant';
-import { IBackupJob, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
-import { getBackupConfigById } from '../backup-config';
+import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
+import { getBackupConfigById, updateBackupConfig } from '../backup-config';
+import { logger } from '../../middlewares/logger';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getUser } from '../user';
 import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third-party/salesforce/metadata/index';
 import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
+import { tableExists } from '../third-party/athena/glue';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
@@ -22,6 +24,7 @@ import { buildAthenaFilterWhere } from './athena-filter';
 import {
   pairedColumns,
   IPageKey,
+  IRetrieveSqlParams,
   OPERATION_COLUMN,
   buildHudiEntireSql,
   buildHudiChangedSql,
@@ -232,6 +235,12 @@ interface INamedTreeNode {
 export interface IObjectSummary {
   name: string;
   type: string; // STANDARD | CUSTOM
+  // Child objects (present in this same backup config) the restore UI
+  // should auto-select whenever this object is selected — objects whose
+  // relationship back to this one is cascadeDelete or restrictedDelete. Only
+  // populated by getObjectListWithDependencies — every other producer of
+  // IObjectSummary leaves this undefined.
+  autoSelectChildren?: string[];
 }
 
 const flattenObjects = (objects: INamedTreeNode[]): IObjectSummary[] => {
@@ -283,6 +292,72 @@ const getRestoreObjectListByConfigId = async (
   const restorable = await salesforceObjectFilteredList({ user, apexMode: 'restore' });
   const restorableNames = new Set(restorable.map((obj) => obj.name));
   return { objects: objects.filter((obj) => restorableNames.has(obj.name)), found: true };
+};
+
+/**
+ * Resolves each object's auto-select CHILD dependencies — the reverse of a
+ * parent lookup: an object's own describe already returns childRelationships,
+ * Salesforce's list of every object that references it, each flagged with
+ * cascadeDelete and restrictedDelete. A child relationship with either flag
+ * true is tightly coupled to its parent (cascadeDelete: the child is deleted
+ * along with the parent; restrictedDelete: the parent can't be deleted while
+ * the child exists) — either way, restoring the parent should bring that
+ * child along automatically. An ordinary lookup child (neither flag set) is
+ * never auto-selected.
+ *
+ * A child is only kept when it's actually present in this backup config's
+ * own object list — an unavailable child is never selected.
+ *
+ * One describe per object, run concurrently. A single object's describe
+ * failing doesn't fail the whole list — it just gets no auto-select children.
+ */
+const resolveAutoSelectChildren = async (
+  objects: IObjectSummary[],
+  user: IUser
+): Promise<IObjectSummary[]> => {
+  const objectNames = new Set(objects.map((obj) => obj.name));
+
+  const childrenByObject = await Promise.all(
+    objects.map(async (obj): Promise<string[]> => {
+      try {
+        const described = await salesforceObjectDescribe({ user, objectName: obj.name });
+        return [...new Set(
+          described.childRelationships
+            .filter((rel) => rel.cascadeDelete || rel.restrictedDelete)
+            .map((rel) => rel.childSObject)
+        )].filter((child) => child !== obj.name && objectNames.has(child));
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  return objects.map((obj, i) => ({ ...obj, autoSelectChildren: childrenByObject[i] }));
+};
+
+/**
+ * get-objectlist-by-configid's full response: getRestoreObjectListByConfigId's
+ * restore-eligible object list, each enriched with autoSelectChildren (see
+ * resolveAutoSelectChildren) so the UI can automatically select an object's
+ * cascade-tied children. Deliberately a step on top of getRestoreObjectListByConfigId
+ * rather than baked into it — that function has other callers (dry-run,
+ * fetch-count, fetch-missing-record-types, ...) with no use for relationship
+ * data, which shouldn't pay for the extra per-object describe calls this adds.
+ *
+ * Returns found:false under the same conditions getRestoreObjectListByConfigId does.
+ */
+const getObjectListWithDependencies = async (
+  backupConfigId: string,
+  configType: ConfigType,
+  userId: string
+): Promise<{ objects: IObjectSummary[]; found: boolean }> => {
+  const { objects, found } = await getRestoreObjectListByConfigId(backupConfigId, configType, userId);
+  if (!found) return { objects: [], found: false };
+
+  const user = await getUser({ userId });
+  if (!user) return { objects: [], found: false };
+
+  return { objects: await resolveAutoSelectChildren(objects, user), found: true };
 };
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
@@ -507,6 +582,76 @@ const fingerprintRetrieve = (p: IRetrieveRecordsParams): string =>
     )
     .digest('base64url');
 
+// Fingerprints the columns a "deleted" query was built with — the cache below
+// is only valid for a request asking for the same shape.
+const deletedCacheFingerprint = (columnNames: string[]): string =>
+  JSON.stringify([...new Set(columnNames)].sort());
+
+/**
+ * ENTIRE's "deleted records" query has no window to prune by (ENTIRE means
+ * entire), so it re-scans the whole delta table's history on every call — and
+ * that table only grows. The first block (no cursor, no search) is identical
+ * for every caller until the next compression lands new deltas, so it's
+ * cached on the config (deletedRecordsCache, keyed by objectApiName) as an
+ * Athena queryExecutionId and replayed via fetchStoredResults instead of
+ * re-scanning. `cacheable` gates this off for CHANGED_BETWEEN (already
+ * windowed/pruned and cheap), search text (bakes into the SQL, not just the
+ * result), and any page past the first (must scan for real to seek).
+ *
+ * A cache miss/expired-execution replay silently falls back to a fresh scan —
+ * this is a speed optimization, never a correctness gate, so it must never
+ * surface a cursor error to a caller who never supplied a cursor. Invalidated
+ * wholesale by updateSparkJobStatusHandler on the next successful compression.
+ */
+const runDeletedForEntire = async (
+  config: IBackupConfig,
+  objectApiName: string,
+  deltaTable: string,
+  sqlParams: IRetrieveSqlParams,
+  run: (name: string, sql: () => string) => Promise<IQueryResult>,
+  executions: Record<string, string>,
+  cacheable: boolean
+): Promise<IQueryResult> => {
+  const fingerprint = deletedCacheFingerprint(sqlParams.columnNames);
+  const cached = cacheable ? config.deletedRecordsCache?.[objectApiName] : undefined;
+
+  if (cached && cached.fingerprint === fingerprint) {
+    try {
+      const replayed = await fetchStoredResults(cached.queryExecutionId, BLOCK_SIZE);
+      executions['deleted'] = cached.queryExecutionId;
+      logger.info(
+        `[fetch-records] deleted-cache hit | cfg:${config.backupConfigId} obj:${objectApiName} execId:${cached.queryExecutionId}`
+      );
+      return replayed;
+    } catch (err: any) {
+      logger.info(
+        `[fetch-records] deleted-cache stale, rescanning | cfg:${config.backupConfigId} obj:${objectApiName} err:${err?.message ?? err}`
+      );
+    }
+  }
+
+  const result = await run('deleted', () => buildDeletedDeltaSql(deltaTable, sqlParams));
+
+  if (cacheable && result.queryExecutionId) {
+    updateBackupConfig(config.backupConfigId, {
+      deletedRecordsCache: {
+        ...config.deletedRecordsCache,
+        [objectApiName]: {
+          fingerprint,
+          queryExecutionId: result.queryExecutionId,
+          cachedAt: new Date().toISOString(),
+        },
+      },
+    }).catch((err: any) => {
+      logger.warn(
+        `[fetch-records] deleted-cache write failed | cfg:${config.backupConfigId} obj:${objectApiName} err:${err?.message ?? err}`
+      );
+    });
+  }
+
+  return result;
+};
+
 /**
  * Entry point for POST /retrieve/fetch-records.
  *
@@ -566,13 +711,18 @@ const retrieveRecords = async (
   };
   const windowSql = { ...sql, startDate: startDate!, endDate: endDate! };
 
+  // Only the true first block of a plain (no-search) ENTIRE request is
+  // cacheable — CHANGED_BETWEEN is already windowed/cheap, search text
+  // changes the SQL itself, and any later page must scan for real to seek.
+  const deletedCacheable = !changed && !sql.searchText && page.cursor === null && page.replay === null;
+
   const [main, deleted] = await Promise.all([
     run('main', () =>
       changed
         ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
         : buildHudiEntireSql(hudiTable, sql)
     ),
-    run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
+    runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable),
   ]);
 
   const columns = pairedColumns(params.columnNames);
@@ -761,37 +911,30 @@ export type IDryRunOutcome =
   | { ok: true; value: IDryRunResult }
   | { ok: false; error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' };
 
-// A table not yet compressed (no backup has run) is "nothing to count", not an
-// error — same treatment retrieveRecords gives a missing Hudi/delta table.
-const isMissingTable = (e: unknown): boolean =>
-  /TABLE_NOT_FOUND|does not exist/i.test(String((e as Error).message));
-
-const runHudiCount = async (databaseName: string, sql: string): Promise<number> => {
-  try {
-    const result = await runAthenaQuery(sql, databaseName);
-    return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
-  } catch (e) {
-    if (isMissingTable(e)) return 0;
-    throw e;
-  }
+// A table not yet compressed (no backup job has run for this object) is
+// "nothing to count", not an error — checked with a real Glue lookup
+// (tableExists) rather than sniffing Athena's error message, so a genuine
+// Athena/Glue failure on a table that DOES exist still throws instead of
+// silently reading as zero.
+const runHudiCount = async (databaseName: string, tableName: string, sql: string): Promise<number> => {
+  if (!(await tableExists(databaseName, tableName))) return 0;
+  const result = await runAthenaQuery(sql, databaseName);
+  return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
 };
 
 const runDeltaCount = async (
   databaseName: string,
+  tableName: string,
   sql: string
 ): Promise<{ total: number; update: number; delete: number }> => {
-  try {
-    const result = await runAthenaQuery(sql, databaseName);
-    const row = result.rows[0] ?? {};
-    return {
-      total: parseInt(row['total_cnt'] ?? '0', 10) || 0,
-      update: parseInt(row['update_cnt'] ?? '0', 10) || 0,
-      delete: parseInt(row['delete_cnt'] ?? '0', 10) || 0,
-    };
-  } catch (e) {
-    if (isMissingTable(e)) return { total: 0, update: 0, delete: 0 };
-    throw e;
-  }
+  if (!(await tableExists(databaseName, tableName))) return { total: 0, update: 0, delete: 0 };
+  const result = await runAthenaQuery(sql, databaseName);
+  const row = result.rows[0] ?? {};
+  return {
+    total: parseInt(row['total_cnt'] ?? '0', 10) || 0,
+    update: parseInt(row['update_cnt'] ?? '0', 10) || 0,
+    delete: parseInt(row['delete_cnt'] ?? '0', 10) || 0,
+  };
 };
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : 'unknown_error');
@@ -876,6 +1019,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
           const whereBody = filter ? buildAthenaFilterWhere(filter) : null;
           const count = await runHudiCount(
             databaseName,
+            `${tableFor(objectApiName)}_hudi`,
             buildHudiCountSql(`${tableFor(objectApiName)}_hudi`, whereBody)
           );
           return { objectApiName, ok: true, count };
@@ -904,6 +1048,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
       try {
         const counts = await runDeltaCount(
           databaseName,
+          `${tableFor(objectApiName)}_delta`,
           buildDeltaCountSql(`${tableFor(objectApiName)}_delta`, {
             startDate: params.startDate!,
             endDate: params.endDate!,
@@ -972,7 +1117,7 @@ const getObjectRecordCounts = async (
     objects.map(async ({ name }): Promise<IObjectRecordCount> => {
       try {
         const table = `cfg_${toGlueId(backupConfigId)}_${toGlueId(name)}_hudi`;
-        const count = await runHudiCount(databaseName, buildHudiCountSql(table, null));
+        const count = await runHudiCount(databaseName, table, buildHudiCountSql(table, null));
         return { objectApiName: name, ok: true, count };
       } catch (e) {
         return { objectApiName: name, ok: false, count: 0, error: errorMessage(e) };
@@ -1274,6 +1419,7 @@ export {
   getBackupJobIdsChangedBetween,
   getObjectListByConfigId,
   getRestoreObjectListByConfigId,
+  getObjectListWithDependencies,
   retrieveRecords,
   retrieveInactiveRecordTypes,
   retrieveMissingFields,

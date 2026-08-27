@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { buildPayload, buildRestorePayload } from '../../../services/payload';
-import { getBackupConfigById } from '../../../services/backup-config';
+import { getBackupConfigById, updateBackupConfig } from '../../../services/backup-config';
 import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
 import { COMPRESSION_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
@@ -182,6 +182,17 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     // is already committed, so a Glue failure is logged, never fatal to the
     // response. Idempotent, so retries / duplicate completion events are safe.
     if (success) {
+      // New deltas just landed for this config — the fetch-records "deleted
+      // records" cache (see restore-retrieve's runDeletedForEntire) is now
+      // stale for every object on it. Cleared wholesale rather than per
+      // object: simpler, and the next ENTIRE fetch just re-scans once and
+      // re-caches. Best-effort, same as the glue ensure below.
+      updateBackupConfig(backupConfigId, { deletedRecordsCache: {} }).catch((err: any) => {
+        logger.warn(
+          `[COMPRESSION] deleted-cache invalidation failed | configId=${backupConfigId} err:${err?.message ?? err}`
+        );
+      });
+
       try {
         const glueResult = await ensureCompressionGlueTables(backupConfigId);
         if (glueResult?.failed.length) {

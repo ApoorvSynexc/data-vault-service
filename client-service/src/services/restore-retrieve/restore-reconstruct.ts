@@ -157,7 +157,11 @@ export interface IRankedRecord {
  * instance can serve any page.
  */
 export const PAGE_SIZE = 50;
-export const BLOCK_SIZE = 2000;
+// Athena's GetQueryResults caps each page at 1000 rows (header included, so
+// 999 data rows). Keeping BLOCK_SIZE under that means fetchQueryResults
+// always finishes in ONE round trip instead of 2-3 sequential ones — the
+// previous 2000 forced up to 3 serial GetQueryResults calls per fresh block.
+export const BLOCK_SIZE = 999;
 
 export interface IPageCursor {
   // Fingerprint of the request shape; a mismatch means the query changed.

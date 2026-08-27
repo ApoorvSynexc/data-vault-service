@@ -3,8 +3,8 @@ import {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
-  getRestoreObjectListByConfigId,
   getObjectListByConfigId,
+  getObjectListWithDependencies,
   getBackupJobIdsChangedBetween,
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
@@ -181,7 +181,7 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
     return;
   }
 
-  const { objects, found } = await getRestoreObjectListByConfigId(
+  const { objects, found } = await getObjectListWithDependencies(
     backupConfigId,
     configType as ConfigType,
     userId
