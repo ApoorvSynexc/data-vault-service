@@ -118,6 +118,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       }),
     });
 
+    await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
     logger.info(`Triggered real-time backup for backupConfigId: ${config.backupConfigId} transactionId: ${transactionId}`);
   }
 };
