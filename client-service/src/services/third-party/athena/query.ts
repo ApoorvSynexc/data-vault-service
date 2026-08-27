@@ -11,7 +11,6 @@ import {
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
   AWS_ATHENA_ROLE_ARN,
-  NODE_ENV,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { IAwsCredentials } from '../../../models';
