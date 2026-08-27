@@ -345,16 +345,19 @@ const salesforceHandler: ICrmBackupHandler = {
     const objects = recursivelyFlatten(backupConfig.objects);
     let sizeInBytes = 0;
     let completedRecordCount = 0;
+    let deletedRecordCount = 0;
     if (backupConfig) {
       objects?.forEach((obj) => {
         sizeInBytes += obj.sizeInBytes ?? 0;
         completedRecordCount += obj.completedRecordCount ?? 0;
+        deletedRecordCount += obj.deletedSuccessRecordCount ?? 0;
       });
     }
     await updateBackupConfig(backupConfigId, {
       backupStatus: BACKUP_STATUS.success,
       sizeInBytes,
       completedRecordCount,
+      deletedRecordCount
     });
 
     logger.info(`Archival job completed, backupJobId=${backupJobId}`);
