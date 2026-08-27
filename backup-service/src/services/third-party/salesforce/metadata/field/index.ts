@@ -88,8 +88,8 @@ export interface ISalesforceFieldDescribe {
 // Compound/binary describe types (Schema.DisplayType: ADDRESS, LOCATION, BASE64)
 // aren't directly SELECT-able in SOQL — their sub-fields are queried individually
 // instead (e.g. MailingAddress -> MailingStreet, MailingCity, ...).
-const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
-const EXCLUDED_FIELD_NAMES = new Set(['InformalName']);
+export const EXCLUDED_FIELD_TYPES = new Set(['address', 'location', 'base64']);
+export const EXCLUDED_FIELD_NAMES = new Set(['InformalName']);
 
 // Single gate for "is this field part of backup/archival" — used both to build
 // the SOQL SELECT list and to decide what's persisted to the schema folder, so

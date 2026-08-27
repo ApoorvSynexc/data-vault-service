@@ -1039,6 +1039,8 @@ Lists the fields on a Salesforce object for the field-selection UI.
 | `objectName` | yes | Salesforce object API name |
 | `crmId` | no | Look up fields for a different connected CRM |
 | `mode` | no | `backup` \| `archival` |
+| `filterable` | no | `true` to keep only filterable fields |
+| `excludeSystemFields` | no | `true` to drop non-updateable and system/audit fields (`Id`, `LastModifiedDate`, …) — for a destination-field mapping picker |
 
 **Success response (200)**
 ```json
@@ -1046,6 +1048,34 @@ Lists the fields on a Salesforce object for the field-selection UI.
   "success": true,
   "message": "Fetched successfully",
   "data": [{ "name": "Name", "label": "Account Name", "type": "string" }, { "name": "Industry", "label": "Industry", "type": "picklist" }],
+  "meta": {}
+}
+```
+
+**Error response (400)**
+```json
+{ "success": false, "message": "Unauthorized", "data": null, "meta": {} }
+```
+
+---
+
+### GET /api/v1/crm-metadata/record-types/list
+Lists the record types on a Salesforce object — feeds the "Record type missing" restore edge case's destination-record-type picker.
+
+**Query params**
+
+| Name | Required | Description |
+|---|---|---|
+| `objectName` | yes | Salesforce object API name |
+| `crmId` | no | Look up record types for a different connected CRM |
+| `activeOnly` | no | `true` to drop inactive record types — for a mapping-destination picker, where an inactive record type is never a valid target |
+
+**Success response (200)**
+```json
+{
+  "success": true,
+  "message": "Fetched successfully",
+  "data": [{ "recordTypeId": "012gL0000004ABC", "name": "VIP Contact", "active": true, "available": true, "defaultRecordTypeMapping": false, "master": false }],
   "meta": {}
 }
 ```
@@ -2300,7 +2330,7 @@ Returns the object list selected on a given backup/archival config.
 {
   "success": true,
   "message": "Fetched successfully",
-  "data": [ { "id": "obj-1", "name": "Contact" } ],
+  "data": [ { "name": "Contact", "type": "STANDARD" }, { "name": "My_Custom__c", "type": "CUSTOM" } ],
   "meta": {}
 }
 ```
@@ -2308,6 +2338,36 @@ Returns the object list selected on a given backup/archival config.
 **Error response `400`**
 ```json
 { "success": false, "message": "invalid_config_type", "data": null, "meta": {} }
+```
+
+### GET /api/v1/restore/retrieve/fetch-count
+Record counts for every object on a config — one Athena `COUNT(*)` against each object's main Hudi
+table, all run concurrently. Same object list (and order) as `/get-objectlist-by-configid`, so
+counts line up with that response by `objectApiName`.
+
+**Query params**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| backupConfigId | string | Yes | Config id |
+| configType | "BACKUP"\|"ARCHIVAL" | Yes | Must match the config's stored type |
+
+**Success response `200`**
+```json
+{
+  "success": true,
+  "message": "Fetched successfully",
+  "data": [
+    { "objectApiName": "Contact", "ok": true, "count": 15234 },
+    { "objectApiName": "My_Custom__c", "ok": true, "count": 812 }
+  ],
+  "meta": {}
+}
+```
+
+**Error response `400`**
+```json
+{ "success": false, "message": "not_exist", "data": null, "meta": {} }
 ```
 
 ### GET /api/v1/restore/fetch-change-between-backup-jobs
@@ -2401,15 +2461,90 @@ Returns Record Types made inactive or deleted inside a date window, from stored 
 ```
 
 ### POST /api/v1/restore/retrieve/fetch-missing-fields
-Returns fields deleted from an object inside a date window.
+Compares the field schema stored on S3 for a backup config against the destination object's live Salesforce fields, and returns the fields the backup captured that no longer exist on the destination — the set a restore's "missing fields in destination" edge case needs mapped to an existing destination field.
 
 **Request body**
 ```json
 {
   "backupConfigId": "b1e6c9d0-8b3a-4c2a-9f3a-2f7a0e0e1234",
-  "objectApiName": "Contact",
+  "objectApiName": "Contact"
+}
+```
+
+**Success response `200`** — no missing fields
+```json
+{
+  "success": true,
+  "message": "Fetched successfully",
+  "data": { "hasMissingFields": false, "missingFields": [] },
+  "meta": {}
+}
+```
+
+**Success response `200`** — missing fields found
+```json
+{
+  "success": true,
+  "message": "Fetched successfully",
+  "data": {
+    "hasMissingFields": true,
+    "missingFields": [ { "apiName": "Legacy_Score__c", "label": "Legacy Score", "type": "double" } ]
+  },
+  "meta": {}
+}
+```
+
+**Error response `400`**
+```json
+{ "success": false, "message": "not_exist", "data": null, "meta": {} }
+```
+
+### POST /api/v1/restore/retrieve/fetch-missing-record-types
+Record types a restore's "Record type missing" edge case needs mapped, grouped by object: record types the backup's RECORD_TYPE schema-change delta history ever flagged inactive/deleted (same source `fetch-inactive-record-types` reads) that are, right now, either missing from or still inactive on the destination object's live Salesforce record types. Runs across every object in one call — pass `objectApiNames` for a scoped restore, omit it to resolve every restorable object on the config (an ENTIRE restore), so the UI never calls this once per object. Only objects with at least one record type needing action are returned.
+
+**Request body**
+```json
+{
+  "backupConfigId": "b1e6c9d0-8b3a-4c2a-9f3a-2f7a0e0e1234",
+  "configType": "BACKUP",
+  "objectApiNames": ["Contact", "Case"],
   "startDate": "2026-08-01T00:00:00.000Z",
   "endDate": "2026-08-20T23:59:59.000Z"
+}
+```
+`objectApiNames`, `startDate`, and `endDate` are all optional. Omit `objectApiNames` to scope to every restorable object on the config. Omit `startDate`/`endDate` to scan the whole delta history instead of a window.
+
+**Success response `200`**
+```json
+{
+  "success": true,
+  "message": "Fetched successfully",
+  "data": [
+    {
+      "objectApiName": "Contact",
+      "recordTypes": [
+        { "sourceRecordTypeId": "012gL0000004ABC", "sourceRecordTypeName": "VIP Contact", "status": "MISSING" },
+        { "sourceRecordTypeId": "012gL0000004XYZ", "sourceRecordTypeName": "Partner Contact", "status": "INACTIVE" }
+      ]
+    }
+  ],
+  "meta": {}
+}
+```
+
+**Error response `400`**
+```json
+{ "success": false, "message": "not_exist", "data": null, "meta": {} }
+```
+
+### POST /api/v1/restore/retrieve/required-fields
+Required fields a restore's "Missing required field value" edge case needs a default for, on one object — the live Salesforce object's fields narrowed through the same restore-field-filtering gate `spark-job`'s `restore-fields` API applies (restore-writable, non-system) plus a required-on-create check (createable, non-nillable, no default, not auto-number). A field Salesforce marks required but restore filtering already excludes never appears here.
+
+**Request body**
+```json
+{
+  "backupConfigId": "b1e6c9d0-8b3a-4c2a-9f3a-2f7a0e0e1234",
+  "objectApiName": "Account"
 }
 ```
 
@@ -2418,9 +2553,18 @@ Returns fields deleted from an object inside a date window.
 {
   "success": true,
   "message": "Fetched successfully",
-  "data": [ { "fieldApiName": "Legacy_Score__c", "dataType": "NUMBER", "deletedAt": "2026-08-12T00:00:00.000Z" } ],
+  "data": [
+    { "fieldApiName": "Name", "fieldLabel": "Account Name", "dataType": "string" },
+    { "fieldApiName": "Industry", "fieldLabel": "Industry", "dataType": "picklist", "picklistValues": ["Technology", "Finance", "Healthcare"] }
+  ],
   "meta": {}
 }
+```
+`picklistValues` is present only for `dataType: "picklist"` fields.
+
+**Error response `400`**
+```json
+{ "success": false, "message": "not_exist", "data": null, "meta": {} }
 ```
 
 ### GET /api/v1/restore/fetch-object-fields
