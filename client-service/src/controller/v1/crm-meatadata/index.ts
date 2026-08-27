@@ -106,7 +106,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
     .map((field) => ({ label: field.label, referenceTo: field.referenceTo, name: field.name, nillable: field.nillable, cascadeDelete: field.cascadeDelete }));
 
 
-  if (relationshipDepth && typeof relationshipDepth === 'number' && relationshipDepth > 1) {
+  if (relationshipDepth && typeof relationshipDepth === 'number' && relationshipDepth > 0) {
     const PolymorphicObjects = new Set<string>();
     for (const field of objectDescription.fields) {
       if (
