@@ -128,6 +128,28 @@ const FILTER_OPERATOR = {
   like: 'LIKE',
 };
 
+const STANDARD_OBJECT_LIST = [
+  'Account',
+  'Contact',
+  'Lead',
+  'Opportunity',
+  'Case',
+  'WorkOrder',
+  'Asset',
+  'Contract',
+  'Product2',
+  'Pricebook2',
+  'Asset',
+  'OpportunityLineItem',
+  'Quote',
+  'QuoteLineItem',
+  'Order',
+  'OrderItem',
+  'PricebookEntry',
+  'Task',
+  'EmailMessage'
+]
+
 export {
   HOST,
   PORT,
@@ -173,4 +195,5 @@ export {
   CONDITION_TYPE,
   FILTER_OPERATOR,
   SYSTEM_FIELDS,
+  STANDARD_OBJECT_LIST
 };
