@@ -23,22 +23,15 @@ const buildEmptyBucketPolicy = (): BucketPolicy => ({
   Statement: [],
 });
 
-// Prefix under the client's own bucket that Athena writes query result files
-// to (see restore-retrieve/index.ts's resolveAthenaOutputLocation, which
-// builds the s3:// URI from this same constant) — kept isolated from the
-// client's actual backup/archival data so the lifecycle rule below can
-// expire result files without ever being able to reach real data, no matter
-// what that data's own prefix layout is.
-export const ATHENA_RESULTS_PREFIX = 'athena-query-results/';
-
-// Client buckets need both read (source data Athena scans) and write (query
-// result files landing under ATHENA_RESULTS_PREFIX, in the client's own
-// bucket rather than Athena-owned managed storage — see athena/query.ts) access.
-//   s3:GetObject        — read individual objects (Athena query execution)
-//   s3:ListBucket        — list prefixes (Athena partition discovery)
-//   s3:PutObject         — write query result files
-//   s3:GetBucketLocation — Athena needs the bucket's region before it can target it
-const REQUIRED_ATHENA_ACTIONS = ['s3:GetObject', 's3:ListBucket', 's3:PutObject', 's3:GetBucketLocation'];
+// Client buckets are read-only source data for Athena — query results land in
+// Athena-owned managed storage instead (see athena/query.ts: this workgroup
+// has Managed Query Results enabled, which rejects any request that also
+// sets ResultConfiguration, so writing results into a client bucket isn't
+// possible without that workgroup setting changing first), so no client
+// bucket policy needs write-side actions.
+//   s3:GetObject  — read individual objects (Athena query execution)
+//   s3:ListBucket — list prefixes (Athena partition discovery)
+const REQUIRED_ATHENA_ACTIONS = ['s3:GetObject', 's3:ListBucket'];
 
 const buildAthenaStatement = (bucketName: string) => ({
   Sid: ATHENA_POLICY_SID,
@@ -90,11 +83,6 @@ export const checkAthenaRoleS3Access = async (creds: IS3Config): Promise<boolean
 
 // Grants our Athena Role ARN the required access on the client's S3 bucket by
 // upserting a single statement in their existing bucket policy.
-//
-// ponytail: result files under ATHENA_RESULTS_PREFIX are never expired here —
-// no S3 lifecycle permissions available yet. Add an
-// s3:PutLifecycleConfiguration-scoped rule (Filter: {Prefix: ATHENA_RESULTS_PREFIX})
-// once granted, so files don't accumulate in the client's bucket indefinitely.
 //
 // Safe merge pattern (AWS recommended for bucket policy updates):
 //   1. Fetch the current policy (empty doc if none exists).

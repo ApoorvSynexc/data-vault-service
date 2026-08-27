@@ -7,7 +7,7 @@ import {
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
 import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
-import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ACCESS_KEY, AWS_ATHENA_SECRET_KEY, AWS_ATHENA_ROLE_ARN, AWS_ATHENA_RESULTS_BUCKET } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 // Every client bucket policy grants S3 access to AWS_ATHENA_ROLE_ARN (a role
@@ -75,22 +75,21 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
   QueryExecutionState.CANCELLED,
 ]);
 
-// Submits a query to Athena and returns the queryExecutionId.
-//
-// outputLocation, when given, is an s3://bucket/prefix/ under the CLIENT's
-// own destination bucket (see restore-retrieve/index.ts's
-// resolveAthenaOutputLocation) — the caller resolves it per backupConfigId,
-// this module has no notion of which client a query belongs to. Omitted, the
-// query falls back to Athena-owned managed storage (engine v3+), which needs
-// no bucket of our own but forfeits ResultReuseConfiguration ("Query Result
-// Reuse is not supported in workgroups with ManagedQueryResultsConfiguration
-// enabled") — the two are mutually exclusive, so only a client-bucket query
-// could ever use result reuse, and this doesn't enable that on its own.
-const startQuery = async (sql: string, database: string, outputLocation?: string): Promise<string> => {
+// Every query's results land in AWS_ATHENA_RESULTS_BUCKET — a bucket we own,
+// not a client's. Fixed and unconditional, not per-request: the workgroup
+// has Managed Query Results turned off specifically so this can be set (the
+// two are mutually exclusive — AWS rejects the request outright with
+// "ManagedQueryResultsConfiguration and ResultConfiguration cannot be set
+// together" otherwise, confirmed the hard way). A client's own bucket was
+// tried first and reverted — see git history — since routing results through
+// a client-owned location would have meant granting that bucket's Athena
+// role write access and resolving a destination per backupConfigId on every
+// query; a single owned bucket needs neither.
+const startQuery = async (sql: string, database: string): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
-    ...(outputLocation ? { ResultConfiguration: { OutputLocation: outputLocation } } : {}),
+    ResultConfiguration: { OutputLocation: `s3://${AWS_ATHENA_RESULTS_BUCKET}/` },
   };
 
   logger.info(`[athena] StartQueryExecution request | ${JSON.stringify(input)}`);
@@ -254,19 +253,18 @@ export const fetchStoredResults = async (
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
 // database must be a Glue Catalog database name (e.g. the backupConfigId).
+// Results land in Athena-owned managed storage (see startQuery) — nothing to
+// configure or own on our side.
 // `maxRows` caps how many rows are pulled back; the returned queryExecutionId
 // lets a later request replay the same rows via fetchStoredResults.
-// `outputLocation`, when given, routes results to that s3://bucket/prefix/
-// instead of Athena-owned managed storage — see startQuery.
 export const runAthenaQuery = async (
   sql: string,
   database: string,
-  maxRows?: number,
-  outputLocation?: string
+  maxRows?: number
 ): Promise<IQueryResult> => {
   logger.info(`[athena] executing query | database:${database} sql:${sql}`);
 
-  const queryExecutionId = await startQuery(sql, database, outputLocation);
+  const queryExecutionId = await startQuery(sql, database);
 
   logger.info(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
 
