@@ -453,10 +453,16 @@ const buildSchemaChangeDeltaSql = (
 // RECORD_TYPE deltas — feeds retrieveInactiveRecordTypes and
 // retrieveMissingRecordTypes. Only UPDATE/DELETE carry a state to report;
 // INSERT has no prior/inactive state.
+//
+// The stored schema_change_type value is "RECORDTYPE" — no underscore,
+// unlike its own delta_id prefix ("SCHEMA_META|RECORDTYPE|...") which also
+// spells it that way. Confirmed against a real delta parquet export; the
+// underscored spelling never matches a single row, silently returning "no
+// missing/inactive record types" for every object regardless of the window.
 export const buildRecordTypeDeltaSql = (
   deltaTable: string,
   p: { startDate?: string | null; endDate?: string | null; deltaPartition?: string | null }
-): string => buildSchemaChangeDeltaSql(deltaTable, 'RECORD_TYPE', ['UPDATE', 'DELETE'], p);
+): string => buildSchemaChangeDeltaSql(deltaTable, 'RECORDTYPE', ['UPDATE', 'DELETE'], p);
 
 /**
  * Partition predicate for the DELTA table. The biggest cost lever on this
@@ -655,7 +661,7 @@ if (require.main === module) {
   // ── RECORD_TYPE schema-change deltas ───────────────────────────────────────
   const recordTypeSql = buildRecordTypeDeltaSql('t_delta', win);
   assert.ok(recordTypeSql.startsWith(`SELECT change_type, CAST(change_data AS varchar) AS change_data FROM "t_delta"`));
-  assert.ok(recordTypeSql.includes(`schema_change_type = 'RECORD_TYPE'`));
+  assert.ok(recordTypeSql.includes(`schema_change_type = 'RECORDTYPE'`), 'stored value has no underscore — confirmed against a real delta export');
   assert.ok(recordTypeSql.includes(`change_type IN ('UPDATE', 'DELETE')`));
   assert.ok(recordTypeSql.includes(prune), 'prunes to the window’s months like every other delta scan');
   assert.ok(!recordTypeSql.includes('ORDER BY') && !recordTypeSql.includes('LIMIT'), 'whole window, no paging');
