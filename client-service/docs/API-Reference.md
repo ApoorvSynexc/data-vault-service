@@ -410,8 +410,6 @@ Triggers execution of a restore job that was previously created (in `PENDING` st
   },
   "conflict": {
     "restoreMode": "OVERWRITE",
-    "isIncludeChild": false,
-    "relationshipDepth": 0,
     "edgeCases": {
       "onDuplicateRecord": "SKIP",
       "parentMissing": "SKIP"
