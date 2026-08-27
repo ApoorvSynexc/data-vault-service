@@ -18,6 +18,7 @@ interface UpdateBackupConfigParams {
   schemaChange?: boolean;
   sizeInBytes?: number;
   completedRecordCount?: number;
+  deletedRecordCount?: number;
   triggerResults?: ITriggerResult[];
   type?: string;
 }
