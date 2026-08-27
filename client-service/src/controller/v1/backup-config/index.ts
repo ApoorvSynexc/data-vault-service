@@ -360,7 +360,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
   }
 
-  if (updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig && updated.scheduleConfig.type === SCHEDULE_TYPE.oneTime && !updated.lastBackupAt) {
+  if (updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig && updated.scheduleConfig.type === SCHEDULE_TYPE.oneTime && updated.status === STATUS.active && !updated.lastBackupAt) {
     const scheduleConfig = updated.scheduleConfig;
     const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
       && !scheduleConfig?.scheduling?.startDate
@@ -369,8 +369,12 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       await triggerBackupJob({ user, config: updated, type: 'backup' });
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
-    await updateAwsEventSchedule(buildEventScheduleInput(updated!));
-  } else if (updated?.schedule === SCHEDULE_MODE.realtime && !updated.lastBackupAt) {
+    if (existing?.status === STATUS.draft && updated.status === STATUS.active) {
+      await createAwsEventScheduler(buildEventScheduleInput(updated));
+    } else if ([STATUS.paused, STATUS.active, STATUS.resumed].includes(existing?.status ?? '')) {
+      await updateAwsEventSchedule(buildEventScheduleInput(updated!));
+    }
+  } else if (updated?.schedule === SCHEDULE_MODE.realtime && updated?.status === STATUS.active && !updated.lastBackupAt) {
     await triggerBackupJob({ user, config: updated, type: 'backup' });
     const triggerResults = await realTimeTriggerManagement('create', updated);
     await updateBackupConfig(updated.backupConfigId, { triggerResults });
@@ -422,7 +426,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       try {
         await deleteAwsEventScheduler(buildBackupScheduleName(config.backupConfigId));
       } catch (error) {
-        logger.error(`[delete-aws-event-scheduler] backupConfigId ${config.backupConfigId} failed: ${error instanceof Error ? error.message : String(error)}`);        
+        logger.error(`[delete-aws-event-scheduler] backupConfigId ${config.backupConfigId} failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -661,8 +665,8 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
     const messageKey = reason.startsWith('invalid_record_id')
       ? 'invalid_record_id'
       : reason.startsWith('record_not_found')
-      ? 'trigger_recovery_record_not_found'
-      : 'trigger_recovery_failed';
+        ? 'trigger_recovery_record_not_found'
+        : 'trigger_recovery_failed';
     makeResponse(req, res, 400, false, messageKey);
   }
 };
