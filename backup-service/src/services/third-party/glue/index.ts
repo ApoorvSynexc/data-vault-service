@@ -123,23 +123,32 @@ export const buildMainFieldSchemaKey = (identity: {
   return `${crmName}/${crmId}/${policyConfigType}/${backupConfigId}/schema/${objectName}/fields/${SCHEMA_KIND_FILE.fields}`;
 };
 
-// Picks the 'main' entry out of the stored schema-version history — never the
-// latest 'changes' entry — and types every column as string (no Salesforce
-// type inference). Pure: exported for the self-check below.
+// Picks the current field list out of the stored schema-version history and
+// types every column as string (no Salesforce type inference). Pure: exported
+// for the self-check below.
+//
+// The writer (metadata/field/index.ts:schemaHandler) appends one entry per
+// schema version: the object's first-ever backup is tagged sourceType 'main',
+// and every later entry — appended only when the schema actually drifted — is
+// tagged 'changes'. Each entry's `context` is always the FULL field list as of
+// that write, not a delta, so the last entry in the array is always today's
+// schema: 'main' itself before anything has ever drifted, otherwise the newest
+// 'changes' entry. Taking anything other than the last entry would freeze the
+// Glue table's columns at the object's very first backup and never pick up
+// fields added or removed afterward.
 export const pickMainTableColumns = (
-  entries: Array<{ sourceType?: string; context: Array<{ name: string }> }>,
+  entries: Array<{ context: Array<{ name: string }> }>,
   key: string
 ): IGlueColumnDef[] => {
-  const mainEntry = entries.find((entry) => entry.sourceType === 'main');
-  if (!mainEntry) {
-    throw new Error(`no stored 'main' field schema under ${key}`);
+  const latest = entries[entries.length - 1];
+  if (!latest) {
+    throw new Error(`no stored field schema under ${key}`);
   }
-  return mainEntry.context.map((field) => ({ name: field.name, type: 'string' }));
+  return latest.context.map((field) => ({ name: field.name, type: 'string' }));
 };
 
 // The current-state table's columns come from the client's S3-stored field
-// schema instead — one entry per schema version, tagged sourceType 'main' |
-// 'changes' (see metadata/field/index.ts:schemaHandler, the writer).
+// schema instead of a Hudi/Parquet footer inspection — see pickMainTableColumns.
 const resolveMainTableColumns = async (
   destConfig: IDestinationConfig,
   identity: {
