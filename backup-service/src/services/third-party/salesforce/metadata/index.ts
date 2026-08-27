@@ -6,6 +6,7 @@ import { ISalesforceMetadataHandler } from './common';
 import { isQueryableField, ISalesforceFieldDescribe, schemaHandler } from './field';
 import { picklistHandler } from './picklist';
 import { ISalesforceRecordTypeInfo, recordTypeHandler } from './recordType';
+import { STANDARD_OBJECT_LIST } from '../../../../constant';
 
 // Only the "childs" comparison needs live Salesforce API access (see
 // child/index.ts) — the rest resolve everything from backupConfigId via the
@@ -144,6 +145,8 @@ export const salesforceObjectFilteredList = async (
   if (settings && settings.standardObjects.length) {
     const standardObjectNames = settings.standardObjects.map(s => s.name);
     standardObjects.push(...standardObjectNames);
+  } else {
+    standardObjects.push(...STANDARD_OBJECT_LIST);
   }
 
   const excludeObjectSuffix = [
