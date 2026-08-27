@@ -505,6 +505,25 @@ export const buildHudiCountSql = (hudiTable: string, whereBody?: string | null):
 export const buildHudiApproxCountSql = (hudiTable: string): string =>
   `SELECT approx_distinct(${quoteCol(ID)}) AS cnt FROM "${hudiTable}"`;
 
+// One Athena query covering every object's approximate count, instead of one
+// query per object. Each Athena query pays its own queue time and Hudi
+// connector/timeline-resolution overhead regardless of how little data it
+// scans — on a capacity-limited workgroup, N concurrent queries don't run in
+// parallel, they queue behind each other (Athena serializes under DPU
+// pressure), so N objects means paying that fixed per-query cost N times over
+// for no benefit. A single UNION ALL pays it once. object_name identifies
+// which branch a row came from — labels are caller-controlled internal
+// object API names, not user input, but still passed through the same
+// string-literal escaping (lit) as everything else in this file.
+//
+// Callers must pre-filter to tables that actually exist: a branch referencing
+// a missing table fails the WHOLE union, unlike a single-table query which
+// can be checked and skipped independently (see tableExists).
+export const buildHudiApproxCountUnionSql = (objects: { label: string; hudiTable: string }[]): string =>
+  objects
+    .map((o) => `SELECT ${lit(o.label)} AS object_name, approx_distinct(${quoteCol(ID)}) AS cnt FROM "${o.hudiTable}"`)
+    .join(' UNION ALL ');
+
 /**
  * CHANGE_BETWEEN: total/UPDATE/DELETE counts out of the delta table's
  * record-level rows (is_schema_change excluded via RECORD_ROWS_ONLY) whose
@@ -668,6 +687,16 @@ if (require.main === module) {
   // identically, but no WHERE support: it's a whole-object display count, not
   // a filtered pre-restore number.
   assert.strictEqual(buildHudiApproxCountSql('t_hudi'), `SELECT approx_distinct("Id") AS cnt FROM "t_hudi"`);
+  // One query, one row per object — pays connector overhead once instead of
+  // once per object.
+  assert.strictEqual(
+    buildHudiApproxCountUnionSql([
+      { label: 'Account', hudiTable: 't_account_hudi' },
+      { label: 'Contact', hudiTable: 't_contact_hudi' },
+    ]),
+    `SELECT 'Account' AS object_name, approx_distinct("Id") AS cnt FROM "t_account_hudi" UNION ALL ` +
+    `SELECT 'Contact' AS object_name, approx_distinct("Id") AS cnt FROM "t_contact_hudi"`
+  );
 
   const deltaCount = buildDeltaCountSql('t_delta', { startDate: START, endDate: END, deltaPartition: prune });
   assert.ok(deltaCount.startsWith(

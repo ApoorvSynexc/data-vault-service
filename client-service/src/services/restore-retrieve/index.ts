@@ -13,6 +13,7 @@ import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third
 import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { tableExists } from '../third-party/athena/glue';
+import { ATHENA_RESULTS_PREFIX } from '../third-party/athena';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
@@ -34,6 +35,7 @@ import {
   buildRecordTypeDeltaSql,
   buildHudiCountSql,
   buildHudiApproxCountSql,
+  buildHudiApproxCountUnionSql,
   buildDeltaCountSql,
 } from './athena-fetch';
 
@@ -335,13 +337,37 @@ export class CursorError extends Error {
 }
 
 /**
+ * Resolves the S3 location Athena should write this config's query results
+ * into — the client's own destination bucket (ATHENA_RESULTS_PREFIX, see
+ * athena/index.ts), not AWS-managed storage. Takes an already-fetched config
+ * (every caller here fetches one anyway, for its own ownership check) rather
+ * than re-reading it, and returns undefined — falling back to managed
+ * storage — instead of throwing when the destination can't be resolved, so a
+ * lookup hiccup here never blocks the query itself from running.
+ */
+const resolveAthenaOutputLocation = async (config: IBackupConfig): Promise<string | undefined> => {
+  try {
+    const destination = await getDestinationById(config.destinationId);
+    if (!destination) return undefined;
+    const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
+    return `s3://${destConfig.bucketName}/${ATHENA_RESULTS_PREFIX}`;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
  * Executes a named query, or replays a previous execution of it.
  *
  * `sql` is a thunk so the string is never built on a replay. Every Hudi/delta
  * query tolerates a missing table — those only exist after the first
  * compression run, so absence means "no compressed state yet", not an error.
  */
-const makeRunner = (databaseName: string, replay: Record<string, string> | null) => {
+const makeRunner = (
+  databaseName: string,
+  replay: Record<string, string> | null,
+  outputLocation?: string
+) => {
   const executions: Record<string, string> = {};
 
   const run = async (name: string, sql: () => string): Promise<IQueryResult> => {
@@ -349,7 +375,7 @@ const makeRunner = (databaseName: string, replay: Record<string, string> | null)
     try {
       const result = stored
         ? await fetchStoredResults(stored)
-        : await runAthenaQuery(sql(), databaseName);
+        : await runAthenaQuery(sql(), databaseName, undefined, outputLocation);
       if (result.queryExecutionId) executions[name] = result.queryExecutionId;
       return result;
     } catch (e: unknown) {
@@ -625,7 +651,8 @@ const retrieveRecords = async (
   const endDate = changed ? params.endDate! : null;
 
   const page = resolvePage(fingerprintRetrieve(params), params.cursor);
-  const { run, executions } = makeRunner(databaseName, page.replay);
+  const outputLocation = await resolveAthenaOutputLocation(config);
+  const { run, executions } = makeRunner(databaseName, page.replay, outputLocation);
 
   const sql = {
     columnNames: params.columnNames,
@@ -705,7 +732,8 @@ const retrieveInactiveRecordTypes = async (
   const deltaTable = `${table}_delta`;
 
   const { startDate, endDate } = params;
-  const { run } = makeRunner(databaseName, null);
+  const outputLocation = await resolveAthenaOutputLocation(config);
+  const { run } = makeRunner(databaseName, null, outputLocation);
   const result = await run('recordTypeDeltas', () =>
     buildRecordTypeDeltaSql(deltaTable, {
       startDate,
@@ -845,19 +873,25 @@ export type IDryRunOutcome =
 // (tableExists) rather than sniffing Athena's error message, so a genuine
 // Athena/Glue failure on a table that DOES exist still throws instead of
 // silently reading as zero.
-const runHudiCount = async (databaseName: string, tableName: string, sql: string): Promise<number> => {
+const runHudiCount = async (
+  databaseName: string,
+  tableName: string,
+  sql: string,
+  outputLocation?: string
+): Promise<number> => {
   if (!(await tableExists(databaseName, tableName))) return 0;
-  const result = await runAthenaQuery(sql, databaseName);
+  const result = await runAthenaQuery(sql, databaseName, undefined, outputLocation);
   return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
 };
 
 const runDeltaCount = async (
   databaseName: string,
   tableName: string,
-  sql: string
+  sql: string,
+  outputLocation?: string
 ): Promise<{ total: number; update: number; delete: number }> => {
   if (!(await tableExists(databaseName, tableName))) return { total: 0, update: 0, delete: 0 };
-  const result = await runAthenaQuery(sql, databaseName);
+  const result = await runAthenaQuery(sql, databaseName, undefined, outputLocation);
   const row = result.rows[0] ?? {};
   return {
     total: parseInt(row['total_cnt'] ?? '0', 10) || 0,
@@ -939,6 +973,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
   const databaseName = toGlueId(params.backupConfigId);
   const tableFor = (objectApiName: string) =>
     `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(objectApiName)}`;
+  const outputLocation = await resolveAthenaOutputLocation(config);
 
   if (params.type === 'ENTIRE') {
     const objects = await Promise.all(
@@ -949,7 +984,8 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
           const count = await runHudiCount(
             databaseName,
             `${tableFor(objectApiName)}_hudi`,
-            buildHudiCountSql(`${tableFor(objectApiName)}_hudi`, whereBody)
+            buildHudiCountSql(`${tableFor(objectApiName)}_hudi`, whereBody),
+            outputLocation
           );
           return { objectApiName, ok: true, count };
         } catch (e) {
@@ -982,7 +1018,8 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
             startDate: params.startDate!,
             endDate: params.endDate!,
             deltaPartition,
-          })
+          }),
+          outputLocation
         );
         return {
           objectApiName,
@@ -1021,11 +1058,20 @@ export interface IObjectRecordCount {
 }
 
 /**
- * Record counts for every object on a config — one Athena approx_distinct
- * scan against the object's main Hudi table (buildHudiApproxCountSql), all
- * run concurrently. Feeds the object-selection step's Records column, a
- * browse-time display number, not something a restore decision is made from
- * — dry-run's own ENTIRE count (buildHudiCountSql) stays exact for that.
+ * Record counts for every object on a config — feeds the object-selection
+ * step's Records column, a browse-time display number, not something a
+ * restore decision is made from (dry-run's own ENTIRE count,
+ * buildHudiCountSql, stays exact for that).
+ *
+ * One Athena query for the whole config (buildHudiApproxCountUnionSql), not
+ * one per object: each Athena query pays its own queue time and Hudi
+ * connector overhead regardless of data size, and on this workgroup's
+ * capacity, concurrent queries don't run in parallel — they queue behind
+ * each other, so N objects used to mean paying that fixed cost N times over
+ * serially. Table existence is checked first via Glue (tableExists, a plain
+ * metadata call, genuinely concurrent — no DPU involved) since a UNION ALL
+ * branch referencing a missing table fails the whole query; a config with no
+ * compressed tables yet skips Athena entirely and returns all zeros.
  *
  * Uses the same restore-eligible object list /get-objectlist-by-configid
  * returns (getRestoreObjectListByConfigId), so the two responses line up by
@@ -1039,23 +1085,53 @@ const getObjectRecordCounts = async (
   configType: ConfigType,
   userId: string
 ): Promise<{ counts: IObjectRecordCount[]; found: boolean }> => {
+  const config = await getBackupConfigById(backupConfigId);
   const { objects, found } = await getRestoreObjectListByConfigId(backupConfigId, configType, userId);
-  if (!found) return { counts: [], found: false };
+  if (!found || !config) return { counts: [], found: false };
 
+  const outputLocation = await resolveAthenaOutputLocation(config);
   const databaseName = toGlueId(backupConfigId);
-  const counts = await Promise.all(
-    objects.map(async ({ name }): Promise<IObjectRecordCount> => {
-      try {
-        const table = `cfg_${toGlueId(backupConfigId)}_${toGlueId(name)}_hudi`;
-        const count = await runHudiCount(databaseName, table, buildHudiApproxCountSql(table));
-        return { objectApiName: name, ok: true, count };
-      } catch (e) {
-        return { objectApiName: name, ok: false, count: 0, error: errorMessage(e) };
-      }
-    })
-  );
+  const withTable = objects.map(({ name }) => ({
+    name,
+    table: `cfg_${toGlueId(backupConfigId)}_${toGlueId(name)}_hudi`,
+  }));
 
-  return { counts, found: true };
+  const presence = await Promise.all(
+    withTable.map(async (o) => ({ ...o, exists: await tableExists(databaseName, o.table).catch(() => false) }))
+  );
+  const present = presence.filter((o) => o.exists);
+
+  if (present.length === 0) {
+    return { counts: withTable.map((o): IObjectRecordCount => ({ objectApiName: o.name, ok: true, count: 0 })), found: true };
+  }
+
+  try {
+    const sql = buildHudiApproxCountUnionSql(present.map((o) => ({ label: o.name, hudiTable: o.table })));
+    const result = await runAthenaQuery(sql, databaseName, undefined, outputLocation);
+    const countByName = new Map(result.rows.map((row) => [row['object_name'], parseInt(row['cnt'] ?? '0', 10) || 0]));
+    const counts = withTable.map((o): IObjectRecordCount => ({
+      objectApiName: o.name,
+      ok: true,
+      count: countByName.get(o.name) ?? 0,
+    }));
+    return { counts, found: true };
+  } catch (e) {
+    // Whole-batch failure (a real Athena error, not a missing table — that's
+    // already filtered out above) shouldn't blank every object's count.
+    // Falls back to the old one-query-per-object shape, still concurrent.
+    const counts = await Promise.all(
+      withTable.map(async (o): Promise<IObjectRecordCount> => {
+        try {
+          const count = await runHudiCount(databaseName, o.table, buildHudiApproxCountSql(o.table), outputLocation);
+          return { objectApiName: o.name, ok: true, count };
+        } catch (fallbackErr) {
+          return { objectApiName: o.name, ok: false, count: 0, error: errorMessage(fallbackErr) };
+        }
+      })
+    );
+    logger.warn(`[restore] combined object-count query failed, fell back to per-object | backupConfigId:${backupConfigId} err:${errorMessage(e)}`);
+    return { counts, found: true };
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -1114,18 +1190,19 @@ const retrieveMissingRecordTypes = async (
 ): Promise<IObjectRecordTypeMapping[] | null> => {
   const { backupConfigId, configType, userId, user, startDate, endDate } = params;
 
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config || config.userId !== userId) return null;
+
   let objectNames = params.objectApiNames?.filter(Boolean) ?? [];
   if (objectNames.length === 0) {
     const { objects, found } = await getRestoreObjectListByConfigId(backupConfigId, configType, userId);
     if (!found) return null;
     objectNames = objects.map((o) => o.name);
-  } else {
-    const config = await getBackupConfigById(backupConfigId);
-    if (!config || config.userId !== userId) return null;
   }
 
   const databaseName = toGlueId(backupConfigId);
-  const { run } = makeRunner(databaseName, null);
+  const outputLocation = await resolveAthenaOutputLocation(config);
+  const { run } = makeRunner(databaseName, null, outputLocation);
   const deltaPartition = buildDeltaPartitionWhere(startDate ?? null, endDate ?? null);
 
   const perObject = await Promise.all(
