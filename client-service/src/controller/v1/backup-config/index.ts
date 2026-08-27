@@ -419,7 +419,11 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         );
       }
     } else if (isIncrementalBackup || isOneTimeSchedule) {
-      await deleteAwsEventScheduler(buildBackupScheduleName(config.backupConfigId));
+      try {
+        await deleteAwsEventScheduler(buildBackupScheduleName(config.backupConfigId));
+      } catch (error) {
+        logger.error(`[delete-aws-event-scheduler] backupConfigId ${config.backupConfigId} failed: ${error instanceof Error ? error.message : String(error)}`);        
+      }
     }
 
     await Promise.all([
