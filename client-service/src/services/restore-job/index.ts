@@ -722,6 +722,21 @@ const runScheduleBackupStage = async (
   }
 
   if (!runResult.ok || !runResult.backupJobId) {
+    // job_already_invoked means this is a ONE_TIME schedule config that already
+    // ran (see runBackupNow) — there's no next run to trigger, but the data it
+    // captured on that one run is still sitting there and current. That's not a
+    // restore failure, just nothing to re-run before ingest reads it.
+    if (runResult.reason === 'job_already_invoked') {
+      logger.info(
+        `[restore-backup-job] one-time backup already ran — reusing existing backup data | restoreJobId=${restorejob.restoreJobId} backupConfigId=${backupConfig.backupConfigId}`
+      );
+      await updateRestoreJob({
+        restoreJobId: restorejob.restoreJobId,
+        objects: objectNames.map((name) => ({ name, status: RESTORE_BACKUP_STATUS.completed })),
+      });
+      return { succeededObjectNames: objectNames };
+    }
+
     const message = `backup_run_now_failed:${runResult.reason ?? 'no_backup_job_id_returned'}`;
     logger.error(
       `[restore-backup-job] run-now rejected | restoreJobId=${restorejob.restoreJobId} backupConfigId=${backupConfig.backupConfigId} reason=${runResult.reason}`

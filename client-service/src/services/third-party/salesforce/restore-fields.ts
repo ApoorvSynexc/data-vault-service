@@ -38,6 +38,18 @@ const objectXml = (fields: IRestoreTrackingField[]): string =>
   `${fields.map(fieldXml).join('\n')}\n` +
   `</CustomObject>`;
 
+// Task and Event don't own their custom fields — both are record types of the
+// underlying Activity object, and Salesforce's Metadata API rejects a
+// CustomField/CustomObject deploy targeted at "Task" or "Event" directly
+// ("Entity Enumeration Or ID: bad value for restricted picklist field").
+// Fields have to be declared on Activity instead, and then appear on both
+// Task's and Event's own describe automatically. Permission Set field/object
+// grants are unaffected — FLS is still assigned per Task/Event individually,
+// see restore-permission-set.ts.
+const ACTIVITY_OBJECTS = new Set(['Task', 'Event']);
+const fieldCreationTarget = (objectApiName: string): string =>
+  ACTIVITY_OBJECTS.has(objectApiName) ? 'Activity' : objectApiName;
+
 const describeFieldNames = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -69,16 +81,17 @@ export const ensureRestoreTrackingFields = async (
     return;
   }
 
+  const deployTarget = fieldCreationTarget(objectApiName);
   await deployMetadata(instanceUrl, tokens, {
     files: [
       {
-        path: `objects/${objectApiName}.object`,
+        path: `objects/${deployTarget}.object`,
         content: objectXml(missing),
       },
     ],
     packageXml: buildPackageXml(
       'CustomField',
-      missing.map((field) => `${objectApiName}.${field.apiName}`)
+      missing.map((field) => `${deployTarget}.${field.apiName}`)
     ),
   });
 };
