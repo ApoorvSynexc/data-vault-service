@@ -26,34 +26,19 @@ export const deployMetadata = async (
   tokens: SalesforceTokens,
   { files, packageXml, destructiveChangesXml, allowMissingFiles = false }: DeployOptions
 ): Promise<void> => {
-  // createFolders: false — JSZip's default (true) additionally writes explicit
-  // directory entries ("objects/", "objects/Account/", ...) into the zip for
-  // every nested file path. Salesforce's deploy-zip scanner chokes on those:
-  // it reports the real file as "named in package.xml, but was not found in
-  // zipped directory" even though the file is genuinely present, because the
-  // directory entries confuse its component lookup. Confirmed live — a
-  // multi-file deploy (this function's first real multi-file caller,
-  // restore-fields.ts's per-object field batches) failed 100% of the time
-  // with exactly that error until this was set.
-  // ponytail: experimental (round 2) — wrapping everything under unpackaged/
-  // and switching to singlePackage:false, matching the classic Ant Migration
-  // Tool deploy-root convention. Revert (drop the prefix, singlePackage:true)
-  // if this doesn't fix the "not found in zipped directory" error.
+  // Flat MDAPI zip root (package.xml at top level, singlePackage: true) — the
+  // same layout trigger.ts's deploys already use successfully. createFolders:
+  // false stops JSZip from writing implicit directory entries that confuse
+  // Salesforce's deploy-zip component scanner.
   const zip = new JSZip();
   for (const file of files) {
-    zip.file(`unpackaged/${file.path}`, file.content, { createFolders: false });
+    zip.file(file.path, file.content, { createFolders: false });
   }
-  zip.file('unpackaged/package.xml', packageXml);
+  zip.file('package.xml', packageXml);
   if (destructiveChangesXml) {
-    zip.file('unpackaged/destructiveChanges.xml', destructiveChangesXml, { createFolders: false });
+    zip.file('destructiveChanges.xml', destructiveChangesXml, { createFolders: false });
   }
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
-
-  // ponytail: temporary diagnostic — createFolders:false didn't stop the
-  // "named in package.xml, but not found in zipped directory" error, so log
-  // exactly what we're about to send. Remove once the cause is confirmed.
-  console.log('[deployMetadata] zip entries:', Object.keys(zip.files));
-  console.log('[deployMetadata] package.xml:\n' + packageXml);
 
   const deployOptions = JSON.stringify({
     deployOptions: {
@@ -63,7 +48,7 @@ export const deployMetadata = async (
       ignoreWarnings: true,
       rollbackOnError: true,
       runAllTests: false,
-      singlePackage: false,
+      singlePackage: true,
     },
   });
 
