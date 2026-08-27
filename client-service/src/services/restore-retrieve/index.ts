@@ -33,6 +33,7 @@ import {
   buildDeltaPartitionWhere,
   buildRecordTypeDeltaSql,
   buildHudiCountSql,
+  buildHudiApproxCountSql,
   buildDeltaCountSql,
 } from './athena-fetch';
 
@@ -1020,10 +1021,11 @@ export interface IObjectRecordCount {
 }
 
 /**
- * Record counts for every object on a config — one Athena COUNT(*) against
- * the object's main Hudi table, all run concurrently (same runHudiCount +
- * buildHudiCountSql the dry-run ENTIRE path already uses, just without a
- * FILTER-scope WHERE body). Feeds the object-selection step's Records column.
+ * Record counts for every object on a config — one Athena approx_distinct
+ * scan against the object's main Hudi table (buildHudiApproxCountSql), all
+ * run concurrently. Feeds the object-selection step's Records column, a
+ * browse-time display number, not something a restore decision is made from
+ * — dry-run's own ENTIRE count (buildHudiCountSql) stays exact for that.
  *
  * Uses the same restore-eligible object list /get-objectlist-by-configid
  * returns (getRestoreObjectListByConfigId), so the two responses line up by
@@ -1045,7 +1047,7 @@ const getObjectRecordCounts = async (
     objects.map(async ({ name }): Promise<IObjectRecordCount> => {
       try {
         const table = `cfg_${toGlueId(backupConfigId)}_${toGlueId(name)}_hudi`;
-        const count = await runHudiCount(databaseName, table, buildHudiCountSql(table, null));
+        const count = await runHudiCount(databaseName, table, buildHudiApproxCountSql(table));
         return { objectApiName: name, ok: true, count };
       } catch (e) {
         return { objectApiName: name, ok: false, count: 0, error: errorMessage(e) };

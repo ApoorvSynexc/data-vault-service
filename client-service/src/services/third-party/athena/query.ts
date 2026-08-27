@@ -141,6 +141,22 @@ const waitForQuery = async (queryExecutionId: string): Promise<void> => {
         const reason = QueryExecution?.Status?.StateChangeReason ?? 'unknown';
         throw new Error(`[athena] query ${state} | reason: ${reason}`);
       }
+      // Athena's own timing breakdown — the only way to tell "small data, slow
+      // query" apart without guessing: a high queueMs points at DPU/workgroup
+      // capacity contention, a high planningMs points at partition/file-listing
+      // overhead (often many small files), and a high engineExecMs with a low
+      // dataScannedBytes points at read-side cost (e.g. Merge-on-Read Hudi
+      // merging base+log files) rather than genuine data volume.
+      const stats = QueryExecution?.Statistics;
+      logger.info(
+        `[athena] query stats | queryExecutionId:${queryExecutionId} ` +
+        `queueMs:${stats?.QueryQueueTimeInMillis ?? 'n/a'} ` +
+        `planningMs:${stats?.QueryPlanningTimeInMillis ?? 'n/a'} ` +
+        `engineExecMs:${stats?.EngineExecutionTimeInMillis ?? 'n/a'} ` +
+        `serviceProcessingMs:${stats?.ServiceProcessingTimeInMillis ?? 'n/a'} ` +
+        `totalMs:${stats?.TotalExecutionTimeInMillis ?? 'n/a'} ` +
+        `dataScannedBytes:${stats?.DataScannedInBytes ?? 'n/a'}`
+      );
       return;
     }
 

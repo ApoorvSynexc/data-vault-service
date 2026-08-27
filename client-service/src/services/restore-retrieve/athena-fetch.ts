@@ -22,11 +22,17 @@ import { FilterError } from './athena-filter';
  * them, so the API contract is "you get back the columns you requested" (plus
  * `OPERATION`).
  *
- * PAGINATION: keyset (seek), not OFFSET. Every builder orders by
- * `LastModifiedDate DESC, Id DESC` and accepts a cursor key; the predicate
- * `(lmd, id) < (cursor.lmd, cursor.id)` seeks straight to the next block
- * instead of counting past the rows already served. Cost per block is constant
- * — page 40 scans no more than page 1.
+ * PAGINATION: keyset (seek), not OFFSET, and deliberately UNORDERED. Every
+ * builder accepts a cursor key and applies the predicate
+ * `(lmd, id) < (cursor.lmd, cursor.id)` so a page only asks for rows "below"
+ * the last one it served — but with no ORDER BY, Athena does not guarantee
+ * which matching rows a LIMIT returns, so this narrows the candidate set
+ * rather than seeking to an exact "next" row. Speed over correctness, by
+ * request: ORDER BY forces a distributed sort whose final merge step is
+ * single-node (a real bottleneck on a capacity-limited workgroup), so it was
+ * dropped — a multi-page fetch can now return a row more than once or skip
+ * one at the boundary, which is accepted here as the cost of not paying for
+ * a sort on every request.
  */
 
 // Object field API names are identifier-safe; validate to keep them out of the
@@ -78,10 +84,12 @@ const whereClause = (parts: (string | null | undefined)[], keyword: 'WHERE' | 'A
   return active.length ? ` ${keyword} ${active.map((p) => `(${p})`).join(' AND ')}` : '';
 };
 
-// Seek predicate for "strictly after the cursor" under ORDER BY lmd DESC, id
-// DESC. Compared as varchar throughout: LastModifiedDate is an ISO string, so
-// lexicographic order is chronological (the same assumption the rest of the
-// module already makes).
+// Narrows a page to rows "below" the cursor in the (lmd, id) key space. With
+// no ORDER BY this is no longer a true seek-to-next-row predicate (see the
+// file header) — it still prunes what a page can return, just without the
+// old guarantee of an exact, gapless "next" boundary. Compared as varchar
+// throughout: LastModifiedDate is an ISO string, so lexicographic order is
+// chronological (the same assumption the rest of the module already makes).
 const keysetWhere = (
   cursor: IPageKey | null | undefined,
   lmdExpr: string,
@@ -240,8 +248,10 @@ export interface IRetrieveSqlParams {
 // the bounds are non-null by type rather than by `!` at every use.
 export type IWindowSqlParams = IRetrieveSqlParams & { startDate: string; endDate: string };
 
-const orderAndLimit = (limit: number): string =>
-  ` ORDER BY ${quoteCol(LMD)} DESC, ${quoteCol(ID)} DESC LIMIT ${limit}`;
+// No ORDER BY — see the file header. A LIMIT with no sort lets Trino stop as
+// soon as any worker has enough matching rows, instead of every worker
+// sorting its share and streaming it to one node for a final merge.
+const orderAndLimit = (limit: number): string => ` LIMIT ${limit}`;
 
 // ENTIRE: the Hudi table IS the answer — one row per record, already at the
 // state the vault holds. No delta is read, so there is nothing to reconstruct.
@@ -485,6 +495,16 @@ export const buildDeltaPartitionWhere = (
 export const buildHudiCountSql = (hudiTable: string, whereBody?: string | null): string =>
   `SELECT COUNT(*) AS cnt FROM "${hudiTable}"` + whereClause([whereBody], 'WHERE');
 
+// Approximate count via approx_distinct (HyperLogLog) — for exploratory
+// display only (the object-list "Records" column, getObjectRecordCounts),
+// never for dry-run: that number is a pre-restore commitment the user acts
+// on, so it stays exact (buildHudiCountSql, above). The Hudi table is one row
+// per Id (see the file header), so distinct-Id cardinality IS the row count;
+// approx_distinct trades ~2.3% standard error for not paying full exact-count
+// cost on a number that's only ever a rough "how big is this" indicator.
+export const buildHudiApproxCountSql = (hudiTable: string): string =>
+  `SELECT approx_distinct(${quoteCol(ID)}) AS cnt FROM "${hudiTable}"`;
+
 /**
  * CHANGE_BETWEEN: total/UPDATE/DELETE counts out of the delta table's
  * record-level rows (is_schema_change excluded via RECORD_ROWS_ONLY) whose
@@ -526,7 +546,7 @@ if (require.main === module) {
   // ── ENTIRE: the Hudi table alone, no delta, no window ──────────────────────
   const hudiAll = buildHudiEntireSql('t_hudi', retrieve);
   assert.ok(hudiAll.startsWith(`SELECT "Id", "Name", "Amount", "LastModifiedDate", 'UPDATE' AS "dv_operation" FROM "t_hudi"`));
-  assert.ok(hudiAll.endsWith(`ORDER BY "LastModifiedDate" DESC, "Id" DESC LIMIT 2000`));
+  assert.ok(hudiAll.endsWith(`LIMIT 2000`) && !hudiAll.includes('ORDER BY'), 'no distributed sort — LIMIT lets any worker satisfy it');
   assert.ok(!hudiAll.includes('WHERE'), 'nothing filtered → no WHERE at all');
   assert.ok(!hudiAll.includes('change_'), 'ENTIRE never reads a delta');
 
@@ -544,9 +564,9 @@ if (require.main === module) {
   assert.ok(changedSql.includes(`"Id" IN (SELECT DISTINCT record_id FROM "t_delta" WHERE (NOT COALESCE(is_schema_change, false)) AND (change_type <> 'DELETE')`));
   assert.ok(changedSql.includes(prune), 'the delta subquery prunes to the window’s months');
   assert.ok(!changedSql.includes(`FROM "t_hudi" WHERE (year`), 'the Hudi table is NOT pruned — it partitions on CreatedDate');
-  // Both groups come out of ONE ordered, seekable stream.
+  // Both groups come out of ONE stream, still unsorted.
   assert.strictEqual(changedSql.match(/FROM "t_hudi"/g)!.length, 1);
-  assert.ok(changedSql.endsWith(`ORDER BY "LastModifiedDate" DESC, "Id" DESC LIMIT 2000`));
+  assert.ok(changedSql.endsWith(`LIMIT 2000`) && !changedSql.includes('ORDER BY'));
 
   // ── Deleted records: snapshot out of the DELETE delta ──────────────────────
   const deleted = buildDeletedDeltaSql('t_delta', win);
@@ -607,7 +627,7 @@ if (require.main === module) {
   ]) {
     assert.ok(
       sql.includes(`("LastModifiedDate" < '${key.lmd}' OR ("LastModifiedDate" = '${key.lmd}' AND "Id" < '001A'))`),
-      'every source seeks in the same key domain, so one cursor orders the merge'
+      'every source narrows against the same key domain, so one cursor applies across all of them'
     );
     assert.ok(!sql.includes('OFFSET'));
   }
@@ -644,6 +664,10 @@ if (require.main === module) {
     buildHudiCountSql('t_hudi', `"Name" = 'Acme'`),
     `SELECT COUNT(*) AS cnt FROM "t_hudi" WHERE ("Name" = 'Acme')`
   );
+  // Exploratory-only approximate count — same "cnt" alias so callers parse it
+  // identically, but no WHERE support: it's a whole-object display count, not
+  // a filtered pre-restore number.
+  assert.strictEqual(buildHudiApproxCountSql('t_hudi'), `SELECT approx_distinct("Id") AS cnt FROM "t_hudi"`);
 
   const deltaCount = buildDeltaCountSql('t_delta', { startDate: START, endDate: END, deltaPartition: prune });
   assert.ok(deltaCount.startsWith(
