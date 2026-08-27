@@ -495,16 +495,6 @@ export const buildDeltaPartitionWhere = (
 export const buildHudiCountSql = (hudiTable: string, whereBody?: string | null): string =>
   `SELECT COUNT(*) AS cnt FROM "${hudiTable}"` + whereClause([whereBody], 'WHERE');
 
-// Approximate count via approx_distinct (HyperLogLog) — for exploratory
-// display only (the object-list "Records" column, getObjectRecordCounts),
-// never for dry-run: that number is a pre-restore commitment the user acts
-// on, so it stays exact (buildHudiCountSql, above). The Hudi table is one row
-// per Id (see the file header), so distinct-Id cardinality IS the row count;
-// approx_distinct trades ~2.3% standard error for not paying full exact-count
-// cost on a number that's only ever a rough "how big is this" indicator.
-export const buildHudiApproxCountSql = (hudiTable: string): string =>
-  `SELECT approx_distinct(${quoteCol(ID)}) AS cnt FROM "${hudiTable}"`;
-
 /**
  * CHANGE_BETWEEN: total/UPDATE/DELETE counts out of the delta table's
  * record-level rows (is_schema_change excluded via RECORD_ROWS_ONLY) whose
@@ -664,11 +654,6 @@ if (require.main === module) {
     buildHudiCountSql('t_hudi', `"Name" = 'Acme'`),
     `SELECT COUNT(*) AS cnt FROM "t_hudi" WHERE ("Name" = 'Acme')`
   );
-  // Exploratory-only approximate count — same "cnt" alias so callers parse it
-  // identically, but no WHERE support: it's a whole-object display count, not
-  // a filtered pre-restore number.
-  assert.strictEqual(buildHudiApproxCountSql('t_hudi'), `SELECT approx_distinct("Id") AS cnt FROM "t_hudi"`);
-
   const deltaCount = buildDeltaCountSql('t_delta', { startDate: START, endDate: END, deltaPartition: prune });
   assert.ok(deltaCount.startsWith(
     `SELECT COUNT(*) AS total_cnt, SUM(CASE WHEN change_type = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +

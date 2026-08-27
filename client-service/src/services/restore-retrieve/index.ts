@@ -33,7 +33,6 @@ import {
   buildDeltaPartitionWhere,
   buildRecordTypeDeltaSql,
   buildHudiCountSql,
-  buildHudiApproxCountSql,
   buildDeltaCountSql,
 } from './athena-fetch';
 
@@ -845,7 +844,11 @@ export type IDryRunOutcome =
 // (tableExists) rather than sniffing Athena's error message, so a genuine
 // Athena/Glue failure on a table that DOES exist still throws instead of
 // silently reading as zero.
-const runHudiCount = async (databaseName: string, tableName: string, sql: string): Promise<number> => {
+const runHudiCount = async (
+  databaseName: string,
+  tableName: string,
+  sql: string
+): Promise<number> => {
   if (!(await tableExists(databaseName, tableName))) return 0;
   const result = await runAthenaQuery(sql, databaseName);
   return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
@@ -1010,55 +1013,6 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
 };
 
 // ---------------------------------------------------------------------------
-// GET /retrieve/fetch-count — per-object record counts for a config
-// ---------------------------------------------------------------------------
-
-export interface IObjectRecordCount {
-  objectApiName: string;
-  ok: boolean;
-  count: number;
-  error?: string;
-}
-
-/**
- * Record counts for every object on a config — one Athena approx_distinct
- * scan against the object's main Hudi table (buildHudiApproxCountSql), all
- * run concurrently. Feeds the object-selection step's Records column, a
- * browse-time display number, not something a restore decision is made from
- * — dry-run's own ENTIRE count (buildHudiCountSql) stays exact for that.
- *
- * Uses the same restore-eligible object list /get-objectlist-by-configid
- * returns (getRestoreObjectListByConfigId), so the two responses line up by
- * objectApiName.
- *
- * Returns found:false when the config doesn't exist, isn't owned by the
- * caller, or its type mismatches — same collapsing as the object-list endpoint.
- */
-const getObjectRecordCounts = async (
-  backupConfigId: string,
-  configType: ConfigType,
-  userId: string
-): Promise<{ counts: IObjectRecordCount[]; found: boolean }> => {
-  const { objects, found } = await getRestoreObjectListByConfigId(backupConfigId, configType, userId);
-  if (!found) return { counts: [], found: false };
-
-  const databaseName = toGlueId(backupConfigId);
-  const counts = await Promise.all(
-    objects.map(async ({ name }): Promise<IObjectRecordCount> => {
-      try {
-        const table = `cfg_${toGlueId(backupConfigId)}_${toGlueId(name)}_hudi`;
-        const count = await runHudiCount(databaseName, table, buildHudiApproxCountSql(table));
-        return { objectApiName: name, ok: true, count };
-      } catch (e) {
-        return { objectApiName: name, ok: false, count: 0, error: errorMessage(e) };
-      }
-    })
-  );
-
-  return { counts, found: true };
-};
-
-// ---------------------------------------------------------------------------
 // POST /retrieve/fetch-missing-record-types — record types to map per object
 // ---------------------------------------------------------------------------
 
@@ -1080,7 +1034,7 @@ export interface IFetchMissingRecordTypesParams {
   user: IUser;
   // Restore scope's own object list (OBJECT/RECORD/FIELD/... scope types already
   // know theirs on the frontend) — omit/empty to resolve every restorable object
-  // on the config (an ALL/ENTIRE scope), same as getObjectRecordCounts.
+  // on the config (an ALL/ENTIRE scope).
   objectApiNames?: string[];
   // Scopes the delta scan the same way CHANGED_BETWEEN restores already scope
   // their record window — omit both for the whole delta history.
@@ -1100,11 +1054,10 @@ export interface IFetchMissingRecordTypesParams {
  * Resolves the object scope itself via getRestoreObjectListByConfigId when
  * the caller doesn't supply objectApiNames, so an ENTIRE restore never
  * requires the UI to enumerate objects or call this once per object. Runs
- * one Athena query per object concurrently (same Promise.all pattern
- * getObjectRecordCounts uses), and only describes an object's live
- * Salesforce record types when it actually has delta-flagged candidates —
- * most objects, whose record types never changed, cost one cheap Athena scan
- * and nothing else.
+ * one Athena query per object concurrently, and only describes an object's
+ * live Salesforce record types when it actually has delta-flagged candidates
+ * — most objects, whose record types never changed, cost one cheap Athena
+ * scan and nothing else.
  *
  * Returns null when the config does not exist, is not owned by the caller,
  * or (when objectApiNames is omitted) its type mismatches.
@@ -1164,9 +1117,8 @@ const retrieveMissingRecordTypes = async (
         return recordTypes.length ? { objectApiName, recordTypes } : null;
       } catch {
         // One object's Athena/describe failure shouldn't fail the whole
-        // response — same "skip and continue" as getObjectRecordCounts, just
-        // omitted here instead of reported, since this response only ever
-        // carries objects that need action.
+        // response — omitted here rather than reported, since this response
+        // only ever carries objects that need action.
         return null;
       }
     })
@@ -1357,5 +1309,4 @@ export {
   fetchObjectFields,
   fetchPicklistValues,
   dryRunRestore,
-  getObjectRecordCounts,
 };

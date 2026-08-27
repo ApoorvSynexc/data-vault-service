@@ -24,7 +24,10 @@ const buildEmptyBucketPolicy = (): BucketPolicy => ({
 });
 
 // Client buckets are read-only source data for Athena — query results land in
-// Athena-owned managed storage instead (see athena/query.ts), so no client
+// Athena-owned managed storage instead (see athena/query.ts: this workgroup
+// has Managed Query Results enabled, which rejects any request that also
+// sets ResultConfiguration, so writing results into a client bucket isn't
+// possible without that workgroup setting changing first), so no client
 // bucket policy needs write-side actions.
 //   s3:GetObject  — read individual objects (Athena query execution)
 //   s3:ListBucket — list prefixes (Athena partition discovery)
