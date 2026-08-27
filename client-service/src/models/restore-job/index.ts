@@ -22,7 +22,10 @@ export interface IRestoreJobDestination {
   objects: Array<{
     id: string;
     name: string;
-    status: "PENDING" | "IN_PROGRESS" | "SUCCESS" | "FAILED";
+    // PENDING | IN_PROGRESS | SUCCESS | FAILED | RESTORN_FIELD_JOB_* (and more
+    // per-stage values as the restore pipeline grows) — widened to string since
+    // each pipeline stage introduces its own object-level status vocabulary.
+    status: string;
     processedRecordCount?: number;
     failedRecordCount?: number;
     errorMessage?: string;
