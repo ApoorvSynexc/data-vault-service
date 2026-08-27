@@ -235,12 +235,6 @@ interface INamedTreeNode {
 export interface IObjectSummary {
   name: string;
   type: string; // STANDARD | CUSTOM
-  // Child objects (present in this same backup config) the restore UI
-  // should auto-select whenever this object is selected — objects whose
-  // relationship back to this one is cascadeDelete or restrictedDelete. Only
-  // populated by getObjectListWithDependencies — every other producer of
-  // IObjectSummary leaves this undefined.
-  autoSelectChildren?: string[];
 }
 
 const flattenObjects = (objects: INamedTreeNode[]): IObjectSummary[] => {
@@ -292,72 +286,6 @@ const getRestoreObjectListByConfigId = async (
   const restorable = await salesforceObjectFilteredList({ user, apexMode: 'restore' });
   const restorableNames = new Set(restorable.map((obj) => obj.name));
   return { objects: objects.filter((obj) => restorableNames.has(obj.name)), found: true };
-};
-
-/**
- * Resolves each object's auto-select CHILD dependencies — the reverse of a
- * parent lookup: an object's own describe already returns childRelationships,
- * Salesforce's list of every object that references it, each flagged with
- * cascadeDelete and restrictedDelete. A child relationship with either flag
- * true is tightly coupled to its parent (cascadeDelete: the child is deleted
- * along with the parent; restrictedDelete: the parent can't be deleted while
- * the child exists) — either way, restoring the parent should bring that
- * child along automatically. An ordinary lookup child (neither flag set) is
- * never auto-selected.
- *
- * A child is only kept when it's actually present in this backup config's
- * own object list — an unavailable child is never selected.
- *
- * One describe per object, run concurrently. A single object's describe
- * failing doesn't fail the whole list — it just gets no auto-select children.
- */
-const resolveAutoSelectChildren = async (
-  objects: IObjectSummary[],
-  user: IUser
-): Promise<IObjectSummary[]> => {
-  const objectNames = new Set(objects.map((obj) => obj.name));
-
-  const childrenByObject = await Promise.all(
-    objects.map(async (obj): Promise<string[]> => {
-      try {
-        const described = await salesforceObjectDescribe({ user, objectName: obj.name });
-        return [...new Set(
-          described.childRelationships
-            .filter((rel) => rel.cascadeDelete || rel.restrictedDelete)
-            .map((rel) => rel.childSObject)
-        )].filter((child) => child !== obj.name && objectNames.has(child));
-      } catch {
-        return [];
-      }
-    })
-  );
-
-  return objects.map((obj, i) => ({ ...obj, autoSelectChildren: childrenByObject[i] }));
-};
-
-/**
- * get-objectlist-by-configid's full response: getRestoreObjectListByConfigId's
- * restore-eligible object list, each enriched with autoSelectChildren (see
- * resolveAutoSelectChildren) so the UI can automatically select an object's
- * cascade-tied children. Deliberately a step on top of getRestoreObjectListByConfigId
- * rather than baked into it — that function has other callers (dry-run,
- * fetch-count, fetch-missing-record-types, ...) with no use for relationship
- * data, which shouldn't pay for the extra per-object describe calls this adds.
- *
- * Returns found:false under the same conditions getRestoreObjectListByConfigId does.
- */
-const getObjectListWithDependencies = async (
-  backupConfigId: string,
-  configType: ConfigType,
-  userId: string
-): Promise<{ objects: IObjectSummary[]; found: boolean }> => {
-  const { objects, found } = await getRestoreObjectListByConfigId(backupConfigId, configType, userId);
-  if (!found) return { objects: [], found: false };
-
-  const user = await getUser({ userId });
-  if (!user) return { objects: [], found: false };
-
-  return { objects: await resolveAutoSelectChildren(objects, user), found: true };
 };
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
@@ -1419,7 +1347,6 @@ export {
   getBackupJobIdsChangedBetween,
   getObjectListByConfigId,
   getRestoreObjectListByConfigId,
-  getObjectListWithDependencies,
   retrieveRecords,
   retrieveInactiveRecordTypes,
   retrieveMissingFields,
