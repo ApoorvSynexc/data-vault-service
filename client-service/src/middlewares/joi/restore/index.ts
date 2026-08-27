@@ -197,7 +197,6 @@ const conflictSchema = Joi.object({
     .valid(...RESTORE_CONFLICT_MODE)
     .required(),
   isIncludeChild: Joi.boolean().optional(),
-  isIncludeParent: Joi.boolean().optional(),
   relationshipDepth: Joi.number().integer().min(0).optional(),
   edgeCases: edgeCasesSchema.optional(),
   mergeRule: mergeRuleSchema.optional(),
