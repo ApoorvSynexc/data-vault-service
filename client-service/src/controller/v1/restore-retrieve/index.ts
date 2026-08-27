@@ -42,7 +42,6 @@ import {
   IDryRunParams,
   DryRunSourceType,
   buildAthenaFilterWhere,
-  getObjectRecordCounts,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -193,38 +192,6 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   }
 
   makeResponse(req, res, 200, true, 'fetch', objects);
-};
-
-/**
- * GET /retrieve/fetch-count?backupConfigId=&configType=
- * Record counts for every object on the config — one Athena COUNT(*) per
- * object against its main Hudi table, run concurrently. Same object list (and
- * order) /get-objectlist-by-configid returns, so the UI can zip counts onto
- * its rows by objectApiName.
- * Returns not_exist if the config doesn't exist, belongs to another user, or its type mismatches.
- */
-const fetchObjectRecordCountsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, configType } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
-
-  if (!backupConfigId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  if (!configType || !VALID_CONFIG_TYPES.includes(configType as ConfigType)) {
-    makeResponse(req, res, 400, false, 'invalid_config_type');
-    return;
-  }
-
-  const { counts, found } = await getObjectRecordCounts(backupConfigId, configType as ConfigType, userId);
-
-  if (!found) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', counts);
 };
 
 /**
@@ -1177,7 +1144,6 @@ export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
   getObjectListByConfigIdHandler,
-  fetchObjectRecordCountsHandler,
   fetchChangeBetweenBackupJobsHandler,
   fetchRecordsHandler,
   fetchInactiveRecordTypesHandler,
