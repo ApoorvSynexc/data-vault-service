@@ -20,6 +20,11 @@ const restorePermissions = [
         permissions: ['restore.read']
     },
     {
+        path : '/restore/retrieve/fetch-count',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
         path : '/restore/fetch-object-fields',
         method: 'GET',
         permissions: ['restore.read']
@@ -32,6 +37,21 @@ const restorePermissions = [
     {
         path : '/restore/get-picklist-field-values',
         method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/retrieve/fetch-missing-fields',
+        method: 'POST',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/retrieve/fetch-missing-record-types',
+        method: 'POST',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/retrieve/required-fields',
+        method: 'POST',
         permissions: ['restore.read']
     },
     {

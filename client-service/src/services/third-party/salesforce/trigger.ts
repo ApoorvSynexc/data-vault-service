@@ -709,9 +709,10 @@ const deployTriggerStatus = async (
 // behind would orphan an uncoverable class in the org — included only when
 // actually present, since destructiveChanges on a missing member errors.
 //
-// testLevel RunLocalTests: production deploys touching Apex must run tests.
-// Unlike createSingleTrigger there is no component to cover here, so the
-// per-component 75% bar that ruled RunLocalTests out for create does not apply.
+// testLevel RunLocalTests: production deploys touching Apex must run tests,
+// and this uses the org's real overall Apex coverage rather than a synthetic
+// always-passing class — if the org is below Salesforce's 75% bar, this fails
+// and surfaces that honestly instead of masking it.
 // ---------------------------------------------------------------------------
 const deleteSingleTrigger = async (
   instanceUrl: string,
@@ -764,7 +765,11 @@ const setupPermissionSet = async (
       if (trigger.status === 'CREATED') { trigger.permissionSetStatus = 'CREATED'; }
     }
   } catch (error) {
-    console.log('Error during permission set setup:', error);
+    // A failure here (e.g. the handler class access grant) means every step
+    // after it in the try block was skipped too — logged loudly since it was
+    // previously only a console.log, silently visible nowhere but the stored
+    // triggerResult.permissionSetError.
+    logger.error(`[permission-set] setup failed: ${error instanceof Error ? error.message : String(error)}`);
     for (const trigger of triggerResults) {
       if (trigger.status === 'CREATED') {
         trigger.permissionSetStatus = 'FAILED';
@@ -931,6 +936,9 @@ const grantApexClassAccess = async (
   );
   if (check.totalSize > 0) { return; }
 
+  // SetupEntityType is NOT sent — it's a read-only, system-derived field
+  // (Salesforce infers it from SetupEntityId's key prefix). Sending it
+  // explicitly fails the insert with INVALID_FIELD_FOR_INSERT_UPDATE.
   await salesforceRequest(
     {
       url: `${instanceUrl}/services/data/v${API_VERSION}/sobjects/SetupEntityAccess`,
@@ -1078,9 +1086,10 @@ const toggleTriggerStatus = async (
       }
     } catch (err) {
       const label = targetStatus === 'Active' ? 'activating' : 'inactivating';
-      console.log(`Error ${label} trigger for ${objectApiName}:`, err);
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`[trigger-${label}] ${objectApiName}: failed — ${message}`);
       triggerResult.status = targetStatus === 'Active' ? 'FAILED' : 'INACTIVATE_FAILED';
-      triggerResult.error = err instanceof Error ? err.message : String(err);
+      triggerResult.error = message;
     }
   }
 
@@ -1151,6 +1160,47 @@ const deletePermissionSet = async (
   );
 };
 
+// Other real-time backup configs on the same CRM connection (org), excluding
+// the one passed in. Triggers, test classes and the permission set are all
+// shared org-wide resources across every real-time config on that connection
+// — deleteTriggers and checkSharedTriggerConflict below both need to know
+// about siblings before touching anything.
+const getSiblingRealtimeConfigs = async (config: IBackupConfig): Promise<IBackupConfig[]> =>
+  (await getBackupConfigsByCrm(config.crmId)).filter(
+    (sibling) => sibling.backupConfigId !== config.backupConfigId && sibling.schedule === SCHEDULE_MODE.realtime
+  );
+
+// ---------------------------------------------------------------------------
+// Guards the pause/inactivate path: an object's trigger is one shared
+// component per org, not one per config, so inactivating it here would also
+// silently stop real-time sync for any other config still using that object.
+// Unlike delete (which skips the shared object and keeps going), this blocks
+// the whole operation up front and explains exactly which object(s) and which
+// other config(s) are the conflict — returns null when it's safe to proceed.
+// ---------------------------------------------------------------------------
+const checkSharedTriggerConflict = async (config: IBackupConfig): Promise<string | null> => {
+  const siblings = await getSiblingRealtimeConfigs(config);
+  if (!siblings.length) { return null; }
+
+  const conflicts = (config.objectNames ?? [])
+    .map((objectApiName) => ({
+      objectApiName,
+      sharedWith: siblings
+        .filter((sibling) => (sibling.objectNames ?? []).some((name) => name.toLowerCase() === objectApiName.toLowerCase()))
+        .map((sibling) => sibling.name || sibling.backupConfigId),
+    }))
+    .filter((c) => c.sharedWith.length > 0);
+
+  if (!conflicts.length) { return null; }
+
+  const detail = conflicts.map((c) => `${c.objectApiName} (also used by: ${c.sharedWith.join(', ')})`).join('; ');
+  return (
+    `Cannot inactivate this real-time backup config: the following object(s) are shared with another ` +
+    `real-time backup config in the same org, and inactivating the trigger here would also stop real-time ` +
+    `sync for that config — ${detail}. Remove the shared object(s) from one config, or pause both, before pausing this one.`
+  );
+};
+
 // ---------------------------------------------------------------------------
 // Delete triggers — permanently removes each object's Apex Trigger + Test
 // Class from the org, then the permission set. Both are shared, org-wide
@@ -1183,9 +1233,7 @@ const deleteTriggers = async (
     return [{ objectApiName: 'N/A', status: 'NOT_FOUND', error: 'No objects specified in backup config.' }];
   }
 
-  const siblingRealtimeConfigs = (await getBackupConfigsByCrm(config.crmId)).filter(
-    (sibling) => sibling.backupConfigId !== config.backupConfigId && sibling.schedule === SCHEDULE_MODE.realtime
-  );
+  const siblingRealtimeConfigs = await getSiblingRealtimeConfigs(config);
   const sharedObjectNames = new Set(
     siblingRealtimeConfigs.flatMap((sibling) => sibling.objectNames ?? []).map((name) => name.toLowerCase())
   );
@@ -1314,4 +1362,5 @@ export {
   realTimeTriggerManagement,
   triggerNameFor,
   recoverTriggerCreation,
+  checkSharedTriggerConflict,
 };

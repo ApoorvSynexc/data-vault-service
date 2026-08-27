@@ -2,6 +2,7 @@ import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, readSchemaFile } from "../../../services";
 import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
+import { SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
 
 
 const getSalesforceObjectSchema = async (req: IRequest, res: IResponse) => {
@@ -136,7 +137,7 @@ const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
 
 const getSalesforceFields = async (req: IRequest, res: IResponse) => {
   let user = req.user!;
-  const { crmId, objectName, filterable } = req.query;
+  const { crmId, objectName, filterable, excludeSystemFields } = req.query;
 
   if (!user.contactEmail) {
     return makeResponse(req, res, 400, false, 'unauthorized');
@@ -163,14 +164,56 @@ const getSalesforceFields = async (req: IRequest, res: IResponse) => {
 
   const fields = describedObjects.fields
     .filter((field) => (filterable === 'true') ? field.filterable : true)
+    // Valid restore-mapping destinations only: writable, and not a system/audit field.
+    .filter((field) => (excludeSystemFields === 'true') ? (field.updateable && !SALESFORCE_SYSTEM_FIELDS.includes(field.name)) : true)
 
   return makeResponse(req, res, 200, true, 'fetch', fields);
+}
+
+// GET /crm-metadata/record-types/list?crmId=&objectName=&activeOnly=
+// Same crmId org-switch + describe as getSalesforceFields, for the object's
+// recordTypeInfos instead of its fields — feeds the "Record type missing"
+// edge case's destination-record-type picker. activeOnly=true (the picker's
+// case: an inactive record type is never a valid mapping destination) drops
+// anything that isn't currently active.
+const getSalesforceRecordTypes = async (req: IRequest, res: IResponse) => {
+  let user = req.user!;
+  const { crmId, objectName, activeOnly } = req.query;
+
+  if (!user.contactEmail) {
+    return makeResponse(req, res, 400, false, 'unauthorized');
+  }
+
+  if (crmId) {
+    const crmUsers = await getUsersByContactEmail({ contactEmail: user.contactEmail });
+    if (!crmUsers) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    const crmUser = crmUsers.find((u) => u.crmId === String(crmId));
+    if (!crmUser) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    user = crmUser;
+  }
+
+  const describedObjects = await salesforceObjectDescribe({ user, objectName: String(objectName) });
+  if (!describedObjects) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const recordTypes = describedObjects.recordTypeInfos
+    .filter((rt) => (activeOnly === 'true') ? rt.active : true);
+
+  return makeResponse(req, res, 200, true, 'fetch', recordTypes);
 }
 
 export const crmMetadataController = wrapController({
   getSalesforceObjectSchema,
   getsalesfroceObjects,
   getSalesforceFields,
+  getSalesforceRecordTypes,
   getSalesforceMasterObjects,
   getSalesforceDescribeObject
 });
