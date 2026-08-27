@@ -4,7 +4,6 @@ import {
   triggerArchivalBackupJob,
   triggerBackupJob,
   hasActiveBackupJob,
-  getBackupJobsByConfig,
   getUser
 } from '../services';
 import { logger } from '../middlewares';
