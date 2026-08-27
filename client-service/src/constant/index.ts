@@ -251,23 +251,6 @@ const SALESFORCE_SYSTEM_FIELDS = [
   'LastReferencedDate',
 ];
 
-// Standard/custom Salesforce relationships that should cascade a restore's
-// automatic parent-object selection beyond what Master-Detail already covers
-// (Master-Detail is detected directly off field describe metadata —
-// relationshipOrder !== null — and needs no entry here). A plain lookup is
-// NOT auto-selected unless its child->parent pair is explicitly listed below;
-// add new cases here as they're needed rather than hard-coding relationship
-// checks through controllers/services. Object API name -> the parent object
-// API names selecting the key object should also auto-select, when present
-// in the same backup config.
-const RESTORE_OBJECT_RELATIONSHIP_CASCADE_RULES: Record<string, string[]> = {
-  Contact: ['Account'],
-  Opportunity: ['Account'],
-  Order : ['Account'],
-  Task : ['Account'],
-  OrderItem : ['Order']
-};
-
 export {
   NODE_ENV,
   NODE_ENV_URL,
@@ -358,6 +341,5 @@ export {
   BACKUP_TYPE,
   ENVIRONMENT_TYPE,
   STANDARD_OBJECT_LIST,
-  SALESFORCE_SYSTEM_FIELDS,
-  RESTORE_OBJECT_RELATIONSHIP_CASCADE_RULES
+  SALESFORCE_SYSTEM_FIELDS
 };

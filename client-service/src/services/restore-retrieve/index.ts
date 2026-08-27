@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, RESTORE_OBJECT_RELATIONSHIP_CASCADE_RULES } from '../../constant';
+import { BACKUP_JOB_TABLE } from '../../constant';
 import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { logger } from '../../middlewares/logger';
@@ -235,11 +235,12 @@ interface INamedTreeNode {
 export interface IObjectSummary {
   name: string;
   type: string; // STANDARD | CUSTOM
-  // Parent objects (present in this same backup config) the restore UI
-  // should auto-select whenever this object is selected. Only populated by
-  // getObjectListWithDependencies — every other producer of IObjectSummary
-  // leaves this undefined.
-  autoSelectParents?: string[];
+  // Child objects (present in this same backup config) the restore UI
+  // should auto-select whenever this object is selected — objects whose
+  // relationship back to this one is cascadeDelete or restrictedDelete. Only
+  // populated by getObjectListWithDependencies — every other producer of
+  // IObjectSummary leaves this undefined.
+  autoSelectChildren?: string[];
 }
 
 const flattenObjects = (objects: INamedTreeNode[]): IObjectSummary[] => {
@@ -294,54 +295,51 @@ const getRestoreObjectListByConfigId = async (
 };
 
 /**
- * Resolves each object's auto-select parent dependencies:
- *   - Master-Detail relationships — relationshipOrder !== null on the
- *     child's own reference field, the same signal getSalesforceMasterObjects
- *     (crm-metadata controller) already uses to detect Master-Detail. Never
- *     inferred from cascadeDelete alone: Salesforce also allows cascade-delete
- *     to be enabled on a plain lookup, so that flag alone can't distinguish
- *     the two relationship kinds.
- *   - RESTORE_OBJECT_RELATIONSHIP_CASCADE_RULES — the centralized cascade
- *     table for standard/custom relationships that should cascade selection
- *     despite being an ordinary lookup (e.g. Contact -> Account). An
- *     unlisted lookup is never auto-selected.
- * Either way, a parent is only kept when it's actually present in this
- * backup config's own object list — an unavailable parent is never selected.
+ * Resolves each object's auto-select CHILD dependencies — the reverse of a
+ * parent lookup: an object's own describe already returns childRelationships,
+ * Salesforce's list of every object that references it, each flagged with
+ * cascadeDelete and restrictedDelete. A child relationship with either flag
+ * true is tightly coupled to its parent (cascadeDelete: the child is deleted
+ * along with the parent; restrictedDelete: the parent can't be deleted while
+ * the child exists) — either way, restoring the parent should bring that
+ * child along automatically. An ordinary lookup child (neither flag set) is
+ * never auto-selected.
+ *
+ * A child is only kept when it's actually present in this backup config's
+ * own object list — an unavailable child is never selected.
  *
  * One describe per object, run concurrently. A single object's describe
- * failing doesn't fail the whole list — it just gets no auto-select parents.
+ * failing doesn't fail the whole list — it just gets no auto-select children.
  */
-const resolveAutoSelectParents = async (
+const resolveAutoSelectChildren = async (
   objects: IObjectSummary[],
   user: IUser
 ): Promise<IObjectSummary[]> => {
   const objectNames = new Set(objects.map((obj) => obj.name));
 
-  const parentsByObject = await Promise.all(
+  const childrenByObject = await Promise.all(
     objects.map(async (obj): Promise<string[]> => {
       try {
         const described = await salesforceObjectDescribe({ user, objectName: obj.name });
-        const masterDetailParents = described.fields
-          .filter((field) => field.type === 'reference' && (field.relationshipOrder !== null || field.restrictedDelete))
-          .flatMap((field) => field.referenceTo);
-        const cascadeParents = RESTORE_OBJECT_RELATIONSHIP_CASCADE_RULES[obj.name] ?? [];
-
-        return [...new Set([...masterDetailParents, ...cascadeParents])]
-          .filter((parent) => parent !== obj.name && objectNames.has(parent));
+        return [...new Set(
+          described.childRelationships
+            .filter((rel) => rel.cascadeDelete || rel.restrictedDelete)
+            .map((rel) => rel.childSObject)
+        )].filter((child) => child !== obj.name && objectNames.has(child));
       } catch {
         return [];
       }
     })
   );
 
-  return objects.map((obj, i) => ({ ...obj, autoSelectParents: parentsByObject[i] }));
+  return objects.map((obj, i) => ({ ...obj, autoSelectChildren: childrenByObject[i] }));
 };
 
 /**
  * get-objectlist-by-configid's full response: getRestoreObjectListByConfigId's
- * restore-eligible object list, each enriched with autoSelectParents (see
- * resolveAutoSelectParents) so the UI can automatically select an object's
- * required parents. Deliberately a step on top of getRestoreObjectListByConfigId
+ * restore-eligible object list, each enriched with autoSelectChildren (see
+ * resolveAutoSelectChildren) so the UI can automatically select an object's
+ * cascade-tied children. Deliberately a step on top of getRestoreObjectListByConfigId
  * rather than baked into it — that function has other callers (dry-run,
  * fetch-count, fetch-missing-record-types, ...) with no use for relationship
  * data, which shouldn't pay for the extra per-object describe calls this adds.
@@ -359,7 +357,7 @@ const getObjectListWithDependencies = async (
   const user = await getUser({ userId });
   if (!user) return { objects: [], found: false };
 
-  return { objects: await resolveAutoSelectParents(objects, user), found: true };
+  return { objects: await resolveAutoSelectChildren(objects, user), found: true };
 };
 
 // Sanitises an arbitrary string into a valid Glue identifier (lowercase, [a-z0-9_]).
