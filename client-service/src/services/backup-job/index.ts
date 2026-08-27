@@ -204,7 +204,6 @@ const triggerBackupJob = async (params: {
   await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
   return result;
   } catch (error) {
-    console.log((JSON.stringify({config})));
     logger.error(`triggerBackupJob failed configId=${config.backupConfigId} type=${type} error=${(error as Error)?.message ?? String(error)}`);
     throw error
   }
