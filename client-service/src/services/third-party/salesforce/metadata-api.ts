@@ -1,4 +1,7 @@
 import JSZip from 'jszip';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { salesforceRequest, SalesforceTokens } from './index';
 import { timer } from '../../../utils/helper';
 
@@ -119,6 +122,25 @@ export const deployMetadata = async (
       const failures = details?.componentFailures
         ?.map((f) => `${f.componentType}:${f.fullName} — ${f.problem}`)
         .join('; ');
+
+      // ponytail: temporary diagnostics — createFolders:false didn't stop the
+      // "named in package.xml, but not found in zipped directory" error, so on
+      // failure only, dump the exact zip we sent to disk. Upload it to the
+      // target org via Workbench (workbench.developerforce.com > migration >
+      // Deploy) to check whether Salesforce accepts THIS zip outside our HTTP
+      // path — tells us whether the bug is in the zip content or the request.
+      // Delete the dumped file after checking it; remove this block once the
+      // cause is confirmed.
+      try {
+        const dumpPath = path.join(os.tmpdir(), `dv-deploy-${jobId}.zip`);
+        fs.writeFileSync(dumpPath, zipBuffer);
+        console.log('[deployMetadata] deploy failed — zip dumped to:', dumpPath);
+        console.log('[deployMetadata] zip entries:', Object.keys(zip.files));
+        console.log('[deployMetadata] package.xml:\n' + packageXml);
+      } catch (dumpError) {
+        console.log('[deployMetadata] diagnostic dump failed:', dumpError);
+      }
+
       throw new Error(`metadata_deploy_failed: ${failures ?? errorMessage ?? 'unknown error'}`);
     }
     return;
