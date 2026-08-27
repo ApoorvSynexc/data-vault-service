@@ -169,28 +169,6 @@ export const salesforceObjectFilteredList = async (
     'e',
     'et',
   ];
-  const STANDARD_OBJECT_LIST = [
-    'Account',
-    'Contact',
-    'Lead',
-    'Opportunity',
-    'Case',
-    'WorkOrder',
-    'Asset',
-    'Contract',
-    'Product2',
-    'Pricebook2',
-    'Asset',
-    'OpportunityLineItem',
-    'Quote',
-    'QuoteLineItem',
-    'Order',
-    'OrderItem',
-    'PricebookEntry',
-    'Task',
-    'EmailMessage',
-  ];
-
   const objectsList = await salesforceObjectList(instanceUrl, tokens);
   let filteredObjects = objectsList.filter(
     (obj) =>
@@ -200,7 +178,7 @@ export const salesforceObjectFilteredList = async (
       obj.replicateable === true &&
       obj.keyPrefix !== null &&
       obj.queryable === true &&
-      ((obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name)) || obj.custom === true) &&
+      ((obj.custom === false && standardObjects.includes(obj.name)) || obj.custom === true) &&
       !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
   );
 

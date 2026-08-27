@@ -1,5 +1,4 @@
 import { salesforceRequest } from "..";
-import { STANDARD_OBJECT_LIST } from "../../../../constant";
 import { logger } from "../../../../middlewares";
 import { IUser } from "../../../../models";
 import { getCrmById } from "../../../crm";
@@ -159,9 +158,8 @@ export const salesforceObjectFilteredList = async (params: ISalesforceObjectList
             obj.replicateable === true &&
             obj.keyPrefix !== null &&
             obj.queryable === true &&
-            (obj.custom === false && STANDARD_OBJECT_LIST.includes(obj.name) || obj.custom === true) &&
-            !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
-            !standardObjects.includes(obj.name)
+            (obj.custom === false && standardObjects.includes(obj.name) || obj.custom === true) &&
+            !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
         );
 
         if (apexMode === 'backup' && apexType === 'realtime') {
