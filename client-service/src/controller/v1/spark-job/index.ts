@@ -109,8 +109,14 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
  */
 
 interface IupdateSparkJobStatuBody {
-  type: "BACKUP" | "RESTORE",
+  type: "BACKUP" | "ARCHIVAL" | "RESTORE",
   backup: {
+    backupConfigId: string,
+    backupJobIds: string[],
+    success: boolean,
+    errorMessage?: string
+  },
+  archival: {
     backupConfigId: string,
     backupJobIds: string[],
     success: boolean,
@@ -124,6 +130,96 @@ interface IupdateSparkJobStatuBody {
   }
 }
 
+// Shared by the BACKUP and ARCHIVAL branches below — both report the same shape
+// (backupConfigId, backupJobIds, success, errorMessage?) against the same
+// BACKUP_JOB_TABLE/BACKUP_CONFIG_TABLE rows (NORMAL and ARCHIVAL configs share both
+// tables, see backup-config's getBackupConfigById). ensureCompressionGlueTables
+// already branches internally on config.type (Hudi-only for ARCHIVAL, Hudi+Delta
+// for BACKUP), so nothing here needs to know which type it's handling.
+const applyCompressionStatus = async (
+  req: IRequest,
+  res: IResponse,
+  params: { backupConfigId: string; backupJobIds: string[]; success: boolean; errorMessage?: string }
+): Promise<void> => {
+  const { backupConfigId, backupJobIds, success, errorMessage } = params;
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  if (typeof success !== 'boolean') {
+    return makeResponse(req, res, 400, false, 'params_required');
+  }
+
+  if (!Array.isArray(backupJobIds) || !backupJobIds.length) {
+    return makeResponse(req, res, 400, false, 'jobs_required');
+  }
+
+  if (backupJobIds.some((id) => !id || typeof id !== 'string')) {
+    return makeResponse(req, res, 400, false, 'job_id_required');
+  }
+
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config) {
+    return makeResponse(req, res, 400, false, 'backup_config_not_found');
+  }
+
+  const status = success ? COMPRESSION_STATUS.compressed : COMPRESSION_STATUS.failed;
+  logger.info(`[COMPRESSION] applying ${status} to ${backupJobIds.length} job(s) | configId=${backupConfigId}`);
+
+  const { updated, failed } = await setCompressionStatusBulk({
+    backupConfigId,
+    jobs: backupJobIds.map((backupJobId) => ({
+      backupJobId,
+      status,
+      // Failure carries the aggregated compression error; success must not keep a stale one.
+      ...(success ? {} : { errorMessage: errorMessage ?? 'compression_failed' }),
+    })),
+  });
+
+  logger.info(`[COMPRESSION] update-spark-job-status complete | configId=${backupConfigId} status=${status} updated=${updated.length} failed=${failed.length}`);
+
+  // Every update failing is an infra problem (all writes errored), not a partial result.
+  if (!updated.length) {
+    return makeResponse(req, res, 400, false, 'compression_status_update_failed', { updated, failed });
+  }
+
+  // Compression succeeded — ensure the current-state Hudi and Delta Glue tables
+  // exist so Athena can query the compressed output. Best-effort: the job status
+  // is already committed, so a Glue failure is logged, never fatal to the
+  // response. Idempotent, so retries / duplicate completion events are safe.
+  if (success) {
+    // New deltas just landed for this config — the fetch-records "deleted
+    // records" cache (see restore-retrieve's runDeletedForEntire) is now
+    // stale for every object on it. Cleared wholesale rather than per
+    // object: simpler, and the next ENTIRE fetch just re-scans once and
+    // re-caches. Best-effort, same as the glue ensure below.
+    updateBackupConfig(backupConfigId, { deletedRecordsCache: {} }).catch((err: any) => {
+      logger.warn(
+        `[COMPRESSION] deleted-cache invalidation failed | configId=${backupConfigId} err:${err?.message ?? err}`
+      );
+    });
+
+    try {
+      const glueResult = await ensureCompressionGlueTables(backupConfigId);
+      if (glueResult?.failed.length) {
+        logger.warn(
+          `[COMPRESSION] glue ensure partial | configId=${backupConfigId} ensured=${glueResult.ensured.length} failed=${JSON.stringify(glueResult.failed)}`
+        );
+      } else {
+        logger.info(
+          `[COMPRESSION] glue ensure complete | configId=${backupConfigId} ensured=${glueResult?.ensured.length ?? 0}`
+        );
+      }
+    } catch (err: any) {
+      logger.error(
+        `[COMPRESSION] glue ensure failed | configId=${backupConfigId} err:${err?.message ?? err}`
+      );
+    }
+  }
+
+  return makeResponse(req, res, 200, true, 'update', { updated, failed });
+};
+
 const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const payload = (req.body as { payload?: unknown })?.payload ?? req.body;
   logger.info('[COMPRESSION] update-spark-job-status request received');
@@ -135,83 +231,9 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
   logger.info('payload decrypted');
 
   if (decrypted.type === "BACKUP") {
-    const { backupConfigId, backupJobIds, success, errorMessage } = decrypted.backup;
-    if (!backupConfigId) {
-      return makeResponse(req, res, 400, false, 'id_required');
-    }
-
-    if (typeof success !== 'boolean') {
-      return makeResponse(req, res, 400, false, 'params_required');
-    }
-
-    if (!Array.isArray(backupJobIds) || !backupJobIds.length) {
-      return makeResponse(req, res, 400, false, 'jobs_required');
-    }
-
-    if (backupJobIds.some((id) => !id || typeof id !== 'string')) {
-      return makeResponse(req, res, 400, false, 'job_id_required');
-    }
-
-    const config = await getBackupConfigById(backupConfigId);
-    if (!config) {
-      return makeResponse(req, res, 400, false, 'backup_config_not_found');
-    }
-
-    const status = success ? COMPRESSION_STATUS.compressed : COMPRESSION_STATUS.failed;
-    logger.info(`[COMPRESSION] applying ${status} to ${backupJobIds.length} job(s) | configId=${backupConfigId}`);
-
-    const { updated, failed } = await setCompressionStatusBulk({
-      backupConfigId,
-      jobs: backupJobIds.map((backupJobId) => ({
-        backupJobId,
-        status,
-        // Failure carries the aggregated compression error; success must not keep a stale one.
-        ...(success ? {} : { errorMessage: errorMessage ?? 'compression_failed' }),
-      })),
-    });
-
-    logger.info(`[COMPRESSION] update-spark-job-status complete | configId=${backupConfigId} status=${status} updated=${updated.length} failed=${failed.length}`);
-
-    // Every update failing is an infra problem (all writes errored), not a partial result.
-    if (!updated.length) {
-      return makeResponse(req, res, 400, false, 'compression_status_update_failed', { updated, failed });
-    }
-
-    // Compression succeeded — ensure the current-state Hudi and Delta Glue tables
-    // exist so Athena can query the compressed output. Best-effort: the job status
-    // is already committed, so a Glue failure is logged, never fatal to the
-    // response. Idempotent, so retries / duplicate completion events are safe.
-    if (success) {
-      // New deltas just landed for this config — the fetch-records "deleted
-      // records" cache (see restore-retrieve's runDeletedForEntire) is now
-      // stale for every object on it. Cleared wholesale rather than per
-      // object: simpler, and the next ENTIRE fetch just re-scans once and
-      // re-caches. Best-effort, same as the glue ensure below.
-      updateBackupConfig(backupConfigId, { deletedRecordsCache: {} }).catch((err: any) => {
-        logger.warn(
-          `[COMPRESSION] deleted-cache invalidation failed | configId=${backupConfigId} err:${err?.message ?? err}`
-        );
-      });
-
-      try {
-        const glueResult = await ensureCompressionGlueTables(backupConfigId);
-        if (glueResult?.failed.length) {
-          logger.warn(
-            `[COMPRESSION] glue ensure partial | configId=${backupConfigId} ensured=${glueResult.ensured.length} failed=${JSON.stringify(glueResult.failed)}`
-          );
-        } else {
-          logger.info(
-            `[COMPRESSION] glue ensure complete | configId=${backupConfigId} ensured=${glueResult?.ensured.length ?? 0}`
-          );
-        }
-      } catch (err: any) {
-        logger.error(
-          `[COMPRESSION] glue ensure failed | configId=${backupConfigId} err:${err?.message ?? err}`
-        );
-      }
-    }
-
-    return makeResponse(req, res, 200, true, 'update', { updated, failed });
+    return applyCompressionStatus(req, res, decrypted.backup);
+  } else if (decrypted.type === "ARCHIVAL") {
+    return applyCompressionStatus(req, res, decrypted.archival);
   } else if (decrypted.type === "RESTORE") {
     console.log('RESTORE SPARK_JOB STATUS');
     const { restoreConfigId, objects, success, errorMessage } = decrypted.restore;
