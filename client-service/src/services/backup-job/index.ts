@@ -188,7 +188,6 @@ const triggerBackupJob = async (params: {
         config: getDecryptedDestinationConfig(destination),
       },
       ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
-      ...(lastSchemaSyncAt ? { lastSchemaSyncAt: currentDate } : {}),
       ...(schemaSync ? { schemaSync: true } : {}),
     };
 
