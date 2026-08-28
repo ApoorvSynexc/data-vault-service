@@ -380,6 +380,7 @@ async function buildRestorePayload(restoreConfigId: string) {
     return {
         jobType: 'RESTORE',
         restoreConfigId,
+        configType: restore.source.configType,
         details: {
             clientId: restore.userId,
             restoreConfigName: restore.jobDetail?.name,
