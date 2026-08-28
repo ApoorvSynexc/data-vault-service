@@ -156,7 +156,7 @@ export interface IRestoreEdgeCases {
   //   REQUIRED_AND_MASTER_DETAIL — Include Required AND Master-Detail Child Objects
   //   ALL_CHILDREN               — Include All Child Objects
   //   SKIP_CHILDREN              — Skip Child Objects
-  includeChilds?: 'MASTER_DETAIL_ONLY' | 'REQUIRED_AND_MASTER_DETAIL' | 'ALL_CHILDREN' | 'SKIP_CHILDREN';
+  includeChilds?: 'REQUIRED_CHILDRENS_ONLY' | 'ALL_CHILDREN' | 'SKIP_CHILDREN';
 }
 
 export interface IRestoreMergeRuleField {

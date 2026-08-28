@@ -380,11 +380,9 @@ async function buildRestorePayload(restoreConfigId: string) {
     return {
         jobType: 'RESTORE',
         restoreConfigId,
-        // ponytail: hardcoded until Spark's non-demo restore path lands. Flip to a
-        // stored flag on IRestore when real restores ship.
-        isDemoOnly: true,
         details: {
             clientId: restore.userId,
+            restoreConfigName: restore.jobDetail?.name,
             backupType: backupConfig.schedule,
             sourceDetails: {
                 sourceName: crm.crmName,
