@@ -11,9 +11,8 @@ const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT'];
 const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP'];
 // MASTER_DETAIL_ONLY: Include Master-Detail Child Objects
 // REQUIRED_AND_MASTER_DETAIL: Include Required AND Master-Detail Child Objects
-// ALL_CHILDREN: Include All Child Objects
 // SKIP_CHILDREN: Skip Child Objects
-const RESTORE_INCLUDE_CHILDS = ['REQUIRED_CHILDRENS_ONLY', 'ALL_CHILDREN', 'SKIP_CHILDREN'];
+const RESTORE_INCLUDE_CHILDS = ['REQUIRED_CHILDRENS_ONLY', 'SKIP_CHILDREN'];
 const RESTORE_CONFIG_TYPE = ['BACKUP', 'ARCHIVAL'];
 // Each configType has its own restore type set — see the configType-conditional
 // `type` field below. BACKUP never accepts DELETED_BETWEEN; ARCHIVAL never accepts CHANGED_BETWEEN.
