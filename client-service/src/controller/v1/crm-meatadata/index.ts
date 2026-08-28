@@ -122,10 +122,10 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
       }
     }
 
-    console.log("111111111111");
+    console.log("111111111111", PolymorphicObjects);
 
     if (PolymorphicObjects.size) {
-      console.log("22222222222222222", PolymorphicObjects);
+      console.log("22222222222222222");
       children = children.filter((child) => !PolymorphicObjects.has(child.name));
     }
   }
