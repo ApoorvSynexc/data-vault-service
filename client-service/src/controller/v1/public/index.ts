@@ -70,6 +70,8 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
     return;
   }
 
+  console.log('REALTIME WEBHOOK ==> ' + JSON.stringify(decryptedBody));
+
   const backupConfigs = await getBackupConfigsByCrm(crm.crmId);
   const realtimeConfigs = backupConfigs.filter((c) => c.schedule === SCHEDULE_MODE.realtime);
   if (!realtimeConfigs.length) {

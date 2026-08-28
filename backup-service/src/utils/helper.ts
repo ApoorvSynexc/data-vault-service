@@ -69,6 +69,14 @@ interface IS3KeyPrefixParams {
 // Builds the S3 key prefix for raw data uploads.
 // Backup paths include an operation sub-folder (inserts / updates / deletes).
 // Archival paths omit it — files are differentiated by a UUID suffix appended at upload time.
+//
+// backupJobId MUST stay in this path (raw_data/<backupJobId>/<objectName>/...), not just
+// backupConfigId. Older builds keyed by raw_data/<objectName>/... only — one shared,
+// config-wide folder per object — so every job for that object (initial backup, every
+// retrigger, every realtime hit) wrote/overwrote into the same place instead of its own
+// scoped folder. Fixed by commit 2333cb7 ("Real-Time Transaction and S3 Prefix Issue Fix").
+// If you see raw_data/<objectName>/ with no id folder in between in S3, that data was
+// written by a build that predates this fix, not by anything on this branch.
 const buildS3KeyPrefix = ({
   crmId,
   crmName,
