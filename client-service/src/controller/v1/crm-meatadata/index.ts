@@ -110,24 +110,18 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
 
 
   if (relationshipDepth && relationshipDepth > 0) {
+    const uniqueChildObjectNames = Array.from(new Set(children.map((child) => child.name)));
+    const childDescriptions = await Promise.all(
+      uniqueChildObjectNames.map((childObjectName) => salesforceObjectDescribe({ user, objectName: childObjectName }))
+    );
+    const childFieldsByObject = new Map(
+      uniqueChildObjectNames.map((name, index) => [name, childDescriptions[index].fields])
+    );
 
-    const PolymorphicObjects = new Set<string>();
-    for (const field of objectDescription.fields) {
-      if (
-        field.type === "reference" &&
-        field.referenceTo &&
-        field.referenceTo.length > 1
-      ) {
-        field.referenceTo.forEach((ref) => PolymorphicObjects.add(ref));
-      }
-    }
-
-    console.log("111111111111", PolymorphicObjects);
-
-    if (PolymorphicObjects.size) {
-      console.log("22222222222222222");
-      children = children.filter((child) => !PolymorphicObjects.has(child.name));
-    }
+    children = children.filter((child) => {
+      const linkingField = childFieldsByObject.get(child.name)?.find((field) => field.name === child.field);
+      return !linkingField?.polymorphicForeignKey;
+    });
   }
 
   // const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
@@ -139,7 +133,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   //     }
   //   })
   // })
-  return makeResponse(req, res, 200, true, 'fetch', { children, fields });
+  return makeResponse(req, res, 200, true, 'fetch', { children, fields,  });
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
