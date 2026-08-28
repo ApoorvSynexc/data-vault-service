@@ -136,10 +136,16 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
 
     // Drop any key not in the Bulk-query field set (e.g. compound Address/Location
     // fields) so realtime writes never store more than a scheduled backup would.
+    // Per-record fallback to the record's own keys: if the column list doesn't
+    // intersect this particular record (stale/mismatched schema, renamed object),
+    // filtering to nothing would silently write `{}` instead of the real data.
     const filteredRecords = columns
-      ? records.map((record) =>
-          Object.fromEntries(columns.filter((c) => c in record).map((c) => [c, record[c]]))
-        )
+      ? records.map((record) => {
+          const filtered = Object.fromEntries(
+            columns.filter((c) => c in record).map((c) => [c, record[c]])
+          );
+          return Object.keys(filtered).length ? filtered : record;
+        })
       : records;
 
     // ── Upload ───────────────────────────────────────────────────────────────
