@@ -1356,6 +1356,8 @@ export {
   getBackupJobIdsChangedBetween,
   getObjectListByConfigId,
   getRestoreObjectListByConfigId,
+  toTreeSummary,
+  filterObjectTree,
   retrieveRecords,
   retrieveInactiveRecordTypes,
   retrieveMissingFields,

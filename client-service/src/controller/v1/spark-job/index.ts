@@ -7,7 +7,7 @@ import { COMPRESSION_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant'
 import { wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, RESTORE_FIELD_JOB_STATUS, RESTORE_BACKUP_STATUS } from '../../../services';
+import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, RESTORE_FIELD_JOB_STATUS, RESTORE_BACKUP_STATUS, toTreeSummary, filterObjectTree } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -410,9 +410,19 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
  *
  * Reuses the same Object List API backup/archival and get-objectlist-by-configid
  * are built on (salesforceObjectFilteredList), with apexMode: 'restore' — already
- * applies createable/updateable on top of its shared filters. Returns just the
- * object API names, no config-side intersection (Spark has no restoreConfig
- * object list of its own to narrow against here).
+ * applies createable/updateable on top of its shared filters.
+ *
+ * BACKUP/NORMAL: unchanged — just the flat restorable object API names, no
+ * config-side intersection (Spark has no restoreConfig object list of its own
+ * to narrow against here).
+ *
+ * ARCHIVAL: a flat name list would throw away the parent/child hierarchy Spark
+ * needs to know which objects ride along with a restored parent, so this
+ * returns the source archival config's own object tree instead — same
+ * { name, type, children? } "object tree grid" shape and the same
+ * filterObjectTree parent-takes-subtree pruning get-objectlist-by-configid
+ * already uses for the user-facing object list, just pruned against the
+ * restorable set already resolved above instead of a second describe call.
  */
 const getRestoreObjectsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreConfigId } = req.query;
@@ -447,8 +457,19 @@ const getRestoreObjectsHandler = async (req: IRequest, res: IResponse): Promise<
   }
 
   const restorable = await salesforceObjectFilteredList({ user: crmUser, apexMode: 'restore' });
-  const objectNames = restorable.map((obj) => obj.name);
 
+  if (restore.source.configType === 'ARCHIVAL') {
+    const archivalConfig = await getBackupConfigById(restore.source.backupConfigId);
+    if (!archivalConfig) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    const restorableNames = new Set(restorable.map((obj) => obj.name));
+    const objectTree = filterObjectTree(toTreeSummary(archivalConfig.objects ?? []), restorableNames);
+    return makeResponse(req, res, 200, true, 'fetch', objectTree);
+  }
+
+  const objectNames = restorable.map((obj) => obj.name);
   return makeResponse(req, res, 200, true, 'fetch', objectNames);
 };
 
