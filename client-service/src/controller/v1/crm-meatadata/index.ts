@@ -106,6 +106,9 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
     .map((field) => ({ label: field.label, referenceTo: field.referenceTo, name: field.name, nillable: field.nillable, cascadeDelete: field.cascadeDelete }));
 
 
+  console.log("0000000000000 " ,{
+    relationshipDepth
+  })
   if (relationshipDepth && typeof relationshipDepth === 'number' && relationshipDepth > 0) {
     const PolymorphicObjects = new Set<string>();
     for (const field of objectDescription.fields) {
@@ -118,7 +121,10 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
       }
     }
 
+    console.log("111111111111");
+
     if (PolymorphicObjects.size) {
+      console.log("22222222222222222", PolymorphicObjects.entries());
       children = children.filter((child) => !PolymorphicObjects.has(child.name));
     }
   }
