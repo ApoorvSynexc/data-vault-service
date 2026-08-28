@@ -85,7 +85,9 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
 
 const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
-  const { objectName, relationshipDepth, mode, type } = req.query;
+  const { objectName, mode, type } = req.query;
+  let { relationshipDepth } = req.query as { relationshipDepth?: number };
+  if (relationshipDepth) relationshipDepth = Number(relationshipDepth);
 
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
@@ -106,10 +108,9 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
     .map((field) => ({ label: field.label, referenceTo: field.referenceTo, name: field.name, nillable: field.nillable, cascadeDelete: field.cascadeDelete }));
 
 
-  console.log("0000000000000 " ,{
-    relationshipDepth
-  })
-  if (relationshipDepth && typeof relationshipDepth === 'number' && relationshipDepth > 0) {
+
+  if (relationshipDepth && relationshipDepth > 0) {
+
     const PolymorphicObjects = new Set<string>();
     for (const field of objectDescription.fields) {
       if (
