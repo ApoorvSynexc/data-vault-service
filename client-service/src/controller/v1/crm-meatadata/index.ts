@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { getApexFields, getApexObjects, toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, getUsersByCrmId, readSchemaFile } from "../../../services";
-import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
+import { toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, readSchemaFile } from "../../../services";
+import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 import { SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
 
@@ -124,16 +124,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
     });
   }
 
-  // const parentFields = objectDescription.fields.filter((field) => field.type === 'reference');
-  // const parent: { [key: string]: string | boolean }[] = [];
-  // parentFields.forEach((field) => {
-  //   field.referenceTo.forEach((ref) => {
-  //     if (filteredObjectNames.includes(ref)) {
-  //       parent.push({ name: ref, nillable: field.nillable, cascadeDelete: field.cascadeDelete });
-  //     }
-  //   })
-  // })
-  return makeResponse(req, res, 200, true, 'fetch', { children, fields,  });
+  return makeResponse(req, res, 200, true, 'fetch', { children, fields, });
 }
 
 const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
@@ -228,11 +219,28 @@ const getSalesforceRecordTypes = async (req: IRequest, res: IResponse) => {
   return makeResponse(req, res, 200, true, 'fetch', recordTypes);
 }
 
+const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
+  const user = req.user!;
+  const { objectName, mode, type } = req.query;
+
+  const apexMode = toApexMode(mode) ?? 'backup';
+  const apexType = toApexType(type ?? mode);
+
+  const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
+  const filteredObjectNames = filteredObjects.map((obj) => obj.name);
+  const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
+  let children = objectDescription.childRelationships
+    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && (filteredObjectNames.includes(child.childSObject) && child.cascadeDelete))))
+    .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
+
+}
+
 export const crmMetadataController = wrapController({
   getSalesforceObjectSchema,
   getsalesfroceObjects,
   getSalesforceFields,
   getSalesforceRecordTypes,
   getSalesforceMasterObjects,
-  getSalesforceDescribeObject
+  getSalesforceDescribeObject,
+  getSalesforceDepthChildren
 });
