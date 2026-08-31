@@ -361,6 +361,30 @@ const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
   return true;
 };
 
+// Undoes deleteBackupConfig when real-time cleanup discovers, after the row is
+// already gone, that one or more Apex Triggers failed to delete in the org.
+// Leaving the DB row deleted at that point would orphan a still-live trigger
+// with no backupConfig left to retry its cleanup from — so the exact same item
+// (same backupConfigId, slug, createdAt, etc.) is put back with status
+// DELETE_FAILED and the triggerResults that recorded which object(s) failed,
+// re-incrementing the counter deleteBackupConfig had already decremented.
+const restoreBackupConfigAfterFailedTriggerDelete = async (
+  config: IBackupConfig,
+  triggerResults: ITriggerResult[]
+): Promise<void> => {
+  const item: IBackupConfig = {
+    ...config,
+    status: STATUS.deleteFailed,
+    triggerResults,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await Promise.all([
+    docClient.send(new PutCommand({ TableName: BACKUP_CONFIG_TABLE, Item: item })),
+    incrementTableCounter(BACKUP_CONFIG_TABLE, buildBackupConfigCounterKey(config.userId, config.type ?? BACKUP_TYPE.normal), 1),
+  ]);
+};
+
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 const getBackupConfigsWithPagination = async (
@@ -747,5 +771,6 @@ export {
   updateBackupConfig,
   appendObjectsToBackupConfig,
   deleteBackupConfig,
+  restoreBackupConfigAfterFailedTriggerDelete,
   buildBackupConfigCounterKey,
 };

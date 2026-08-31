@@ -183,6 +183,9 @@ const STATUS = {
   inactive: 'INACTIVE',
   deleted: 'DELETED',
   notAuthorized: 'NOT_AUTHORIZED',
+  // Real-time config only: deletion was restored because one or more of its
+  // Apex Triggers failed to delete in the org — see restoreBackupConfigAfterFailedTriggerDelete.
+  deleteFailed: 'DELETE_FAILED',
 };
 const NOTIFICATION_STATUS = {
   unread: 'UNREAD',
