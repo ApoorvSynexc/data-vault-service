@@ -1,0 +1,6 @@
+<p>Hi <%= recipientName %>,</p>
+<p>Your restore <strong><%= label %></strong>, sourced from backup <strong><%= backupConfigName %></strong>, has completed successfully.</p>
+<p><strong>Restore job ID:</strong> <%= restoreJobId %></p>
+<% if (typeof totalRecordCount === 'number') { %>
+<p><strong>Records restored:</strong> <%= totalRecordCount.toLocaleString() %></p>
+<% } %>

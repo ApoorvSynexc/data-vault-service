@@ -1,0 +1,6 @@
+<p>Hi <%= recipientName %>,</p>
+<p>Your <%= fileFormat %> export for <strong><%= label %></strong> is ready to download.</p>
+<p><strong>File:</strong> <%= fileName %></p>
+<% if (typeof expiresInHours === 'number') { %>
+<p>This download link expires in <%= expiresInHours %> hour<%= expiresInHours === 1 ? '' : 's' %>.</p>
+<% } %>

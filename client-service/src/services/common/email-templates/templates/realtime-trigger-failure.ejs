@@ -1,0 +1,8 @@
+<p>Hi <%= recipientName %>,</p>
+<p>We couldn't set up real-time backup for <strong><%= objectApiName %></strong> on the <strong><%= crmName %></strong> org, as part of your backup configuration <strong><%= backupConfigName %></strong>.</p>
+<p><strong>Reason:</strong> <%= errorMessage %></p>
+<% if (needsRecoveryRecordId) { %>
+<p>To retry, please provide a sample record Id for <strong><%= objectApiName %></strong> so we can complete the setup.</p>
+<% } else { %>
+<p>Please retry the setup, or reach out if this keeps happening.</p>
+<% } %>

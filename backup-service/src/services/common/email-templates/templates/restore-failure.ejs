@@ -1,0 +1,7 @@
+<p>Hi <%= recipientName %>,</p>
+<p>Your restore <strong><%= label %></strong>, sourced from backup <strong><%= backupConfigName %></strong>, has failed.</p>
+<p><strong>Restore job ID:</strong> <%= restoreJobId %></p>
+<% if (errorMessage) { %>
+<p><strong>Reason:</strong> <%= errorMessage %></p>
+<% } %>
+<p>No changes were made to your CRM. You can retry the restore from your dashboard, or reach out if this keeps happening.</p>

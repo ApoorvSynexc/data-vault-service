@@ -1,0 +1,10 @@
+<p>Hi <%= recipientName %>,</p>
+<p>Your backup job for <strong><%= backupConfigName %></strong> on the <strong><%= crmName %></strong> org has failed.</p>
+<p><strong>Job ID:</strong> <%= backupJobId %></p>
+<% if (errorMessage) { %>
+<p><strong>Reason:</strong> <%= errorMessage %></p>
+<% } %>
+<% if (failedObjects && failedObjects.length) { %>
+<p><strong>Affected objects:</strong> <%= failedObjects.join(', ') %></p>
+<% } %>
+<p>You can retry the backup from your dashboard, or reach out if this keeps happening.</p>
