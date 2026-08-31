@@ -66,6 +66,13 @@ const buildChildRelationshipTree = async (params: {
         return { ...child, children: [] };
       }
 
+      // restrictedDelete blocks deleting the parent while this child still has
+      // records, and without cascadeDelete the child isn't removed alongside
+      // it either — so there's no cascade edge to keep walking past this node.
+      if (child.restrictedDelete && !child.cascadeDelete) {
+        return { ...child, children: [] };
+      }
+
       const children = await buildChildRelationshipTree({
         user,
         objectDescription: childDescription,
