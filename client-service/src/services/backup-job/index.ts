@@ -16,13 +16,16 @@ import { SalesforceAuthExpiredError } from '../third-party';
 import { deleteAwsEventScheduler } from '../third-party/event-bridge';
 import { buildBackupScheduleName, computeNextScheduledRun } from '../../utils/event-bridge';
 
-const getSourceObjects = (objects?: IObject[]) => {
+// includeChildren: archival's cascade pipeline needs each object's children
+// tree to build its per-level WHERE clauses, so archival keeps forwarding it;
+// plain backup has no use for it, so it's dropped there.
+const getSourceObjects = (objects?: IObject[], includeChildren = false) => {
   if (objects?.length) {
     return objects.map((object) => ({
       name: object.name,
       field: object.field ?? [],
       ...(object.condition ? { condition: object.condition } : {}),
-      ...(object.children ? { children: object.children } : {}),
+      ...(includeChildren && object.children ? { children: object.children } : {}),
       ...(object.id ? { id: object.id } : {}),
       ...(object.parentObjects ? { parentObjects: object.parentObjects } : {}),
     }));
@@ -104,7 +107,7 @@ const triggerArchivalBackupJob = async (params: {
       crmId: crm.crmId,
       crmName: crm.crmName,
       instanceUrl: user.crmProfile?.instanceUrl,
-      object: getSourceObjects(objects),
+      object: getSourceObjects(objects, true),
     },
     destination: {
       type: destination.type,
