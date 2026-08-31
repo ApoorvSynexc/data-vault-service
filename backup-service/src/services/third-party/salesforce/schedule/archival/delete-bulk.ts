@@ -1,4 +1,4 @@
-import { OBJECT_STATUS } from '../../../../../constant';
+import { OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
 import { incrementBackupConfigCounters } from '../../../../backup-config';
@@ -11,7 +11,6 @@ import {
 import { parseCSVLine, splitCSVRows, buildErrorLogsS3Prefix } from '../../../../../utils/helper';
 import { SalesforceTokens } from '../../api-request';
 import { logger } from '../../../../../middlewares/logger';
-import { SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
 
 const RECORD_ERROR_BATCH_SIZE = 200;
 
