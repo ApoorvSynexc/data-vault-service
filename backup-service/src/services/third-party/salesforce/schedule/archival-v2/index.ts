@@ -282,19 +282,18 @@ const archiveObject = async (payload: IArchiveObject) => {
         },
       });
 
-      const whereClause = buildWhereClause(object);
       if (parentWhereClause) {
         const transformedWhere = transformWhereBodyForChild(
-          whereClause,
+          parentWhereClause,
           (object as any).fieldApiName
         );
         parentWhereClause = transformedWhere;
         // parentWhereClause += ` AND ${transformedWhere}`
       } else {
-        parentWhereClause = whereClause;
+        parentWhereClause = buildWhereClause(object);
       }
 
-      const whereBody = whereClause.replace(/^WHERE\s+/i, '').trim();
+      const whereBody = parentWhereClause.replace(/^WHERE\s+/i, '').trim();
       const archivalWhere = whereBody
         ? `WHERE IsDeleted = false AND (${whereBody})`
         : 'WHERE IsDeleted = false';
