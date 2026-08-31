@@ -711,10 +711,18 @@ const deployTriggerStatus = async (
 // behind would orphan an uncoverable class in the org — included only when
 // actually present, since destructiveChanges on a missing member errors.
 //
-// testLevel RunLocalTests: production deploys touching Apex must run tests,
-// and this uses the org's real overall Apex coverage rather than a synthetic
-// always-passing class — if the org is below Salesforce's 75% bar, this fails
-// and surfaces that honestly instead of masking it.
+// testLevel RunSpecifiedTests, not RunLocalTests — same reasoning as every
+// other deploy in this file (see deployTriggerStatus above): RunLocalTests
+// runs every local Apex test in the org and enforces its org-wide 75%
+// average, so one unrelated, permanently-broken test (e.g. a recovery test
+// class querying a record that's since been deleted — see
+// buildTriggerRecoveryTestBody) or a subscriber org sitting under 75%
+// overall blocks every trigger deletion forever, not just the broken one.
+// destructiveChanges.xml deploys ship an empty package.xml (nothing is
+// "delivered"), so RunSpecifiedTests' per-class coverage requirement has
+// nothing to apply to — confirmed working in practice by Salesforce admins
+// deleting a trigger/test-class pair via Workbench the same way: point
+// runTests at the very test class being deleted in the same deploy.
 // ---------------------------------------------------------------------------
 const deleteSingleTrigger = async (
   instanceUrl: string,
@@ -732,7 +740,7 @@ const deleteSingleTrigger = async (
       ...(testClassId ? [{ type: 'ApexClass', name: testClassName }] : []),
     ],
     `Trigger ${triggerName} delete`,
-    { testLevel: 'RunLocalTests' }
+    { testLevel: 'RunSpecifiedTests', runTests: [testClassName] }
   );
 };
 
@@ -1284,21 +1292,30 @@ const deleteTriggers = async (
     }
   }
 
-  // The permission set is shared org-wide infrastructure, not per-config —
-  // only tear it down once no other real-time config in this org needs it.
-  if (isLastRealtimeConfig) {
+  // The permission set is shared org-wide infrastructure, not per-config — only
+  // tear it down once no other real-time config in this org needs it AND every
+  // one of THIS config's own triggers actually came off (DELETED/NOT_FOUND/
+  // SKIPPED_SHARED all count as resolved). A DELETE_FAILED trigger is still
+  // live and still calling into the handler class the permission set grants
+  // access to — deleting the permission set anyway (as this used to do,
+  // keyed only on isLastRealtimeConfig) would strip that still-active
+  // trigger's Apex Class + External Credential Principal access out from
+  // under it.
+  const deleted = triggerResults.filter((r) => r.status === 'DELETED').length;
+  const failed = triggerResults.filter((r) => r.status === 'DELETE_FAILED').length;
+
+  if (isLastRealtimeConfig && failed === 0) {
     try {
       await deletePermissionSet(instanceUrl, tokens);
       logger.info(`[trigger-delete] permission set '${PERMISSION_SET_NAME}' deleted`);
     } catch (err) {
       logger.error(`[trigger-delete] failed to delete permission set: ${err instanceof Error ? err.message : String(err)}`);
     }
+  } else if (failed > 0) {
+    logger.info(`[trigger-delete] permission set kept — ${failed} trigger(s) in this config failed to delete and still need it`);
   } else {
     logger.info(`[trigger-delete] permission set kept — ${siblingRealtimeConfigs.length} other real-time config(s) remain in this org`);
   }
-
-  const deleted = triggerResults.filter((r) => r.status === 'DELETED').length;
-  const failed = triggerResults.filter((r) => r.status === 'DELETE_FAILED').length;
   logger.info(
     `[trigger-delete] backupConfigId=${config.backupConfigId} done: ${deleted}/${triggerResults.length} deleted, ${failed} failed — ` +
     triggerResults.map((r) => `${r.objectApiName}=${r.status}`).join(', ')
