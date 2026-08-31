@@ -1,8 +1,87 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, readSchemaFile } from "../../../services";
-import { ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
+import { ISalesforceChildRelationship, ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 import { SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
+import { IUser } from "../../../models";
+
+// A child relationship is only in-scope for cascade traversal when its type
+// matches the mode (archival keeps everything; backup only follows objects we
+// actually track, and only across cascade-delete edges) and it isn't a direct
+// self-reference.
+const filterChildRelationships = (
+  childRelationships: ISalesforceChildRelationship[],
+  objectName: string,
+  apexMode: string,
+  filteredObjectNames: string[]
+) =>
+  childRelationships
+    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && filteredObjectNames.includes(child.childSObject) && child.cascadeDelete)))
+    .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
+
+type ISalesforceRelationshipChild = ReturnType<typeof filterChildRelationships>[number];
+
+interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
+  children: ISalesforceChildTreeNode[];
+}
+
+const MAX_RELATIONSHIP_DEPTH = 5;
+
+// Depth-first walk of childRelationships, stopping at whichever comes first:
+// MAX_RELATIONSHIP_DEPTH levels, no more children, or a child object that's
+// already in the current ancestor chain (visitedObjectNames, seeded with the
+// root req.query objectName) — that last case is what stops a self-referencing
+// or circular relationship graph (A -> B -> A) from recursing forever. A
+// repeated object is still returned as a leaf (its edge is real), just not
+// expanded further.
+const buildChildRelationshipTree = async (params: {
+  user: IUser;
+  objectDescription: ISalesforceObjectDescribeResponse;
+  objectName: string;
+  apexMode: string;
+  filteredObjectNames: string[];
+  visitedObjectNames: Set<string>;
+  depth: number;
+}): Promise<ISalesforceChildTreeNode[]> => {
+  const { user, objectDescription, objectName, apexMode, filteredObjectNames, visitedObjectNames, depth } = params;
+
+  if (depth >= MAX_RELATIONSHIP_DEPTH) return [];
+
+  const rawChildren = filterChildRelationships(objectDescription.childRelationships, objectName, apexMode, filteredObjectNames);
+  if (!rawChildren.length) return [];
+
+  // Multiple relationships can point at the same child object type — describe
+  // each distinct one once and reuse it both for the polymorphic check below
+  // and as the next level's own objectDescription.
+  const uniqueChildNames = Array.from(new Set(rawChildren.map((child) => child.name)));
+  const childDescriptions = await Promise.all(
+    uniqueChildNames.map((name) => salesforceObjectDescribe({ user, objectName: name }))
+  );
+  const descriptionByName = new Map(uniqueChildNames.map((name, index) => [name, childDescriptions[index]]));
+
+  const childNodes = await Promise.all(
+    rawChildren.map(async (child): Promise<ISalesforceChildTreeNode | null> => {
+      const childDescription = descriptionByName.get(child.name)!;
+      if (visitedObjectNames.has(child.name)) {
+        return { ...child, children: [] };
+      }
+
+      const children = await buildChildRelationshipTree({
+        user,
+        objectDescription: childDescription,
+        objectName: child.name,
+        apexMode,
+        filteredObjectNames,
+        visitedObjectNames: new Set(visitedObjectNames).add(child.name),
+        depth: depth + 1,
+      });
+
+      return { ...child, children };
+    })
+  );
+
+  return childNodes.filter((node): node is ISalesforceChildTreeNode => node !== null);
+};
 
 
 const getSalesforceObjectSchema = async (req: IRequest, res: IResponse) => {
@@ -99,9 +178,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
-  let children = objectDescription.childRelationships
-    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && (filteredObjectNames.includes(child.childSObject) && child.cascadeDelete))))
-    .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
+  let children = filterChildRelationships(objectDescription.childRelationships, String(objectName), apexMode, filteredObjectNames);
 
   const fields = objectDescription.fields
     .filter((field) => field.type === 'reference')
@@ -219,9 +296,17 @@ const getSalesforceRecordTypes = async (req: IRequest, res: IResponse) => {
   return makeResponse(req, res, 200, true, 'fetch', recordTypes);
 }
 
+// GET /crm-metadata/depth-children?objectName=&mode=&type=
+// Full recursive child-relationship tree for an object, capped at
+// MAX_RELATIONSHIP_DEPTH levels — the depth-aware counterpart to
+// getSalesforceDescribeObject's single-level children.
 const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
   const { objectName, mode, type } = req.query;
+
+  if (!objectName) {
+    return makeResponse(req, res, 400, false, 'object_name_required');
+  }
 
   const apexMode = toApexMode(mode) ?? 'backup';
   const apexType = toApexType(type ?? mode);
@@ -229,10 +314,18 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
-  let children = objectDescription.childRelationships
-    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && (filteredObjectNames.includes(child.childSObject) && child.cascadeDelete))))
-    .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
 
+  const children = await buildChildRelationshipTree({
+    user,
+    objectDescription,
+    objectName: String(objectName),
+    apexMode,
+    filteredObjectNames,
+    visitedObjectNames: new Set([String(objectName)]),
+    depth: 0,
+  });
+
+  return makeResponse(req, res, 200, true, 'fetch', { children });
 }
 
 export const crmMetadataController = wrapController({
