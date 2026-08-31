@@ -9,7 +9,7 @@
  * No record IDs are extracted or passed between levels.
  */
 
-import { OBJECT_STATUS } from '../../../../../constant';
+import { OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
 import { updateArchivalObject } from '../../../../backup-job';
 import {
   incrementBackupConfigCounters,
@@ -48,7 +48,7 @@ const buildArchivalFileS3Key = (
   `${buildS3KeyPrefix({ crmId, crmName, backupConfigId, backupJobId, objectName, type: 'archival' })}/${randomUUID()}.csv`;
 
 // Salesforce API version used for all REST and Bulk API calls in this module.
-const SF_API_VERSION = 'v65.0';
+const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 
 // How long to wait between each bulk job status poll (ms).
 // 5 seconds balances responsiveness against Salesforce API rate limits.

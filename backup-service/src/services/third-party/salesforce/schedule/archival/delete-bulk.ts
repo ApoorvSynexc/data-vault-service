@@ -11,10 +11,11 @@ import {
 import { parseCSVLine, splitCSVRows, buildErrorLogsS3Prefix } from '../../../../../utils/helper';
 import { SalesforceTokens } from '../../api-request';
 import { logger } from '../../../../../middlewares/logger';
+import { SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
 
 const RECORD_ERROR_BATCH_SIZE = 200;
 
-const SF_API_VERSION = 'v65.0';
+const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000;
 const POLL_INTERVAL_MS = 5000;
 

@@ -1,8 +1,8 @@
 import { httpRequest } from '../../../utils/http-request';
-import { CORE_SERVICE, INTERNAL_SECRET } from '../../../constant';
+import { CORE_SERVICE, INTERNAL_SECRET, SALESFORCE_BULK_API_VERSION } from '../../../constant';
 import { apexRestBase } from '../../../utils/salesforce-namespace';
 
-const SF_API_VERSION = 'v65.0';
+const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 
 class SalesforceAuthExpiredError extends Error {
   constructor() {
