@@ -176,6 +176,18 @@ const escapeSOQLString = (str: string): string => {
   return str.replace(/'/g, "''");
 };
 
+// Escapes a value for safe interpolation into template-literal HTML — used
+// by the email templates (services/common/email-templates) for any dynamic
+// string they render (object/config names, error messages) that can
+// originate from user input, guarding against HTML/script injection.
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 const formatDate = (dateString: string): string => {
   const date = new Date(dateString);
   return date.toISOString().split('T')[0];
@@ -310,6 +322,7 @@ export {
   buildSchemaKey,
   pickLegacyFieldsKey,
   schemasAreEqual,
+  escapeHtml,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
   type SchemaKind,

@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "npm run format && npm run lint && tsc",
+    "postbuild": "node -e \"require('fs').cpSync('src/services/common/email-templates/templates','dist/services/common/email-templates/templates',{recursive:true})\"",
     "start": "node dist/index.js",
     "migrate": "node dist/migration/index.js",
     "migrate:create-role": "node dist/migration/index.js CREATE_ROLE",
@@ -23,6 +24,7 @@
     "crypto": "^1.0.1",
     "dayjs": "^1.11.20",
     "dotenv": "^17.3.1",
+    "ejs": "^6.0.1",
     "express": "^5.2.1",
     "joi": "^18.0.2",
     "jsonwebtoken": "^9.0.3",
@@ -34,6 +36,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/ejs": "^3.1.5",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",

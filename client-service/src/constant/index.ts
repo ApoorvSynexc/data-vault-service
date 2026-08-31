@@ -4,6 +4,17 @@ const NODE_ENV_URL = String(process.env.NODE_ENV_URL);
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
+// Email branding/contact info — shared across services/common/email-templates.
+// No real values existed anywhere in the service before this; update the
+// defaults (or set the env vars) with real values before these templates go
+// out to real users.
+const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || 'DataVault');
+const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@datavault.io');
+const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'no-reply@datavault.io');
+// Base URL for CTA links (e.g. "View backup configuration") — the
+// user-facing dashboard, not this API's own host.
+const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.datavault.io');
+
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
 const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
@@ -261,6 +272,12 @@ export {
   NODE_ENV_URL,
   HOST,
   PORT,
+
+  // Email branding/contact info
+  EMAIL_COMPANY_NAME,
+  EMAIL_SUPPORT_ADDRESS,
+  EMAIL_FROM_ADDRESS,
+  EMAIL_APP_URL,
 
   // AWS / DynamoDB Config
   AWS_REGION,

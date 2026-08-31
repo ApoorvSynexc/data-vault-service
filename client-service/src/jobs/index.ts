@@ -4,10 +4,12 @@ import { runLogsArchive, } from "./logs-archive-cron"
 import { runEmrJob } from "./run-emr-job"
 import { timer } from '../utils/helper';
 import { logger } from '../middlewares';
+import { NODE_ENV } from '../constant';
 
 export const startCron = () => {
     startBackupConfigCron();
 
+    if(['qa'].includes(NODE_ENV.toLowerCase())) return;
     logger.info(`[CRON] cron registered | for 3AM, 11AM, 7PM`);
 
     // Staggered 8h apart so they never overlap: 3AM, 11AM, 7PM.
