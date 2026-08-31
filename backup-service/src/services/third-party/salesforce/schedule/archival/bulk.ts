@@ -366,7 +366,7 @@ async function uploadSingleObject(
   });
   // Exclude soft-deleted records from every level of the archival query — see
   // the matching comment in archival/index.ts for the rationale.
-  const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE IsDeleted = false AND (${effectiveWhereBody}) ORDER BY Id ASC`;
+  const soql = `SELECT ${fieldNames.join(', ')} FROM ${object.name} WHERE IsDeleted = false AND (${effectiveWhereBody})  WITH USER_MODE ORDER BY Id ASC`;
 
   logger.info(`[archival:child] SOQL | objectName:${object.name} soql:${soql}`);
 

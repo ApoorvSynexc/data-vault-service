@@ -200,7 +200,7 @@ export const exportFirstTime = async (
       });
 
       const whereClause = buildWhereClause(object);
-      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ORDER BY Id ASC`;
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
 
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
@@ -381,7 +381,7 @@ export const exportIncremental = async (
       const userWhere = buildWhereClause(object);
       const dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
       const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
-      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} ORDER BY Id ASC`;
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} WITH USER_MODE ORDER BY Id ASC`;
 
       // queryAll so Salesforce includes soft-deleted records in the result set
       try {

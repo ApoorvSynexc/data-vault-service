@@ -454,7 +454,7 @@ export const getInactiveOwnerIds = async ({ user, includeManagers }: { user: IUs
     };
 
     const fields = includeManagers ? 'Id, ManagerId' : 'Id';
-    const soql = `SELECT ${fields} FROM User WHERE IsActive = false`;
+    const soql = `SELECT ${fields} FROM User WHERE IsActive = false WITH USER_MODE`;
     const url = `${instanceUrl}/services/data/v66.0/query?q=${encodeURIComponent(soql)}`;
 
     const result = await salesforceRequest<{ records: ISalesforceUserQueryRecord[] }>({ url, method: 'GET' }, tokens);
