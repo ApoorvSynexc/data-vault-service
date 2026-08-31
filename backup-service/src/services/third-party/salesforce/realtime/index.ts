@@ -136,15 +136,24 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
 
     // Drop any key not in the Bulk-query field set (e.g. compound Address/Location
     // fields) so realtime writes never store more than a scheduled backup would.
+    // Per-record fallback to the record's own keys: if the column list doesn't
+    // intersect this particular record (stale/mismatched schema, renamed object),
+    // filtering to nothing would silently write `{}` instead of the real data.
     const filteredRecords = columns
-      ? records.map((record) =>
-          Object.fromEntries(columns.filter((c) => c in record).map((c) => [c, record[c]]))
-        )
+      ? records.map((record) => {
+          const filtered = Object.fromEntries(
+            columns.filter((c) => c in record).map((c) => [c, record[c]])
+          );
+          return Object.keys(filtered).length ? filtered : record;
+        })
       : records;
 
     // ── Upload ───────────────────────────────────────────────────────────────
     // All hits for the same job share the same backupJobId folder.
     // Each hit gets a unique UUID filename so concurrent uploads never overwrite each other.
+    // realtimeJobId (backupJobId) must stay in this key — see the note on
+    // buildS3KeyPrefix in utils/helper.ts for why dropping it collides every job for
+    // an object into one shared raw_data/<object>/ folder.
     const folder = operationToFolder(operation);
     const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.json`;
     const csvBuffer = Buffer.from(JSON.stringify(filteredRecords), 'utf8');
