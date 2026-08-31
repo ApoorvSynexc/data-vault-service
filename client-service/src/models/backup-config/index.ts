@@ -52,16 +52,23 @@ export interface IObject {
   totalRecordCount?: number;
   name: string;
   type: string; // STANDARD | CUSTOM
+  isUserSelected?: boolean;
   sizeInBytes?: number;
   field: IObjectField[];
   condition?: IObjectCondition;
   scheduleConfig?: IScheduleConfig;
-  children?: IObject[];
+  children?: IObjectRelationshipNode[];
   parentObjects?: IObjectParent[];
   // Archival scheduling is per-object (unlike backup-config's single config-level
   // schedule), so a manually-invoked INCREMENTAL object's "skip the next automatic
   // run" note has to live on the object itself, not the shared config.
   upcomingJob?: IUpcomingJob;
+}
+
+export interface IObjectRelationshipNode {
+  id: string;
+  name: string;
+  children?: IObjectRelationshipNode[];
 }
 
 export interface ITriggerResult {
