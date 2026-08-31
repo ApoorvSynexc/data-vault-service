@@ -320,8 +320,6 @@ async function buildPayload(backupConfigId: string) {
             archivalSchemaChangeDetection(backupConfig, jobOperations);
     }
 
-    const { parentToChild, childToParent } = buildRelationshipTrees(backupConfig);
-
     logger.info(`Built EMR payload for backupConfigId: ${backupConfigId} jobs=${jobs.length}`);
 
     const payload = {
@@ -335,10 +333,6 @@ async function buildPayload(backupConfigId: string) {
                 orgId: crm.crmId,
             },
             objectOperations,
-            hierarchy: {
-                parentToChild,
-                childToParent
-            },
             destinationConfigs: {
                 destinationName: destination.provider,
                 destinationRequiredCreds: getDecryptedDestinationConfig(destination),
@@ -451,6 +445,8 @@ async function buildRestorePayload(restoreConfigId: string) {
         throw new Error('destination_not_found');
     }
 
+    const { parentToChild, childToParent } = buildRelationshipTrees(backupConfig);
+
     logger.info(`Built EMR RESTORE payload for restoreConfigId: ${restoreConfigId} jobs=${restore.source.backupJobIds?.length ?? 0}`);
 
     return {
@@ -470,6 +466,10 @@ async function buildRestorePayload(restoreConfigId: string) {
                 selection: { restoreScope: mapRestoreScope(restore.selection.restoreScope) },
                 // Already optional-in/optional-out as stored — undefined keys drop on JSON.stringify.
                 conflict: restore.conflict,
+            },
+            hierarchy: {
+                parentToChild,
+                childToParent
             },
             destinationConfigs: {
                 destinationName: destination.provider,
