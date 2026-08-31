@@ -297,7 +297,7 @@ const archiveObject = async (payload: IArchiveObject) => {
       const archivalWhere = whereBody
         ? `WHERE IsDeleted = false AND (${whereBody})`
         : 'WHERE IsDeleted = false';
-      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${archivalWhere} ORDER BY Id ASC`;
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${archivalWhere} WITH USER_MODE ORDER BY Id ASC`;
 
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });

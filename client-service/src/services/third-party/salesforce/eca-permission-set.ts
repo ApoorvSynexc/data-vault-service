@@ -98,7 +98,7 @@ const permissionSetExists = async (
   tokens: SalesforceTokens,
   permissionSetName: string
 ): Promise<boolean> => {
-  const soql = `SELECT Id FROM PermissionSet WHERE Name = '${permissionSetName}' LIMIT 1`;
+  const soql = `SELECT Id FROM PermissionSet WHERE Name = '${permissionSetName}' WITH USER_MODE LIMIT 1`;
   const { data } = await salesforceRequest<{ totalSize: number }>(
     {
       url: `${instanceUrl}/services/data/v${METADATA_API_VERSION}/query?q=${encodeURIComponent(soql)}`,

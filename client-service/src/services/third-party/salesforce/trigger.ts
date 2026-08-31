@@ -830,7 +830,7 @@ const fetchPermissionSetId = async (
   instanceUrl: string,
   tokens: SalesforceTokens
 ): Promise<string | null> => {
-  const soql = `SELECT Id FROM PermissionSet WHERE Name = '${PERMISSION_SET_NAME}' LIMIT 1`;
+  const soql = `SELECT Id FROM PermissionSet WHERE Name = '${PERMISSION_SET_NAME}' WITH USER_MODE LIMIT 1`;
   const { data } = await salesforceRequest<{ totalSize: number; records: { Id: string }[] }>(
     { url: `${instanceUrl}/services/data/v${API_VERSION}/query?q=${encodeURIComponent(soql)}`, method: 'GET' },
     tokens

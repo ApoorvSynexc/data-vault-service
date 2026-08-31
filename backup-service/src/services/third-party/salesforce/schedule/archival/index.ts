@@ -670,7 +670,7 @@ export const archiveAndHardDelete = async (
       const archivalWhere = whereBody
         ? `WHERE IsDeleted = false AND (${whereBody})`
         : 'WHERE IsDeleted = false';
-      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${archivalWhere} ORDER BY Id ASC`;
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${archivalWhere} WITH USER_MODE ORDER BY Id ASC`;
       logger.info(
         `[archival:orchestrator] SOQL | backupJobId:${backupJobId} objectName:${objectName} soql:${soql}`
       );
