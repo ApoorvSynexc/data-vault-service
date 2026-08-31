@@ -43,15 +43,26 @@ const objectParentSchema = Joi.object({
   name: Joi.string().required(),
 });
 
+// Lightweight cascade-hierarchy preview node attached to an object's `children`
+// — id/name only. Field-level config (type/field/condition) for each object in
+// the tree lives in its own top-level entry in `objects`, joined by id.
+const objectRelationshipNodeSchema = Joi.object({
+  id: Joi.string().required(),
+  name: Joi.string().required(),
+  children: Joi.array().items(Joi.link('#objectRelationshipNode')).optional(),
+}).id('objectRelationshipNode');
+
 const objectSchema = Joi.object({
   id: Joi.string().required(),
   name: Joi.string().required(),
   type: Joi.string()
     .valid(...Object.values(OBJECT_TYPE))
     .required(),
+  isUserSelected: Joi.boolean().optional(),
   condition: conditionSchema.optional(),
   field: Joi.array().items(objectFieldSchema).required(),
   parentObjects: Joi.array().items(objectParentSchema).optional(),
+  children: Joi.array().items(objectRelationshipNodeSchema).optional(),
 });
 
 const schedulingSchema = Joi.object({
