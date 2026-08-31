@@ -16,7 +16,7 @@ const filterChildRelationships = (
   filteredObjectNames: string[]
 ) =>
   childRelationships
-    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && filteredObjectNames.includes(child.childSObject) && child.cascadeDelete)))
+    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && filteredObjectNames.includes(child.childSObject))))
     .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
 
 type ISalesforceRelationshipChild = ReturnType<typeof filterChildRelationships>[number];
