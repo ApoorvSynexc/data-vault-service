@@ -7,7 +7,7 @@ import { getRestoreById } from '../restore';
 import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS, SCHEDULE_MODE, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL } from '../../constant';
 import { runRealtimeSchemaSync } from './schema-sync';
 import { logger } from '../../middlewares';
-import { IAwsCredentials, IBackupConfig, IBackupJob, IRestoreScope, IRestoreSource } from '../../models';
+import { IAwsCredentials, IBackupConfig, IBackupJob, IObject, IObjectRelationshipNode, IRestoreScope, IRestoreSource } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
 import { encrypt } from '../../utils/encryption';
 import { getRestoreJobById } from '../restore-job';
@@ -201,6 +201,76 @@ async function fetchCompressibleBackupJobs(backupConfigId: string) {
     return allJobs;
 }
 
+// Same id/name shape as an IObjectRelationshipNode, minus its own children —
+// used as the entry recorded per parent below.
+interface IObjectRelationshipRef {
+    id: string;
+    name: string;
+}
+
+// Mirrors parentToChild's own node shape (id, name, children: []), just with
+// `parent` in place of `children` — one entry per object appearing anywhere
+// in a selected root's relationship tree, listing every distinct parent it
+// was found under (an object can have more than one, e.g. Task appears
+// under both Account and Contact).
+interface IObjectParents {
+    id: string;
+    name: string;
+    parent: IObjectRelationshipRef[];
+}
+
+// Walks one root's relationship tree recording each node's direct parent
+// into parentsByChildId (keyed by child id, since names alone can collide
+// with an unrelated object that reuses the same id-bearing entry elsewhere
+// in the tree). The nesting only encodes the parent -> child direction, so
+// this walk is the only way to get the reverse. visitedIds guards against a
+// malformed/cyclic stored tree recursing forever.
+function collectChildParents(
+    nodes: IObjectRelationshipNode[] | undefined,
+    parent: IObjectRelationshipRef,
+    visitedIds: Set<string>,
+    parentsByChildId: Map<string, { name: string; parents: Map<string, string> }>
+): void {
+    for (const node of nodes ?? []) {
+        if (visitedIds.has(node.id)) continue;
+
+        if (!parentsByChildId.has(node.id)) {
+            parentsByChildId.set(node.id, { name: node.name, parents: new Map() });
+        }
+        parentsByChildId.get(node.id)!.parents.set(parent.id, parent.name);
+
+        collectChildParents(node.children, { id: node.id, name: node.name }, new Set(visitedIds).add(node.id), parentsByChildId);
+    }
+}
+
+function buildChildToParent(selectedRoots: IObject[]): IObjectParents[] {
+    const parentsByChildId = new Map<string, { name: string; parents: Map<string, string> }>();
+
+    for (const root of selectedRoots) {
+        collectChildParents(root.children, { id: root.id, name: root.name }, new Set([root.id]), parentsByChildId);
+    }
+
+    return Array.from(parentsByChildId.entries()).map(([id, { name, parents }]) => ({
+        id,
+        name,
+        parent: Array.from(parents.entries()).map(([parentId, parentName]) => ({ id: parentId, name: parentName })),
+    }));
+}
+
+// parentToChild is exactly the stored tree (IObjectRelationshipNode[]) off
+// the user-selected root object(s) (isUserSelected: true) — no rebuilding.
+function buildRelationshipTrees(backupConfig: IBackupConfig): {
+    parentToChild: IObjectRelationshipNode[];
+    childToParent: IObjectParents[];
+} {
+    const selectedRoots = (backupConfig.objects ?? []).filter((object) => object.isUserSelected);
+
+    return {
+        parentToChild: selectedRoots.flatMap((root) => root.children ?? []),
+        childToParent: buildChildToParent(selectedRoots),
+    };
+}
+
 // ─── Build EMR payload from a backupConfigId ──────────────────────────────────
 // Pure builder: resolves config/crm/destination/jobs and shapes the payload Spark
 // reads. objectOperations is keyed by backupJobId so Spark can compress each job's
@@ -250,6 +320,8 @@ async function buildPayload(backupConfigId: string) {
             archivalSchemaChangeDetection(backupConfig, jobOperations);
     }
 
+    const { parentToChild, childToParent } = buildRelationshipTrees(backupConfig);
+
     logger.info(`Built EMR payload for backupConfigId: ${backupConfigId} jobs=${jobs.length}`);
 
     const payload = {
@@ -263,6 +335,10 @@ async function buildPayload(backupConfigId: string) {
                 orgId: crm.crmId,
             },
             objectOperations,
+            hierarchy: {
+                parentToChild,
+                childToParent
+            },
             destinationConfigs: {
                 destinationName: destination.provider,
                 destinationRequiredCreds: getDecryptedDestinationConfig(destination),
