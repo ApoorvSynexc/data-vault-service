@@ -152,11 +152,9 @@ export interface IRestoreEdgeCases {
   // object) get pulled in alongside it. BACKUP/NORMAL-sourced restores only —
   // an ARCHIVAL restore's object tree already states its own hierarchy
   // explicitly (see IRestoreArchivalObjectTree), so this has nothing to add there.
-  //   MASTER_DETAIL_ONLY         — Include Master-Detail Child Objects
   //   REQUIRED_AND_MASTER_DETAIL — Include Required AND Master-Detail Child Objects
-  //   ALL_CHILDREN               — Include All Child Objects
   //   SKIP_CHILDREN              — Skip Child Objects
-  includeChilds?: 'REQUIRED_CHILDRENS_ONLY' | 'ALL_CHILDREN' | 'SKIP_CHILDREN';
+  includeChilds?: 'REQUIRED_CHILDRENS_ONLY' | 'SKIP_CHILDREN';
 }
 
 export interface IRestoreMergeRuleField {
