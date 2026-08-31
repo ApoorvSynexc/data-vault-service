@@ -60,6 +60,7 @@ export const dryRunV2 = async (payload: IDryRunV2Payload): Promise<IDryRunV2Resu
   const { user, objects } = payload;
 
   const queries = generateSoqlQueries(objects);
+  console.log(JSON.stringify({ queries }));
   logger.info(`[dry-run-v2] generated ${queries.length} SOQL count quer${queries.length === 1 ? 'y' : 'ies'}`);
 
   const { results, apiCallCount } = await fetchCountsFromSalesforce(user, queries);
