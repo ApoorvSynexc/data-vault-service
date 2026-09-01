@@ -42,6 +42,10 @@ import {
   IDryRunParams,
   DryRunSourceType,
   buildAthenaFilterWhere,
+  getBackupConfigById,
+  runMetadataComparisonForConfig,
+  hasMetadataChanged,
+  triggerBackupJob,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -1145,6 +1149,57 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
     });
   }
 };
+
+const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
+  const { ...body } = req.body;
+  const restoreId = uuidv4();
+
+  const backupConfig = await getBackupConfigById(body.source.backupConfigId);
+  if (!backupConfig) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const isDraft = body.status === 'DRAFT';
+  const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? 'DRAFT' : 'IN_PROGRESS' };
+  const created = await createRestore(payload);
+  if (!created) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const restoreJob = await createRestoreJob(payload);
+  makeResponse(req, res, 201, true, 'create');
+
+
+  // Step 1: compare metadata comparison
+  try {
+    const result = await runMetadataComparisonForConfig(backupConfig);
+    const changedObjectNames: string[] = [];
+    for (const { objectName, result: metadataResult } of result) {
+      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+        changedObjectNames.push(objectName);
+      }
+    }
+
+    if (changedObjectNames.length) {
+      await triggerBackupJob({
+        user, config: backupConfig,
+        type: 'backup',
+        lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+        schemaSync: true,
+        triggerSource: {
+          name: "CREATE_RESTORE",
+          entityId: restoreJob.restoreJobId,
+        },
+        ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
+      });
+    }
+  } catch (error) {
+    logger.error(`[Restore creation metadata comparison] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+  }
+
+
+}
 
 const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreId } = req.body as Record<string, string>;

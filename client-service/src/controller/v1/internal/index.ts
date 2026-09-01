@@ -115,9 +115,8 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
       }
         break;
       case 'schema.sync.completed': {
-        // The Schema-Sync backup job finished and refreshed the stored metadata.
-        // Resume the deferred compression, forcing it past the realtime drift gate
-        // (metadata now matches) so it can't re-trigger another Schema-Sync loop.
+        const { triggerSource } = req.body;
+        console.log(JSON.stringify({ triggerSource }));
         await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
       }
         break;
