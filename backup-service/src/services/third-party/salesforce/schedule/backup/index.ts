@@ -169,25 +169,6 @@ export const exportFirstTime = async (
       },
       { instanceUrl, tokens }
     );
-    // await uploadPicklistValues({
-    //   schema,
-    //   destConfig,
-    //   crmId,
-    //   crmName,
-    //   backupConfigId,
-    //   objectName,
-    //   type: 'backup',
-    //   backupJobId,
-    // });
-    // await uploadRecordTypeMetadata({
-    //   destConfig,
-    //   crmId,
-    //   crmName,
-    //   backupConfigId,
-    //   objectName,
-    //   type: 'backup',
-    //   backupJobId,
-    // });
 
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
@@ -344,25 +325,6 @@ export const exportIncremental = async (
     const allFieldNames = withSystemFields(
       fieldsMetadata?.metadataType === 'fields' ? fieldsMetadata.fields.map((f) => f.name) : []
     );
-    // await uploadPicklistValues({
-    //   schema: latestSchema,
-    //   destConfig,
-    //   crmId,
-    //   crmName,
-    //   backupConfigId,
-    //   objectName,
-    //   type: 'backup',
-    //   backupJobId,
-    // });
-    // await uploadRecordTypeMetadata({
-    //   destConfig,
-    //   crmId,
-    //   crmName,
-    //   backupConfigId,
-    //   objectName,
-    //   type: 'backup',
-    //   backupJobId,
-    // });
 
     // ── Phase 1: query new + updated + deleted records in one queryAll job ────
     let bulkJobId = object.bulkJobId;
