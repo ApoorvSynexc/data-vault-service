@@ -159,24 +159,3 @@ export function buildChildWhereBody(parentWhereBody: string, parentFieldApiName:
   }
 }
 
-// ── Relationship depth analysis ───────────────────────────────────────────────
-// Returns the maximum number of relationship traversals (dots) across all
-// field references in a WHERE clause body.
-// e.g. "Owner.Profile.Name = 'Admin'"              → 2
-//      "Contact.Account.Owner.Profile.Name = 'X'"  → 4
-
-function walkMaxDepth(node: WhereNode | null | undefined): number {
-  if (!node) { return 0; }
-  if (node.field) { return (node.field.match(/\./g) ?? []).length; }
-  return Math.max(walkMaxDepth(node.left), walkMaxDepth(node.right));
-}
-
-export function getMaxRelationshipDepth(whereBody: string): number {
-  try {
-    const ast = parseQuery(`SELECT Id FROM X WHERE ${whereBody}`);
-    return walkMaxDepth(ast.where as unknown as WhereNode);
-  } catch {
-    return 0;
-  }
-}
-

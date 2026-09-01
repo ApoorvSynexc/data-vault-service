@@ -1,11 +1,50 @@
 import { parseQuery } from '@jetstreamapp/soql-parser-js';
-import { getMaxRelationshipDepth } from '../dry-run/soql-builder';
 import { IUser } from '../../../../models';
 import { salesforceRequest } from '..';
 import { resolveSalesforceTokens } from './salesforce-api';
 
 const SF_API_VERSION = 'v66.0';
 const MAX_RELATIONSHIP_DEPTH = 4;
+
+// ── Relationship depth analysis ───────────────────────────────────────────────
+// Mirrors the WhereNode shape in ../dry-run/soql-builder.ts (this file's only
+// consumer of it was getMaxRelationshipDepth, moved here so validate-soql
+// doesn't depend on the older dry-run module for a single function) — cast
+// from the soql-parser-js library's WhereClause type via `as unknown as WhereNode`.
+interface WhereNode {
+  field?: string;
+  operator?: string;
+  value?: string | string[];
+  literalType?: string;
+  valueQuery?: {
+    fields: Array<{ field: string }>;
+    sObject: string;
+    where?: WhereNode;
+  };
+  openParen?: number;
+  closeParen?: number;
+  left?: WhereNode;
+  right?: WhereNode;
+}
+
+// Returns the maximum number of relationship traversals (dots) across all
+// field references in a WHERE clause body.
+// e.g. "Owner.Profile.Name = 'Admin'"              → 2
+//      "Contact.Account.Owner.Profile.Name = 'X'"  → 4
+function walkMaxDepth(node: WhereNode | null | undefined): number {
+  if (!node) { return 0; }
+  if (node.field) { return (node.field.match(/\./g) ?? []).length; }
+  return Math.max(walkMaxDepth(node.left), walkMaxDepth(node.right));
+}
+
+function getMaxRelationshipDepth(whereBody: string): number {
+  try {
+    const ast = parseQuery(`SELECT Id FROM X WHERE ${whereBody}`);
+    return walkMaxDepth(ast.where as unknown as WhereNode);
+  } catch {
+    return 0;
+  }
+}
 
 export interface IValidateSoqlResult {
   isValid: boolean;
