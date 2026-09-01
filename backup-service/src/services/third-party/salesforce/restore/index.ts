@@ -274,6 +274,8 @@ export const runSalesforceRestore = async (
   };
 
   const getS3KeysList = await listS3Objects(s3Config, `${sourceS3Credentials.csvFilePath}/${object.name}`);
+  console.log(JSON.stringify({ getS3KeysList, path: sourceS3Credentials.csvFilePath }));
+  
   for (let index = 0; index < getS3KeysList.length; index++) {
     const keys = getS3KeysList[index];
     const operation = keys.split('/')[keys.split('/').length - 1] as 'insert' | 'update' | 'upsert';
