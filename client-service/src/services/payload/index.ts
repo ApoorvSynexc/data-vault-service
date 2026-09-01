@@ -242,7 +242,7 @@ function collectChildParents(
         }
         parentsByChildId.get(node.id)!.parents.set(parent.id, { name: parent.name, fieldName: node.fieldName });
 
-        collectChildParents(node.children, { id: node.id, name: node.name }, new Set(visitedIds).add(node.id), parentsByChildId);
+        collectChildParents(node.children, { id: node.id, name: node.name, fieldName: node.fieldName }, new Set(visitedIds).add(node.id), parentsByChildId);
     }
 }
 
