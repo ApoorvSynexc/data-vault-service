@@ -6,28 +6,12 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import { AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY, AWS_ATHENA_ROLE_ARN } from '../../../constant';
+import { AWS_REGION, AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { logger } from '../../../middlewares';
-import { IAwsCredentials } from '../../../models';
 
-// constant/index.ts builds these with String(process.env.X), so an unset var
-// reads back as the literal string "undefined" rather than undefined itself —
-// excluded here so a deployed environment without these set doesn't send AWS
-// a literal accessKeyId of "undefined" (a real, previously-hit QA bug).
-const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
-
-const awsCredentials: IAwsCredentials = {
-  region: AWS_REGION,
-};
-
-if (isSet(AWS_ACCESS_KEY) && isSet(AWS_SECRET_KEY)) {
-  awsCredentials.credentials = {
-    accessKeyId: AWS_ACCESS_KEY,
-    secretAccessKey: AWS_SECRET_KEY,
-  };
-}
-
-const athena = new AthenaClient(awsCredentials);
+// Credentials come from the SDK default chain only (task/instance role) — no
+// static keys are ever passed in.
+const athena = new AthenaClient({ region: AWS_REGION });
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check, then
 // poll on a 250ms→2s backoff ladder. These compressed Hudi/delta tables are
@@ -44,15 +28,12 @@ const POLL_MAX_MS = 2000;
 // when queries are fast.
 const QUERY_TIMEOUT_MS = 300_000;
 
-// Never logs secret keys — only whether static master credentials are
-// configured, so a misconfigured env var shows up without leaking anything.
 // Deferred via setImmediate: `logger` comes through the middlewares barrel,
 // which has a circular import back to this module — logging synchronously at
 // the top level can run before that cycle resolves and crash on `undefined`.
 setImmediate(() => {
   logger.info(
     `[athena] settings | region:${AWS_REGION} roleArn:${AWS_ATHENA_ROLE_ARN} ` +
-    `usingStaticCredentials:${Boolean(awsCredentials.credentials)} ` +
     `pollFirstMs:${POLL_FIRST_MS} pollInitialMs:${POLL_INITIAL_MS} pollMaxMs:${POLL_MAX_MS} queryTimeoutMs:${QUERY_TIMEOUT_MS}`
   );
 });
