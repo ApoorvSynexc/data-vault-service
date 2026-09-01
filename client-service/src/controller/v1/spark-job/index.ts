@@ -288,7 +288,6 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
           .map((object) => object.name)
       );
 
-      console.log(JSON.stringify({decrypted}))
       if (objects && objects?.length) {
         const updatedObjects: { id: string; name: string; status: "PENDING" }[] = objects
           .filter((object) => !failedObjectNames.has(object))
