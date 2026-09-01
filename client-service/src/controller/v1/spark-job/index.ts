@@ -288,20 +288,23 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
           .map((object) => object.name)
       );
 
-      const updatedObjects: { id: string; name: string; status: "PENDING" }[] = (objects || [])
-        .filter((object) => !failedObjectNames.has(object))
-        .map((object) => ({
-          id: uuidv4(),
-          name: object,
-          status: "PENDING",
-        }));
+      console.log(JSON.stringify({decrypted}))
+      if (objects && objects?.length) {
+        const updatedObjects: { id: string; name: string; status: "PENDING" }[] = objects
+          .filter((object) => !failedObjectNames.has(object))
+          .map((object) => ({
+            id: uuidv4(),
+            name: object,
+            status: "PENDING",
+          }));
 
-      await updateRestoreJob({
-        restoreJobId: restoreConfigId,
-        objects: updatedObjects,
-      });
+        await updateRestoreJob({
+          restoreJobId: restoreConfigId,
+          objects: updatedObjects,
+        });
 
-      restoreJob.destination.objects = updatedObjects;
+        restoreJob.destination.objects = updatedObjects;
+      }
     }
 
     console.log(JSON.stringify({ restoreJob, restore, decrypted }));
