@@ -138,61 +138,6 @@ const exportWithRetry = async (
   throw lastError;
 };
 
-const exportWithRetryArchival = async (
-  ...args: Parameters<typeof exportObjectToDestinationArchival>
-): Promise<void> => {
-  const [, backupJobId, , , , object] = args;
-  const objectName = object.name;
-  let lastError: any;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      await exportObjectToDestinationArchival(...args);
-      return;
-    } catch (err: any) {
-      lastError = err;
-      if (attempt < MAX_RETRIES) {
-        logger.warn(
-          `Archival job ${backupJobId}: retrying ${objectName} (attempt ${attempt}/${MAX_RETRIES}) - ${err?.message}`
-        );
-      }
-    }
-  }
-
-  throw lastError;
-};
-
-// const exportWithRetryArchivalV2 = async (
-//   payload:
-//     {
-//       backupConfigId: string,
-//       backupJobId: string,
-//       source: ISource,
-//       destinationType: string,
-//       destConfig: IDestinationConfig,
-//       object: IBackupObject
-//     }
-// ): Promise<void> => {
-//   const objectName = payload.object.name;
-//   let lastError: any;
-
-//   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-//     try {
-//       await archiveObject(payload);
-//       return;
-//     } catch (err: any) {
-//       lastError = err;
-//       if (attempt < MAX_RETRIES) {
-//         logger.warn(
-//           `Archival job ${payload.backupJobId}: retrying ${objectName} (attempt ${attempt}/${MAX_RETRIES}) - ${err?.message}`
-//         );
-//       }
-//     }
-//   }
-
-//   throw lastError;
-// };
-
 const salesforceHandler: ICrmBackupHandler = {
   runBackup: async (
     backupConfigId: string,
@@ -265,8 +210,14 @@ const salesforceHandler: ICrmBackupHandler = {
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
 
     const completedJob = await getBackupJob(backupJobId);
-    const failedStatus = [OBJECT_STATUS.failed, OBJECT_STATUS.deletionJobFailed, OBJECT_STATUS.deletionRecordsFailed];
-    const failedObjects = (completedJob?.object ?? []).filter((obj) => failedStatus.includes(obj.status ?? ''));
+    const failedStatus = [
+      OBJECT_STATUS.failed,
+      OBJECT_STATUS.deletionJobFailed,
+      OBJECT_STATUS.deletionRecordsFailed,
+    ];
+    const failedObjects = (completedJob?.object ?? []).filter((obj) =>
+      failedStatus.includes(obj.status ?? '')
+    );
 
     if (failedObjects.length) {
       const objectNames = failedObjects.map((obj) => obj.name).join(', ');
@@ -290,7 +241,9 @@ const salesforceHandler: ICrmBackupHandler = {
         );
       }
 
-      logger.info(`Backup job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`);
+      logger.info(
+        `Backup job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`
+      );
     }
   },
   runArchival: async (
@@ -363,7 +316,7 @@ const salesforceHandler: ICrmBackupHandler = {
       backupStatus: BACKUP_STATUS.success,
       sizeInBytes,
       completedRecordCount,
-      deletedRecordCount
+      deletedRecordCount,
     });
 
     logger.info(`Archival job completed, backupJobId=${backupJobId}`);
@@ -400,63 +353,12 @@ const salesforceHandler: ICrmBackupHandler = {
         );
       }
 
-      logger.info(`Archival job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`);
+      logger.info(
+        `Archival job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`
+      );
     }
 
     return 'SUCCESS';
-    // for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
-    //   const batch = object.slice(i, i + CONCURRENCY_LIMIT);
-    //   await Promise.allSettled(
-    //     batch.map((item) =>
-    //       exportWithRetryArchival(
-    //         backupConfigId,
-    //         backupJobId,
-    //         instanceUrl,
-    //         tokens,
-    //         crmName,
-    //         item,
-    //         destinationType,
-    //         destConfig
-    //       ).catch((err: any) => {
-    //         // Object already marked FAILED + errorMessage inside archiveAndHardDelete.
-    //         // Log and continue so remaining objects are not skipped.
-    //         logger.error(
-    //           `[archival] object failed — continuing with remaining objects | backupJobId:${backupJobId} objectName:${item.name} error:${err?.message}`
-    //         );
-    //       })
-    //     )
-    //   );
-    // }
-
-    // // Derive final status from the actual object statuses written to DynamoDB.
-    // // Only COMPLETED counts as success — DELETION_RECORDS_FAILED and DELETION_JOB_FAILED
-    // // are both failure states even though the delete phase ran.
-    // const freshJob = await getBackupJob(backupJobId);
-    // const flattenObjects = (items: IBackupObject[]): IBackupObject[] =>
-    //   items.flatMap((o) => [o, ...flattenObjects(o.children ?? [])]);
-    // const allObjects = flattenObjects(freshJob?.object ?? []);
-
-    // const FAILURE_STATUSES = new Set([
-    //   OBJECT_STATUS.failed,
-    //   OBJECT_STATUS.deletionJobFailed,
-    //   OBJECT_STATUS.deletionRecordsFailed,
-    // ]);
-    // const hasAnyFailure = allObjects.some((o) => FAILURE_STATUSES.has(o.status ?? ''));
-    // const hasAnySuccess = allObjects.some((o) => o.status === OBJECT_STATUS.completed);
-
-    // const finalStatus =
-    //   hasAnyFailure && hasAnySuccess
-    //     ? BACKUP_STATUS.partialFailure
-    //     : hasAnyFailure
-    //       ? BACKUP_STATUS.failed
-    //       : BACKUP_STATUS.success;
-
-    // await updateBackupConfig(backupConfigId, { backupStatus: finalStatus });
-    // logger.info(
-    //   `Archival job completed | backupJobId:${backupJobId} hasAnyFailure:${hasAnyFailure} hasAnySuccess:${hasAnySuccess} finalStatus:${finalStatus}`
-    // );
-
-    // return hasAnyFailure ? 'PARTIAL_FAILURE' : 'SUCCESS';
   },
   runRestore: async (
     restoreId: string,
@@ -569,5 +471,4 @@ export {
   exportObjectToDestination,
   exportWithRetry,
   exportObjectToDestinationArchival,
-  exportWithRetryArchival,
 };

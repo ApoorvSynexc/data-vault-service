@@ -45,10 +45,7 @@ assert.deepStrictEqual(pickMainTableColumns(afterDrift, key), [
 ]);
 
 // A field removed later must drop out too — not just accumulate.
-const afterRemoval = [
-  ...afterDrift,
-  { context: [{ name: 'Id' }, { name: 'Name' }] },
-];
+const afterRemoval = [...afterDrift, { context: [{ name: 'Id' }, { name: 'Name' }] }];
 assert.deepStrictEqual(pickMainTableColumns(afterRemoval, key), [
   { name: 'Id', type: 'string' },
   { name: 'Name', type: 'string' },

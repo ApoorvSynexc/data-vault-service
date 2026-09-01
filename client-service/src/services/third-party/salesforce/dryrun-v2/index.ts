@@ -1,10 +1,10 @@
 import { logger } from "../../../../middlewares";
 import type { IUser } from "../../../../models";
-import type { ISalesforceObject } from "../dry-run/types";
+import type { ISalesforceObject } from "./types";
 import { generateSoqlQueries } from "./soql-generation";
 import { fetchCountsFromSalesforce, ICountResult } from "./salesforce-api";
 
-export type { ISalesforceObject } from "../dry-run/types";
+export type { ISalesforceObject } from "./types";
 
 export interface IDryRunV2Payload {
   user: IUser;

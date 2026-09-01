@@ -24,7 +24,7 @@ import {
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { buildArchivalObjectScheduleName, buildScheduleInput, computeNextScheduledRun } from "../../../utils/event-bridge";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
-import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
+import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dryrun-v2/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
 import { previewRecords } from "../../../services/third-party/salesforce/dryrun-v2/preview-records";
 import { validateSoql } from "../../../services/third-party/salesforce/dryrun-v2/validate-soql";

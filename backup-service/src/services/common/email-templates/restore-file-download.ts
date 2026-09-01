@@ -15,15 +15,31 @@ export interface IRestoreFileDownloadEmailParams {
   expiresInHours?: number;
 }
 
-export const buildRestoreFileDownloadEmail = (params: IRestoreFileDownloadEmailParams): IEmailTemplate => {
-  const { recipientName, restoreConfigName, backupConfigName, fileFormat, fileName, downloadUrl, expiresInHours } = params;
+export const buildRestoreFileDownloadEmail = (
+  params: IRestoreFileDownloadEmailParams
+): IEmailTemplate => {
+  const {
+    recipientName,
+    restoreConfigName,
+    backupConfigName,
+    fileFormat,
+    fileName,
+    downloadUrl,
+    expiresInHours,
+  } = params;
   const label = restoreConfigName ?? backupConfigName;
 
   return {
     subject: `Your ${fileFormat} export is ready: ${label}`,
     html: renderEmail({
       contentTemplate: 'restore-file-download',
-      locals: { recipientName: recipientName ?? 'there', label, fileFormat, fileName, expiresInHours },
+      locals: {
+        recipientName: recipientName ?? 'there',
+        label,
+        fileFormat,
+        fileName,
+        expiresInHours,
+      },
       preheader: `Your ${fileFormat} export for ${label} is ready to download`,
       heading: `Your ${fileFormat} export is ready`,
       ctaLabel: `Download ${fileFormat}`,

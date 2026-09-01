@@ -45,7 +45,9 @@ const inFlightDatabaseCreate = new Map<string, Promise<void>>();
 const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
   const existing = inFlightDatabaseCreate.get(databaseName);
   if (existing) {
-    logger.info(`[glue] ensureGlueDatabase duplicate | db:${databaseName} awaiting in-progress create`);
+    logger.info(
+      `[glue] ensureGlueDatabase duplicate | db:${databaseName} awaiting in-progress create`
+    );
     return existing;
   }
 
@@ -56,7 +58,9 @@ const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
       logger.info(`[glue] created database | db:${databaseName}`);
     } catch (err: any) {
       if (err.name !== 'AlreadyExistsException') {
-        logger.error(`[glue] ensureGlueDatabase failed | db:${databaseName} err:${err.name}: ${err.message}`);
+        logger.error(
+          `[glue] ensureGlueDatabase failed | db:${databaseName} err:${err.name}: ${err.message}`
+        );
         throw err;
       }
       logger.info(`[glue] database already exists | db:${databaseName}`);
@@ -80,7 +84,9 @@ const glueTableExists = async (databaseName: string, tableName: string): Promise
     if (err instanceof EntityNotFoundException || err.name === 'EntityNotFoundException') {
       return false;
     }
-    logger.error(`[glue] glueTableExists failed | db:${databaseName} table:${tableName} err:${err.name}: ${err.message}`);
+    logger.error(
+      `[glue] glueTableExists failed | db:${databaseName} table:${tableName} err:${err.name}: ${err.message}`
+    );
     throw err;
   }
 };
@@ -358,8 +364,16 @@ const ensureHudiFormatTable = async (
     dataset: 'main_backup_files' | 'delta';
   }
 ): Promise<boolean> => {
-  const { crmId, crmName, policyConfigType, backupConfigId, objectName, destConfig, tableName, dataset } =
-    params;
+  const {
+    crmId,
+    crmName,
+    policyConfigType,
+    backupConfigId,
+    objectName,
+    destConfig,
+    tableName,
+    dataset,
+  } = params;
   const identity: ITableIdentity = { crmId, crmName, policyConfigType, backupConfigId, objectName };
 
   const databaseName = buildGlueDatabaseName(backupConfigId);
@@ -382,16 +396,25 @@ const ensureHudiFormatTable = async (
     logger.info(
       `[glue] ${label} table already exists, syncing schema + partitions | db:${databaseName} table:${tableName}`
     );
-    await syncHudiTableSchema(databaseName, tableName, destConfig, rootKey, identity, dataset).catch(
-      (err: any) => {
-        logger.warn(`[glue] schema sync failed | table:${tableName} err:${err.name}: ${err.message}`);
-      }
-    );
+    await syncHudiTableSchema(
+      databaseName,
+      tableName,
+      destConfig,
+      rootKey,
+      identity,
+      dataset
+    ).catch((err: any) => {
+      logger.warn(`[glue] schema sync failed | table:${tableName} err:${err.name}: ${err.message}`);
+    });
     await syncPartitions();
     return false;
   }
 
-  const { glueColumns, finalPartitionKeys } = await resolveTableShape(destConfig, identity, dataset);
+  const { glueColumns, finalPartitionKeys } = await resolveTableShape(
+    destConfig,
+    identity,
+    dataset
+  );
 
   try {
     await glue.send(
