@@ -23,15 +23,25 @@ const buildEmptyBucketPolicy = (): BucketPolicy => ({
   Statement: [],
 });
 
-// Client buckets are read-only source data for Athena — query results land in
-// Athena-owned managed storage instead (see athena/query.ts: this workgroup
-// has Managed Query Results enabled, which rejects any request that also
-// sets ResultConfiguration, so writing results into a client bucket isn't
-// possible without that workgroup setting changing first), so no client
-// bucket policy needs write-side actions.
-//   s3:GetObject  — read individual objects (Athena query execution)
-//   s3:ListBucket — list prefixes (Athena partition discovery)
-const REQUIRED_ATHENA_ACTIONS = ['s3:GetObject', 's3:ListBucket'];
+// Athena both READS the client's backup data and WRITES its query results into
+// the same bucket, under {backupConfigId}/retrieve/ (see athena/query.ts), so
+// the grant covers the write side too. The full write set is what Athena
+// requires for a result location — result files are written as multipart
+// uploads, which need the abort/list-parts actions to clean up a failed query.
+//   s3:GetObject / s3:ListBucket   — query execution + partition discovery
+//   s3:GetBucketLocation           — resolve the result bucket's region
+//   s3:PutObject                   — write the result file
+//   s3:ListBucketMultipartUploads / s3:ListMultipartUploadParts /
+//   s3:AbortMultipartUpload        — multipart result writes and their cleanup
+const REQUIRED_ATHENA_ACTIONS = [
+  's3:GetObject',
+  's3:ListBucket',
+  's3:GetBucketLocation',
+  's3:PutObject',
+  's3:ListBucketMultipartUploads',
+  's3:ListMultipartUploadParts',
+  's3:AbortMultipartUpload',
+];
 
 const buildAthenaStatement = (bucketName: string) => ({
   Sid: ATHENA_POLICY_SID,
