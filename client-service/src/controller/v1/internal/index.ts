@@ -15,7 +15,7 @@ import {
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
 import { encrypt } from '../../../utils/encryption';
-import { salesforceFieldCreation } from '../../../services/third-party/salesforce/restore';
+import { salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
 
 const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupConfigId } = req.query;
@@ -121,6 +121,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
 
         if(triggerSource.name === 'CREATE_RESTORE') {
           await salesforceFieldCreation({ restoreJobId: triggerSource.entityId });
+          await salesforceFieldsPermission({ restoreJobId: triggerSource.entityId });
         }
 
         await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
