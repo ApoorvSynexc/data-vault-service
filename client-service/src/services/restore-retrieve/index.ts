@@ -34,7 +34,10 @@ import {
   buildRecordTypeDeltaSql,
   buildHudiCountSql,
   buildDeltaCountSql,
+  recordIdsWhere,
+  validateColumns,
 } from './athena-fetch';
+import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records-by-ids';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 
@@ -1068,6 +1071,339 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
 };
 
 // ---------------------------------------------------------------------------
+// POST /dry-run-diff — the records a restore would write, paired with the
+// destination org's current state of each
+// ---------------------------------------------------------------------------
+
+// Rows compared per object. A diff pairs every vault record with a LIVE
+// Salesforce read, so this is bounded by what a single request can reasonably
+// resolve — an ALL-scope restore spans every object at once. The response is
+// deliberately a SAMPLE: /dry-run remains the endpoint that answers "how many
+// records in total".
+export const DIFF_DEFAULT_LIMIT = 50;
+export const DIFF_MAX_LIMIT = 200;
+
+// Scope types dry-run-diff resolves to records. A superset of DryRunScopeType:
+// RECORD/BULK_CSV (id lists) and DELETED_ONLY (deleted-delta rows) select
+// records rather than whole objects, so they have no meaning for a per-object
+// COUNT but a clear one for a diff. INSERTS_ONLY, CHANGE_SINCE and OBJECT_TREE
+// stay unsupported — the first two have no restore-side implementation to
+// mirror, and OBJECT_TREE is ARCHIVAL/Spark-side.
+export type DiffScopeType = DryRunScopeType | 'RECORD' | 'BULK_CSV' | 'DELETED_ONLY';
+
+export interface IDryRunDiffParams extends IDryRunParams {
+  // The diff's second half is a live Salesforce read, so unlike the count-only
+  // dry-run this needs the full user, not just an ownership id.
+  user: IUser;
+  limit?: number;
+}
+
+// One object's resolved slice of the restore scope: which records to read, and
+// (FIELD scope only) which columns the restore would actually write.
+interface IDiffTarget {
+  objectApiName: string;
+  // Compiled Athena WHERE body narrowing which records match — null selects
+  // every record on the object. See IRetrieveSqlParams.scopeWhere.
+  scopeWhere: string | null;
+  // null means "the object's whole stored schema", resolved per object below.
+  columnNames: string[] | null;
+  // Read the deleted records out of the delta table instead of the live Hudi
+  // rows — the DELETED_ONLY scope, and only it.
+  deletedOnly: boolean;
+}
+
+export interface IDryRunDiffRecord {
+  // The record as the vault holds it — what a restore would write back,
+  // carrying the OPERATION field naming which write that would be.
+  changeRecord: Record<string, string>;
+  // The same record as it exists in the destination org right now, or null
+  // when it does not exist there — the record a restore would INSERT rather
+  // than update.
+  salesforceRecord: Record<string, any> | null;
+}
+
+export interface IDryRunDiffObject {
+  objectApiName: string;
+  ok: boolean;
+  error?: string;
+  // The vault columns compared. The salesforceRecord half carries only those
+  // of them the live object still has — see the describe intersection below.
+  columns: string[];
+  recordCount: number;
+  records: IDryRunDiffRecord[];
+}
+
+export interface IDryRunDiffResult {
+  type: DryRunSourceType;
+  // Echoed back so a caller can tell a full object from one cut off at the cap.
+  limit: number;
+  totalRecordCount: number;
+  objects: IDryRunDiffObject[];
+}
+
+export type IDryRunDiffOutcome =
+  | { ok: true; value: IDryRunDiffResult }
+  | { ok: false; error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' };
+
+/**
+ * Resolves an IRestoreScope to the per-object record selection a diff reads —
+ * the same scope semantics the restore itself applies, compiled to Athena:
+ *
+ *   ALL          — every restore-eligible object on the config, all records.
+ *   OBJECT       — the named objects, all records.
+ *   FIELD        — the named objects, all records, narrowed to fieldNames.
+ *                  (The count dry-run drops fieldNames — a COUNT is the same
+ *                  whichever columns it projects. A diff is not.)
+ *   FILTER       — the named objects, records matching each object's filter.
+ *   RECORD       — the named objects, records whose Id is in recordIds.
+ *   BULK_CSV     — as RECORD, with the ids that came out of the uploaded CSV.
+ *   DELETED_ONLY — every restore-eligible object, deleted records only.
+ *
+ * Returns null for any other scope type — the caller maps that to
+ * invalid_restore_scope_type.
+ */
+const resolveDiffTargets = async (params: IDryRunDiffParams): Promise<IDiffTarget[] | null> => {
+  const scope = params.restoreScope;
+  const target = (
+    objectApiName: string,
+    rest: Partial<IDiffTarget> = {}
+  ): IDiffTarget => ({ objectApiName, scopeWhere: null, columnNames: null, deletedOnly: false, ...rest });
+
+  const allRestorableObjects = async (): Promise<string[]> => {
+    const { objects } = await getRestoreObjectListByConfigId(
+      params.backupConfigId,
+      params.configType,
+      params.userId
+    );
+    return objects.map((o) => o.name);
+  };
+
+  switch (scope.type as DiffScopeType) {
+    case 'ALL':
+      return (await allRestorableObjects()).map((name) => target(name));
+    case 'OBJECT':
+      return [...new Set(scope.objects ?? [])].map((name) => target(name));
+    case 'FIELD':
+      return (scope.fields ?? []).map((f) => target(f.objectName, { columnNames: f.fieldNames }));
+    case 'FILTER':
+      return (scope.filters ?? []).map((f) =>
+        target(f.objectName, { scopeWhere: buildAthenaFilterWhere(f.filter) })
+      );
+    case 'RECORD':
+      return (scope.records ?? []).map((r) =>
+        target(r.objectName, { scopeWhere: recordIdsWhere(r.recordIds ?? []) })
+      );
+    case 'BULK_CSV':
+      return (scope.bulkCsvIds ?? []).map((b) =>
+        target(b.objectName, { scopeWhere: recordIdsWhere(b.ids ?? []) })
+      );
+    // deletedOnly is the discriminator, not a toggle — the scope type already
+    // says "deleted records"; `deletedOnly: false` on it would be a scope that
+    // selects nothing, so the stored flag is not consulted.
+    case 'DELETED_ONLY':
+      return (await allRestorableObjects()).map((name) => target(name, { deletedOnly: true }));
+    default:
+      return null;
+  }
+};
+
+/**
+ * Reads one object's slice of the vault — the same Hudi/delta model
+ * fetch-records uses, run once at the diff's row cap instead of paged.
+ *
+ * No cursor and no block/replay machinery: the cap is small and every row is
+ * about to cost a live Salesforce read anyway, so there is nothing for a
+ * second page to amortise.
+ */
+const fetchDiffBlock = async (
+  params: IDryRunDiffParams,
+  target: IDiffTarget,
+  columnNames: string[],
+  limit: number
+): Promise<IRankedRecord[]> => {
+  const databaseName = toGlueId(params.backupConfigId);
+  const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(target.objectApiName)}`;
+  const hudiTable = `${table}_hudi`;
+  const deltaTable = `${table}_delta`;
+
+  const changed = params.type === 'CHANGED_BETWEEN';
+  const startDate = changed ? params.startDate! : null;
+  const endDate = changed ? params.endDate! : null;
+
+  const { run } = makeRunner(databaseName, null);
+  const sql: IRetrieveSqlParams = {
+    columnNames,
+    searchText: null,
+    startDate,
+    endDate,
+    deltaPartition: buildDeltaPartitionWhere(startDate, endDate),
+    scopeWhere: target.scopeWhere,
+    limit,
+    cursor: null,
+  };
+  const windowSql = { ...sql, startDate: startDate!, endDate: endDate! };
+  const columns = pairedColumns(columnNames);
+  const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
+
+  // DELETED_ONLY asks for exactly the records the vault holds ONLY as a DELETE
+  // delta, so the main Hudi query is skipped rather than filtered — a deleted
+  // record has no Hudi row for it to return.
+  if (target.deletedOnly) {
+    const deleted = await run('deleted', () => buildDeletedDeltaSql(deltaTable, sql));
+    return toRankedRows(deleted, columns, derived).slice(0, limit);
+  }
+
+  // ENTIRE reads the main Hudi table only — the same contract the /dry-run
+  // count it pairs with applies, so the two agree on what ENTIRE means.
+  // Deleted records are reachable through the DELETED_ONLY scope instead.
+  if (!changed) {
+    const main = await run('main', () => buildHudiEntireSql(hudiTable, sql));
+    return toRankedRows(main, columns, derived).slice(0, limit);
+  }
+
+  // CHANGED_BETWEEN: created/updated Hudi rows and deleted-delta rows both
+  // count as "changed in the window" — /dry-run's own CHANGED_BETWEEN count
+  // reports DELETEs too — so the pair is merged exactly as fetch-records does,
+  // Hudi first so a live record is never shadowed by a stale tombstone.
+  const [main, deleted] = await Promise.all([
+    run('main', () => buildHudiChangedSql(hudiTable, deltaTable, windowSql)),
+    run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
+  ]);
+
+  const block = dedupeById([
+    ...toRankedRows(main, columns, derived),
+    ...toRankedRows(deleted, columns, derived),
+  ])
+    .sort(byKeyDesc)
+    .slice(0, limit);
+
+  // Roll the window's updates back, so changeRecord is the PRE-window version a
+  // restore would actually write — not the current state, which is what the
+  // live Salesforce half of the pair already shows.
+  const recordIds = block
+    .filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE')
+    .map(({ record }) => record['Id'])
+    .filter(Boolean);
+  if (recordIds.length) {
+    const deltas = await run('deltas', () => buildWindowDeltasSql(deltaTable, recordIds, windowSql));
+    undoWindowDeltas(block, deltas.rows, columns);
+  }
+
+  return block;
+};
+
+/**
+ * Pairs one object's vault records with the destination org's current state of
+ * each.
+ *
+ * The live query asks only for vault columns the object STILL has: an unknown
+ * field fails the whole SOQL statement, and a schema that drifted since the
+ * backup is normal (it is what /retrieve/fetch-missing-fields exists to
+ * report), so the describe intersection keeps one dropped field from costing
+ * the whole object's diff.
+ */
+const pairWithSalesforce = async (
+  params: IDryRunDiffParams,
+  objectApiName: string,
+  columnNames: string[],
+  block: IRankedRecord[]
+): Promise<IDryRunDiffRecord[]> => {
+  const ids = block.map(({ record }) => record['Id']).filter(Boolean);
+  if (!ids.length) {
+    return block.map(({ record }) => ({ changeRecord: record, salesforceRecord: null }));
+  }
+
+  const described = await salesforceObjectDescribe({ user: params.user, objectName: objectApiName });
+  const live = new Set(described.fields.filter(isQueryableField).map((f) => f.name.toLowerCase()));
+  const fieldNames = columnNames.filter((c) => live.has(c.toLowerCase()));
+
+  const byId = await fetchSalesforceRecordsByIds({
+    user: params.user,
+    objectApiName,
+    fieldNames,
+    ids,
+  });
+
+  return block.map(({ record }) => ({
+    changeRecord: record,
+    salesforceRecord: byId.get(record['Id']) ?? null,
+  }));
+};
+
+/**
+ * The records a restore would touch, each paired with the destination org's
+ * current version of it — read-only, no CSV, no write, no restore executed.
+ *
+ * The record-level counterpart to /dry-run: same request shape and the same
+ * scope semantics, but it returns the rows rather than counting them, and it
+ * accepts the three record-selecting scopes a COUNT has no use for (RECORD,
+ * BULK_CSV, DELETED_ONLY). Capped at `limit` rows PER OBJECT — every row costs
+ * a live Salesforce read, so this is a sample; /dry-run stays the endpoint that
+ * answers "how many in total".
+ *
+ * Objects are diffed concurrently and fail independently: an object whose table
+ * has never been compressed, whose schema is missing, or whose describe fails
+ * comes back with ok:false and its error, rather than failing the whole diff.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller.
+ */
+const dryRunDiff = async (params: IDryRunDiffParams): Promise<IDryRunDiffOutcome> => {
+  const config = await getBackupConfigById(params.backupConfigId);
+  if (!config || config.userId !== params.userId) return { ok: false, error: 'not_exist' };
+
+  if (params.type === 'CHANGED_BETWEEN' && (!params.startDate || !params.endDate)) {
+    return { ok: false, error: 'date_range_required' };
+  }
+
+  const targets = await resolveDiffTargets(params);
+  if (!targets) return { ok: false, error: 'invalid_restore_scope_type' };
+
+  const limit = Math.min(Math.max(params.limit ?? DIFF_DEFAULT_LIMIT, 1), DIFF_MAX_LIMIT);
+
+  const objects = await Promise.all(
+    targets.map(async (target): Promise<IDryRunDiffObject> => {
+      const { objectApiName } = target;
+      try {
+        // FIELD scope names the columns a restore writes; every other scope
+        // restores the whole record, so the stored schema IS the column list.
+        let columnNames = target.columnNames;
+        if (!columnNames) {
+          const stored = await fetchObjectFields({
+            objectApiName,
+            backupConfigId: params.backupConfigId,
+            userId: params.userId,
+          });
+          const fields = stored.ok ? latestStoredFields(stored.schema) : null;
+          if (!fields?.length) {
+            return { objectApiName, ok: false, columns: [], recordCount: 0, records: [], error: 'no_stored_schema' };
+          }
+          columnNames = fields.map((f) => f.name);
+        }
+
+        validateColumns(columnNames);
+
+        const block = await fetchDiffBlock(params, target, columnNames, limit);
+        const records = await pairWithSalesforce(params, objectApiName, columnNames, block);
+
+        return { objectApiName, ok: true, columns: columnNames, recordCount: records.length, records };
+      } catch (e) {
+        return { objectApiName, ok: false, columns: [], recordCount: 0, records: [], error: errorMessage(e) };
+      }
+    })
+  );
+
+  return {
+    ok: true,
+    value: {
+      type: params.type,
+      limit,
+      totalRecordCount: objects.reduce((sum, o) => sum + o.recordCount, 0),
+      objects,
+    },
+  };
+};
+
+// ---------------------------------------------------------------------------
 // POST /retrieve/fetch-missing-record-types — record types to map per object
 // ---------------------------------------------------------------------------
 
@@ -1366,4 +1702,5 @@ export {
   fetchObjectFields,
   fetchPicklistValues,
   dryRunRestore,
+  dryRunDiff,
 };

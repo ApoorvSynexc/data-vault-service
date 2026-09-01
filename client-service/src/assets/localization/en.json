@@ -108,6 +108,7 @@
   "invalid_scope_fields": "each restoreScope.fields entry must have a string objectName and a fieldNames array",
   "invalid_scope_filters": "each restoreScope.filters entry must have a string objectName and a filter object",
   "invalid_full_restore": "fullRestore must be a boolean",
+  "invalid_limit": "limit must be a positive integer",
   "invalid_time_format": "startTime and endTime must be ISO 8601 strings, e.g. 2026-06-30 or 2026-06-30T23:59:59.999Z",
   "invalid_time_range": "the start of the window must not be later than its end",
   "invalid_schedule_config": "Backup configuration has an invalid or missing schedule configuration",

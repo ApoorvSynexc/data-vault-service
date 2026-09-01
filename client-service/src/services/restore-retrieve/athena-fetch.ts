@@ -1,3 +1,8 @@
+// Referenced explicitly so the self-check at the bottom (`require`, `module`)
+// type-checks under `ts-node src/services/restore-retrieve/athena-fetch.ts` —
+// same directive restore-reconstruct.ts carries for the same reason.
+/// <reference types="node" />
+
 import { FilterError } from './athena-filter';
 
 /**
@@ -99,6 +104,20 @@ const keysetWhere = (
     ? `${lmdExpr} < ${lit(cursor.lmd)} OR ` +
       `(${lmdExpr} = ${lit(cursor.lmd)} AND ${idExpr} < ${lit(cursor.id)})`
     : null;
+
+/**
+ * `Id IN (...)` for the RECORD and BULK_CSV restore scopes — both name the
+ * records to restore by id, so both compile to the same predicate.
+ *
+ * Ids are client-supplied (a CSV upload, in the BULK_CSV case), so every value
+ * goes through `lit` rather than being interpolated raw. Returns null for an
+ * empty list: "no ids" is not "match everything", and the caller decides what
+ * an empty selection means rather than silently getting an unscoped read.
+ */
+export const recordIdsWhere = (recordIds: string[]): string | null => {
+  const ids = [...new Set(recordIds.filter(Boolean))];
+  return ids.length ? `${quoteCol(ID)} IN (${idList(ids)})` : null;
+};
 
 // =============================================================================
 // Hudi + Delta record retrieval — POST /retrieve/fetch-records
@@ -260,6 +279,19 @@ export interface IRetrieveSqlParams {
   searchText?: string | null;
   // Partition predicate for the delta table, from buildDeltaPartitionWhere.
   deltaPartition?: string | null;
+  /**
+   * Extra WHERE body narrowing WHICH records match, from the restore scope's
+   * own record selection: an Id list (RECORD / BULK_CSV, via recordIdsWhere)
+   * or compiled filter conditions (FILTER, via buildAthenaFilterWhere). Null
+   * when the scope selects every record — ALL / OBJECT / FIELD.
+   *
+   * Applied identically across the Hudi and deleted-delta builders, so a
+   * scoped read matches the same records whichever half of the pair it comes
+   * out of. On the deleted path it binds to the json-extracted column
+   * ALIASES, which only exist for `columnNames` — a filter on a field outside
+   * the requested column list has nothing to bind to there.
+   */
+  scopeWhere?: string | null;
   limit: number;
   // Absent/null → first block.
   cursor?: IPageKey | null;
@@ -281,7 +313,11 @@ export const buildHudiEntireSql = (hudiTable: string, p: IRetrieveSqlParams): st
   return (
     `SELECT ${cols}, 'UPDATE' AS ${quoteCol(OP)} FROM "${hudiTable}"` +
     whereClause(
-      [searchWhere(p.columnNames, p.searchText), keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID))],
+      [
+        p.scopeWhere,
+        searchWhere(p.columnNames, p.searchText),
+        keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID)),
+      ],
       'WHERE'
     ) +
     orderAndLimit(p.limit)
@@ -327,6 +363,7 @@ export const buildHudiChangedSql = (
     whereClause(
       [
         `${created} OR ${updated}`,
+        p.scopeWhere,
         searchWhere(p.columnNames, p.searchText),
         keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID)),
       ],
@@ -380,6 +417,7 @@ export const buildDeletedDeltaSql = (deltaTable: string, p: IRetrieveSqlParams):
         windowed
           ? `NOT COALESCE(${inWindow(quoteCol(CREATED_ALIAS), p.startDate!, p.endDate!)}, false)`
           : null,
+        p.scopeWhere,
         searchWhere(p.columnNames, p.searchText),
         keysetWhere(p.cursor, quoteCol(LMD), quoteCol(ID)),
       ],
@@ -686,6 +724,31 @@ if (require.main === module) {
   } catch (e) {
     assert.ok(e instanceof FilterError && e.code === 'invalid_column_name');
   }
+
+  // ── Restore-scope record selection (dry-run-diff) ──────────────────────────
+  // RECORD / BULK_CSV compile to the same Id predicate; ids are quoted and
+  // escaped, deduped, and an empty selection is null rather than "everything".
+  assert.strictEqual(recordIdsWhere(['001A', '001B']), `"Id" IN ('001A', '001B')`);
+  assert.strictEqual(recordIdsWhere(['001A', '001A', '']), `"Id" IN ('001A')`);
+  assert.strictEqual(recordIdsWhere([]), null, 'no ids is not "match everything"');
+  assert.strictEqual(recordIdsWhere(["0'1"]), `"Id" IN ('0''1')`);
+
+  // scopeWhere reaches all three record builders, so a scoped read matches the
+  // same records whichever half of the Hudi/delta pair it comes out of.
+  const scoped = { ...retrieve, scopeWhere: `"Id" IN ('001A')` };
+  assert.ok(buildHudiEntireSql('t_hudi', scoped).includes(`WHERE ("Id" IN ('001A'))`));
+  assert.ok(buildHudiChangedSql('t_hudi', 't_delta', { ...win, scopeWhere: `"Id" IN ('001A')` }).includes(`AND ("Id" IN ('001A'))`));
+  assert.ok(buildDeletedDeltaSql('t_delta', scoped).includes(`("Id" IN ('001A'))`));
+  // On the deleted path it must bind in the OUTER query, where the
+  // json-extracted values carry their real column aliases — the inner subquery
+  // only knows `change_data`.
+  assert.ok(
+    buildDeletedDeltaSql('t_delta', scoped).indexOf(`"Id" IN ('001A')`) >
+    buildDeletedDeltaSql('t_delta', scoped).indexOf(`) w`),
+    'scopeWhere binds to the aliased projection, not the raw delta rows'
+  );
+  // Omitted → nothing added, so ALL/OBJECT/FIELD scopes read exactly as before.
+  assert.strictEqual(buildHudiEntireSql('t_hudi', retrieve), buildHudiEntireSql('t_hudi', { ...retrieve, scopeWhere: null }));
 
   // ── Dry-run counts ──────────────────────────────────────────────────────────
   assert.strictEqual(buildHudiCountSql('t_hudi'), `SELECT COUNT(*) AS cnt FROM "t_hudi"`);
