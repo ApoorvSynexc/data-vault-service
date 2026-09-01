@@ -33,6 +33,9 @@ const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE 
 // Dedicated IAM credentials scoped to Glue (separate from the default AWS creds).
 const AWS_GLUE_ACCESS_KEY = String(process.env.AWS_GLUE_ACCESS_KEY);
 const AWS_GLUE_SECRET_KEY = String(process.env.AWS_GLUE_SECRET_KEY);
+// Credentials used only to construct the Glue SDK client (services/third-party/glue).
+const AWS_ACCESS_KEY = String(process.env.AWS_ACCESS_KEY);
+const AWS_SECRET_KEY = String(process.env.AWS_SECRET_KEY);
 
 // Salesforce Config
 const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
@@ -202,6 +205,8 @@ export {
   // AWS Glue / Athena
   AWS_GLUE_ACCESS_KEY,
   AWS_GLUE_SECRET_KEY,
+  AWS_ACCESS_KEY,
+  AWS_SECRET_KEY,
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
   RESTORE_TABLE,
