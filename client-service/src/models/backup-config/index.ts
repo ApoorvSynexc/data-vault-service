@@ -68,7 +68,7 @@ export interface IObject {
 export interface IObjectRelationshipNode {
   id: string;
   name: string;
-  field?: string;
+  fieldName?: string;
   children?: IObjectRelationshipNode[];
 }
 
