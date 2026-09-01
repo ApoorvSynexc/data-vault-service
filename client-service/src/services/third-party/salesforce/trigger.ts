@@ -7,23 +7,25 @@ import { appendObjectsToBackupConfig, getBackupConfigsByCrm } from '../../backup
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
 import { getMasterChildApiNames } from './apex';
+import { METADATA_API_VERSION as API_VERSION } from './metadata-api';
 import { withNamespace } from '../../../utils/salesforce-namespace';
-import { SALESFORCE_NAMESPACE, SCHEDULE_MODE } from '../../../constant';
+import {
+  SALESFORCE_NAMESPACE,
+  SCHEDULE_MODE,
+  SALESFORCE_PERMISSION_SET_APEX_CLASSES,
+  SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL,
+  SALESFORCE_HANDLER_CLASS_NAME,
+  SALESFORCE_HANDLER_METHOD_NAME,
+} from '../../../constant';
 import { logger } from '../../../middlewares';
 
-const HANDLER_CLASS_NAME = `DataVaultRecordSyncTriggerHandler`;
-const API_VERSION = '66.0';
-
-// Unqualified name of the External Credential Principal inside the managed
-// package. Format once namespaced: {Namespace}__{ExternalCredentialDeveloperName}-{PrincipalDeveloperName}
-// — withNamespace prefixes the whole string once, which lands the namespace on
-// exactly the ExternalCredential half, matching that format.
-const EXTERNAL_CREDENTIAL_PRINCIPAL_NAME = `DataVaultAPIExt-DataVaultAPIUser`;
+const HANDLER_CLASS_NAME = SALESFORCE_HANDLER_CLASS_NAME;
 
 // ---------------------------------------------------------------------------
 // Real-time sync is delivered by an Apex Trigger per object, calling the
-// managed package's DataVaultRecordSyncTriggerHandler.enqueueSync. Salesforce
-// requires each deployed trigger to reach 75% coverage, and a managed
+// managed package's handler class/method (SALESFORCE_HANDLER_CLASS_NAME /
+// SALESFORCE_HANDLER_METHOD_NAME, default DataVaultRecordSyncTriggerHandler.
+// enqueueSync). Salesforce requires each deployed trigger to reach 75% coverage, and a managed
 // package's own tests do not count towards subscriber-org coverage, so every
 // trigger ships with a generated Test Class (see createSingleTrigger below).
 // ---------------------------------------------------------------------------
@@ -212,7 +214,7 @@ const buildTriggerBody = (objectApiName: string): string => {
     `    // the catch. The catch itself must stay: a real-time backup must never make\n` +
     `    // the user's own DML fail. Errors are reported by the handler, which\n` +
     `    // notifies on failure.\n` +
-    `    try { ${apexHandlerRef}.enqueueSync(Trigger.new, Trigger.old, Trigger.operationType.name()); } catch (Exception e) {}\n` +
+    `    try { ${apexHandlerRef}.${SALESFORCE_HANDLER_METHOD_NAME}(Trigger.new, Trigger.old, Trigger.operationType.name()); } catch (Exception e) {}\n` +
     `}`
   );
 };
@@ -709,10 +711,18 @@ const deployTriggerStatus = async (
 // behind would orphan an uncoverable class in the org — included only when
 // actually present, since destructiveChanges on a missing member errors.
 //
-// testLevel RunLocalTests: production deploys touching Apex must run tests,
-// and this uses the org's real overall Apex coverage rather than a synthetic
-// always-passing class — if the org is below Salesforce's 75% bar, this fails
-// and surfaces that honestly instead of masking it.
+// testLevel RunSpecifiedTests, not RunLocalTests — same reasoning as every
+// other deploy in this file (see deployTriggerStatus above): RunLocalTests
+// runs every local Apex test in the org and enforces its org-wide 75%
+// average, so one unrelated, permanently-broken test (e.g. a recovery test
+// class querying a record that's since been deleted — see
+// buildTriggerRecoveryTestBody) or a subscriber org sitting under 75%
+// overall blocks every trigger deletion forever, not just the broken one.
+// destructiveChanges.xml deploys ship an empty package.xml (nothing is
+// "delivered"), so RunSpecifiedTests' per-class coverage requirement has
+// nothing to apply to — confirmed working in practice by Salesforce admins
+// deleting a trigger/test-class pair via Workbench the same way: point
+// runTests at the very test class being deleted in the same deploy.
 // ---------------------------------------------------------------------------
 const deleteSingleTrigger = async (
   instanceUrl: string,
@@ -730,13 +740,18 @@ const deleteSingleTrigger = async (
       ...(testClassId ? [{ type: 'ApexClass', name: testClassName }] : []),
     ],
     `Trigger ${triggerName} delete`,
-    { testLevel: 'RunLocalTests' }
+    { testLevel: 'RunSpecifiedTests', runTests: [testClassName] }
   );
 };
 
 // ---------------------------------------------------------------------------
 // Grants permission set access after trigger creation/activation:
-//   1. Handler class access — the trigger's Apex call
+//   1. Apex Class access — every managed-package class the trigger's call
+//      chain touches (SALESFORCE_PERMISSION_SET_APEX_CLASSES), not just the
+//      handler itself: the Queueable it enqueues, the DTO/callout/exception
+//      classes on that path all need SetupEntityAccess too, or the async
+//      Queueable step fails with an Apex class access error despite the
+//      trigger itself deploying fine.
 //   2. External Credential Principal access
 // Mutates the passed results array to set permissionSetStatus on each entry.
 // ---------------------------------------------------------------------------
@@ -748,9 +763,11 @@ const setupPermissionSet = async (
   try {
     const permissionSetId = await upsertPermissionSet(instanceUrl, tokens);
 
-    const handlerClassId = await fetchApexClassId(instanceUrl, tokens, HANDLER_CLASS_NAME);
-    if (handlerClassId) {
-      await grantApexClassAccess(instanceUrl, tokens, permissionSetId, handlerClassId);
+    for (const className of SALESFORCE_PERMISSION_SET_APEX_CLASSES) {
+      const classId = await fetchApexClassId(instanceUrl, tokens, className);
+      if (classId) {
+        await grantApexClassAccess(instanceUrl, tokens, permissionSetId, classId);
+      }
     }
 
     await grantExternalCredentialPrincipalAccess(
@@ -758,7 +775,7 @@ const setupPermissionSet = async (
       tokens,
       PERMISSION_SET_NAME,
       'DataVault Real-Time Trigger Access',
-      withNamespace(EXTERNAL_CREDENTIAL_PRINCIPAL_NAME)
+      withNamespace(SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL)
     );
 
     for (const trigger of triggerResults) {
@@ -1275,21 +1292,30 @@ const deleteTriggers = async (
     }
   }
 
-  // The permission set is shared org-wide infrastructure, not per-config —
-  // only tear it down once no other real-time config in this org needs it.
-  if (isLastRealtimeConfig) {
+  // The permission set is shared org-wide infrastructure, not per-config — only
+  // tear it down once no other real-time config in this org needs it AND every
+  // one of THIS config's own triggers actually came off (DELETED/NOT_FOUND/
+  // SKIPPED_SHARED all count as resolved). A DELETE_FAILED trigger is still
+  // live and still calling into the handler class the permission set grants
+  // access to — deleting the permission set anyway (as this used to do,
+  // keyed only on isLastRealtimeConfig) would strip that still-active
+  // trigger's Apex Class + External Credential Principal access out from
+  // under it.
+  const deleted = triggerResults.filter((r) => r.status === 'DELETED').length;
+  const failed = triggerResults.filter((r) => r.status === 'DELETE_FAILED').length;
+
+  if (isLastRealtimeConfig && failed === 0) {
     try {
       await deletePermissionSet(instanceUrl, tokens);
       logger.info(`[trigger-delete] permission set '${PERMISSION_SET_NAME}' deleted`);
     } catch (err) {
       logger.error(`[trigger-delete] failed to delete permission set: ${err instanceof Error ? err.message : String(err)}`);
     }
+  } else if (failed > 0) {
+    logger.info(`[trigger-delete] permission set kept — ${failed} trigger(s) in this config failed to delete and still need it`);
   } else {
     logger.info(`[trigger-delete] permission set kept — ${siblingRealtimeConfigs.length} other real-time config(s) remain in this org`);
   }
-
-  const deleted = triggerResults.filter((r) => r.status === 'DELETED').length;
-  const failed = triggerResults.filter((r) => r.status === 'DELETE_FAILED').length;
   logger.info(
     `[trigger-delete] backupConfigId=${config.backupConfigId} done: ${deleted}/${triggerResults.length} deleted, ${failed} failed — ` +
     triggerResults.map((r) => `${r.objectApiName}=${r.status}`).join(', ')

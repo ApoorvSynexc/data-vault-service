@@ -6,9 +6,9 @@ import { callApex, APEX_BASE } from './apex';
 
 // Packaged API/developer name of the ECA shipped with the managed package
 // (force-app/internal/360DV/externalClientApps/Data_Vault_Connected_App.eca-meta.xml).
-// In a Subscriber org this comes back namespace-prefixed (e.g.
-// SYX_DVV__Data_Vault_Connected_App); in an unpackaged Dev Hub/scratch org it
-// stays exactly this — resolveEcaDeveloperName() matches both.
+// Every target org is a Subscriber org with the package installed under
+// SALESFORCE_NAMESPACE, so this always comes back namespace-prefixed (e.g.
+// SYX_DVV__Data_Vault_Connected_App) — see resolveEcaDeveloperName().
 export const ECA_API_NAME = 'Data_Vault_Connected_App';
 // Display-only now — no longer used to look up the ECA (see resolveEcaDeveloperName).
 export const ECA_APP_LABEL = '360 Data Vault';
@@ -21,7 +21,9 @@ export const ECA_APP_LABEL = '360 Data Vault';
 export const ECA_PERMISSION_SET_LABEL = '360 Data Vault ECA Permission Set';
 export const ECA_PERMISSION_SET_NAME = 'Data_Vault_ECA_Permission_Set';
 
-export type EcaProvisionMode = 'subscriber' | 'development';
+// Always 'subscriber' now — scratch/Dev Hub (unpackaged) orgs are no longer a
+// real target, so the field is kept only for EcaProvisionResult's shape.
+export type EcaProvisionMode = 'subscriber';
 
 export interface EcaProvisionResult {
   mode: EcaProvisionMode;
@@ -40,21 +42,16 @@ interface EcaLookupResult {
 }
 
 /**
- * Resolves the ECA's developer name via feature detection instead of a fixed
- * assumption. ExternalClientApplication is a Metadata-API-only type — it is
- * not in Tooling API's queryable object list (querying it via /tooling/query
- * returns INVALID_TYPE in every org, not just this one) and isn't a REST/SOAP
- * data sobject either. listMetadata() (Metadata API, SOAP) is the documented
- * way to enumerate existing components of a type without already knowing
- * their fullName.
+ * Resolves the ECA's namespaced developer name. ExternalClientApplication is
+ * a Metadata-API-only type — it is not in Tooling API's queryable object list
+ * (querying it via /tooling/query returns INVALID_TYPE in every org, not just
+ * this one) and isn't a REST/SOAP data sobject either. listMetadata()
+ * (Metadata API, SOAP) is the documented way to enumerate existing components
+ * of a type without already knowing their fullName.
  *
- * There's no supported API to ask "is this a Dev Hub / scratch / subscriber
- * org" directly, so this doesn't try to. Instead it detects the thing that
- * actually matters: whether the returned fullName is namespace-prefixed
- * (Subscriber org, post-install) or not (Dev Hub/scratch org, unpackaged).
- * Never throws — a missing ECA or an unreachable Metadata API both resolve to
- * Development Mode with developerName: null, so callers can skip the
- * ECA-specific step and keep provisioning whatever else is available.
+ * Never throws — a missing ECA (package not installed in this org yet) or an
+ * unreachable Metadata API both resolve to developerName: null, so callers can
+ * skip the ECA-specific step and keep provisioning whatever else is available.
  */
 const resolveEcaDeveloperName = async (
   instanceUrl: string,
@@ -66,7 +63,7 @@ const resolveEcaDeveloperName = async (
     entries = await listMetadataSoap(instanceUrl, tokens, 'ExternalClientApplication', METADATA_API_VERSION);
   } catch (err: any) {
     console.log('[eca-permission-set] Metadata API listMetadata unavailable:', err?.message ?? err);
-    return { mode: 'development', developerName: null };
+    return { mode: 'subscriber', developerName: null };
   }
 
   console.log(
@@ -78,18 +75,12 @@ const resolveEcaDeveloperName = async (
 
   const namespaced = entries.find((e) => e.fullName.endsWith(`__${ECA_API_NAME}`));
   if (namespaced) {
-    console.log('[eca-permission-set] Subscriber Mode detected — found', namespaced.fullName);
+    console.log('[eca-permission-set] Found ECA:', namespaced.fullName);
     return { mode: 'subscriber', developerName: namespaced.fullName };
   }
 
-  const unpackaged = entries.find((e) => e.fullName === ECA_API_NAME);
-  if (unpackaged) {
-    console.log('[eca-permission-set] Development Mode detected — found unpackaged', unpackaged.fullName);
-    return { mode: 'development', developerName: unpackaged.fullName };
-  }
-
-  console.log(`[eca-permission-set] '${ECA_API_NAME}' not found under any expected name — Development Mode, skipping ECA step`);
-  return { mode: 'development', developerName: null };
+  console.log(`[eca-permission-set] '${ECA_API_NAME}' not found under the namespaced name — package not installed in this org yet, skipping ECA step`);
+  return { mode: 'subscriber', developerName: null };
 };
 
 // Returns true if the Permission Set already exists (by developer/API name).
@@ -363,8 +354,8 @@ const deployEcaOauthPolicy = async (
  * fact) once the target state is already in place, so re-running this after
  * a full prior success does zero deploys.
  *
- * Never throws for a missing/undiscoverable ECA (Development Mode — expected
- * before packaging or before the org has the component at all): the
+ * Never throws for a missing/undiscoverable ECA (expected before the package
+ * is installed in this org, or before the org has the component at all): the
  * Permission Set still gets created, and the result reports ecaFound: false
  * with a status message instead of failing the whole call. Only genuine
  * failures (permission set / OAuth policy deploy errors) still throw, since
@@ -407,7 +398,7 @@ export const provisionEcaPermissionSet = async (
       permissionSetAlreadyExists: alreadyExists,
       permissionSetAssignedToEca: false,
       externalClientAppUpdated: false,
-      message: `External Client App '${ECA_API_NAME}' was not found in this org yet (Development Mode) — permission set was still provisioned. Re-run this once the ECA is packaged and installed.`,
+      message: `External Client App '${ECA_API_NAME}' was not found in this org yet — permission set was still provisioned. Re-run this once the managed package is installed.`,
     };
   }
 

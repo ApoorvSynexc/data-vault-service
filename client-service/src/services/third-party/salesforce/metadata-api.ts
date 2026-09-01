@@ -1,9 +1,11 @@
 import JSZip from 'jszip';
 import { salesforceRequest, SalesforceTokens } from './index';
 import { timer } from '../../../utils/helper';
+import { SALESFORCE_METADATA_API_VERSION } from '../../../constant';
 
-// Metadata API version — kept in sync with services/third-party/salesforce/trigger.ts.
-export const METADATA_API_VERSION = '66.0';
+// Metadata API version — sourced from ENV (SALESFORCE_METADATA_API_VERSION),
+// shared by every file in this directory that imports it.
+export const METADATA_API_VERSION = SALESFORCE_METADATA_API_VERSION;
 
 interface DeployFile {
   path: string;

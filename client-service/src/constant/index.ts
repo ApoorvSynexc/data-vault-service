@@ -65,6 +65,34 @@ const SALESFORCE_LOGIN_REDIRECT_URI = String(process.env.SALESFORCE_LOGIN_REDIRE
 // Managed package namespace prefix (e.g. "SYX_DVV"). Empty when unpackaged/unset —
 // see utils/salesforce-namespace.ts for the only place this should be consumed.
 const SALESFORCE_NAMESPACE = String(process.env.SALESFORCE_NAMESPACE || '').trim();
+// Metadata API version for all metadata deploy/describe calls (permission sets,
+// triggers, external client apps, etc.) — see services/third-party/salesforce/metadata-api.ts.
+const SALESFORCE_METADATA_API_VERSION = String(process.env.SALESFORCE_METADATA_API_VERSION || '66.0').trim();
+// Apex classes shipped with the managed package that must have Apex Class access
+// granted on the real-time trigger permission set — see trigger.ts's setupPermissionSet.
+// Comma-separated so ops can extend it without a code change.
+const SALESFORCE_PERMISSION_SET_APEX_CLASSES = String(
+  process.env.SALESFORCE_PERMISSION_SET_APEX_CLASSES ||
+    'DataVaultRecordSyncTriggerHandler,DataVaultRecordSyncQueueable,DataVaultRecordSyncPayloadDto,DataVaultCalloutService,DataVaultCustomPackageException'
+)
+  .split(',')
+  .map((name) => name.trim())
+  .filter(Boolean);
+// Unqualified External Credential Principal name granted on the same permission
+// set — see trigger.ts's setupPermissionSet.
+const SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL = String(
+  process.env.SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL || 'DataVaultAPIExt-DataVaultAPIUser'
+).trim();
+// Managed-package Apex class + method every generated trigger calls into
+// (see trigger.ts's apexHandlerRef/buildTriggerBody). Changing this without a
+// matching change in the managed package breaks every already-deployed
+// trigger, so only override it in lockstep with a package release.
+const SALESFORCE_HANDLER_CLASS_NAME = String(
+  process.env.SALESFORCE_HANDLER_CLASS_NAME || 'DataVaultRecordSyncTriggerHandler'
+).trim();
+const SALESFORCE_HANDLER_METHOD_NAME = String(
+  process.env.SALESFORCE_HANDLER_METHOD_NAME || 'enqueueSync'
+).trim();
 const OAUTH_STATE_TABLE = `${NODE_ENV_PREFIX}-${process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states'}`;
 const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
 const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
@@ -155,6 +183,9 @@ const STATUS = {
   inactive: 'INACTIVE',
   deleted: 'DELETED',
   notAuthorized: 'NOT_AUTHORIZED',
+  // Real-time config only: deletion was restored because one or more of its
+  // Apex Triggers failed to delete in the org — see restoreBackupConfigAfterFailedTriggerDelete.
+  deleteFailed: 'DELETE_FAILED',
 };
 const NOTIFICATION_STATUS = {
   unread: 'UNREAD',
@@ -322,6 +353,11 @@ export {
   SALESFORCE_REDIRECT_URI,
   SALESFORCE_LOGIN_REDIRECT_URI,
   SALESFORCE_NAMESPACE,
+  SALESFORCE_METADATA_API_VERSION,
+  SALESFORCE_PERMISSION_SET_APEX_CLASSES,
+  SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL,
+  SALESFORCE_HANDLER_CLASS_NAME,
+  SALESFORCE_HANDLER_METHOD_NAME,
   OAUTH_STATE_TABLE,
   CRM_TABLE,
   BACKUP_CONFIG_TABLE,
