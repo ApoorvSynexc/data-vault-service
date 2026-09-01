@@ -1,26 +1,10 @@
 import { GlueClient, GetTableCommand, EntityNotFoundException } from '@aws-sdk/client-glue';
-import { AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY } from '../../../constant';
+import { AWS_REGION } from '../../../constant';
 import { logger } from '../../../middlewares';
-import { IAwsCredentials } from '../../../models';
 
-// constant/index.ts builds these with String(process.env.X), so an unset var
-// reads back as the literal string "undefined" rather than undefined itself —
-// excluded here so a deployed environment without these set doesn't send AWS
-// a literal accessKeyId of "undefined" (a real, previously-hit QA bug).
-const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
-
-const awsCredentials: IAwsCredentials = {
-  region: AWS_REGION,
-};
-
-if (isSet(AWS_ACCESS_KEY) && isSet(AWS_SECRET_KEY)) {
-  awsCredentials.credentials = {
-    accessKeyId: AWS_ACCESS_KEY,
-    secretAccessKey: AWS_SECRET_KEY,
-  };
-}
-
-const glue = new GlueClient(awsCredentials);
+// Credentials come from the SDK default chain only (task/instance role) — no
+// static keys are ever passed in.
+const glue = new GlueClient({ region: AWS_REGION });
 
 // Whether a Glue table exists — checked before counting records so an object
 // that simply hasn't been compressed yet (no backup job has run for it) reads
