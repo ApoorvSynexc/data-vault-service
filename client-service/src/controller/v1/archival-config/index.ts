@@ -4,8 +4,6 @@ import { logger } from "../../../middlewares";
 import {
     createBackupConfig,
     deleteBackupConfig,
-    getApexFields,
-    getApexPicklistValues,
     getUserForCrm,
     getApexObjectChilds,
     toApexType,
@@ -30,7 +28,6 @@ import {
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { buildArchivalObjectScheduleName, buildScheduleInput, computeNextScheduledRun } from "../../../utils/event-bridge";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
-import { buildOwnWhereBody, buildChildWhereBody } from "../../../services/third-party/salesforce/dry-run/soql-builder";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dry-run/types";
 import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
 import { previewRecords } from "../../../services/third-party/salesforce/dryrun-v2/preview-records";
@@ -58,37 +55,6 @@ const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<voi
     ]);
 
     makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
-};
-
-const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const user = req.user;
-    const { crmId, objectName } = req.query;
-    if (!crmId) {
-        return makeResponse(req, res, 400, false, 'crm_id_required');
-    }
-    if (!objectName) {
-        return makeResponse(req, res, 400, false, 'object_name_required');
-    }
-    const result = await getApexFields({ user, objectName: String(objectName), mode: 'archival' });
-    makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
-};
-
-// Same apex callout also exposed on /restore (see restore-retrieve controller) — shared logic lives in getApexPicklistValues.
-const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { crmId, objectApiName, fieldApiName } = req.query;
-    if (!crmId) {
-        return makeResponse(req, res, 400, false, 'crm_id_required');
-    }
-    if (!objectApiName || !fieldApiName) {
-        return makeResponse(req, res, 400, false, 'params_required');
-    }
-    // A person can have one user record per connected CRM — resolve the record for this crmId.
-    const crmUser = await getUserForCrm(req.user!, String(crmId));
-    if (!crmUser) {
-        return makeResponse(req, res, 400, false, 'not_exist');
-    }
-    const result = await getApexPicklistValues({ user: crmUser, objectApiName: String(objectApiName), fieldApiName: String(fieldApiName) });
-    makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -597,8 +563,6 @@ const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<vo
 
 export const archivalConfigController = wrapController({
     getObjectChildHanlder,
-    getFieldsHanlder,
-    getPicklistFieldValuesHandler,
     getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,
