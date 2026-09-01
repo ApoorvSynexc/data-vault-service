@@ -247,15 +247,16 @@ function collectChildParents(
 }
 
 function buildChildToParent(selectedRoots: IObject[]): IObjectParents[] {
-    const parentsByChildId = new Map<string, { name: string; parents: Map<string, { name: string; fieldName?: string }> }>();
+    const parentsByChildId = new Map<string, { name: string; fieldName?: string; parents: Map<string, { name: string; fieldName?: string }> }>();
 
     for (const root of selectedRoots) {
-        collectChildParents(root.children, { id: root.id, name: root.name }, new Set([root.id]), parentsByChildId);
+        collectChildParents(root.children, { id: root.id, name: root.name, fieldName: root.fieldName }, new Set([root.id]), parentsByChildId);
     }
 
-    return Array.from(parentsByChildId.entries()).map(([id, { name, parents }]) => ({
+    return Array.from(parentsByChildId.entries()).map(([id, { name, fieldName, parents }]) => ({
         id,
         name,
+        fieldName,
         parent: Array.from(parents.entries()).map(([parentId, { name: parentName, fieldName }]) => ({ id: parentId, name: parentName, fieldName })),
     }));
 }
