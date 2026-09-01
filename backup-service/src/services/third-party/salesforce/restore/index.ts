@@ -244,20 +244,20 @@ export const runSalesforceRestore = async (
     return 'SUCCESS';
   }
 
-  let operation: 'insert' | 'update' | 'upsert';
-  switch (conflict.restoreMode) {
-    case 'APPEND_NEW':
-      operation = 'insert';
-      break;
-    case 'OVERWRITE':
-      operation = 'upsert';
-      externalIdFieldName = 'Id'; // Salesforce's own docs say this is the only supported external ID field for upsert-ing to existing records
-      break;
-    case 'REPLACE_ENTIRE_OBJECT':
-      throw new Error('REPLACE_ENTIRE_OBJECT restore mode is not implemented yet');
-    default:
-      throw new Error(`Unsupported restoreMode: ${conflict.restoreMode}`);
-  }
+  // let operation: 'insert' | 'update' | 'upsert';
+  // switch (conflict.restoreMode) {
+  //   case 'APPEND_NEW':
+  //     operation = 'insert';
+  //     break;
+  //   case 'OVERWRITE':
+  //     operation = 'upsert';
+  //     externalIdFieldName = 'Id'; // Salesforce's own docs say this is the only supported external ID field for upsert-ing to existing records
+  //     break;
+  //   case 'REPLACE_ENTIRE_OBJECT':
+  //     throw new Error('REPLACE_ENTIRE_OBJECT restore mode is not implemented yet');
+  //   default:
+  //     throw new Error(`Unsupported restoreMode: ${conflict.restoreMode}`);
+  // }
 
   const s3Config: IDestinationConfig = {
     bucketName: sourceS3Credentials.bucketName,
@@ -273,19 +273,28 @@ export const runSalesforceRestore = async (
     backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
   };
 
-  await restoreObjectData(
-    restoreJobId,
-    s3Config,
-    sourceS3Credentials.csvFilePath,
-    object.name,
-    destinationSalesforceCredentials.instanceUrl,
-    tokens,
-    operation,
-    externalIdFieldName
-  );
+  const getS3KeysList = await listS3Objects(s3Config, `${sourceS3Credentials.csvFilePath}/${object.name}`);
+  for (let index = 0; index < getS3KeysList.length; index++) {
+    const keys = getS3KeysList[index];
+    const operation = keys.split('/')[keys.split('/').length - 1] as 'insert' | 'update' | 'upsert';
+
+    await restoreObjectData(
+      restoreJobId,
+      s3Config,
+      sourceS3Credentials.csvFilePath,
+      object.name,
+      destinationSalesforceCredentials.instanceUrl,
+      tokens,
+      operation,
+      externalIdFieldName
+    );
+    logger.info(
+      `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`
+    );
+  }
 
   logger.info(
-    `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`
+    `[restore] restore job completed, No operation found, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}`
   );
   return 'SUCCESS';
 };

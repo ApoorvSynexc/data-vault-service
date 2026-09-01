@@ -1066,7 +1066,6 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   // wrapController turns it into a 400 and the restore record above is left
   // IN_PROGRESS with no job — see architectural notes on this in the report.
   const restoreJob = isDraft ? null : await createRestoreJob(payload);
-
   makeResponse(req, res, 201, true, 'create');
 
   if (restoreJob) {
