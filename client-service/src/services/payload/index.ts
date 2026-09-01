@@ -121,7 +121,7 @@ function processObjectOperations(jobs: IBackupJob[]): Record<string, string[]> {
 
 // Schema chnage detection
 function archivalSchemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Record<string, string[]>): Record<string, string[]> {
-    const objects = flattenBackupObjects(backupConfig.objects ?? []) ?? [];
+    const objects = flattenBackupObjects((backupConfig.objects as any) ?? []) ?? [];
     const objectOperationsKeys = Object.keys(objectOperations);
 
     for (const obj of objects) {
