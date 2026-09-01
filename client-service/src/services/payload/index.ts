@@ -219,6 +219,7 @@ interface IObjectRelationshipRef {
 interface IObjectParents {
     id: string;
     name: string;
+    fieldName?: string;
     parent: IObjectRelationshipRef[];
 }
 
@@ -232,30 +233,31 @@ function collectChildParents(
     nodes: IObjectRelationshipNode[] | undefined,
     parent: IObjectRelationshipRef,
     visitedIds: Set<string>,
-    parentsByChildId: Map<string, { name: string; parents: Map<string, { name: string; fieldName?: string }> }>
+    parentsByChildId: Map<string, { name: string; fieldName?: string; parents: Map<string, { name: string; fieldName?: string }> }>
 ): void {
     for (const node of nodes ?? []) {
         if (visitedIds.has(node.id)) continue;
 
         if (!parentsByChildId.has(node.id)) {
-            parentsByChildId.set(node.id, { name: node.name, parents: new Map() });
+            parentsByChildId.set(node.id, { name: node.name, fieldName: node.fieldName, parents: new Map() });
         }
         parentsByChildId.get(node.id)!.parents.set(parent.id, { name: parent.name, fieldName: node.fieldName });
 
-        collectChildParents(node.children, { id: node.id, name: node.name }, new Set(visitedIds).add(node.id), parentsByChildId);
+        collectChildParents(node.children, { id: node.id, name: node.name, fieldName: node.fieldName }, new Set(visitedIds).add(node.id), parentsByChildId);
     }
 }
 
 function buildChildToParent(selectedRoots: IObject[]): IObjectParents[] {
-    const parentsByChildId = new Map<string, { name: string; parents: Map<string, { name: string; fieldName?: string }> }>();
+    const parentsByChildId = new Map<string, { name: string; fieldName?: string; parents: Map<string, { name: string; fieldName?: string }> }>();
 
     for (const root of selectedRoots) {
-        collectChildParents(root.children, { id: root.id, name: root.name }, new Set([root.id]), parentsByChildId);
+        collectChildParents(root.children, { id: root.id, name: root.name, fieldName: root.fieldName }, new Set([root.id]), parentsByChildId);
     }
 
-    return Array.from(parentsByChildId.entries()).map(([id, { name, parents }]) => ({
+    return Array.from(parentsByChildId.entries()).map(([id, { name, fieldName, parents }]) => ({
         id,
         name,
+        fieldName,
         parent: Array.from(parents.entries()).map(([parentId, { name: parentName, fieldName }]) => ({ id: parentId, name: parentName, fieldName })),
     }));
 }
@@ -470,6 +472,7 @@ async function buildRestorePayload(restoreConfigId: string) {
                 // Already optional-in/optional-out as stored — undefined keys drop on JSON.stringify.
                 conflict: restore.conflict,
             },
+            objects: backupConfig.objects,
             hierarchy: {
                 parentToChild,
                 childToParent
