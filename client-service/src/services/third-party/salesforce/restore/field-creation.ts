@@ -8,7 +8,7 @@ import { ensureRestoreTrackingFields } from "../restore-fields";
 export const salesforceFieldCreation = async (params: { restoreJobId: string }) => {
     const { restoreJobId } = params;
 
-    logger.info(`[salesforce-field-creation] restoreJobId=${restoreJobId}`);
+    logger.info(`[salesforce-field-creation] restoreJobId=${restoreJobId} start`);
     try {
 
         const restoreJob = await getRestoreJobById(restoreJobId);
@@ -41,6 +41,7 @@ export const salesforceFieldCreation = async (params: { restoreJobId: string }) 
                         credentials,
                         object.name
                     );
+                    logger.info(`[salesforce-field-creation] restoreJobId=${restoreJobId} object=${object.name} done`);
                 } catch (error) {
                     logger.error(`[salesforce-field-creation] restoreJobId=${restoreJobId} object=${object.name} err:${error}`);
                 }
