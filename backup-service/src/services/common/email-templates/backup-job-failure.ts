@@ -13,14 +13,31 @@ export interface IBackupJobFailureEmailParams {
   errorMessage?: string;
 }
 
-export const buildBackupJobFailureEmail = (params: IBackupJobFailureEmailParams): IEmailTemplate => {
-  const { recipientName, backupConfigId, backupConfigName, crmName, backupJobId, failedObjects, errorMessage } = params;
+export const buildBackupJobFailureEmail = (
+  params: IBackupJobFailureEmailParams
+): IEmailTemplate => {
+  const {
+    recipientName,
+    backupConfigId,
+    backupConfigName,
+    crmName,
+    backupJobId,
+    failedObjects,
+    errorMessage,
+  } = params;
 
   return {
     subject: `Backup job failed for ${backupConfigName}`,
     html: renderEmail({
       contentTemplate: 'backup-job-failure',
-      locals: { recipientName: recipientName ?? 'there', backupConfigName, crmName, backupJobId, failedObjects, errorMessage },
+      locals: {
+        recipientName: recipientName ?? 'there',
+        backupConfigName,
+        crmName,
+        backupJobId,
+        failedObjects,
+        errorMessage,
+      },
       preheader: `Backup job failed for ${backupConfigName}`,
       heading: 'Backup job failed',
       ctaLabel: 'View backup job',

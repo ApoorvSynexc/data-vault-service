@@ -43,9 +43,9 @@ export const salesforceMetadataHandler = async (
       const filteredObjects = await salesforceObjectFilteredList(
         salesforceContext?.instanceUrl,
         salesforceContext?.tokens,
-        backupConfig.userId,
+        backupConfig.userId
       );
-      objectNames = filteredObjects.map(o => o.name);
+      objectNames = filteredObjects.map((o) => o.name);
     }
 
     switch (metadataType) {
@@ -139,11 +139,10 @@ export const salesforceObjectFilteredList = async (
   apexMode?: string,
   apexType?: string
 ): Promise<ISalesforceObjectResponse[]> => {
-
   const standardObjects: string[] = [];
   const settings = await getSettingsByUser(userId);
   if (settings && settings.standardObjects.length) {
-    const standardObjectNames = settings.standardObjects.map(s => s.name);
+    const standardObjectNames = settings.standardObjects.map((s) => s.name);
     standardObjects.push(...standardObjectNames);
   } else {
     standardObjects.push(...STANDARD_OBJECT_LIST);

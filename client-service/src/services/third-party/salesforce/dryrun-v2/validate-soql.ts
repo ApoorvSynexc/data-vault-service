@@ -7,10 +7,9 @@ const SF_API_VERSION = 'v66.0';
 const MAX_RELATIONSHIP_DEPTH = 4;
 
 // ── Relationship depth analysis ───────────────────────────────────────────────
-// Mirrors the WhereNode shape in ../dry-run/soql-builder.ts (this file's only
-// consumer of it was getMaxRelationshipDepth, moved here so validate-soql
-// doesn't depend on the older dry-run module for a single function) — cast
-// from the soql-parser-js library's WhereClause type via `as unknown as WhereNode`.
+// Cast from the soql-parser-js library's WhereClause type via
+// `as unknown as WhereNode` (mirrors the same pattern the now-retired
+// dry-run (v1) module used).
 interface WhereNode {
   field?: string;
   operator?: string;

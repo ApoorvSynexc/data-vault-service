@@ -1,4 +1,4 @@
-import type { ISalesforceObject } from "../dry-run/types";
+import type { ISalesforceObject } from "./types";
 import { formatFieldValuesForSOQL, formatSalesforceValueByDataType } from "../../../../utils/helper";
 
 export interface ISoqlCountQuery {
@@ -11,7 +11,7 @@ export interface ISoqlCountQuery {
 // Ported from backup-service/src/services/third-party/salesforce/schedule/archival-v2
 // — same WHERE-building rules, adapted to client-service's ISalesforceObject/
 // IFieldFilter shape.
-// Client-service's FilterOperator ('=' | '!=' | 'LIKE' | 'IN', see dry-run/types.ts)
+// Client-service's FilterOperator ('=' | '!=' | 'LIKE' | 'IN', see ./types.ts)
 // is narrower than archival-v2's — no comparison operators or NOT IN exist on
 // this side, so this list (and the branches below) only cover what the type
 // actually allows.

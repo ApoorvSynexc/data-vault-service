@@ -14,14 +14,31 @@ export interface IArchivalJobFailureEmailParams {
   errorMessage?: string;
 }
 
-export const buildArchivalJobFailureEmail = (params: IArchivalJobFailureEmailParams): IEmailTemplate => {
-  const { recipientName, backupConfigId, backupConfigName, crmName, backupJobId, failedObjects, errorMessage } = params;
+export const buildArchivalJobFailureEmail = (
+  params: IArchivalJobFailureEmailParams
+): IEmailTemplate => {
+  const {
+    recipientName,
+    backupConfigId,
+    backupConfigName,
+    crmName,
+    backupJobId,
+    failedObjects,
+    errorMessage,
+  } = params;
 
   return {
     subject: `Archival job failed for ${backupConfigName}`,
     html: renderEmail({
       contentTemplate: 'archival-job-failure',
-      locals: { recipientName: recipientName ?? 'there', backupConfigName, crmName, backupJobId, failedObjects, errorMessage },
+      locals: {
+        recipientName: recipientName ?? 'there',
+        backupConfigName,
+        crmName,
+        backupJobId,
+        failedObjects,
+        errorMessage,
+      },
       preheader: `Archival job failed for ${backupConfigName}`,
       heading: 'Archival job failed',
       ctaLabel: 'View archival job',

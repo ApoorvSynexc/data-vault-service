@@ -128,8 +128,4 @@ const createBulkQueryJob = async (payload: ICreateBulkQueryJob): Promise<string>
   return res.id;
 };
 
-export {
-  salesforceRequest,
-  makePageFetcher,
-  createBulkQueryJob,
-};
+export { salesforceRequest, makePageFetcher, createBulkQueryJob };

@@ -13,7 +13,8 @@ const TEMPLATES_DIR = path.join(__dirname, 'templates');
 // Reads straight from disk on every call rather than caching — these are
 // low-volume transactional emails, not a hot path, and this keeps a template
 // edit picked up without a redeploy of the compiled service.
-const readTemplate = (name: string): string => fs.readFileSync(path.join(TEMPLATES_DIR, `${name}.ejs`), 'utf8');
+const readTemplate = (name: string): string =>
+  fs.readFileSync(path.join(TEMPLATES_DIR, `${name}.ejs`), 'utf8');
 
 interface IRenderEmailParams {
   // Filename (no extension) under ./templates — the small partial with this

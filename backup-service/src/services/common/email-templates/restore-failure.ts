@@ -14,14 +14,27 @@ export interface IRestoreFailureEmailParams {
 }
 
 export const buildRestoreFailureEmail = (params: IRestoreFailureEmailParams): IEmailTemplate => {
-  const { recipientName, restoreConfigId, restoreConfigName, backupConfigName, restoreJobId, errorMessage } = params;
+  const {
+    recipientName,
+    restoreConfigId,
+    restoreConfigName,
+    backupConfigName,
+    restoreJobId,
+    errorMessage,
+  } = params;
   const label = restoreConfigName ?? backupConfigName;
 
   return {
     subject: `Restore failed for ${label}`,
     html: renderEmail({
       contentTemplate: 'restore-failure',
-      locals: { recipientName: recipientName ?? 'there', label, backupConfigName, restoreJobId, errorMessage },
+      locals: {
+        recipientName: recipientName ?? 'there',
+        label,
+        backupConfigName,
+        restoreJobId,
+        errorMessage,
+      },
       preheader: `Restore failed for ${label}`,
       heading: 'Restore failed',
       ctaLabel: 'View restore job',

@@ -13,14 +13,27 @@ export interface IRestoreCompleteEmailParams {
 }
 
 export const buildRestoreCompleteEmail = (params: IRestoreCompleteEmailParams): IEmailTemplate => {
-  const { recipientName, restoreConfigId, restoreConfigName, backupConfigName, restoreJobId, totalRecordCount } = params;
+  const {
+    recipientName,
+    restoreConfigId,
+    restoreConfigName,
+    backupConfigName,
+    restoreJobId,
+    totalRecordCount,
+  } = params;
   const label = restoreConfigName ?? backupConfigName;
 
   return {
     subject: `Restore complete: ${label}`,
     html: renderEmail({
       contentTemplate: 'restore-complete',
-      locals: { recipientName: recipientName ?? 'there', label, backupConfigName, restoreJobId, totalRecordCount },
+      locals: {
+        recipientName: recipientName ?? 'there',
+        label,
+        backupConfigName,
+        restoreJobId,
+        totalRecordCount,
+      },
       preheader: `Restore complete for ${label}`,
       heading: 'Restore complete',
       ctaLabel: 'View restore details',

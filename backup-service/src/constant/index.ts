@@ -49,7 +49,9 @@ const SALESFORCE_NAMESPACE = String(process.env.SALESFORCE_NAMESPACE || '').trim
 // restore/bulk.ts, schedule/backup/bulk.ts, schedule/archival/bulk.ts,
 // schedule/archival/delete-bulk.ts, schedule/archival-v2/bulk.ts. Includes the
 // leading "v" since every call site interpolates it directly into the URL path.
-const SALESFORCE_BULK_API_VERSION = String(process.env.SALESFORCE_BULK_API_VERSION || 'v65.0').trim();
+const SALESFORCE_BULK_API_VERSION = String(
+  process.env.SALESFORCE_BULK_API_VERSION || 'v65.0'
+).trim();
 
 // Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
@@ -178,8 +180,8 @@ const STANDARD_OBJECT_LIST = [
   'OrderItem',
   'PricebookEntry',
   'Task',
-  'EmailMessage'
-]
+  'EmailMessage',
+];
 
 export {
   HOST,
@@ -237,5 +239,5 @@ export {
   FILTER_OPERATOR,
   SYSTEM_FIELDS,
   STANDARD_OBJECT_LIST,
-  NOTIFICATION_STATUS
+  NOTIFICATION_STATUS,
 };

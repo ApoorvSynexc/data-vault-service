@@ -4,7 +4,11 @@ import { uploadToS3 } from '../../../destination/s3';
 import { readLatestSchema } from '../../../schema';
 import { ICrmRealtimeHandler } from '../../types';
 import { persistRealtimeSchema } from './schema';
-import { EXCLUDED_FIELD_NAMES, EXCLUDED_FIELD_TYPES, ISalesforceFieldSnapshot } from '../metadata/field';
+import {
+  EXCLUDED_FIELD_NAMES,
+  EXCLUDED_FIELD_TYPES,
+  ISalesforceFieldSnapshot,
+} from '../metadata/field';
 
 // ---------------------------------------------------------------------------
 // Map Salesforce CDC operation to the S3 folder convention used by bulk jobs
@@ -89,7 +93,8 @@ const loadStoredSchema = async (
 // to the permission-scoped descriptor fallback so a realtime hit never persists a
 // compound Address/Location/Base64 field the Bulk query could never have selected.
 const isQueryableSchemaField = (f: ISchemaField): boolean =>
-  !EXCLUDED_FIELD_NAMES.has(f.apiName) && !EXCLUDED_FIELD_TYPES.has((f.dataType ?? '').toLowerCase());
+  !EXCLUDED_FIELD_NAMES.has(f.apiName) &&
+  !EXCLUDED_FIELD_TYPES.has((f.dataType ?? '').toLowerCase());
 
 // ---------------------------------------------------------------------------
 // Salesforce realtime handler — implements ICrmRealtimeHandler

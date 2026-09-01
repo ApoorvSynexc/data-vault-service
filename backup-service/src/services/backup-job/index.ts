@@ -334,7 +334,7 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
 
 const recursivelyUpdateObjects = async (
   objects: IBackupObject[],
-  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined }
+  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined }
 ): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
@@ -349,21 +349,21 @@ const recursivelyUpdateObjects = async (
             : {}),
           ...(!isReset && (object as any)?.salesforceApiCount
             ? {
-              salesforceApiCount:
-                (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
-            }
+                salesforceApiCount:
+                  (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
+              }
             : {}),
           ...(!isReset && (object as any)?.deletedSuccessRecordCount
             ? {
-              deletedSuccessRecordCount:
-                (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
-            }
+                deletedSuccessRecordCount:
+                  (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
+              }
             : {}),
           ...(!isReset && (object as any)?.deletedfailedRecordCount
             ? {
-              deletedfailedRecordCount:
-                (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
-            }
+                deletedfailedRecordCount:
+                  (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
+              }
             : {}),
           // recordErrorsS3Prefix: last write wins (each bulk job gets its own prefix)
           ...(!isReset && (object as any)?.recordErrorsS3Prefix
@@ -390,7 +390,7 @@ const updateArchivalObject = async ({
   objects,
 }: {
   backupJobId: string;
-  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined };
+  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
   // When `objects` is provided (caller already holds the array), use it directly
