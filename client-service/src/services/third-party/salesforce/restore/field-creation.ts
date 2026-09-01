@@ -1,3 +1,4 @@
+import { logger } from "../../../../middlewares";
 import { IUser } from "../../../../models";
 import { getRestoreById } from "../../../restore";
 import { getRestoreJobById } from "../../../restore-job";
@@ -6,6 +7,8 @@ import { ensureRestoreTrackingFields } from "../restore-fields";
 
 export const salesforceFieldCreation = async (params: { restoreJobId: string }) => {
     const { restoreJobId } = params;
+
+    logger.info(`[salesforce-field-creation] restoreJobId=${restoreJobId}`);
     try {
 
         const restoreJob = await getRestoreJobById(restoreJobId);
@@ -32,14 +35,20 @@ export const salesforceFieldCreation = async (params: { restoreJobId: string }) 
             }
             for (let index = 0; index < objects.length; index++) {
                 const object = objects[index];
-                await ensureRestoreTrackingFields(
-                    user?.crmProfile?.instanceUrl,
-                    credentials,
-                    object.name
-                );
+                try {
+                    await ensureRestoreTrackingFields(
+                        user?.crmProfile?.instanceUrl,
+                        credentials,
+                        object.name
+                    );
+                } catch (error) {
+                    logger.error(`[salesforce-field-creation] restoreJobId=${restoreJobId} object=${object.name} err:${error}`);
+                }
             }
         }
-    } catch {
 
+        logger.info(`[salesforce-field-creation] restoreJobId=${restoreJobId} done`);
+    } catch (error) {
+        logger.error(`[salesforce-field-creation] restoreJobId=${restoreJobId} err:${error}`);
     }
 }
