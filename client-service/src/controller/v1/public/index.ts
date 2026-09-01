@@ -63,7 +63,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
   const { crm } = sf;
   const decryptedBody = JSON.parse(sf.plaintext);
 
-  const { transactionId } = decryptedBody;
+  const { transactionId, objectApiName } = decryptedBody;
 
   if (!transactionId) {
     logger.warn('Realtime webhook received without transactionId — skipping');
@@ -81,14 +81,11 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
   logger.info(`Found ${realtimeConfigs.length} real-time backup config(s) for orgId: ${crm.organizationId} transactionId: ${transactionId}`);
 
   for (const config of realtimeConfigs) {
+    const ojectNames = config.objects?.map(o => o.name) || [];
+    if (!ojectNames.includes(objectApiName)) continue;
+
     const destination = await getDestinationById(config.destinationId);
     if (!destination) {
-      /**
-       * WHY continue instead of return:
-       *   A missing destination on one config should not prevent the other configs from
-       *   being processed. Using return here was a bug — it caused all configs after the
-       *   first broken one to be silently skipped even when their destinations were valid.
-       */
       logger.warn(`Destination not found for backupConfigId: ${config.backupConfigId} — skipping`);
       continue;
     }
@@ -163,7 +160,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    if(config.status === STATUS.paused) {
+    if (config.status === STATUS.paused) {
       logger.info('Backup config is paused, skipping event');
       return makeResponse(req, res, 200, true, 'fetch');
     }
