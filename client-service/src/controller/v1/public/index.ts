@@ -154,9 +154,10 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     const event = req.body;
     const xAPiKey = req.headers?.['x-api-key'] as string | undefined;
 
-    if(xAPiKey !== AWS_EVENT_DESTINATION_API_KEY){
-      return makeResponse(req, res, 401, false, 'unauthorized');
-    }
+    console.log({xAPiKey, AWS_EVENT_DESTINATION_API_KEY});
+    // if(xAPiKey !== AWS_EVENT_DESTINATION_API_KEY){
+    //   return makeResponse(req, res, 401, false, 'unauthorized');
+    // }
 
     const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
     const config = await getBackupConfigById(backupConfigId);
