@@ -49,6 +49,7 @@ const objectParentSchema = Joi.object({
 const objectRelationshipNodeSchema = Joi.object({
   id: Joi.string().required(),
   name: Joi.string().required(),
+  field: Joi.string().optional(),
   children: Joi.array().items(Joi.link('#objectRelationshipNode')).optional(),
 }).id('objectRelationshipNode');
 
