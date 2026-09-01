@@ -48,7 +48,6 @@ export const validateSoqlSyntax = (soql: string): IValidateSoqlResult => {
 // Salesforce replies to a bad explain (unknown object/field, no access) with
 // a 400 body shaped [{ errorCode, message }] — httpRequest surfaces that as
 // a thrown "HTTP Error 400: {json}". Unwrap it the same way apex.ts's
-// parseApexError does, so a bad field is reportable data, not a thrown error.
 const parseExplainError = (error: any): { errorCode?: string; message?: string } | null => {
   try {
     const json = String(error?.message ?? '').replace(/^HTTP Error \d+:\s*/, '');

@@ -4,9 +4,6 @@ import { logger } from "../../../middlewares";
 import {
     createBackupConfig,
     deleteBackupConfig,
-    getUserForCrm,
-    getApexObjectChilds,
-    toApexType,
     getDestinationById,
     getBackupConfigsWithPagination,
     getCrmById,
@@ -20,7 +17,6 @@ import {
     triggerArchivalBackupJob,
     getBackupJobById,
     getDecryptedDestinationConfig,
-    unwrapApex,
     createAwsEventScheduler,
     updateAwsEventSchedule,
     deleteAwsEventScheduler,
@@ -40,22 +36,6 @@ interface ObjectRecordsBody {
     fieldNames: string[]
     soql: string
 }
-
-
-const getObjectChildHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const user = req.user;
-    // `type` is the schedule/realtime split; older clients sent it as `mode`.
-    const { crmId, objectName, type, mode, relationshipDepth } = req.query;
-    if (!crmId) {
-        return makeResponse(req, res, 400, false, 'crm_id_required');
-    }
-
-    const [apexResult] = await Promise.all([
-        getApexObjectChilds({ user, objectName: String(objectName), mode: 'archival', type: toApexType(type ?? mode), relationshipType: 'ALL', relationshipDepth: relationshipDepth ? Number(relationshipDepth) : undefined }),
-    ]);
-
-    makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
-};
 
 const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     const { name, fieldNames, soql } = req.body as ObjectRecordsBody;
@@ -562,7 +542,6 @@ const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<vo
 };
 
 export const archivalConfigController = wrapController({
-    getObjectChildHanlder,
     getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,

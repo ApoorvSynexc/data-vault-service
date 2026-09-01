@@ -6,7 +6,6 @@ import { getCrmById } from '../../crm';
 import { appendObjectsToBackupConfig, getBackupConfigsByCrm } from '../../backup-config';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
-import { getMasterChildApiNames } from './apex';
 import { METADATA_API_VERSION as API_VERSION } from './metadata-api';
 import { withNamespace } from '../../../utils/salesforce-namespace';
 import {
@@ -964,36 +963,6 @@ const grantApexClassAccess = async (
     },
     tokens
   );
-};
-
-// ---------------------------------------------------------------------------
-// Expand the configured objects with their Master-Detail children so a
-// trigger is created on each child too. Deduped (case-insensitive) — a child
-// reachable from two parents gets a single trigger. Best-effort: a failed
-// children lookup for one object leaves the rest of the list intact.
-// ---------------------------------------------------------------------------
-const expandWithMasterChildren = async (
-  user: IUser,
-  objectApiNames: string[]
-): Promise<string[]> => {
-  const byName = new Map<string, string>(); // lowercased key -> original casing
-  for (const name of objectApiNames) byName.set(name.toLowerCase(), name);
-
-  await Promise.all(
-    objectApiNames.map(async (name) => {
-      try {
-        const childNames = await getMasterChildApiNames(user, name, 'realtime');
-        for (const child of childNames) {
-          const key = child.toLowerCase();
-          if (!byName.has(key)) byName.set(key, child);
-        }
-      } catch (err) {
-        console.log(`Error fetching master children for ${name}:`, err);
-      }
-    })
-  );
-
-  return Array.from(byName.values());
 };
 
 // ---------------------------------------------------------------------------
