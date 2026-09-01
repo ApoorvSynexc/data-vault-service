@@ -27,6 +27,7 @@ const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABL
 const COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.COUNTER_TABLE || 'data-vault-counters'}`;
 
 // Event Bridge Scheduler Config
+const AWS_EVENT_DESTINATION_API_KEY = String(process.env.AWS_EVENT_DESTINATION_API_KEY);
 const AWS_SCHEDULER_REGION = String(process.env.AWS_SCHEDULER_REGION);
 const AWS_SCHEDULER_ROLE_ARN = String(process.env.AWS_SCHEDULER_ROLE_ARN).trim();
 const AWS_EVENT_BUS_ARN = String(process.env.AWS_EVENT_BUS_ARN);
@@ -322,6 +323,7 @@ export {
   COUNTER_TABLE,
 
   // AWS EventBridge Scheduler Config
+  AWS_EVENT_DESTINATION_API_KEY,
   AWS_SCHEDULER_REGION,
   AWS_SCHEDULER_ROLE_ARN,
   AWS_EVENT_BUS_ARN,

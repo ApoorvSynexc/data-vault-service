@@ -13,6 +13,7 @@ import { initalizePayloadTransform } from '../../../services/payload';
 import { decryptFromTransport } from '../../../utils/encryption';
 import { httpRequest } from '../../../utils/http-request';
 import {
+  AWS_EVENT_DESTINATION_API_KEY,
   BACKUP_SERVICE,
   BACKUP_STATUS,
   INTERNAL_SECRET,
@@ -152,10 +153,12 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
   try {
     const event = req.body;
     const xAPiKey = req.headers?.['x-api-key'] as string | undefined;
-    console.log({ xAPiKey });
+
+    if(xAPiKey !== AWS_EVENT_DESTINATION_API_KEY){
+      return makeResponse(req, res, 401, false, 'unauthorized');
+    }
 
     const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
-
     const config = await getBackupConfigById(backupConfigId);
     if (!config) {
       logger.warn(`[EVENT BRIDGE] Backup config not found for backupConfigId: ${backupConfigId} — skipping`);
