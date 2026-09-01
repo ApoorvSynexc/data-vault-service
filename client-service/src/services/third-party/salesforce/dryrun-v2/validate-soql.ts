@@ -14,16 +14,6 @@ export interface IValidateSoqlResult {
   relationshipDepth?: number;
 }
 
-// Pure syntax + relationship-depth check — no Salesforce API call. Runs the
-// same soql-parser-js parser dry-run/soql-builder.ts already relies on,
-// directly against the exact soql string generateSoqlQueries() built (or
-// previewRecords' reformatted version of it). Catches malformed WHERE
-// clauses (bad quoting, mismatched parens, disallowed tokens, ...) and
-// excessive relationship traversal before ever spending a Salesforce API
-// call on it.
-//
-// What this does NOT check: whether the object/fields actually exist or are
-// accessible in the org — for that, see validateSoql below.
 export const validateSoqlSyntax = (soql: string): IValidateSoqlResult => {
   try {
     parseQuery(soql);
@@ -45,9 +35,6 @@ export const validateSoqlSyntax = (soql: string): IValidateSoqlResult => {
   return { isValid: true, relationshipDepth };
 };
 
-// Salesforce replies to a bad explain (unknown object/field, no access) with
-// a 400 body shaped [{ errorCode, message }] — httpRequest surfaces that as
-// a thrown "HTTP Error 400: {json}". Unwrap it the same way apex.ts's
 const parseExplainError = (error: any): { errorCode?: string; message?: string } | null => {
   try {
     const json = String(error?.message ?? '').replace(/^HTTP Error \d+:\s*/, '');
@@ -58,15 +45,6 @@ const parseExplainError = (error: any): { errorCode?: string; message?: string }
   }
 };
 
-// Full validation: the local syntax/depth check above, then whether the
-// object and every field referenced in the query actually exist and are
-// accessible to this user in the org — via Salesforce's Query Explain
-// resource (`?explain=` instead of `?q=`), which validates and plans a
-// query WITHOUT executing it or returning any rows. That's the one thing
-// the local parser can never know on its own (it has no idea what fields
-// exist, let alone what this user is allowed to see), so it costs one real
-// Salesforce API call — but no bulk query, no records, no custom Apex
-// endpoint.
 export const validateSoql = async (params: { user: IUser; soql: string }): Promise<IValidateSoqlResult> => {
   const { user, soql } = params;
 
