@@ -1,6 +1,7 @@
 import { makePageFetcher, salesforceRequest, SalesforceTokens } from '../api-request';
+import { SALESFORCE_BULK_API_VERSION } from '../../../../constant';
 
-const SF_API_VERSION = 'v65.0';
+const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 
 export interface IBulkDeleteJob {
   id: string;

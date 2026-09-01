@@ -14,6 +14,7 @@ import {
   getBackupConfigsWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
+  restoreBackupConfigAfterFailedTriggerDelete,
   deleteBackupJobsByConfig,
   getTableCounter,
   buildBackupConfigCounterKey,
@@ -445,9 +446,25 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     // hit a gateway timeout (504). Uses `config` captured above, not a
     // re-fetch — the DB row is already gone by the time this runs.
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      realTimeTriggerManagement('delete', config).catch((err) => {
-        logger.error(`[trigger-delete] backupConfigId ${config.backupConfigId} background cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+      realTimeTriggerManagement('delete', config)
+        .then(async (triggerResults) => {
+          // A trigger that failed to delete (or a management call that failed
+          // outright) is still live in the org — leaving the config row
+          // deleted at that point would orphan it with nothing left to retry
+          // cleanup from. Put the same row back (same backupConfigId/slug/
+          // createdAt), flagged DELETE_FAILED, so the user can see it and
+          // retry instead of the trigger silently surviving its config.
+          const hasFailedDeletion = triggerResults.some(
+            (result) => result.status === 'DELETE_FAILED' || result.status === 'FAILED'
+          );
+          if (hasFailedDeletion) {
+            logger.error(`[trigger-delete] backupConfigId ${config.backupConfigId} had undeleted trigger(s) — restoring backup config`);
+            await restoreBackupConfigAfterFailedTriggerDelete(config, triggerResults);
+          }
+        })
+        .catch((err) => {
+          logger.error(`[trigger-delete] backupConfigId ${config.backupConfigId} background cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
     }
   } catch (error) {
     throw error;

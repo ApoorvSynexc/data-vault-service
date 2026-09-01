@@ -1,11 +1,11 @@
-import { OBJECT_STATUS } from '../../../../../constant';
+import { OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
 import { updateBackupObject } from '../../../../backup-job';
 import { logger } from '../../../../../middlewares/logger';
 import { IDestinationConfig } from '../../../../../models';
 import { uploadToS3 } from '../../../../destination/s3';
 import { makePageFetcher, salesforceRequest, SalesforceTokens } from '../../api-request';
 
-const SF_API_VERSION = 'v65.0';
+const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 const INITIAL_PAGE_KEY = `initial`;
