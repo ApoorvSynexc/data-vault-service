@@ -5,6 +5,7 @@ import { JOB_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 
 const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { triggerSource } = req.body;
   const job = await createBackupJob(req.body);
 
   // Respond immediately — backup runs in the background
@@ -14,7 +15,7 @@ const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   });
 
   // Fire-and-forget: errors are caught inside runBackupJob and persisted to DynamoDB
-  runBackupJob(job).catch(() => {});
+  runBackupJob({...job, triggerSource}).catch(() => {});
 };
 
 const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {

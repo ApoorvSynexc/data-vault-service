@@ -153,8 +153,12 @@ const triggerBackupJob = async (params: {
   type?: 'backup' | 'archival';
   schemaSync?: boolean;
   lastSchemaSyncAt?: boolean;
+  triggerSource?: {
+    name: string;
+    entityId: string;
+  }
 }) => {
-  const { config, lastUpdatedAt, type = 'backup', user, lastSchemaSyncAt, schemaSync } = params;
+  const { config, lastUpdatedAt, type = 'backup', user, lastSchemaSyncAt, schemaSync, triggerSource } = params;
   try {
     const active = await hasActiveBackupJob(config.backupConfigId);
     if (active) {
@@ -190,6 +194,7 @@ const triggerBackupJob = async (params: {
         type: destination.type,
         config: getDecryptedDestinationConfig(destination),
       },
+      triggerSource,
       ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
       ...(schemaSync ? { schemaSync: true } : {}),
     };
