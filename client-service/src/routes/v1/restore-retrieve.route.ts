@@ -24,6 +24,11 @@ import { createRestoreValidation } from '../../middlewares';
  * POST /dry-run                         — record counts a restore configuration would touch
  *                                         (ENTIRE: main Hudi only; CHANGED_BETWEEN: delta
  *                                         total/UPDATE/DELETE) — read-only, no restore is performed
+ * POST /dry-run-diff                    — the same configuration, but returning the records
+ *                                         themselves instead of counts, each paired with the
+ *                                         destination org's current version of that record
+ *                                         ({changeRecord, salesforceRecord}). Capped per object;
+ *                                         read-only, no restore is performed
  * GET  /                                — single restore/retrieve job (by backupJobId)
  */
 const router = Router();
@@ -45,6 +50,7 @@ router.post('/retrieve/fetch-missing-record-types', restoreRetrieveJobController
 router.post('/retrieve/required-fields', restoreRetrieveJobController.requiredFieldsHandler);
 router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
 router.post('/dry-run', restoreRetrieveJobController.dryRunHandler);
+router.post('/dry-run-diff', restoreRetrieveJobController.dryRunDiffHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 

@@ -38,6 +38,7 @@ import {
   retrieveMissingRecordTypes,
   retrieveRequiredFields,
   dryRunRestore,
+  dryRunDiff,
   IDryRunParams,
   DryRunSourceType,
   buildAthenaFilterWhere,
@@ -484,6 +485,10 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 // aren't asked for by the dry-run contract, so they 400 rather than silently
 // counting the wrong thing.
 const VALID_DRYRUN_SCOPE_TYPES = ['ALL', 'OBJECT', 'FIELD', 'FILTER'];
+// /dry-run-diff resolves three more: RECORD and BULK_CSV select records by id,
+// DELETED_ONLY selects the deleted ones — all meaningless to a per-object COUNT
+// but not to a record-level diff. See DiffScopeType in the service.
+const VALID_DIFF_SCOPE_TYPES = [...VALID_DRYRUN_SCOPE_TYPES, 'RECORD', 'BULK_CSV', 'DELETED_ONLY'];
 const VALID_FILTER_TYPES = ['AND', 'OR', 'SOQL'];
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
@@ -565,14 +570,55 @@ const validateDryRunScope = (
   return { ok: true };
 };
 
+// An entry naming an object plus a non-empty array of record ids — the shape
+// both RECORD (records[].recordIds) and BULK_CSV (bulkCsvIds[].ids) carry.
+const validateIdEntries = (
+  entries: unknown,
+  idKey: 'recordIds' | 'ids',
+  error: Parameters<typeof makeResponse>[4]
+): { ok: true } | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  if (!Array.isArray(entries) || entries.length === 0) return { ok: false, error };
+  for (const entry of entries) {
+    if (!isPlainObject(entry) || typeof entry.objectName !== 'string' || !entry.objectName.trim()) {
+      return { ok: false, error };
+    }
+    const ids = entry[idKey];
+    if (!Array.isArray(ids) || ids.length === 0 || ids.some((id) => typeof id !== 'string' || !id.trim())) {
+      return { ok: false, error };
+    }
+  }
+  return { ok: true };
+};
+
+// validateDryRunScope plus the three record-selecting scopes only the diff
+// accepts. DELETED_ONLY needs no shape check — the scope type IS the selection,
+// and the objects it covers are resolved from the config, not the request.
+const validateDiffScope = (
+  restoreScope: IRestoreScope
+): { ok: true } | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  if (restoreScope.type === 'RECORD') {
+    return validateIdEntries(restoreScope.records, 'recordIds', 'invalid_scope_records');
+  }
+  if (restoreScope.type === 'BULK_CSV') {
+    return validateIdEntries(restoreScope.bulkCsvIds, 'ids', 'invalid_scope_records');
+  }
+  return validateDryRunScope(restoreScope);
+};
+
 /**
  * Parses the /dry-run body — the same source.type/startDate/endDate and
  * selection.restoreScope shape the restore-creation body (POST /) carries,
  * narrowed to what counting needs: no destination, conflict, or schedule.
+ *
+ * /dry-run-diff sends the identical body, so it shares this parser and passes
+ * its own (wider) scope-type list and validator — everything else about the
+ * two requests is the same.
  */
 const parseDryRunParams = (
   body: Record<string, unknown>,
-  userId: string
+  userId: string,
+  scopeTypes: string[] = VALID_DRYRUN_SCOPE_TYPES,
+  validateScope: (s: IRestoreScope) => { ok: true } | { ok: false; error: Parameters<typeof makeResponse>[4] } = validateDryRunScope
 ):
   | { ok: true; value: IDryRunParams }
   | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
@@ -594,11 +640,11 @@ const parseDryRunParams = (
   if (!restoreScope || typeof restoreScope !== 'object') {
     return { ok: false, error: 'invalid_restore_scope' };
   }
-  if (!VALID_DRYRUN_SCOPE_TYPES.includes(restoreScope.type)) {
+  if (!scopeTypes.includes(restoreScope.type)) {
     return { ok: false, error: 'invalid_restore_scope_type' };
   }
 
-  const scopeCheck = validateDryRunScope(restoreScope);
+  const scopeCheck = validateScope(restoreScope);
   if (!scopeCheck.ok) return scopeCheck;
 
   const value: IDryRunParams = {
@@ -653,6 +699,68 @@ const dryRunHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   }
 
   const result = await dryRunRestore(parsed.value);
+
+  if (!result.ok) {
+    makeResponse(req, res, 400, false, result.error);
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result.value);
+};
+
+/**
+ * POST /dry-run-diff
+ * Body: the /dry-run body, plus an optional `limit`:
+ * {
+ *   backupConfigId: string
+ *   configType:     'BACKUP' | 'ARCHIVAL'
+ *   source: { type: 'ENTIRE' | 'CHANGED_BETWEEN', startDate?, endDate? }
+ *   selection: { restoreScope: IRestoreScope }
+ *       (type: ALL | OBJECT | FIELD | FILTER | RECORD | BULK_CSV | DELETED_ONLY)
+ *   limit?: number   (records per object; default 50, max 200)
+ * }
+ *
+ * The record-level counterpart to /dry-run: instead of counting what a restore
+ * would touch, it returns those records — each paired with the destination
+ * org's current version of the same record:
+ *
+ *   records: [{ changeRecord: {...}, salesforceRecord: {...} | null }]
+ *
+ * changeRecord is what the restore would WRITE (carrying OPERATION — the write
+ * it would perform); salesforceRecord is what is in Salesforce right now, or
+ * null when the record no longer exists there. Read-only: nothing is written,
+ * no CSV is produced, no restore is performed.
+ *
+ * Capped per object, because every row costs a live Salesforce read — this is a
+ * sample of the restore, not the whole of it. /dry-run remains the endpoint
+ * that answers "how many records in total".
+ *
+ * Scope handling matches the restore itself: ALL diffs every restorable object,
+ * OBJECT/FIELD/FILTER the objects each names (FIELD also narrowing to its
+ * fieldNames), RECORD and BULK_CSV only their listed ids, and DELETED_ONLY only
+ * the deleted records.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the caller.
+ */
+const dryRunDiffHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseDryRunParams(
+    req.body as Record<string, unknown>,
+    req.user!.userId,
+    VALID_DIFF_SCOPE_TYPES,
+    validateDiffScope
+  );
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
+    return;
+  }
+
+  const { limit } = req.body as Record<string, any>;
+  if (limit !== undefined && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1)) {
+    makeResponse(req, res, 400, false, 'invalid_limit');
+    return;
+  }
+
+  const result = await dryRunDiff({ ...parsed.value, user: req.user!, limit });
 
   if (!result.ok) {
     makeResponse(req, res, 400, false, result.error);
@@ -1129,6 +1237,7 @@ export const restoreRetrieveJobController = wrapController({
   requiredFieldsHandler,
   fetchObjectFieldsHandler,
   dryRunHandler,
+  dryRunDiffHandler,
   createRestoreHandler,
   activateRestoreHandler,
   getPicklistFieldValuesHandler,
