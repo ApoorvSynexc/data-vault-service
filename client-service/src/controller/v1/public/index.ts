@@ -151,12 +151,14 @@ const salesForceRealTimeHandler = async (req: IRequest, res: IResponse): Promise
 const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
     const event = req.body;
-    // `id` is only present on archival's per-object schedule payload (see
-    // buildScheduleInput) — backup-config's config-level schedule never sends it.
+    const xAPiKey = req.headers?.['x-api-key'] as string | undefined;
+    console.log({ xAPiKey });
+
     const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
 
     const config = await getBackupConfigById(backupConfigId);
     if (!config) {
+      logger.warn(`[EVENT BRIDGE] Backup config not found for backupConfigId: ${backupConfigId} — skipping`);
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
