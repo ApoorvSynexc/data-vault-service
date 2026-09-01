@@ -185,72 +185,6 @@ const getMasterChildApiNames = async (
     .filter((name): name is string => !!name);
 };
 
-// Field metadata takes `mode` only — schedule vs realtime does not change the fields.
-const getApexFields = async ({ user, objectName, mode }: { user?: IUser; objectName?: string; mode?: ApexMode } = {}) => {
-  if (!user || !user.crmId) {
-    // Not an empty result — an empty array is indistinguishable from "the org
-    // has no objects" and made every caller report a plausible-looking lie.
-    throw new Error('CRM not connected');
-  }
-  const crm = await getCrmById(user.crmId);
-  if (!crm) {
-    throw new Error('CRM not found');
-  }
-  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
-  const instanceUrl = user.crmProfile?.instanceUrl;
-
-  const url = `${APEX_BASE(instanceUrl)}/object-fields-metadata?${apexQuery({ apiName: objectName, mode })}`;
-  console.log('APEX URL ==> ' + url);
-  return callApex(
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    { url, method: 'GET' }
-  );
-};
-
-const getApexPicklistValues = async ({ user, objectApiName, fieldApiName }: { user?: IUser; objectApiName?: string; fieldApiName?: string } = {}) => {
-  if (!user || !user.crmId) {
-    // Not an empty result — an empty array is indistinguishable from "the org
-    // has no objects" and made every caller report a plausible-looking lie.
-    throw new Error('CRM not connected');
-  }
-  const crm = await getCrmById(user.crmId);
-  if (!crm) {
-    throw new Error('CRM not found');
-  }
-  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
-  const instanceUrl = user.crmProfile?.instanceUrl;
-  if (!instanceUrl) {
-    throw new Error('Instance URL not found');
-  }
-  const url = `${APEX_BASE(instanceUrl)}/get-picklist-values?objectApiName=${encodeURIComponent(objectApiName!)}&fieldApiName=${encodeURIComponent(fieldApiName!)}`;
-  return callApex(
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    { url, method: 'GET' }
-  );
-};
-
-const getRecordTypeMetadata = async ({ user, objectApiName }: { user?: IUser; objectApiName?: string } = {}) => {
-  if (!user || !user.crmId) {
-    // Not an empty result — an empty array is indistinguishable from "the org
-    // has no objects" and made every caller report a plausible-looking lie.
-    throw new Error('CRM not connected');
-  }
-  const crm = await getCrmById(user.crmId);
-  if (!crm) {
-    throw new Error('CRM not found');
-  }
-  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
-  const instanceUrl = user.crmProfile?.instanceUrl;
-  if (!instanceUrl) {
-    throw new Error('Instance URL not found');
-  }
-  const url = `${APEX_BASE(instanceUrl)}/object-record-type-metadata?objectApiName=${encodeURIComponent(objectApiName!)}`;
-  return callApex(
-    { accessToken: access_token, refreshToken: refresh_token, userId: user.userId, environment: crm.environment, customUrl: user.customUrl },
-    { url, method: 'GET' }
-  );
-};
-
 const apexValidateSoql = async (
   user?: IUser,
   apiName?: string,
@@ -338,4 +272,4 @@ export const apexCountOne = async (
 };
 
 export type { ApexMode, ApexType, ApexRelationshipType };
-export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getMasterChildApiNames, getApexObjectRecords, getApexFields, getApexPicklistValues, getRecordTypeMetadata, apexValidateSoql, callApex, unwrapApex, toApexMode, toApexType, apexQuery, APEX_BASE };
+export { getApexObjects, getApexObjectsCount, getApexObjectChilds, getMasterChildApiNames, getApexObjectRecords, apexValidateSoql, callApex, unwrapApex, toApexMode, toApexType, apexQuery, APEX_BASE };

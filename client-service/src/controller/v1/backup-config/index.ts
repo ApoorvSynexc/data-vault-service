@@ -2,7 +2,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
-  getApexFields,
   getApexObjects,
   toApexType,
   createBackupConfig,
@@ -129,19 +128,6 @@ const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<vo
   }));
 
   makeResponse(req, res, 200, true, 'fetch', { success: true, results });
-};
-
-const getFieldsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  const { crmId, objectName } = req.query;
-  if (!crmId) {
-    return makeResponse(req, res, 400, false, 'crm_id_required');
-  }
-  if (!objectName) {
-    return makeResponse(req, res, 400, false, 'object_name_required');
-  }
-  const result = await getApexFields({ user, objectName: String(objectName), mode: 'backup' });
-  makeResponse(req, res, 200, true, 'fetch', unwrapApex(result));
 };
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -688,7 +674,6 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
 export const backupConfigController = wrapController({
   getObjectsHanlder,
   getObjectsCountHanlder,
-  getFieldsHanlder,
   createBackupConfigHandler,
   listBackupConfigsHandler,
   getBackupConfigHandler,
