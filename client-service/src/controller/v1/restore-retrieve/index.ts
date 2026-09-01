@@ -1298,5 +1298,6 @@ export const restoreRetrieveJobController = wrapController({
   getPicklistFieldValuesHandler,
   listRestoresHandler,
   getRestoreJobHandler,
-  getRestoreJobStatsHandler
+  getRestoreJobStatsHandler,
+  createRestoreHandler2
 });
