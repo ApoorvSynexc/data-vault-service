@@ -24,7 +24,6 @@ export interface ISalesforcePicklistValue {
 // Shape of one entry in describedObject.fields (standard sobjects/{name}/describe)
 // — the orchestrator (../index.ts) fetches the describe once per object and
 // hands `fields` in directly. This module no longer fetches anything itself
-// (no more CORE_SERVICE getObjectMetadata call).
 export interface ISalesforceFieldDescribe {
   aggregatable: boolean;
   aiPredictionField: boolean;

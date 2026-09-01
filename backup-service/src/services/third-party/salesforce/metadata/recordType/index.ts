@@ -13,8 +13,6 @@ import {
 // Shape of one entry in describedObject.recordTypeInfos (standard sobjects/
 // {name}/describe) — the orchestrator (../index.ts) fetches the describe once
 // per object and hands `recordTypeInfos` in directly. This module no longer
-// fetches anything itself (no more CORE_SERVICE getRecordTypeValues call).
-// Unlike the old CORE_SERVICE reply, the standard describe carries no
 // developerName — recordTypeId is the only stable identifier available here.
 export interface ISalesforceRecordTypeInfo {
   active: boolean;
