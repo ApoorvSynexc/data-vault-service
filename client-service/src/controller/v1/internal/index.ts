@@ -7,6 +7,7 @@ import {
   initalizePayloadTransform,
   getDecryptedCrmCredential,
   updateUser,
+  initalizeRestoreTransform,
 } from '../../../services';
 import { BACKUP_STATUS, STATUS } from '../../../constant';
 import {
@@ -117,14 +118,14 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         break;
       case 'schema.sync.completed': {
         const { triggerSource } = req.body;
-        console.log(JSON.stringify({ triggerSource }));
 
-        if(triggerSource.name === 'CREATE_RESTORE') {
+        if(triggerSource?.name === 'CREATE_RESTORE') {
           await salesforceFieldCreation({ restoreJobId: triggerSource.entityId });
           await salesforceFieldsPermission({ restoreJobId: triggerSource.entityId });
+          await initalizeRestoreTransform(triggerSource.entityId);
+        } else {
+          await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
         }
-
-        await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
       }
         break;
       case 'schema.updated': {
