@@ -222,4 +222,9 @@ export interface IBackupJob {
    *   job is over.
    */
   lastCompletedAt?: string;
+
+  triggerSource?:{
+    name: string;
+    entityId: string;
+  }
 }
