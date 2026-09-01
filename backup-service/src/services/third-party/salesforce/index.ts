@@ -19,7 +19,6 @@ import { getRestoreJobById } from '../../restore-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
-import { archiveAndHardDelete } from './schedule/archival';
 import { runSalesforceRestore } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
@@ -75,43 +74,6 @@ const exportObjectToDestination = async (
       lastUpdatedAt
     );
   }
-};
-
-const exportObjectToDestinationArchival = async (
-  backupConfigId: string,
-  backupJobId: string,
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  crmName: string,
-  object: IBackupObject,
-  destinationType: string,
-  destConfig: IDestinationConfig
-): Promise<void> => {
-  logger.info(
-    `[archival:payload] received | backupConfigId:${backupConfigId} backupJobId:${backupJobId} objectName:${object.name} status:${object.status ?? 'none'}`
-  );
-  logger.info(`[archival:payload] full object | ${JSON.stringify(object, null, 2)}`);
-
-  if (object.status === OBJECT_STATUS.completed) {
-    logger.info(
-      `[archival:payload] skipping — already completed | backupJobId:${backupJobId} objectName:${object.name}`
-    );
-    return;
-  }
-
-  if (destinationType !== 'S3') {
-    throw new Error(`Unsupported destination type: ${destinationType}`);
-  }
-
-  await archiveAndHardDelete(
-    backupConfigId,
-    backupJobId,
-    instanceUrl,
-    tokens,
-    crmName,
-    object,
-    destConfig
-  );
 };
 
 const exportWithRetry = async (
@@ -466,9 +428,4 @@ const salesforceHandler: ICrmBackupHandler = {
   },
 };
 
-export {
-  salesforceHandler,
-  exportObjectToDestination,
-  exportWithRetry,
-  exportObjectToDestinationArchival,
-};
+export { salesforceHandler, exportObjectToDestination, exportWithRetry };

@@ -1,6 +1,5 @@
 import { logger } from '../../../../../middlewares';
 import { uploadToS3 } from '../../../../destination';
-import { PICKLIST_TYPES } from '../../picklist';
 import {
   buildS3Key,
   diffEntities,
@@ -33,6 +32,8 @@ export interface IPicklistFieldResult extends IPicklistDiff {
   latestValues: ISalesforcePicklistValue[];
   storedEntries: IStoredPicklistEntry[];
 }
+
+const PICKLIST_TYPES = new Set(['picklist', 'multipicklist']);
 
 const picklistValueKey = (value: ISalesforcePicklistValue): string =>
   value.value ?? value.label ?? '';
