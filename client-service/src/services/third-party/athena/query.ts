@@ -45,20 +45,24 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
 ]);
 
 // Submits a query to Athena and returns the queryExecutionId.
-// No ResultConfiguration.OutputLocation — omitting it makes Athena store
-// results in Athena-owned managed storage (engine v3+) instead of a bucket we
-// have to own, secure, and keep in the workgroup's region. We only ever read
-// results back through GetQueryResults, never touch the underlying files
-// directly, so managed storage is a strict improvement here.
+// `outputLocation` is the client's own bucket
+// (s3://{bucket}/{backupConfigId}/retrieve/ — see buildRetrieveOutputLocation),
+// so result files land with the data they came from and the client owns their
+// lifecycle. Omitted only when the config has no resolvable S3 destination, in
+// which case Athena falls back to the workgroup's own result setting.
 //
-// No ResultReuseConfiguration either — AWS does not support query result
-// reuse on workgroups with managed query results enabled ("Query Result Reuse
-// is not supported in workgroups with ManagedQueryResultsConfiguration
-// enabled"), so the two features are mutually exclusive here.
-const startQuery = async (sql: string, database: string): Promise<string> => {
+// No ResultReuseConfiguration — AWS does not support query result reuse on
+// workgroups with managed query results enabled, so the two features are
+// mutually exclusive here.
+const startQuery = async (
+  sql: string,
+  database: string,
+  outputLocation?: string
+): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
     QueryString: sql,
     QueryExecutionContext: { Database: database },
+    ...(outputLocation && { ResultConfiguration: { OutputLocation: outputLocation } }),
   };
 
   logger.info(`[athena] StartQueryExecution request | ${JSON.stringify(input)}`);
@@ -202,12 +206,13 @@ const fetchQueryResults = async (
  * Re-reads the results of a query that has ALREADY run, by its execution id.
  *
  * This is the cheap half of the pagination design: Athena persists every result
- * set in the workgroup's output location, so reading it back scans no data and
+ * set at the query's output location, so reading it back scans no data and
  * costs nothing beyond an S3 GET. It also skips the ~2s submit/poll settle, so
  * a replayed page returns in a fraction of the time a fresh query takes.
  *
  * Throws if the execution id has expired (Athena retains query metadata ~45
- * days) or its result file is gone — callers treat that as "cursor expired".
+ * days) or its result file is gone — including when the client's own lifecycle
+ * rules expired it out of their bucket — callers treat that as "cursor expired".
  */
 export const fetchStoredResults = async (
   queryExecutionId: string,
@@ -222,18 +227,20 @@ export const fetchStoredResults = async (
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
 // database must be a Glue Catalog database name (e.g. the backupConfigId).
-// Results land in Athena-owned managed storage (see startQuery) — nothing to
-// configure or own on our side.
+// `outputLocation` is where Athena writes the result file (see startQuery).
 // `maxRows` caps how many rows are pulled back; the returned queryExecutionId
 // lets a later request replay the same rows via fetchStoredResults.
 export const runAthenaQuery = async (
   sql: string,
   database: string,
+  outputLocation?: string,
   maxRows?: number
 ): Promise<IQueryResult> => {
-  logger.info(`[athena] executing query | database:${database} sql:${sql}`);
+  logger.info(
+    `[athena] executing query | database:${database} outputLocation:${outputLocation ?? 'workgroup-default'} sql:${sql}`
+  );
 
-  const queryExecutionId = await startQuery(sql, database);
+  const queryExecutionId = await startQuery(sql, database, outputLocation);
 
   logger.info(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
 
