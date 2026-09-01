@@ -219,6 +219,7 @@ interface IObjectRelationshipRef {
 interface IObjectParents {
     id: string;
     name: string;
+    fieldName?: string;
     parent: IObjectRelationshipRef[];
 }
 
@@ -232,13 +233,13 @@ function collectChildParents(
     nodes: IObjectRelationshipNode[] | undefined,
     parent: IObjectRelationshipRef,
     visitedIds: Set<string>,
-    parentsByChildId: Map<string, { name: string; parents: Map<string, { name: string; fieldName?: string }> }>
+    parentsByChildId: Map<string, { name: string; fieldName?: string; parents: Map<string, { name: string; fieldName?: string }> }>
 ): void {
     for (const node of nodes ?? []) {
         if (visitedIds.has(node.id)) continue;
 
         if (!parentsByChildId.has(node.id)) {
-            parentsByChildId.set(node.id, { name: node.name, parents: new Map() });
+            parentsByChildId.set(node.id, { name: node.name, fieldName: node.fieldName, parents: new Map() });
         }
         parentsByChildId.get(node.id)!.parents.set(parent.id, { name: parent.name, fieldName: node.fieldName });
 
