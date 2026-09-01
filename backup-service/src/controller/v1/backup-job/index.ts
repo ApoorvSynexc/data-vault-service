@@ -6,6 +6,7 @@ import { wrapController } from '../../../utils/helper';
 
 const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { triggerSource } = req.body;
+  console.log("11111111111111111111", {triggerSource})
   const job = await createBackupJob(req.body);
 
   // Respond immediately — backup runs in the background

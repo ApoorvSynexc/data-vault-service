@@ -140,7 +140,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
     });
 
     if (job.schemaSync) {
-      await notifySchemaSyncCompleted(backupConfigId);
+      await notifySchemaSyncCompleted(backupConfigId, triggerSource);
     }
   } catch (err: any) {
     logger.error(`Backup job ${backupJobId} failed: ${err?.message}`);

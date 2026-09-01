@@ -46,6 +46,7 @@ import {
   runMetadataComparisonForConfig,
   hasMetadataChanged,
   triggerBackupJob,
+  getDecryptedCrmCredential,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -55,6 +56,7 @@ import { IBackupJob, IRestoreScope, IRestoreFilters } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { removeCsvColumnsInFolder } from '../../../utils/restore-csv-format';
+import { ensureRestoreTrackingFields } from '../../../services/third-party/salesforce/restore-fields';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -1172,9 +1174,9 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
 
 
   // Step 1: compare metadata comparison
+  const changedObjectNames: string[] = [];
   try {
     const result = await runMetadataComparisonForConfig(backupConfig);
-    const changedObjectNames: string[] = [];
     for (const { objectName, result: metadataResult } of result) {
       if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
         changedObjectNames.push(objectName);
@@ -1197,8 +1199,6 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   } catch (error) {
     logger.error(`[Restore creation metadata comparison] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
   }
-
-
 }
 
 const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
