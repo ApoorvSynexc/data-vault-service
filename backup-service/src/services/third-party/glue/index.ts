@@ -9,16 +9,31 @@ import {
   Column,
   PartitionInput,
 } from '@aws-sdk/client-glue';
-import { AWS_REGION } from '../../../constant';
+import { AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
-import { IDestinationConfig } from '../../../models';
+import { IDestinationConfig, IAwsCredentials } from '../../../models';
 import { SCHEMA_KIND_FILE } from '../../../utils/helper';
 import { listS3Prefixes } from '../../destination/s3';
 import { getStoredEntries } from '../salesforce/metadata/common';
 
-// Credentials come from the SDK default chain only (task/instance role) — no
-// static keys are ever passed in.
-const glue = new GlueClient({ region: AWS_REGION });
+// constant/index.ts builds these with String(process.env.X), so an unset var
+// reads back as the literal string "undefined" rather than undefined itself —
+// excluded here so a deployed environment without these set doesn't send AWS
+// a literal accessKeyId of "undefined" (a real, previously-hit QA bug).
+const isSet = (value: string): boolean => Boolean(value) && value !== 'undefined';
+
+const awsCredentials: IAwsCredentials = {
+  region: AWS_REGION,
+};
+
+if (isSet(AWS_ACCESS_KEY) && isSet(AWS_SECRET_KEY)) {
+  awsCredentials.credentials = {
+    accessKeyId: AWS_ACCESS_KEY,
+    secretAccessKey: AWS_SECRET_KEY,
+  };
+}
+
+const glue = new GlueClient(awsCredentials);
 
 const toGlueIdentifier = (value: string): string => value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 const buildGlueDatabaseName = (backupConfigId: string): string => toGlueIdentifier(backupConfigId);

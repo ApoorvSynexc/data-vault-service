@@ -46,6 +46,11 @@ const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN).trim();
 // Dedicated IAM credentials scoped to Athena (separate from the default AWS creds).
 const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
 const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
+// Credentials used only to construct the Glue and Athena SDK clients (glue.ts,
+// query.ts) — kept separate from AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY so
+// those two are never touched by anything Glue/Athena-related.
+const AWS_ACCESS_KEY = String(process.env.AWS_ACCESS_KEY);
+const AWS_SECRET_KEY = String(process.env.AWS_SECRET_KEY);
 
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET);
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET);
@@ -333,6 +338,8 @@ export {
   AWS_ATHENA_ROLE_ARN,
   AWS_ATHENA_ACCESS_KEY,
   AWS_ATHENA_SECRET_KEY,
+  AWS_ACCESS_KEY,
+  AWS_SECRET_KEY,
 
   // JWT Config
   JWT_ACCESS_SECRET,
