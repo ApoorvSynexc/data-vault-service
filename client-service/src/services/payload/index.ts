@@ -201,10 +201,14 @@ async function fetchCompressibleBackupJobs(backupConfigId: string) {
 }
 
 // Same id/name shape as an IObjectRelationshipNode, minus its own children —
-// used as the entry recorded per parent below.
+// used as the entry recorded per parent below. fieldName is the join field on
+// the child that points at this specific parent (a child can use a different
+// field per parent, e.g. Task.WhoId under Contact vs Task.WhatId elsewhere),
+// so it's optional here since it's absent for the root parent ref.
 interface IObjectRelationshipRef {
     id: string;
     name: string;
+    fieldName?: string;
 }
 
 // Mirrors parentToChild's own node shape (id, name, children: []), just with
@@ -228,7 +232,7 @@ function collectChildParents(
     nodes: IObjectRelationshipNode[] | undefined,
     parent: IObjectRelationshipRef,
     visitedIds: Set<string>,
-    parentsByChildId: Map<string, { name: string; parents: Map<string, string> }>
+    parentsByChildId: Map<string, { name: string; parents: Map<string, { name: string; fieldName?: string }> }>
 ): void {
     for (const node of nodes ?? []) {
         if (visitedIds.has(node.id)) continue;
@@ -236,14 +240,14 @@ function collectChildParents(
         if (!parentsByChildId.has(node.id)) {
             parentsByChildId.set(node.id, { name: node.name, parents: new Map() });
         }
-        parentsByChildId.get(node.id)!.parents.set(parent.id, parent.name);
+        parentsByChildId.get(node.id)!.parents.set(parent.id, { name: parent.name, fieldName: node.fieldName });
 
         collectChildParents(node.children, { id: node.id, name: node.name }, new Set(visitedIds).add(node.id), parentsByChildId);
     }
 }
 
 function buildChildToParent(selectedRoots: IObject[]): IObjectParents[] {
-    const parentsByChildId = new Map<string, { name: string; parents: Map<string, string> }>();
+    const parentsByChildId = new Map<string, { name: string; parents: Map<string, { name: string; fieldName?: string }> }>();
 
     for (const root of selectedRoots) {
         collectChildParents(root.children, { id: root.id, name: root.name }, new Set([root.id]), parentsByChildId);
@@ -252,7 +256,7 @@ function buildChildToParent(selectedRoots: IObject[]): IObjectParents[] {
     return Array.from(parentsByChildId.entries()).map(([id, { name, parents }]) => ({
         id,
         name,
-        parent: Array.from(parents.entries()).map(([parentId, parentName]) => ({ id: parentId, name: parentName })),
+        parent: Array.from(parents.entries()).map(([parentId, { name: parentName, fieldName }]) => ({ id: parentId, name: parentName, fieldName })),
     }));
 }
 
