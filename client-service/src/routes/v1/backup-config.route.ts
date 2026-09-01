@@ -4,10 +4,6 @@ import { createBackupConfigValidation, updateBackupConfigValidation, recoverTrig
 
 const router = Router();
 
-// router.get('/objects', backupConfigController.getObjectsHanlder);
-// router.get('/object-childs', backupConfigController.getObjectChildHandler);
-// router.post('/objects-count', backupConfigController.getObjectsCountHanlder);
-// router.get('/fields', backupConfigController.getFieldsHanlder);
 
 router.post('/', createBackupConfigValidation, backupConfigController.createBackupConfigHandler);
 router.get('/list', backupConfigController.listBackupConfigsHandler);

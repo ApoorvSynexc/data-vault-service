@@ -2,14 +2,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
-  getApexObjects,
-  toApexType,
   createBackupConfig,
   getBackupConfigById,
   getBackupConfigBySlug,
   getBackupConfigsByUser,
-  getBackupConfigsByUserAndCrm,
-
   getBackupConfigsWithPagination,
   updateBackupConfig,
   deleteBackupConfig,
@@ -25,15 +21,12 @@ import {
   recoverTriggerCreation,
   checkSharedTriggerConflict,
   computeJobStats,
-  getApexObjectsCount,
   getSalesforceProfile,
   initalizePayloadTransform,
   hasActiveBackupJob,
   syncMetadataAndTriggers,
-  unwrapApex,
   getUser,
   getDecryptedCrmCredential,
-  getApexObjectChilds,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
@@ -49,86 +42,6 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils/event-bridge';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
-
-const getObjectsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  // `type` is the schedule/realtime split; older clients sent it as `mode`.
-  const { crmId, type, mode } = req.query;
-  if (!crmId) {
-    return makeResponse(req, res, 400, false, 'crm_id_required');
-  }
-
-  const [apexResult, backupConfigs] = await Promise.all([
-    getApexObjects({ user, mode: 'backup', type: toApexType(type ?? mode) }),
-    getBackupConfigsByUserAndCrm(req.user!.userId, String(crmId)),
-  ]);
-
-  const backedUpMap = new Map<string, { schedule: string }>();
-  for (const config of backupConfigs) {
-    for (const objectName of config.objectNames) {
-      backedUpMap.set(objectName, {
-        schedule: config.schedule === SCHEDULE_MODE.realtime ? 'realtime' : 'schedule',
-      });
-    }
-  }
-
-  const objects = unwrapApex<Array<{ label: string; apiName: string }>>(apexResult).map((obj) => ({
-    ...obj,
-    isBackedUp: backedUpMap.has(obj.apiName),
-    schedule: backedUpMap.get(obj.apiName)?.schedule ?? null,
-  }));
-
-  // Only the enriched list — spreading apexResult here also leaked its raw `data`
-  // and `success` into the response envelope.
-  makeResponse(req, res, 200, true, 'fetch', { objects });
-};
-
-const getObjectChildHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  // `type` is the schedule/realtime split; older clients sent it as `mode`.
-  const { crmId, objectName, type, mode, relationshipDepth } = req.query;
-  if (!crmId) {
-    return makeResponse(req, res, 400, false, 'crm_id_required');
-  }
-
-  const [apexResult] = await Promise.all([
-    getApexObjectChilds({ user, objectName: String(objectName), mode: 'backup', type: toApexType(type ?? mode), relationshipType: 'MASTER', relationshipDepth: 0 }),
-  ]);
-
-  makeResponse(req, res, 200, true, 'fetch', unwrapApex(apexResult));
-};
-
-const getObjectsCountHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  const { crmId, items } = req.body;
-  if (!crmId) {
-    return makeResponse(req, res, 400, false, 'crm_id_required');
-  }
-
-  // UI sends items: [{ apiName }]; Apex wants a flat name list.
-  const apiNames: string[] = (items ?? [])
-    .map((item: { apiName?: string }) => item?.apiName)
-    .filter(Boolean);
-
-  if (apiNames.length === 0) {
-    return makeResponse(req, res, 400, false, 'object_name_required');
-  }
-
-  const apexResult = await getApexObjectsCount({ user, apiNames });
-
-  // Apex returns unfiltered counts keyed by object name ({ Account: 12 }); the UI
-  // wants one row per requested object, in the order it asked for them. An object
-  // missing from the map means Apex could not count it — report success:false there
-  // rather than a 0 that reads as "this object is empty".
-  const counts = unwrapApex<Record<string, number>>(apexResult) ?? {};
-  const results = apiNames.map((apiName) => ({
-    success: apiName in counts,
-    recordCount: counts[apiName] ?? 0,
-    apiName,
-  }));
-
-  makeResponse(req, res, 200, true, 'fetch', { success: true, results });
-};
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -672,8 +585,6 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
 };
 
 export const backupConfigController = wrapController({
-  getObjectsHanlder,
-  getObjectsCountHanlder,
   createBackupConfigHandler,
   listBackupConfigsHandler,
   getBackupConfigHandler,
@@ -683,7 +594,6 @@ export const backupConfigController = wrapController({
   syncMetadataTriggerHandler,
   getBackupJobStatsHandler,
   syncMetadataHandler,
-  getObjectChildHandler,
   runNowHandler,
   recoverTriggerHandler,
 });
