@@ -466,6 +466,7 @@ async function buildRestorePayload(restoreConfigId: string) {
                 // Already optional-in/optional-out as stored — undefined keys drop on JSON.stringify.
                 conflict: restore.conflict,
             },
+            objects: backupConfig.objects,
             hierarchy: {
                 parentToChild,
                 childToParent
