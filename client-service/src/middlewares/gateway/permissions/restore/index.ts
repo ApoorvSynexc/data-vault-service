@@ -68,6 +68,16 @@ const restorePermissions = [
         path : '/restore/job/stats',
         method: 'GET',
         permissions: ['restore.read']
+    },
+    {
+        path : '/restore/dry-run',
+        method: 'POST',
+        permissions: ['restore.read']
+    },
+    {
+        path : '/restore/dry-run-diff',
+        method: 'POST',
+        permissions: ['restore.read']
     }
 ];
 
