@@ -42,6 +42,10 @@ import {
   IDryRunParams,
   DryRunSourceType,
   buildAthenaFilterWhere,
+  getBackupConfigById,
+  runMetadataComparisonForConfig,
+  hasMetadataChanged,
+  triggerBackupJob,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -1043,19 +1047,6 @@ const requiredFieldsHandler = async (req: IRequest, res: IResponse): Promise<voi
   makeResponse(req, res, 200, true, 'fetch', result);
 };
 
-/**
- * GET /fetch-object-fields
- * Query: {
- *   objectApiName:  string
- *   backupConfigId: string
- * }
- *
- * Returns the latest schema JSON stored on S3 for objectApiName under the given
- * backup config — exactly as stored, without transformation.
- *
- * Returns 400 not_exist when the config/destination can't be resolved (or isn't
- * owned by the caller) or no schema has been written for the object yet.
- */
 const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { objectApiName, backupConfigId } = req.query as {
     objectApiName?: unknown;
@@ -1093,32 +1084,6 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'fetch', fields);
 };
 
-/**
- * POST /
- *
- * Creates the restore request and, unless it was saved as a DRAFT, runs it:
- *
- *   1. createRestoreJob   — the job row (status IN_PROGRESS, every object
- *                           IN_PROGRESS), which fixes the destination
- *                           `csvFilePath` the transform writes to. Cheap
- *                           DynamoDB writes, so this still happens before
- *                           the response.
- *   2. tiggerRestoreJob   — the actual long-running work, kicked off only
- *                           after the response, fire-and-forget. For a
- *                           BACKUP/NORMAL-sourced restore this runs the
- *                           RESTORN FIELD JOB (custom fields + Permission
- *                           Set) and RUN BACKUP JOB stages first; every
- *                           restore then submits the EMR/Spark job. Spark
- *                           calls back into /build-payload
- *                           (buildRestorePayload) for the full payload,
- *                           writes the ingest CSVs, then reports to
- *                           /update-spark-job-status, which is where
- *                           runRestoreIngestJob hands the job to
- *                           backup-service's Bulk API ingest.
- *
- * Same path activateRestoreHandler uses, so a DRAFT and a non-DRAFT restore
- * run identically.
- */
 const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
   const { ...body } = req.body;
@@ -1185,19 +1150,57 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 };
 
-/**
- * POST /activate
- * Body: { restoreId: string }
- *
- * Transitions a DRAFT restore to IN_PROGRESS and kicks off the restore job — the
- * step createRestoreHandler intentionally skips when a restore is created with
- * status: 'DRAFT' (see the `if (body.status !== 'DRAFT')` branch there).
- *
- * Returns not_exist when the restore doesn't exist or isn't owned by the
- * caller (isOwner returns false for both, same as getRestoreRetrieveJobHandler
- * — avoids leaking whether a given ID exists), and restore_not_draft when the
- * restore has already been activated or otherwise left DRAFT status.
- */
+const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
+  const { ...body } = req.body;
+  const restoreId = uuidv4();
+
+  const backupConfig = await getBackupConfigById(body.source.backupConfigId);
+  if (!backupConfig) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const isDraft = body.status === 'DRAFT';
+  const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? 'DRAFT' : 'IN_PROGRESS' };
+  const created = await createRestore(payload);
+  if (!created) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const restoreJob = await createRestoreJob(payload);
+  makeResponse(req, res, 201, true, 'create');
+
+
+  // Step 1: compare metadata comparison
+  try {
+    const result = await runMetadataComparisonForConfig(backupConfig);
+    const changedObjectNames: string[] = [];
+    for (const { objectName, result: metadataResult } of result) {
+      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+        changedObjectNames.push(objectName);
+      }
+    }
+
+    if (changedObjectNames.length) {
+      await triggerBackupJob({
+        user, config: backupConfig,
+        type: 'backup',
+        lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+        schemaSync: true,
+        triggerSource: {
+          name: "CREATE_RESTORE",
+          entityId: restoreJob.restoreJobId,
+        },
+        ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
+      });
+    }
+  } catch (error) {
+    logger.error(`[Restore creation metadata comparison] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+  }
+
+
+}
+
 const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreId } = req.body as Record<string, string>;
   const userId = req.user!.userId;
@@ -1266,17 +1269,6 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
   makeResponse(req, res, 200, true, 'fetch', { ...restoreJob, destination: { ...restoreJob.destination, encryptedTokens: undefined }, source: undefined });
 };
 
-/**
- * GET /job/stats?restoreId=
- * Mirrors getBackupJobStatsHandler's shape: with restoreId, stats are scoped
- * to that restore's own jobs (restoreId-index); without it, scoped to every
- * restore job the authenticated user has (userId-index).
- *
- * successRecordCount = processedRecordCount - failedRecordCount, summed across
- * every job's destination.objects[] — processedRecordCount already counts
- * both successes and failures (Salesforce Bulk API's numberRecordsProcessed
- * semantics), so the difference is the actual success count.
- */
 const getRestoreJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreId } = req.query as Record<string, string>;
   const userId = req.user!.userId;
@@ -1306,5 +1298,6 @@ export const restoreRetrieveJobController = wrapController({
   getPicklistFieldValuesHandler,
   listRestoresHandler,
   getRestoreJobHandler,
-  getRestoreJobStatsHandler
+  getRestoreJobStatsHandler,
+  createRestoreHandler2
 });

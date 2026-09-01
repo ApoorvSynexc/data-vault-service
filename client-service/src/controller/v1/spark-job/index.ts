@@ -288,7 +288,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
           .map((object) => object.name)
       );
 
-      const updatedObjects: { id: string; name: string; status: "PENDING" }[] = objects
+      const updatedObjects: { id: string; name: string; status: "PENDING" }[] = (objects || [])
         .filter((object) => !failedObjectNames.has(object))
         .map((object) => ({
           id: uuidv4(),
