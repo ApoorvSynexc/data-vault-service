@@ -6,7 +6,7 @@ import { DESTINATION_TYPE } from '../../../constant';
 const objectParentSchema = Joi.object({
   id: Joi.string().required(),
   name: Joi.string().required(),
-  field: Joi.string().optional(),
+  fieldName: Joi.string().optional(),
 });
 
 const sourceSchema = Joi.object({

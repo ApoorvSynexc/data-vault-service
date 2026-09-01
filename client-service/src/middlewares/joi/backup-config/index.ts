@@ -49,7 +49,7 @@ const objectParentSchema = Joi.object({
 const objectRelationshipNodeSchema = Joi.object({
   id: Joi.string().required(),
   name: Joi.string().required(),
-  field: Joi.string().optional(),
+  fieldName: Joi.string().optional(),
   children: Joi.array().items(Joi.link('#objectRelationshipNode')).optional(),
 }).id('objectRelationshipNode');
 
@@ -61,7 +61,7 @@ const objectSchema = Joi.object({
     .required(),
   isUserSelected: Joi.boolean().optional(),
   condition: conditionSchema.optional(),
-  field: Joi.array().items(objectFieldSchema).required(),
+  field: Joi.array().items(objectFieldSchema).optional(),
   parentObjects: Joi.array().items(objectParentSchema).optional(),
   children: Joi.array().items(objectRelationshipNodeSchema).optional(),
 });
