@@ -38,7 +38,7 @@ interface ICreateJob {
   instanceUrl: string;
   tokens: SalesforceTokens;
   objectName: string;
-  operation: 'insert' | 'update' | 'upsert';
+  operation: 'insert' | 'update' | 'upsert' | 'delete';
   externalIdFieldName?: string;
 }
 

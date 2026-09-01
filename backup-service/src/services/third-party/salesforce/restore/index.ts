@@ -95,7 +95,7 @@ const submitIngestChunk = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectName: string,
-  operation: 'insert' | 'update' | 'upsert',
+  operation: 'insert' | 'update' | 'upsert' | 'delete',
   externalIdFieldName: string | undefined,
   chunk: CsvChunk
 ): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
@@ -137,7 +137,7 @@ const restoreObjectData = async (
   objectName: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
-  operation: 'insert' | 'update' | 'upsert',
+  operation: 'insert' | 'update' | 'upsert' | 'delete',
   externalIdFieldName: string
 ): Promise<string[]> => {
   const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}`);
