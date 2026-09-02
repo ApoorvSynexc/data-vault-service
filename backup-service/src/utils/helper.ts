@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { logger } from '../middlewares';
-import { IBackupObject } from '../models';
+import { IBackupObject, IRestoreObjectHierarchyNode } from '../models';
 import { SYSTEM_FIELDS } from '../constant';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
@@ -384,6 +384,132 @@ const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
   return objects.flatMap((obj) => [obj, ...(obj.children ? recursivelyFlatten(obj.children) : [])]);
 };
 
+interface IHierarchyEdges {
+  allNames: Set<string>;
+  childNamesByParent: Map<string, Set<string>>;
+  directParentNamesByChild: Map<string, Set<string>>;
+}
+
+// Walks a restore's child->parent hierarchy (IRestoreObjectHierarchyNode —
+// each node names its own upward parent chain) once and collects every
+// parent->child edge, deduped by name. The same object can be reachable
+// through more than one branch — e.g. Contact under both Account and
+// Opportunity->Product — so this resolves to shared edges per name rather
+// than one copy of the object per branch that reaches it.
+// A `path`-scoped (not global) visited guard is used so a genuinely shared
+// ancestor is still walked once per distinct path to it (needed to collect
+// every one of its parent edges), while an actual cycle still terminates.
+const collectHierarchyEdges = (nodes: IRestoreObjectHierarchyNode[]): IHierarchyEdges => {
+  const allNames = new Set<string>();
+  const childNamesByParent = new Map<string, Set<string>>();
+  const directParentNamesByChild = new Map<string, Set<string>>();
+
+  const visit = (node: IRestoreObjectHierarchyNode, path: Set<string>): void => {
+    allNames.add(node.name);
+    if (path.has(node.name)) {
+      return;
+    }
+    const nextPath = new Set(path).add(node.name);
+    (node.parents ?? []).forEach((parent) => {
+      allNames.add(parent.name);
+      if (!childNamesByParent.has(parent.name)) {
+        childNamesByParent.set(parent.name, new Set());
+      }
+      childNamesByParent.get(parent.name)!.add(node.name);
+      if (!directParentNamesByChild.has(node.name)) {
+        directParentNamesByChild.set(node.name, new Set());
+      }
+      directParentNamesByChild.get(node.name)!.add(parent.name);
+      visit(parent, nextPath);
+    });
+  };
+  nodes.forEach((node) => visit(node, new Set()));
+
+  return { allNames, childNamesByParent, directParentNamesByChild };
+};
+
+export interface IRestoreObjectParentChildNode {
+  name: string;
+  children: IRestoreObjectParentChildNode[];
+}
+
+// Presentational parent->child view of the hierarchy, rooted at the topmost
+// ancestors. A name reachable through more than one branch (a diamond) is
+// rendered once per branch it belongs to, same as a file shown under every
+// folder it's linked from — fine for display, but NOT for driving execution
+// order (see getRestoreExecutionPlan below for that).
+const buildParentToChildHierarchy = (
+  nodes: IRestoreObjectHierarchyNode[]
+): IRestoreObjectParentChildNode[] => {
+  const { allNames, childNamesByParent, directParentNamesByChild } = collectHierarchyEdges(nodes);
+
+  const buildNode = (name: string, ancestors: Set<string>): IRestoreObjectParentChildNode => {
+    // A name can't be its own descendant — guards against a malformed/cyclic
+    // hierarchy sending this into infinite recursion.
+    if (ancestors.has(name)) {
+      return { name, children: [] };
+    }
+    const nextAncestors = new Set(ancestors).add(name);
+    const children = Array.from(childNamesByParent.get(name) ?? []).map((childName) =>
+      buildNode(childName, nextAncestors)
+    );
+    return { name, children };
+  };
+
+  const rootNames = Array.from(allNames).filter((name) => !directParentNamesByChild.has(name));
+  return rootNames.map((name) => buildNode(name, new Set()));
+};
+
+export interface IRestoreExecutionPlan {
+  // Every parent name precedes every one of its children. A name reachable
+  // through more than one parent (a diamond) is placed only after ALL of its
+  // parents, not just the first branch that reaches it.
+  order: string[];
+  // Each name's immediate parents, for callers that need to decide whether to
+  // skip a node because one of ITS OWN parents (not a more distant ancestor)
+  // failed to restore.
+  directParentNamesByChild: Map<string, Set<string>>;
+}
+
+// Flattens the same child->parent hierarchy into a single valid execution
+// order (Kahn's algorithm) instead of the tree buildParentToChildHierarchy
+// produces. Use this whenever the goal is "restore/insert every parent
+// before its children, exactly once each" — walking the tree per-branch
+// would run a diamond's shared node twice, and could run it after only one
+// of its parents instead of all of them.
+const getRestoreExecutionPlan = (nodes: IRestoreObjectHierarchyNode[]): IRestoreExecutionPlan => {
+  const { allNames, childNamesByParent, directParentNamesByChild } = collectHierarchyEdges(nodes);
+
+  const remainingParentCount = new Map<string, number>();
+  directParentNamesByChild.forEach((parents, name) => remainingParentCount.set(name, parents.size));
+
+  const queue: string[] = Array.from(allNames).filter((name) => !remainingParentCount.has(name));
+  const order: string[] = [];
+
+  while (queue.length) {
+    const name = queue.shift()!;
+    order.push(name);
+    (childNamesByParent.get(name) ?? new Set()).forEach((childName) => {
+      const remaining = (remainingParentCount.get(childName) ?? 1) - 1;
+      remainingParentCount.set(childName, remaining);
+      if (remaining === 0) {
+        queue.push(childName);
+      }
+    });
+  }
+
+  // A cycle (shouldn't happen for a valid lookup/master-detail graph) leaves
+  // names permanently stuck above 0 remaining parents — append them at the
+  // end rather than silently dropping the object from the restore.
+  allNames.forEach((name) => {
+    if (!order.includes(name)) {
+      order.push(name);
+    }
+  });
+
+  return { order, directParentNamesByChild };
+};
+
 // Ensures Salesforce's system fields are present in a field list — they're
 // always selected by default for backup/archival. Call once, right after
 // fetching/filtering the schema — every SOQL built from the result already
@@ -407,6 +533,8 @@ export {
   formatFieldValuesForSOQL,
   formatValueByDataType,
   recursivelyFlatten,
+  buildParentToChildHierarchy,
+  getRestoreExecutionPlan,
   withSystemFields,
   escapeHtml,
   type IS3KeyPrefixParams,

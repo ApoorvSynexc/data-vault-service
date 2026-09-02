@@ -5,6 +5,7 @@ import {
   IRestoreConflict,
   IRestoreJobDestination,
   IRestoreJobSource,
+  IRestoreObjectHierarchyNode,
   ISource,
 } from '../../models';
 
@@ -32,7 +33,8 @@ export interface ICrmBackupHandler {
     restoreJobId: string,
     source: IRestoreJobSource,
     destination: IRestoreJobDestination,
-    conflict: IRestoreConflict
+    conflict: IRestoreConflict,
+    objectHierarchy?: IRestoreObjectHierarchyNode[]
   ): Promise<'SUCCESS' | 'FAILED'>;
 }
 
