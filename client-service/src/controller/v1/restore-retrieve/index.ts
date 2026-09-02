@@ -1176,6 +1176,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   const changedObjectNames: string[] = [];
   try {
     const result = await runMetadataComparisonForConfig(backupConfig);
+    console.log(JSON.stringify({result}))
     for (const { objectName, result: metadataResult } of result) {
       if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
         changedObjectNames.push(objectName);
