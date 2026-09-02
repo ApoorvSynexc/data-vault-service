@@ -178,8 +178,19 @@ const getSalesforceObjectsHandler = async (req: IRequest, res: IResponse): Promi
     return;
   }
 
+  const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
   const objectsList = await salesforceObjectList({ user });
-  makeResponse(req, res, 200, true, 'delete', objectsList);
+  let filteredObjects = objectsList.filter((obj) =>
+    obj.deprecatedAndHidden === false &&
+    obj.customSetting === false &&
+    obj.retrieveable === true &&
+    obj.replicateable === true &&
+    obj.keyPrefix !== null &&
+    obj.queryable === true &&
+    (obj.custom === false) &&
+    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+  );
+  makeResponse(req, res, 200, true, 'delete', filteredObjects);
 };
 
 const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
