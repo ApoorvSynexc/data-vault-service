@@ -223,7 +223,7 @@ const restoreObjectData = async (
 export const runSalesforceRestore = async (
   payload: RunSalesforceRestorePayload
 ): Promise<'SUCCESS' | 'FAILED'> => {
-  let externalIdFieldName = '';
+  let externalIdFieldName = 'Id';
   const {
     restoreId,
     restoreJobId,
@@ -243,7 +243,7 @@ export const runSalesforceRestore = async (
     );
     return 'SUCCESS';
   }
-
+  
   // let operation: 'insert' | 'update' | 'upsert';
   // switch (conflict.restoreMode) {
   //   case 'APPEND_NEW':
