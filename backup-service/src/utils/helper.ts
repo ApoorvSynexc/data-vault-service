@@ -428,38 +428,6 @@ const collectHierarchyEdges = (nodes: IRestoreObjectHierarchyNode[]): IHierarchy
   return { allNames, childNamesByParent, directParentNamesByChild };
 };
 
-export interface IRestoreObjectParentChildNode {
-  name: string;
-  children: IRestoreObjectParentChildNode[];
-}
-
-// Presentational parent->child view of the hierarchy, rooted at the topmost
-// ancestors. A name reachable through more than one branch (a diamond) is
-// rendered once per branch it belongs to, same as a file shown under every
-// folder it's linked from — fine for display, but NOT for driving execution
-// order (see getRestoreExecutionPlan below for that).
-const buildParentToChildHierarchy = (
-  nodes: IRestoreObjectHierarchyNode[]
-): IRestoreObjectParentChildNode[] => {
-  const { allNames, childNamesByParent, directParentNamesByChild } = collectHierarchyEdges(nodes);
-
-  const buildNode = (name: string, ancestors: Set<string>): IRestoreObjectParentChildNode => {
-    // A name can't be its own descendant — guards against a malformed/cyclic
-    // hierarchy sending this into infinite recursion.
-    if (ancestors.has(name)) {
-      return { name, children: [] };
-    }
-    const nextAncestors = new Set(ancestors).add(name);
-    const children = Array.from(childNamesByParent.get(name) ?? []).map((childName) =>
-      buildNode(childName, nextAncestors)
-    );
-    return { name, children };
-  };
-
-  const rootNames = Array.from(allNames).filter((name) => !directParentNamesByChild.has(name));
-  return rootNames.map((name) => buildNode(name, new Set()));
-};
-
 export interface IRestoreExecutionPlan {
   // Every parent name precedes every one of its children. A name reachable
   // through more than one parent (a diamond) is placed only after ALL of its
@@ -471,12 +439,14 @@ export interface IRestoreExecutionPlan {
   directParentNamesByChild: Map<string, Set<string>>;
 }
 
-// Flattens the same child->parent hierarchy into a single valid execution
-// order (Kahn's algorithm) instead of the tree buildParentToChildHierarchy
-// produces. Use this whenever the goal is "restore/insert every parent
-// before its children, exactly once each" — walking the tree per-branch
-// would run a diamond's shared node twice, and could run it after only one
-// of its parents instead of all of them.
+// Flattens a restore's child->parent hierarchy (IRestoreObjectHierarchyNode —
+// each node names its own upward parent chain) into a single valid execution
+// order (Kahn's algorithm): every parent before every one of its children,
+// exactly once each. A name reachable through more than one parent (a
+// diamond — e.g. Contact under both Account and Opportunity->Product) is
+// placed only after ALL of its parents, not just the first one reached —
+// walking the hierarchy as a per-branch tree instead would run that shared
+// node twice, and could run it after only one of its parents.
 const getRestoreExecutionPlan = (nodes: IRestoreObjectHierarchyNode[]): IRestoreExecutionPlan => {
   const { allNames, childNamesByParent, directParentNamesByChild } = collectHierarchyEdges(nodes);
 
@@ -533,7 +503,6 @@ export {
   formatFieldValuesForSOQL,
   formatValueByDataType,
   recursivelyFlatten,
-  buildParentToChildHierarchy,
   getRestoreExecutionPlan,
   withSystemFields,
   escapeHtml,
