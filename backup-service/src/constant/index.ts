@@ -41,9 +41,6 @@ const AWS_SECRET_KEY = String(process.env.AWS_SECRET_KEY);
 const SALESFORCE_CLIENT_ID = String(process.env.SALESFORCE_CLIENT_ID);
 const SALESFORCE_CLIENT_SECRET = String(process.env.SALESFORCE_CLIENT_SECRET);
 const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
-// Managed package namespace prefix (e.g. "SYX_DVV"). Empty when unpackaged/unset —
-// see utils/salesforce-namespace.ts for the only place this should be consumed.
-const SALESFORCE_NAMESPACE = String(process.env.SALESFORCE_NAMESPACE || '').trim();
 // Bulk API 2.0 version used for every jobs/query + jobs/ingest endpoint (bulk
 // backup/archival query, restore ingest, archival delete) — see api-request.ts,
 // restore/bulk.ts, schedule/backup/bulk.ts, schedule/archival/bulk.ts,
@@ -229,7 +226,6 @@ export {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
-  SALESFORCE_NAMESPACE,
   SALESFORCE_BULK_API_VERSION,
 
   //service
