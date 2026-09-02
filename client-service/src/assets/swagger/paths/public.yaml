@@ -1,0 +1,69 @@
+/v1/public/payload:
+  post:
+    tags: [Public]
+    summary: Decrypt an encrypted transport payload and kick off the EMR payload-transform job
+    description: >
+      No session auth — the trust boundary is the decrypt step itself. Called by an
+      S3/EventBridge-adjacent caller holding the shared transport key.
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [payload]
+            properties:
+              payload:
+                type: string
+                description: Base64 encrypted envelope containing backupConfigId
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+
+/v1/public/backup-trigger:
+  post:
+    tags: [Public]
+    summary: EventBridge scheduled-rule target that triggers a backup/archival run
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            description: EventBridge envelope with detail.backupConfigId and detail.userId
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+
+/v1/public/webhook/salesforce:
+  put:
+    tags: [Public]
+    summary: Salesforce real-time change-event webhook (Data Vault managed package Apex trigger)
+    description: >
+      Body arrives as an encrypted two-layer Salesforce envelope; decryption via the
+      attachDecryptedSalesforceRequest middleware is the sole authorization check.
+      Responds 200 immediately, then fans out to backup-service per matching
+      real-time backup config.
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [cipherText, iv, authTag]
+            properties:
+              cipherText: { type: string }
+              iv: { type: string }
+              authTag: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'

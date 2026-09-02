@@ -1,0 +1,29 @@
+/v1/internal/refresh-token:
+  get:
+    tags: [Internal]
+    summary: Refresh a CRM's Salesforce access token (called by backup-service)
+    security: [{ internalSecret: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/internal/backup-payload:
+  post:
+    tags: [Internal]
+    summary: Build the backup-service job payload for a backup configuration
+    security: [{ internalSecret: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'

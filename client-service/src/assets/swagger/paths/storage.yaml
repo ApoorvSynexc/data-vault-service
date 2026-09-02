@@ -1,0 +1,21 @@
+/v1/storage/overview:
+  get:
+    tags: [Storage]
+    summary: Get storage usage overview for the authenticated organization
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/storage/last-backup-config:
+  get:
+    tags: [Storage]
+    summary: Get storage usage for the most recently used backup configurations
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'

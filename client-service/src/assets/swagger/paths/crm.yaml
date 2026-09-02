@@ -1,0 +1,104 @@
+/v1/crm/list:
+  get:
+    tags: [CRM]
+    summary: List CRM accounts connected to the authenticated user's organization
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm/:
+  put:
+    tags: [CRM]
+    summary: Update a connected CRM account
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+  delete:
+    tags: [CRM]
+    summary: Delete a connected CRM account record
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+
+/v1/crm/connect:
+  get:
+    tags: [CRM]
+    summary: Start the Salesforce OAuth connect flow (redirects to Salesforce)
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm/callback:
+  get:
+    tags: [CRM]
+    summary: Salesforce OAuth callback that finalizes the CRM connection
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+
+/v1/crm/disconnect:
+  delete:
+    tags: [CRM]
+    summary: Disconnect a CRM account without deleting its record
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm/refresh-token:
+  get:
+    tags: [CRM]
+    summary: Refresh the stored Salesforce access token for a connected CRM
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'

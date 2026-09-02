@@ -1,0 +1,239 @@
+/v1/backup-config/objects:
+  get:
+    tags: [Backup Config]
+    summary: List Salesforce objects available to back up
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/object-childs:
+  get:
+    tags: [Backup Config]
+    summary: List child objects reachable from a given object for backup configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/objects-count:
+  post:
+    tags: [Backup Config]
+    summary: Get the estimated record count for a backup configuration's object filters
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/fields:
+  get:
+    tags: [Backup Config]
+    summary: List fields of an object usable as backup filter conditions
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/:
+  post:
+    tags: [Backup Config]
+    summary: Create a backup configuration and schedule its recurring run
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      201:
+        $ref: '#/components/responses/Created'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+  get:
+    tags: [Backup Config]
+    summary: Get a single backup configuration by id
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+  put:
+    tags: [Backup Config]
+    summary: Update a backup configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+  delete:
+    tags: [Backup Config]
+    summary: Delete a backup configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+
+/v1/backup-config/list:
+  get:
+    tags: [Backup Config]
+    summary: List backup configurations (paginated)
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/run-now:
+  get:
+    tags: [Backup Config]
+    summary: Trigger an out-of-schedule backup run for a configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/stats:
+  get:
+    tags: [Backup Config]
+    summary: Get backup job success/failure stats for a configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/initalize-payload-transform:
+  get:
+    tags: [Backup Config]
+    summary: Initialize the payload transform used to build a backup run's job payload
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/sync-metadata:
+  get:
+    tags: [Backup Config]
+    summary: Trigger a metadata sync for a backup configuration's objects
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/sync-schema-metadata:
+  get:
+    tags: [Backup Config]
+    summary: Sync the stored S3 schema metadata for a backup configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/backup-config/trigger/recover:
+  post:
+    tags: [Backup Config]
+    summary: Recover/retry a backup configuration's failed scheduled trigger
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'

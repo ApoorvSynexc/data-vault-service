@@ -1,0 +1,125 @@
+/v1/salesforce/permissions:
+  get:
+    tags: [Salesforce]
+    summary: Get the current org's Salesforce permission set assignments
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+
+/v1/salesforce/user/list:
+  get:
+    tags: [Salesforce]
+    summary: List Salesforce org users
+    description: Request query is an encrypted Salesforce envelope, decrypted by middleware.
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/salesforce/user-update:
+  post:
+    tags: [Salesforce]
+    summary: Create or update Salesforce org users
+    description: Request body is an encrypted Salesforce envelope, decrypted by middleware.
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/salesforce/role/list:
+  get:
+    tags: [Salesforce]
+    summary: List Salesforce org roles
+    description: Request query is an encrypted Salesforce envelope, decrypted by middleware.
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/salesforce/role/create:
+  post:
+    tags: [Salesforce]
+    summary: Create a Salesforce org role
+    description: Request body is an encrypted Salesforce envelope, decrypted by middleware.
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      201:
+        $ref: '#/components/responses/Created'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/salesforce/role/update:
+  put:
+    tags: [Salesforce]
+    summary: Update a Salesforce org role
+    description: Request body is an encrypted Salesforce envelope, decrypted by middleware.
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/salesforce/role/delete:
+  delete:
+    tags: [Salesforce]
+    summary: Delete a Salesforce org role
+    description: Request query is an encrypted Salesforce envelope, decrypted by middleware.
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+
+/v1/salesforce/confirm-admin-user-created:
+  get:
+    tags: [Salesforce]
+    summary: Confirm the Data Vault admin user was created on the connected Salesforce org
+    description: Request query is an encrypted Salesforce envelope, decrypted by middleware.
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+
+/v1/salesforce/confirm-org-authorized:
+  get:
+    tags: [Salesforce]
+    summary: Confirm the Salesforce org has completed OAuth authorization
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'

@@ -1,0 +1,21 @@
+/v1/dashboard/overview:
+  get:
+    tags: [Dashboard]
+    summary: Get aggregated dashboard overview widgets (backup/archival/storage summary)
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/dashboard/last-jobs:
+  get:
+    tags: [Dashboard]
+    summary: Get the most recent backup job runs
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'

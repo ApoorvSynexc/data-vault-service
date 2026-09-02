@@ -1,0 +1,316 @@
+/v1/restore/:
+  post:
+    tags: [Restore Retrieve]
+    summary: Create a restore job
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      201:
+        $ref: '#/components/responses/Created'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/activate:
+  post:
+    tags: [Restore Retrieve]
+    summary: Activate a previously created restore job so it starts running
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/config/list:
+  get:
+    tags: [Restore Retrieve]
+    summary: List restore/retrieve jobs, paginated by config or user
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/job:
+  get:
+    tags: [Restore Retrieve]
+    summary: Get a single restore job by id
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+
+/v1/restore/job/stats:
+  get:
+    tags: [Restore Retrieve]
+    summary: Get restore job success/failure stats
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/list:
+  get:
+    tags: [Restore Retrieve]
+    summary: List restore/retrieve jobs
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/get-objectlist-by-configid:
+  get:
+    tags: [Restore Retrieve]
+    summary: List the object(s) selected on a single backup configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: backupConfigId
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/fetch-change-between-backup-jobs:
+  get:
+    tags: [Restore Retrieve]
+    summary: List backupJobIds of a config that started inside a given time window
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: backupConfigId
+        in: query
+        required: true
+        schema: { type: string }
+      - name: startDate
+        in: query
+        required: true
+        schema: { type: string, format: date-time }
+      - name: endDate
+        in: query
+        required: true
+        schema: { type: string, format: date-time }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/retrieve/fetch-records:
+  post:
+    tags: [Restore Retrieve]
+    summary: Fetch one object's records out of the compressed Hudi/Delta tables
+    description: >
+      ENTIRE, or CHANGED_BETWEEN a date window; each row is tagged with the
+      OPERATION a restore would perform.
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/retrieve/fetch-missing-fields:
+  post:
+    tags: [Restore Retrieve]
+    summary: Fields the backup config's stored S3 schema has that live Salesforce fields do not
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/retrieve/fetch-missing-record-types:
+  post:
+    tags: [Restore Retrieve]
+    summary: Record types flagged inactive/deleted by backup history and still missing/inactive on the destination org
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/retrieve/required-fields:
+  post:
+    tags: [Restore Retrieve]
+    summary: Get an object's required fields after restore field filtering
+    description: Restore-writable, non-system, required-on-create fields.
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/fetch-object-fields:
+  get:
+    tags: [Restore Retrieve]
+    summary: Get the latest S3 schema for an object across the shared backup config of given job ids
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+      - name: backupJobIds
+        in: query
+        required: true
+        schema: { type: string }
+        description: Comma-separated backup job ids
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/dry-run:
+  post:
+    tags: [Restore Retrieve]
+    summary: Get record counts a restore configuration would touch (read-only)
+    description: >
+      ENTIRE returns main Hudi-only counts; CHANGED_BETWEEN returns delta
+      total/UPDATE/DELETE counts. No restore is performed.
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/dry-run-diff:
+  post:
+    tags: [Restore Retrieve]
+    summary: Same as dry-run, but returns the records themselves paired with the destination org's current version
+    description: >
+      Each result pairs {changeRecord, salesforceRecord}, capped per object.
+      Read-only, no restore is performed.
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/get-picklist-field-values:
+  get:
+    tags: [Restore Retrieve]
+    summary: Get picklist values for a field, used to populate restore filter UI
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+      - name: fieldApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/restore:
+  get:
+    tags: [Restore Retrieve]
+    summary: Get a single restore/retrieve job by backupJobId
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: backupJobId
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'

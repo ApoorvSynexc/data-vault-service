@@ -1,0 +1,191 @@
+/v1/archival-config/object-records:
+  post:
+    tags: [Archival Config]
+    summary: Preview records matching an archival configuration's object filters
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/archival-config/list:
+  get:
+    tags: [Archival Config]
+    summary: List archival configurations (paginated)
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/archival-config/:
+  get:
+    tags: [Archival Config]
+    summary: Get a single archival configuration by id
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+  put:
+    tags: [Archival Config]
+    summary: Update an archival configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+  delete:
+    tags: [Archival Config]
+    summary: Delete an archival configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+  post:
+    tags: [Archival Config]
+    summary: Create an archival configuration (Hudi-only, richer object/field/SOQL support)
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      201:
+        $ref: '#/components/responses/Created'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/archival-config/stats:
+  get:
+    tags: [Archival Config]
+    summary: Get archival job success/failure stats for a configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/archival-config/run-now:
+  get:
+    tags: [Archival Config]
+    summary: Trigger an out-of-schedule archival run for a configuration
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/archival-config/dry-run:
+  post:
+    tags: [Archival Config]
+    summary: Get record counts an archival configuration would touch (read-only)
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/archival-config/validate-soql:
+  post:
+    tags: [Archival Config]
+    summary: Validate a custom SOQL filter used by an archival configuration
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [soql]
+            properties:
+              soql: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/archival-config/record-errors:
+  get:
+    tags: [Archival Config]
+    summary: List record-level errors from an archival job run
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'

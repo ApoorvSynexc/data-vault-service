@@ -1,0 +1,43 @@
+/v1/settings/:
+  get:
+    tags: [Settings]
+    summary: Get the authenticated organization's settings
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+  put:
+    tags: [Settings]
+    summary: Create or update the authenticated organization's settings
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/settings/standard-object:
+  delete:
+    tags: [Settings]
+    summary: Remove a standard object from the organization's settings
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
