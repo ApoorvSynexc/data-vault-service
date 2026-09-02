@@ -1,0 +1,99 @@
+/v1/destination/:
+  post:
+    tags: [Destination]
+    summary: Create a backup destination (e.g. S3 bucket)
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      201:
+        $ref: '#/components/responses/Created'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+  get:
+    tags: [Destination]
+    summary: Get a single destination by id
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+  put:
+    tags: [Destination]
+    summary: Update a destination
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+  delete:
+    tags: [Destination]
+    summary: Delete a destination
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/NotFound'
+
+/v1/destination/list:
+  get:
+    tags: [Destination]
+    summary: List destinations (paginated)
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/destination/config:
+  get:
+    tags: [Destination]
+    summary: Get the raw config (e.g. bucket/region) of a destination
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'

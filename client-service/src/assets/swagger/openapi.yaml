@@ -1,0 +1,114 @@
+openapi: 3.0.3
+info:
+  title: DataVault Client Service API
+  description: >
+    REST API served by client-service. Every endpoint responds with the envelope
+    `{ success, message, data, meta }`. Session auth is a JWT stored in the
+    `accessToken` HttpOnly cookie set by POST /v1/auth/login.
+  # version is stamped in at load time from package.json, see src/config/swagger/index.ts
+servers:
+  - url: /api
+    description: Same-origin, relative to the host serving this app
+
+tags:
+  - name: Health
+    description: Liveness check
+  - name: Auth
+    description: Signup, login, session refresh, social login, org authorization — public
+  - name: User
+    description: Authenticated user profile and org user management
+  - name: CRM
+    description: Connected CRM (Salesforce) account lifecycle
+  - name: CRM Metadata
+    description: Read-only Salesforce object/field/record-type metadata
+  - name: Backup Config
+    description: Backup configuration CRUD, scheduling and metadata sync
+  - name: Backup Job
+    description: Backup job run history and manual resume
+  - name: Internal
+    description: Server-to-server routes called by backup-service (X-Internal-Secret)
+  - name: Public
+    description: Unauthenticated routes gated by an encrypted payload / signed webhook instead
+  - name: Archival Config
+    description: Archival configuration CRUD, dry-run and SOQL validation
+  - name: Dashboard
+    description: Aggregated overview widgets
+  - name: Destination
+    description: Backup destination (e.g. S3 bucket) CRUD
+  - name: Restore Retrieve
+    description: Restore/retrieve job creation, browsing and record-level diffing
+  - name: Salesforce
+    description: Salesforce org user/role/permission management
+  - name: Settings
+    description: Per-organization settings
+  - name: Spark Job
+    description: EMR/Spark job payload build and status callbacks
+  - name: Storage
+    description: Storage usage overview
+  - name: Notification
+    description: In-app notifications
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: accessToken
+      description: JWT set as an HttpOnly cookie on login. Required by every private route.
+    internalSecret:
+      type: apiKey
+      in: header
+      name: X-Internal-Secret
+      description: Shared secret used for server-to-server calls (e.g. from backup-service).
+
+  schemas:
+    ApiResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          nullable: true
+        meta:
+          type: object
+
+  responses:
+    Success:
+      description: Request succeeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    Created:
+      description: Resource created
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    BadRequest:
+      description: Validation error or malformed request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    Unauthorized:
+      description: Missing, invalid or expired session
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    Forbidden:
+      description: Authenticated but not permitted to perform this action
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    NotFound:
+      description: Record does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'

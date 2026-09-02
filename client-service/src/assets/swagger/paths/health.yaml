@@ -1,0 +1,8 @@
+/health:
+  get:
+    tags: [Health]
+    summary: Liveness check
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'

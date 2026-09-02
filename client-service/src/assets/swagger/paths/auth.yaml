@@ -1,0 +1,77 @@
+/v1/auth/login:
+  post:
+    tags: [Auth]
+    summary: Log in and receive the accessToken/refreshToken session cookies
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [email, password]
+            properties:
+              email: { type: string, format: email }
+              password: { type: string, format: password }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+
+/v1/auth/refresh-token:
+  post:
+    tags: [Auth]
+    summary: Exchange the refreshToken cookie for a new accessToken
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/auth/logout:
+  post:
+    tags: [Auth]
+    summary: Clear the session cookies and invalidate the session
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+
+/v1/auth/social-login:
+  get:
+    tags: [Auth]
+    summary: Start the social login OAuth flow (redirects to the provider)
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+
+/v1/auth/social-login/callback:
+  get:
+    tags: [Auth]
+    summary: OAuth callback that completes social login and sets the session cookies
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+
+/v1/auth/configure-org:
+  post:
+    tags: [Auth]
+    summary: Finish organization setup after the Salesforce OAuth authorize redirect
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'

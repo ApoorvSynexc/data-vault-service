@@ -1,0 +1,120 @@
+/v1/crm-metadata/object-schema:
+  get:
+    tags: [CRM Metadata]
+    summary: Get the stored S3 schema for a Salesforce object
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm-metadata/all-objects/list:
+  get:
+    tags: [CRM Metadata]
+    summary: List every Salesforce object available on the connected org (unfiltered)
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm-metadata/objects/list:
+  get:
+    tags: [CRM Metadata]
+    summary: List Salesforce objects eligible for backup/archival configuration
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm-metadata/objects/describe:
+  get:
+    tags: [CRM Metadata]
+    summary: Describe a single Salesforce object (fields, relationships, record types)
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm-metadata/object/depth-children:
+  get:
+    tags: [CRM Metadata]
+    summary: List child objects reachable from a Salesforce object, one relationship deep
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm-metadata/objects/master/list:
+  post:
+    tags: [CRM Metadata]
+    summary: List the master (parent) objects for a set of Salesforce objects
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm-metadata/fields/list:
+  get:
+    tags: [CRM Metadata]
+    summary: List fields of a Salesforce object
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/crm-metadata/record-types/list:
+  get:
+    tags: [CRM Metadata]
+    summary: List record types of a Salesforce object
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
