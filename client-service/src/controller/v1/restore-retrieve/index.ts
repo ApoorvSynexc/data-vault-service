@@ -1171,6 +1171,10 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   const restoreJob = await createRestoreJob(payload);
   makeResponse(req, res, 201, true, 'create');
 
+  const backupConfigUser = await getUser({ userId: backupConfig.userId });
+  if (!backupConfigUser) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
 
   // Step 1: compare metadata comparison
   const changedObjectNames: string[] = [];
@@ -1184,7 +1188,8 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
 
     if (changedObjectNames.length) {
       await triggerBackupJob({
-        user, config: backupConfig,
+        user: backupConfigUser, 
+        config: backupConfig,
         type: 'backup',
         lastUpdatedAt: backupConfig.lastSchemaSyncAt,
         schemaSync: true,
