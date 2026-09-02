@@ -47,6 +47,7 @@ import {
   hasMetadataChanged,
   triggerBackupJob,
   getDecryptedCrmCredential,
+  initalizeRestoreTransform,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -57,6 +58,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { removeCsvColumnsInFolder } from '../../../utils/restore-csv-format';
 import { ensureRestoreTrackingFields } from '../../../services/third-party/salesforce/restore-fields';
+import { salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -1188,7 +1190,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
 
     if (changedObjectNames.length) {
       await triggerBackupJob({
-        user: backupConfigUser, 
+        user: backupConfigUser,
         config: backupConfig,
         type: 'backup',
         lastUpdatedAt: backupConfig.lastSchemaSyncAt,
@@ -1199,6 +1201,10 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
         },
         ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
       });
+    } else {
+      await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
+      await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
+      await initalizeRestoreTransform(restoreJob.restoreJobId);
     }
   } catch (error) {
     logger.error(`[Restore creation metadata comparison] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
