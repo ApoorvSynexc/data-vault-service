@@ -49,7 +49,6 @@ const unwrapApex = <T = any>(result: any): T =>
  */
 type ApexMode = 'backup' | 'archival' | 'restore';
 type ApexType = 'schedule' | 'realtime';
-type ApexRelationshipType = 'MASTER' | 'LOOKUP' | 'REQUIRED_LOOKUP' | 'ALL';
 
 // req.query values are untrusted strings, and backup configs store the schedule
 // upper-cased (SCHEDULE/REALTIME) — normalise, and drop anything outside the Apex
@@ -96,12 +95,5 @@ const getApexObjects = async ({ user, mode, type }: { user?: IUser; mode?: ApexM
   );
 };
 
-export interface IApexCountOneResult {
-  count: number | null;
-  success: boolean;
-  errorCode?: string;
-  errorMessage?: string;
-}
-
-export type { ApexMode, ApexType, ApexRelationshipType };
+export type { ApexMode, ApexType };
 export { getApexObjects, callApex, unwrapApex, toApexMode, toApexType, apexQuery, APEX_BASE };
