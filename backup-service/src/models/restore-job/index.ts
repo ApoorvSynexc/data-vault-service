@@ -29,6 +29,14 @@ export interface IRestoreJobObject {
   children?: IRestoreJobObject[];
 }
 
+// One object's parent-relationship chain, e.g. Contact -> Account -> User —
+// `parents` walks upward (lookup/master-detail targets), the opposite direction
+// from IRestoreJobObject['children']. Mirrors client-service's own model.
+export interface IRestoreObjectHierarchyNode {
+  name: string;
+  parents: IRestoreObjectHierarchyNode[];
+}
+
 export interface IRestoreJobDestination {
   crmId: string;
   crmName: string;
@@ -63,6 +71,7 @@ export interface IRestoreJob {
   source: IRestoreJobSource;
   destination: IRestoreJobDestination;
   conflict: IRestoreConflict;
+  objectHierarchy?: IRestoreObjectHierarchyNode[];
   status: string; // PENDING | RUNNING | SUCCESS | FAILED
   startedAt?: string;
   completedAt?: string;

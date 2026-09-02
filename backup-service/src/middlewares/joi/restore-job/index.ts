@@ -41,6 +41,14 @@ const destinationSchema = Joi.object({
   objects: Joi.array().items(restoreJobObjectSchema),
 });
 
+// Mirrors IRestoreObjectHierarchyNode (models/restore-job) — self-referencing
+// via Joi.link so a parent chain of any depth (e.g. Contact -> Account -> User)
+// validates the same way restoreJobObjectSchema's `children` does.
+const objectHierarchyNodeSchema = Joi.object({
+  name: Joi.string().required(),
+  parents: Joi.array().items(Joi.link('#objectHierarchyNode')).optional(),
+}).id('objectHierarchyNode');
+
 const edgeCaseFieldMappingSchema = Joi.object({
   sourceObject: Joi.string().required(),
   sourceFields: Joi.string().required(),
@@ -132,6 +140,7 @@ export const createRestoreJobValidation = (req: Request, res: Response, next: Ne
     source: sourceSchema.required(),
     destination: destinationSchema.required(),
     conflict: conflictSchema.required(),
+    objectHierarchy: Joi.array().items(objectHierarchyNodeSchema).optional(),
     lastUpdatedAt: Joi.string().isoDate().optional(),
   });
 

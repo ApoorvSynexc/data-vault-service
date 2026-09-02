@@ -946,8 +946,9 @@ const sendRestoreToBackupService = async (
     userId: restorejob.userId,
     restoreJobId: restorejob.restoreJobId,
     source: restorejob.source,
-    destination: { ...restorejob.destination, objects },
-    conflict: restorejob.conflict
+    destination: { ...restorejob.destination },
+    conflict: restorejob.conflict,
+    ...(restorejob.objectHierarchy && { objectHierarchy: restorejob.objectHierarchy }),
   }
   try {
     result = await httpRequest({
