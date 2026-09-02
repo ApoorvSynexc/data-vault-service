@@ -5,6 +5,7 @@ import { getMasterObjectsValidation } from '../../middlewares';
 const router = Router();
 
 router.get('/object-schema', crmMetadataController.getSalesforceObjectSchema);
+router.get('/all-objects/list', crmMetadataController.getSalesforceObjectsHandler);
 router.get('/objects/list', crmMetadataController.getsalesfroceObjects);
 router.get('/objects/describe', crmMetadataController.getSalesforceDescribeObject);
 router.get('/object/depth-children', crmMetadataController.getSalesforceDepthChildren);

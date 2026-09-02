@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, readSchemaFile } from "../../../services";
-import { ISalesforceChildRelationship, ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
+import { ISalesforceChildRelationship, ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
 import { SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
 import { IUser } from "../../../models";
@@ -168,6 +168,19 @@ const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
 
   return makeResponse(req, res, 200, true, 'fetch', filteredObjects);
 }
+
+const getSalesforceObjectsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user!;
+  const { name } = req.query;
+
+  if (!name) {
+    makeResponse(req, res, 400, false, 'name_required');
+    return;
+  }
+
+  const objectsList = await salesforceObjectList({ user });
+  makeResponse(req, res, 200, true, 'delete', objectsList);
+};
 
 const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
@@ -342,5 +355,6 @@ export const crmMetadataController = wrapController({
   getSalesforceRecordTypes,
   getSalesforceMasterObjects,
   getSalesforceDescribeObject,
-  getSalesforceDepthChildren
+  getSalesforceDepthChildren,
+  getSalesforceObjectsHandler
 });
