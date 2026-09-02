@@ -209,6 +209,14 @@ const JOB_STATUS = {
   success: 'SUCCESS',
   failed: 'FAILED',
 };
+const RESTORE_JOB_STATUS = {
+  inProgress: 'IN_PROGRESS',
+  bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
+  bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
+  restoreInProgress: 'RESTORE_IN_PROGRESS',
+  completed: 'COMPLETED',
+  failed: 'FAILED',
+};
 // Compression lifecycle. Written to the same `status` field as JOB_STATUS, so a
 // compressed job no longer reports the backup outcome it had before compression.
 // ponytail: one-way door â€” SUCCESS vs FAILED is lost once compression starts.
@@ -397,6 +405,7 @@ export {
   FILTER_OPERATOR,
   BACKUP_STATUS,
   JOB_STATUS,
+  RESTORE_JOB_STATUS,
   COMPRESSION_STATUS,
   CONDITION_TYPE,
   OBJECT_TYPE,

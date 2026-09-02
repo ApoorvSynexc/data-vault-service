@@ -113,6 +113,15 @@ const OBJECT_STATUS = {
   failed: 'FAILED',
 };
 
+const RESTORE_JOB_STATUS = {
+  inProgress: 'IN_PROGRESS',
+  bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
+  bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
+  restoreInProgress: 'RESTORE_IN_PROGRESS',
+  completed: 'COMPLETED',
+  failed: 'FAILED',
+};
+
 const DESTINATION_TYPE = {
   s3: 'S3',
 };
@@ -233,6 +242,7 @@ export {
   BACKUP_STATUS,
   JOB_TYPE,
   OBJECT_STATUS,
+  RESTORE_JOB_STATUS,
   DESTINATION_TYPE,
   CRM_NAME,
   CONDITION_TYPE,

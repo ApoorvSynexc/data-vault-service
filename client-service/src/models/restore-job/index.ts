@@ -46,6 +46,16 @@ export interface IRestoreJobDestination {
   } | EncryptedPayload;
 }
 
+// Interface-level enum for RESTORE_JOB_STATUS (constant/index.ts) — mirrors
+// BulkJobState's string-literal-union convention elsewhere in this codebase.
+export type RestoreJobStatus =
+  | 'IN_PROGRESS'
+  | 'BULK_QUERY_IN_PROGRESS'
+  | 'BULK_QUERY_COMPLETED'
+  | 'RESTORE_IN_PROGRESS'
+  | 'COMPLETED'
+  | 'FAILED';
+
 export interface IRestoreJob {
   restoreJobId: string; // PK
   restoreId: string; // GSI: restoreId-index — parent restore request this job belongs to
