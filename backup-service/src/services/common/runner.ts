@@ -274,7 +274,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
 // Entry point for restore jobs — call this fire-and-forget from the controller
 // ---------------------------------------------------------------------------
 export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
-  const { restoreId, restoreJobId, source, destination, conflict } = job;
+  const { restoreId, restoreJobId, source, destination, conflict, objectHierarchy } = job;
   const startedAt = dayjs().toISOString();
 
   activeJobs.add(restoreJobId);
@@ -316,7 +316,8 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       restoreJobId,
       restoreSource,
       restoreDestination,
-      conflict
+      conflict,
+      objectHierarchy
     );
 
     await updateRestoreJobStatus({

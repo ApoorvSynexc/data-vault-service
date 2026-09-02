@@ -7,6 +7,7 @@ import {
   IRestoreConflict,
   IRestoreJobDestination,
   IRestoreJobSource,
+  IRestoreObjectHierarchyNode,
   IS3ObjectKey,
   ISource,
 } from '../../../models';
@@ -22,7 +23,7 @@ import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { runSalesforceRestore } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
-import { recursivelyFlatten } from '../../../utils/helper';
+import { getRestoreExecutionPlan, recursivelyFlatten } from '../../../utils/helper';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -327,7 +328,8 @@ const salesforceHandler: ICrmBackupHandler = {
     restoreJobId: string,
     source: IRestoreJobSource,
     destination: IRestoreJobDestination,
-    conflict: IRestoreConflict
+    conflict: IRestoreConflict,
+    objectHierarchy?: IRestoreObjectHierarchyNode[]
   ): Promise<'SUCCESS' | 'FAILED'> => {
     try {
       const objects = destination.objects;
@@ -345,37 +347,66 @@ const salesforceHandler: ICrmBackupHandler = {
           ? JSON.parse(decrypt(destination.encryptedTokens))
           : destination.encryptedTokens;
 
+      const resolvedSourceS3Credentials = {
+        ...sourceS3Credentials,
+        backupConfigId: source.backupConfigId,
+        bucketName: source.bucketName,
+        region: source.region,
+        csvFilePath: source.csvFilePath,
+      };
+      const resolvedDestinationCredentials = {
+        ...destinationSalesforceCredentials,
+        instanceUrl: destination.instanceUrl,
+      };
+
+      const objectsByName = new Map(objects.map((object) => [object.name, object]));
+      const { order, directParentNamesByChild } = getRestoreExecutionPlan(objectHierarchy ?? []);
+
+      // Keep only the names actually selected for this restore, in the order
+      // the plan puts them — every parent still precedes every one of its
+      // children (see getRestoreExecutionPlan for how a diamond, e.g. Contact
+      // reachable via both Account and Opportunity->Product, is placed only
+      // after ALL of its parents). Objects the hierarchy never mentioned at
+      // all restore independently, appended in their original order.
+      const orderedNames = order.filter((name) => objectsByName.has(name));
+      const standaloneNames = objects
+        .map((object) => object.name)
+        .filter((name) => !order.includes(name));
+
+      console.log(JSON.stringify({ orderedNames, standaloneNames }));
+      // Restore parents before children, one object at a time — no
+      // batching/parallelism, since a child's own restore depends on every
+      // one of its parents having already landed.
       let hasAnyFailure = false;
-      for (let i = 0; i < objects.length; i += CONCURRENCY_LIMIT) {
-        const batch = objects.slice(i, i + CONCURRENCY_LIMIT);
-        const results = await Promise.allSettled(
-          batch.map((object) =>
-            runSalesforceRestore({
-              restoreId,
-              restoreJobId,
-              object,
-              sourceS3Credentials: {
-                ...sourceS3Credentials,
-                backupConfigId: source.backupConfigId,
-                bucketName: source.bucketName,
-                region: source.region,
-                csvFilePath: source.csvFilePath,
-              },
-              destinationSalesforceCredentials: {
-                ...destinationSalesforceCredentials,
-                instanceUrl: destination.instanceUrl,
-              },
-              conflict,
-            }).catch((err: any) => {
-              // Log and continue so remaining objects in the batch/job are not skipped.
-              logger.error(
-                `[restore] object failed, objectName:${object.name}, restoreJobId:${restoreJobId}, error:${err?.message}`
-              );
-              throw err;
-            })
-          )
-        );
-        hasAnyFailure ||= results.some((result) => result.status === 'rejected');
+      const failedNames = new Set<string>();
+      for (const name of [...orderedNames, ...standaloneNames]) {
+        const object = objectsByName.get(name)!;
+        const parentNames = directParentNamesByChild.get(name);
+        if (parentNames && Array.from(parentNames).some((parentName) => failedNames.has(parentName))) {
+          failedNames.add(name);
+          hasAnyFailure = true;
+          logger.error(
+            `[restore] object skipped, objectName:${name}, restoreJobId:${restoreJobId}, reason: a parent object failed to restore`
+          );
+          continue;
+        }
+
+        try {
+          await runSalesforceRestore({
+            restoreId,
+            restoreJobId,
+            object,
+            sourceS3Credentials: resolvedSourceS3Credentials,
+            destinationSalesforceCredentials: resolvedDestinationCredentials,
+            conflict,
+          });
+        } catch (err: any) {
+          failedNames.add(name);
+          hasAnyFailure = true;
+          logger.error(
+            `[restore] object failed, objectName:${name}, restoreJobId:${restoreJobId}, error:${err?.message}`
+          );
+        }
       }
 
       const finalStatus = hasAnyFailure ? 'FAILED' : 'SUCCESS';
