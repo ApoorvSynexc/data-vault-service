@@ -48,6 +48,7 @@ export const salesforceMetadataHandler = async (
                 .map(f => f.compoundFieldName);
                 fields = fields.filter(f => !nonNullCompoundFieldNames.includes(f.name));
                 fields = fields.filter(isQueryableField);
+                console.log(JSON.stringify({ fields }));
                 const diff = await schemaHandler(params, fields, user);
                 return { diff, metadataType, fields };
             }
