@@ -52,10 +52,12 @@ export const salesforceMetadataHandler = async (
 
     switch (metadataType) {
       case 'fields': {
-        // Filtered once here so the schema folder and the Bulk API SELECT list
-        // (built by the caller from these same `fields`) never disagree about
-        // what's part of backup/archival.
-        const fields = describedObject.fields.filter(isQueryableField);
+        let fields = describedObject.fields;
+        const nonNullCompoundFieldNames = describedObject.fields
+          .filter(f => f.compoundFieldName)
+          .map(f => f.compoundFieldName);
+        fields = fields.filter(f => !nonNullCompoundFieldNames.includes(f.name));
+        fields = fields.filter(isQueryableField);
         const diff = await schemaHandler(params, fields);
         return { diff, metadataType, fields };
       }
