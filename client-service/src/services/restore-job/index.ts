@@ -2,7 +2,7 @@ import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/li
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, INTERNAL_SECRET, RESTORE_JOB_TABLE, SCHEDULE_MODE, JOB_STATUS, BACKUP_STATUS } from '../../constant';
-import { IRestore, IRestoreConflict, IRestoreJob, IBackupConfig, IBackupJob, IRestoreArchivalChildObject, IRestoreJobObject, IObjectRelationshipNode } from '../../models';
+import { IRestore, IRestoreJob, IBackupConfig, IBackupJob, IRestoreArchivalChildObject, IRestoreJobObject, IObjectRelationshipNode } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
 import { getBackupConfigById } from '../backup-config';
