@@ -140,7 +140,7 @@ const restoreObjectData = async (
   operation: 'insert' | 'update' | 'upsert' | 'delete',
   externalIdFieldName: string
 ): Promise<string[]> => {
-  const keys = await listS3Objects(s3Config, `${csvFilePath}/${objectName}`);
+  const keys = await listS3Objects(s3Config, `${csvFilePath}`);
 
   if (!keys.length) {
     await updateRestoreObject({
@@ -273,27 +273,22 @@ export const runSalesforceRestore = async (
     backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
   };
 
-  const getS3KeysList = await listS3Objects(s3Config, `${sourceS3Credentials.csvFilePath}/${object.name}`);
-  console.log(JSON.stringify({ getS3KeysList, path: sourceS3Credentials.csvFilePath }));
-  
-  for (let index = 0; index < getS3KeysList.length; index++) {
-    const keys = getS3KeysList[index];
-    const operation = keys.split('/')[keys.split('/').length - 1] as 'insert' | 'update' | 'upsert';
+  const path = `${sourceS3Credentials.csvFilePath}/${object.name}/csv`;
+  console.log(JSON.stringify({ path }));
 
-    await restoreObjectData(
-      restoreJobId,
-      s3Config,
-      sourceS3Credentials.csvFilePath,
-      object.name,
-      destinationSalesforceCredentials.instanceUrl,
-      tokens,
-      operation,
-      externalIdFieldName
-    );
-    logger.info(
-      `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`
-    );
-  }
+  await restoreObjectData(
+    restoreJobId,
+    s3Config,
+    path,
+    object.name,
+    destinationSalesforceCredentials.instanceUrl,
+    tokens,
+    'upsert',
+    externalIdFieldName
+  );
+  logger.info(
+    `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${"upsert"}`
+  );
 
   logger.info(
     `[restore] restore job completed, No operation found, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}`
