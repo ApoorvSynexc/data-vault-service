@@ -182,7 +182,6 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
  */
 const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupConfigId, configType } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
 
   if (!backupConfigId) {
     makeResponse(req, res, 400, false, 'id_required');
