@@ -51,6 +51,7 @@ export interface IObject {
   schemaChange?: boolean;
   totalRecordCount?: number;
   name: string;
+  status?: string;
   fieldName?: string;
   type: string; // STANDARD | CUSTOM
   isUserSelected?: boolean;

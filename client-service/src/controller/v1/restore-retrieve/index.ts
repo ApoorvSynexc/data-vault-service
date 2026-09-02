@@ -182,7 +182,6 @@ const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Prom
  */
 const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupConfigId, configType } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
 
   if (!backupConfigId) {
     makeResponse(req, res, 400, false, 'id_required');
@@ -194,18 +193,18 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
     return;
   }
 
-  const { objects, objectTree, found } = await getRestoreObjectListByConfigId(
-    backupConfigId,
-    configType as ConfigType,
-    userId
-  );
+  // const { objects, objectTree, found } = await getRestoreObjectListByConfigId(
+  //   backupConfigId,
+  //   configType as ConfigType,
+  //   userId
+  // );
 
-  if (!found) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
+  let config = await getBackupConfigById(backupConfigId);
+  if (!config) {
+    return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  makeResponse(req, res, 200, true, 'fetch', configType === 'ARCHIVAL' ? objectTree : objects);
+  makeResponse(req, res, 200, true, 'fetch', config);
 };
 
 /**

@@ -2,7 +2,7 @@ import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/li
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, INTERNAL_SECRET, RESTORE_JOB_TABLE, SCHEDULE_MODE, JOB_STATUS, BACKUP_STATUS } from '../../constant';
-import { IRestore, IRestoreConflict, IRestoreJob, IBackupConfig, IBackupJob, IRestoreArchivalChildObject, IRestoreJobObject } from '../../models';
+import { IRestore, IRestoreJob, IBackupConfig, IBackupJob, IRestoreArchivalChildObject, IRestoreJobObject, IObjectRelationshipNode } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
 import { getBackupConfigById } from '../backup-config';
@@ -19,6 +19,13 @@ import { runBackupNow, getBackupJobById, isBackupCompleted, triggerBackupJob } f
 import { runMetadataComparisonForConfig, hasMetadataChanged, IMetadataComparisonResult } from '../metadata-sync';
 import { initalizeRestoreTransform } from '../payload';
 import { logger } from '../../middlewares';
+
+const toRestoreJobObjectFromRelationshipNode = (node: IObjectRelationshipNode): IRestoreJobObject => ({
+  id: node.id,
+  name: node.name,
+  status: "IN_PROGRESS",
+  ...((node.children?.length ?? 0) > 0 && { children: node.children!.map(toRestoreJobObjectFromRelationshipNode) }),
+});
 
 const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   const { userId, crmId, restoreId, status = 'IN_PROGRESS', source, destination, conflict, selection } = params;
@@ -53,7 +60,7 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   if (selection.restoreScope.type === 'ALL') {
     destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "IN_PROGRESS" })) ?? [];
   } else if (selection.restoreScope.type === 'OBJECT' && selection.restoreScope.objects) {
-    destinationObjects = selection.restoreScope.objects.map(name => ({ id: uuidv4(), name, status: "IN_PROGRESS" }));
+    destinationObjects = selection.restoreScope.objects.map(name => ({ id: uuidv4(), name, status: "IN_PROGRESS", }));
   } else if (selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
     destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "IN_PROGRESS" }));
   } else if (selection.restoreScope.type === 'OBJECT_TREE' && selection.restoreScope.objectTree) {
@@ -70,6 +77,22 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
     destinationObjects = [toJobObject(selection.restoreScope.objectTree)];
   } else {
     destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "IN_PROGRESS" })) ?? [];
+  }
+
+  if (destinationObjects.length && sourceBackupConfig.objects?.length) {
+    destinationObjects = destinationObjects.map(obj => {
+      if (obj.children?.length) {
+        return obj;
+      }
+      const sourceObject = sourceBackupConfig.objects!.find(o => o.name === obj.name);
+      if (!sourceObject?.children?.length) {
+        return obj;
+      }
+      return {
+        ...obj,
+        children: sourceObject.children.map(toRestoreJobObjectFromRelationshipNode),
+      };
+    });
   }
 
   const updatedSource = {

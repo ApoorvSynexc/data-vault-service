@@ -27,6 +27,8 @@ import {
   syncMetadataAndTriggers,
   getUser,
   getDecryptedCrmCredential,
+  runMetadataComparisonForConfig,
+  hasMetadataChanged,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
@@ -430,13 +432,20 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
     userId: req.user!.userId,
     slug: String(slug),
   });
-  if (!config) {
+  if (!config || !config.backupConfigId) {
     makeResponse(req, res, 400, false, 'backup_config_not_found');
     return;
   }
 
-  makeResponse(req, res, 201, true, 'create');
-  await syncMetadataAndTriggers(config.backupConfigId);
+  const changedObjectNames: any = [];
+  const result = await runMetadataComparisonForConfig(config);
+ for (const { objectName, result: metadataResult } of result) {
+      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+        changedObjectNames.push(objectName);
+      }
+    }
+  makeResponse(req, res, 201, true, 'create', result);
+  // await syncMetadataAndTriggers(config.backupConfigId);
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {

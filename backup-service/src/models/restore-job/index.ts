@@ -18,18 +18,21 @@ export interface IRestoreJobSource {
     | EncryptedPayload;
 }
 
+export interface IRestoreJobObject {
+  id: string;
+  name: string;
+  status: string;
+  processedRecordCount?: number;
+  failedRecordCount?: number;
+  errorMessage?: string;
+  errors?: string[];
+  children?: IRestoreJobObject[];
+}
+
 export interface IRestoreJobDestination {
   crmId: string;
   crmName: string;
-  objects: Array<{
-    id: string;
-    name: string;
-    status: 'PENDING' | 'SUCCESS' | 'FAILED';
-    processedRecordCount?: number;
-    failedRecordCount?: number;
-    errorMessage?: string;
-    errors?: string[];
-  }>;
+  objects: IRestoreJobObject[];
 
   instanceUrl: string;
   encryptedTokens:
@@ -39,6 +42,16 @@ export interface IRestoreJobDestination {
       }
     | EncryptedPayload;
 }
+
+// Interface-level enum for RESTORE_JOB_STATUS (constant/index.ts) — mirrors
+// BulkJobState's string-literal-union convention elsewhere in this codebase.
+export type RestoreJobStatus =
+  | 'IN_PROGRESS'
+  | 'BULK_QUERY_IN_PROGRESS'
+  | 'BULK_QUERY_COMPLETED'
+  | 'RESTORE_IN_PROGRESS'
+  | 'COMPLETED'
+  | 'FAILED';
 
 export interface IRestoreJob {
   restoreJobId: string; // PK
