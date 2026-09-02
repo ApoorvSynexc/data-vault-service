@@ -39,17 +39,6 @@ export const salesforceMetadataHandler = async (
       objectName
     );
 
-    if (!objectNames || !objectNames.length) {
-      const filteredObjects = await salesforceObjectFilteredList(
-        salesforceContext?.instanceUrl,
-        salesforceContext?.tokens,
-        backupConfig.userId,
-        backupConfig.type === 'NORMAL' ? 'backup' : 'archival',
-        backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule'
-      );
-      objectNames = filteredObjects.map((o) => o.name);
-    }
-
     switch (metadataType) {
       case 'fields': {
         let fields = describedObject.fields;
@@ -59,14 +48,20 @@ export const salesforceMetadataHandler = async (
         fields = fields.filter(f => !nonNullCompoundFieldNames.includes(f.name));
         fields = fields.filter(isQueryableField);
         const diff = await schemaHandler(params, fields);
-        return { diff, metadataType, fields }; 
+        return { diff, metadataType, fields };
       }
       case 'childs': {
         let children = describedObject.childRelationships;
-        if (objectNames) {
-          children = describedObject.childRelationships.filter((ch) =>
-            objectNames.includes(ch.childSObject)
-          );
+        const filteredObjects = await salesforceObjectFilteredList(
+          salesforceContext?.instanceUrl,
+          salesforceContext?.tokens,
+          backupConfig.userId,
+          backupConfig.type === 'NORMAL' ? 'backup' : 'archival',
+          backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule'
+        );
+        if (filteredObjects.length) {
+          const objectNames = filteredObjects.map(o => o.name);
+          children = children.filter((child) => objectNames.includes(child.childSObject));
         }
         const diff = await childHandler(params, children);
         return { diff, metadataType };
