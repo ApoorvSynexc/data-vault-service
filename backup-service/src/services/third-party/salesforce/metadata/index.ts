@@ -43,7 +43,9 @@ export const salesforceMetadataHandler = async (
       const filteredObjects = await salesforceObjectFilteredList(
         salesforceContext?.instanceUrl,
         salesforceContext?.tokens,
-        backupConfig.userId
+        backupConfig.userId,
+        backupConfig.type === 'NORMAL' ? 'backup' : 'archival',
+        backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule'
       );
       objectNames = filteredObjects.map((o) => o.name);
     }
