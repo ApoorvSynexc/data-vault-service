@@ -19,18 +19,10 @@ export interface IRestoreJobSource {
 export interface IRestoreJobObject {
   id: string;
   name: string;
-  // PENDING | IN_PROGRESS | SUCCESS | FAILED | RESTORN_FIELD_JOB_* (and more
-  // per-stage values as the restore pipeline grows) — widened to string since
-  // each pipeline stage introduces its own object-level status vocabulary.
   status: string;
   processedRecordCount?: number;
   failedRecordCount?: number;
   errorMessage?: string;
-  // ARCHIVAL restores only (source.configType === 'ARCHIVAL', restoreScope
-  // type 'OBJECT_TREE') — the object hierarchy is preserved here exactly as
-  // submitted, not flattened into sibling entries: destination.objects holds
-  // just the one root, and every descendant lives nested under it via this
-  // field, recursively. BACKUP-sourced restores never set this.
   children?: IRestoreJobObject[];
 }
 
