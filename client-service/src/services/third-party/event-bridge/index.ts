@@ -10,6 +10,7 @@ import {
     UpdateScheduleCommandOutput,
 } from "@aws-sdk/client-scheduler";
 import { AWS_EVENT_BUS_ARN, AWS_EVENT_DETAIL_TYPE, AWS_EVENT_SOURCE, AWS_SCHEDULER_REGION, AWS_SCHEDULER_ROLE_ARN } from "../../../constant";
+import { logger } from "../../../middlewares";
 
 const scheduler = new SchedulerClient({ region: AWS_SCHEDULER_REGION });
 
@@ -44,7 +45,9 @@ const createAwsEventScheduler = async (input: ScheduleInput): Promise<CreateSche
     const { name, scheduleExpression, timeZone, payload, startDate, endDate } = input;
 
     try {
-        return await scheduler.send(new CreateScheduleCommand(buildParams({ name, scheduleExpression, timeZone, payload, startDate, endDate })));
+        const result = await scheduler.send(new CreateScheduleCommand(buildParams({ name, scheduleExpression, timeZone, payload, startDate, endDate })));
+        logger.info(`[event-bridge] Scheduled "${name}" created successfully.`);
+        return result;
     } catch (err: any) {
         if (err.name === "ConflictException")
             throw new Error(`Schedule "${name}" already exists. Use update instead.`);
