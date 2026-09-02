@@ -15,6 +15,20 @@ const sourceSchema = Joi.object({
   csvFilePath: Joi.string().optional(),
 });
 
+// Mirrors IRestoreJobObject (models/restore-job) — self-referencing via
+// Joi.link so an ARCHIVAL object tree's `children` validates to any depth,
+// the same shape client-service's own object tree can send.
+const restoreJobObjectSchema = Joi.object({
+  id: Joi.string().optional(),
+  name: Joi.string().required(),
+  status: Joi.string().required(),
+  processedRecordCount: Joi.number().optional(),
+  failedRecordCount: Joi.number().optional(),
+  errorMessage: Joi.string().allow('').optional(),
+  errors: Joi.array().items(Joi.string()).optional(),
+  children: Joi.array().items(Joi.link('#restoreJobObject')).optional(),
+}).id('restoreJobObject');
+
 const destinationSchema = Joi.object({
   crmId: Joi.string().required(),
   crmName: Joi.string().required(),
@@ -24,17 +38,7 @@ const destinationSchema = Joi.object({
 
   // Mirrors IRestoreJobDestination['objects']: a re-triggered job carries the
   // progress fields written by the previous run, so they must be accepted here.
-  objects: Joi.array().items(
-    Joi.object({
-      id: Joi.string().optional(),
-      name: Joi.string().required(),
-      status: Joi.string().required(),
-      processedRecordCount: Joi.number().optional(),
-      failedRecordCount: Joi.number().optional(),
-      errorMessage: Joi.string().allow('').optional(),
-      errors: Joi.array().items(Joi.string()).optional(),
-    })
-  ),
+  objects: Joi.array().items(restoreJobObjectSchema),
 });
 
 const edgeCaseFieldMappingSchema = Joi.object({

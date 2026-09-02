@@ -1,5 +1,5 @@
 import { logger } from "../middlewares";
-import { getBackupConfigsInBatches, getUser, initalizePayloadTransform, triggerBackupJob, runMetadataComparisonForConfig, hasMetadataChanged } from "../services";
+import { getBackupConfigsInBatches, getUser, initalizePayloadTransform, triggerBackupJob, runMetadataComparisonForConfig, hasMetadataChanged, updateBackupConfig } from "../services";
 import { BACKUP_STATUS } from '../constant';
 
 const runEmrJob = async () => {
@@ -39,6 +39,7 @@ const runEmrJob = async () => {
               await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
             } else {
               await initalizePayloadTransform(config.backupConfigId);
+              await updateBackupConfig(config.backupConfigId, { lastSchemaSyncAt: new Date().toISOString() });
             }
           }
           // Other config hit EMR

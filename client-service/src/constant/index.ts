@@ -27,6 +27,7 @@ const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABL
 const COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.COUNTER_TABLE || 'data-vault-counters'}`;
 
 // Event Bridge Scheduler Config
+const AWS_EVENT_DESTINATION_API_KEY = String(process.env.AWS_EVENT_DESTINATION_API_KEY);
 const AWS_SCHEDULER_REGION = String(process.env.AWS_SCHEDULER_REGION);
 const AWS_SCHEDULER_ROLE_ARN = String(process.env.AWS_SCHEDULER_ROLE_ARN).trim();
 const AWS_EVENT_BUS_ARN = String(process.env.AWS_EVENT_BUS_ARN);
@@ -208,6 +209,14 @@ const JOB_STATUS = {
   success: 'SUCCESS',
   failed: 'FAILED',
 };
+const RESTORE_JOB_STATUS = {
+  inProgress: 'IN_PROGRESS',
+  bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
+  bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
+  restoreInProgress: 'RESTORE_IN_PROGRESS',
+  completed: 'COMPLETED',
+  failed: 'FAILED',
+};
 // Compression lifecycle. Written to the same `status` field as JOB_STATUS, so a
 // compressed job no longer reports the backup outcome it had before compression.
 // ponytail: one-way door â€” SUCCESS vs FAILED is lost once compression starts.
@@ -322,6 +331,7 @@ export {
   COUNTER_TABLE,
 
   // AWS EventBridge Scheduler Config
+  AWS_EVENT_DESTINATION_API_KEY,
   AWS_SCHEDULER_REGION,
   AWS_SCHEDULER_ROLE_ARN,
   AWS_EVENT_BUS_ARN,
@@ -395,6 +405,7 @@ export {
   FILTER_OPERATOR,
   BACKUP_STATUS,
   JOB_STATUS,
+  RESTORE_JOB_STATUS,
   COMPRESSION_STATUS,
   CONDITION_TYPE,
   OBJECT_TYPE,

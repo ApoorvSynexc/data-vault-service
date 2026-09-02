@@ -43,19 +43,23 @@ export const salesforceMetadataHandler = async (
       const filteredObjects = await salesforceObjectFilteredList(
         salesforceContext?.instanceUrl,
         salesforceContext?.tokens,
-        backupConfig.userId
+        backupConfig.userId,
+        backupConfig.type === 'NORMAL' ? 'backup' : 'archival',
+        backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule'
       );
       objectNames = filteredObjects.map((o) => o.name);
     }
 
     switch (metadataType) {
       case 'fields': {
-        // Filtered once here so the schema folder and the Bulk API SELECT list
-        // (built by the caller from these same `fields`) never disagree about
-        // what's part of backup/archival.
-        const fields = describedObject.fields.filter(isQueryableField);
+        let fields = describedObject.fields;
+        const nonNullCompoundFieldNames = describedObject.fields
+          .filter(f => f.compoundFieldName)
+          .map(f => f.compoundFieldName);
+        fields = fields.filter(f => !nonNullCompoundFieldNames.includes(f.name));
+        fields = fields.filter(isQueryableField);
         const diff = await schemaHandler(params, fields);
-        return { diff, metadataType, fields };
+        return { diff, metadataType, fields }; 
       }
       case 'childs': {
         let children = describedObject.childRelationships;

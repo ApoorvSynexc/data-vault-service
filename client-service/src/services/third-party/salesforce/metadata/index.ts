@@ -2,6 +2,7 @@ import { salesforceRequest } from "..";
 import { STANDARD_OBJECT_LIST } from "../../../../constant";
 import { logger } from "../../../../middlewares";
 import { IUser } from "../../../../models";
+import { getBackupConfigById } from "../../../backup-config";
 import { getCrmById } from "../../../crm";
 import { getSettingsByUser } from "../../../settings";
 import { getDecryptedCrmCredential } from "../../../user";
@@ -31,17 +32,38 @@ export const salesforceMetadataHandler = async (
             `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
         );
 
+        const backupConfig = await getBackupConfigById(backupConfigId);
+        if (!backupConfig) {
+            throw new Error(`[metadata:schema] Backup config not found, backupConfigId=${backupConfigId}`);
+        }
+
         const { user } = await getComparisonContext(backupConfigId, knownUser);
         const describedObject = await salesforceObjectDescribe({ user, objectName });
 
         switch (metadataType) {
             case "fields": {
-                const fields = describedObject.fields.filter(isQueryableField);
+                let fields = describedObject.fields;
+                const nonNullCompoundFieldNames = describedObject.fields
+                .filter(f => f.compoundFieldName)
+                .map(f => f.compoundFieldName);
+                fields = fields.filter(f => !nonNullCompoundFieldNames.includes(f.name));
+                fields = fields.filter(isQueryableField);
                 const diff = await schemaHandler(params, fields, user);
                 return { diff, metadataType, fields };
             }
             case "childs": {
-                const diff = await childHandler(params, describedObject.childRelationships, user);
+                let children = describedObject.childRelationships;
+                const filteredObjects = await salesforceObjectFilteredList({
+                    user,
+                    apexMode: backupConfig.type === 'NORMAL' ? 'backup' : 'archival',
+                    apexType: backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule'
+                });
+                if (filteredObjects.length) {
+                    const objectNames = filteredObjects.map(o => o.name);
+                    children = children.filter((child) => objectNames.includes(child.childSObject));
+                }
+
+                const diff = await childHandler(params, children, user);
                 return { diff, metadataType };
             }
             case "picklist": {
@@ -145,7 +167,7 @@ export const salesforceObjectFilteredList = async (params: ISalesforceObjectList
     try {
         const standardObjects: string[] = [];
         const settings = await getSettingsByUser(user.userId);
-        if(settings && settings.standardObjects.length) {
+        if (settings && settings.standardObjects.length) {
             const standardObjectNames = settings.standardObjects.map(s => s.name);
             standardObjects.push(...standardObjectNames);
         } else {
