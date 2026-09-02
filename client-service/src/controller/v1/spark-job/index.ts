@@ -10,6 +10,7 @@ import { logger } from '../../../middlewares';
 import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, RESTORE_FIELD_JOB_STATUS, RESTORE_BACKUP_STATUS, toTreeSummary, filterObjectTree } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
+import { sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
 
 // Decrypts a request, or returns null if it isn't decryptable. Accepts both shapes
 // Spark sends: a base64 transport string, or the raw { ciphertext, iv } envelope
@@ -307,14 +308,16 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     console.log(JSON.stringify({ restoreJob, restore, decrypted }));
+    await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).objects });
+
     // EMR succeeded — continue automatically to the ingest stage. Background,
     // fire-and-forget (the response below doesn't wait on it), same as every
     // other restore stage transition in this workflow.
-    runRestoreIngestJob(restoreJob, restore.source.configType).catch((error) => {
-      logger.error(
-        `[restore-ingest] failed | restoreJobId=${restoreConfigId} err:${error?.message ?? error}`
-      );
-    });
+    // runRestoreIngestJob(restoreJob, restore.source.configType).catch((error) => {
+    //   logger.error(
+    //     `[restore-ingest] failed | restoreJobId=${restoreConfigId} err:${error?.message ?? error}`
+    //   );
+    // });
     return makeResponse(req, res, 200, true, 'update');
   }
 };

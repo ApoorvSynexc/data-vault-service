@@ -26,6 +26,15 @@ export interface IRestoreJobObject {
   children?: IRestoreJobObject[];
 }
 
+// One object's parent-relationship chain, e.g. Contact -> Account -> User —
+// `parents` walks upward (lookup/master-detail targets), the opposite direction
+// from IRestoreJobObject['children']. Used to preserve ordering/lookup context
+// across a restore; each node's own parents recurse the same shape.
+export interface IRestoreObjectHierarchyNode {
+  name: string;
+  parents: IRestoreObjectHierarchyNode[];
+}
+
 export interface IRestoreJobDestination {
   crmId: string;
   crmName: string;
@@ -55,6 +64,7 @@ export interface IRestoreJob {
   source: IRestoreJobSource; // encrypted — never expose
   destination: IRestoreJobDestination; // encrypted — never expose
   conflict: IRestoreConflict;
+  objectHierarchy?: IRestoreObjectHierarchyNode[];
   status: string; // PENDING | IN_PROGRESS | RUNNING | SUCCESS | FAILED
   startedAt?: string;
   completedAt?: string;

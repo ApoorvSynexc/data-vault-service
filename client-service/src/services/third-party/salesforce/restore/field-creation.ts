@@ -53,7 +53,6 @@ export const salesforceFieldCreation = async (params: { restoreJobId: string }) 
         logger.error(`[salesforce-field-creation] restoreJobId=${restoreJobId} err:${error}`);
     }
 }
-
 export const salesforceFieldsPermission = async (params: { restoreJobId: string }) => {
     const { restoreJobId } = params;
 
@@ -98,3 +97,4 @@ export const salesforceFieldsPermission = async (params: { restoreJobId: string 
         logger.error(`[salesforce-fields-permission] restoreJobId=${restoreJobId} err:${error}`);
     }
 }
+
