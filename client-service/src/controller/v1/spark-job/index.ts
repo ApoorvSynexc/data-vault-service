@@ -300,7 +300,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
 
         await updateRestoreJob({
           restoreJobId: restoreConfigId,
-          objects: updatedObjects,
+          replaceObjects: updatedObjects,
         });
 
         restoreJob.destination.objects = updatedObjects;
