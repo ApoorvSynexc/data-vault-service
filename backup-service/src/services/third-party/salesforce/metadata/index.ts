@@ -59,7 +59,7 @@ export const salesforceMetadataHandler = async (
         fields = fields.filter(f => !nonNullCompoundFieldNames.includes(f.name));
         fields = fields.filter(isQueryableField);
         const diff = await schemaHandler(params, fields);
-        return { diff, metadataType, fields };
+        return { diff, metadataType, fields }; 
       }
       case 'childs': {
         let children = describedObject.childRelationships;
