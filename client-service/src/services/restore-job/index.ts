@@ -63,7 +63,7 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
     destinationObjects = selection.restoreScope.objects.map(obj => ({ id: obj.id, name: obj.name, status: "IN_PROGRESS", }));
   } else if (selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
     destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: "IN_PROGRESS" }));
-  } else if (selection.restoreScope.type === 'OBJECT_TREE' && selection.restoreScope.objectTree) {
+  } else if (selection.restoreScope.type === 'OBJECT_TREE') {
     // ARCHIVAL restore: the hierarchy is preserved as-is, not flattened —
     // destination.objects holds exactly one entry (the root), and every
     // descendant lives nested under it via `children`, recursively, mirroring
@@ -74,7 +74,7 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
       status: "IN_PROGRESS",
       ...((node.children?.length ?? 0) > 0 && { children: node.children!.map(toJobObject) }),
     });
-    destinationObjects = [toJobObject(selection.restoreScope.objectTree)];
+    destinationObjects = [];
   } else {
     destinationObjects = sourceBackupConfig.objects?.map(obj => ({ id: obj.id, name: obj.name, status: "IN_PROGRESS" })) ?? [];
   }

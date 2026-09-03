@@ -79,7 +79,7 @@ assert.deepStrictEqual(mapRestoreSource(legacySource), legacySource);
 const baseScope: IRestoreScope = {
   type: 'ALL',
   objects: [{ id: 'obj-1', name: 'Account', type: 'STANDARD' }],
-  records: [{ objectName: 'Account', recordIds: ['r1'] }],
+  records: [{ id: 'r1', objectName: 'Account', recordIds: ['r1'] }],
   fields: [{ objectName: 'Account', fieldNames: ['Name'] }],
   filters: [{ objectName: 'Account', filter: { type: 'SOQL', soqlQuery: 'SELECT Id FROM Account' } }],
   changeSince: { date: '2026-01-01' },
