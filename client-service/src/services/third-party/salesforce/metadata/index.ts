@@ -44,8 +44,8 @@ export const salesforceMetadataHandler = async (
             case "fields": {
                 let fields = describedObject.fields;
                 const nonNullCompoundFieldNames = describedObject.fields
-                .filter(f => f.compoundFieldName)
-                .map(f => f.compoundFieldName);
+                    .filter(f => (f.compoundFieldName && f.compoundFieldName !== f.name))
+                    .map(f => f.compoundFieldName);
                 fields = fields.filter(f => !nonNullCompoundFieldNames.includes(f.name));
                 fields = fields.filter(isQueryableField);
                 const diff = await schemaHandler(params, fields, user);
