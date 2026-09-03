@@ -1,4 +1,6 @@
 import { logger } from "../../../../middlewares";
+import { flattenBackupObjects } from "../../../../utils/helper";
+import { getBackupConfigById } from "../../../backup-config";
 import { getRestoreById } from "../../../restore";
 import { getRestoreJobById } from "../../../restore-job";
 import { getDecryptedCrmCredential, getUser } from "../../../user";
@@ -21,12 +23,18 @@ export const salesforceFieldCreation = async (params: { restoreJobId: string }) 
             return;
         }
 
+        const backupConfig = await getBackupConfigById(restoreJob.source.backupConfigId);
+        if (!backupConfig || !backupConfig.objects) {
+            return;
+        }
+
         const user = await getUser({ userId: restore.userId });
         if (!user) {
             return;
         }
 
-        const objects = restoreJob.destination.objects;
+        // const objects = restoreJob.destination.objects;
+        const objects = flattenBackupObjects(backupConfig.objects);
         if (user?.crmProfile?.instanceUrl) {
             const tokens = getDecryptedCrmCredential(user);
             const credentials = {
@@ -69,12 +77,18 @@ export const salesforceFieldsPermission = async (params: { restoreJobId: string 
             return;
         }
 
+        const backupConfig = await getBackupConfigById(restoreJob.source.backupConfigId);
+        if (!backupConfig || !backupConfig.objects) {
+            return;
+        }
+
         const user = await getUser({ userId: restore.userId });
         if (!user) {
             return;
         }
 
-        const objects = restoreJob.destination.objects;
+        // const objects = restoreJob.destination.objects;
+        const objects = flattenBackupObjects(backupConfig.objects);
         if (user?.crmProfile?.instanceUrl) {
             const tokens = getDecryptedCrmCredential(user);
             const credentials = {
