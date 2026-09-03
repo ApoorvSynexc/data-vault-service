@@ -350,7 +350,7 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
 
-  if(req?.maxDepth) maxDepth = Number(maxDepth);
+  if((req as any)?.maxDepth) maxDepth = Number(maxDepth);
 
   const children = await buildChildRelationshipTree({
     user,
