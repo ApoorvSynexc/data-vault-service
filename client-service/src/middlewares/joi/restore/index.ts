@@ -21,9 +21,11 @@ const BACKUP_SOURCE_TYPE = ['ENTIRE', 'CHANGED_BETWEEN'];
 const ARCHIVAL_SOURCE_TYPE = ['ENTIRE', 'DELETED_BETWEEN'];
 
 const scopeRecordSchema = Joi.object({
+  id: Joi.string().required(),
   objectName: Joi.string().required(),
   recordIds: Joi.array().items(Joi.string()).min(1).required(),
-});
+  children: Joi.array().items(Joi.link('#scopeRecord')).optional(),
+}).id('scopeRecord');
 
 const scopeFieldSchema = Joi.object({
   objectName: Joi.string().required(),
