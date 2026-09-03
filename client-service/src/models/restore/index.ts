@@ -33,11 +33,13 @@ export interface IRestoreChangeSince {
 export interface IRestoreBulkCsvIds {
   objectName: string;
   ids: string[];
+  children?: IRestoreBulkCsvIds[];
 }
 
 export interface IRestoreScopeFilter {
   objectName: string;
   filter: IRestoreFilters;
+  children?: IRestoreScopeFilter[];
 }
 
 export interface IRestoreArchivalChildObject {
