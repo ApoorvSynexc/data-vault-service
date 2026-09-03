@@ -64,12 +64,14 @@ const changeSinceSchema = Joi.object({
 const bulkCsvIdsSchema = Joi.object({
   objectName: Joi.string().required(),
   ids: Joi.array().items(Joi.string()).min(1).required(),
-});
+  children: Joi.array().items(Joi.link('#bulkCsvIds')).optional(),
+}).id('bulkCsvIds');
 
 const scopeFilterSchema = Joi.object({
   objectName: Joi.string().required(),
   filter: filtersSchema.required(),
-});
+  children: Joi.array().items(Joi.link('#scopeFilter')).optional(),
+}).id('scopeFilter');
 
 // ARCHIVAL restore object tree — mirrors archival-config's own recursive
 // objectChildrenSchema (Joi.link) pattern, deliberately narrower: a live
