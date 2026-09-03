@@ -2,8 +2,10 @@ import { IScheduleConfig } from '../backup-config';
 import { IObject } from '../shared';
 
 export interface IRestoreScopeRecord {
+  id: string;
   objectName: string;
   recordIds: string[];
+  children?: IRestoreScopeRecord[];
 }
 
 export interface IRestoreScopeField {
@@ -38,31 +40,13 @@ export interface IRestoreScopeFilter {
   filter: IRestoreFilters;
 }
 
-// ARCHIVAL restore's object hierarchy — mirrors archival-config's own IObject
-// tree shape (models/backup-config's IObject.children), but narrower: a live
-// archival config lets every node in the tree carry its own field/condition,
-// while here only the root of this tree ever carries a filter/record
-// selection. Everything below it is pure Salesforce object hierarchy —
-// restored because its parent was restored, not selected independently.
 export interface IRestoreArchivalChildObject {
   name: string;
   children?: IRestoreArchivalChildObject[];
 }
 
-export interface IRestoreArchivalObjectTree extends IRestoreArchivalChildObject {
-  // How the root's own records were chosen — mirrors IRestoreScope's own
-  // FILTER/RECORD/BULK_CSV mechanisms, just scoped to this one root object
-  // instead of picking the whole restore's scope. Omitted entirely means the
-  // root's full record set (no scoping), same as ENTIRE elsewhere in restore.
-  type?: 'FILTER' | 'RECORD' | 'BULK_CSV';
-  filters?: IRestoreFilters; // type === 'FILTER'
-  recordIds?: string[]; // type === 'RECORD' — same naming as IRestoreScopeRecord.recordIds
-  ids?: string[]; // type === 'BULK_CSV' — same naming as IRestoreBulkCsvIds.ids
-}
-
 export interface IRestoreScope {
   type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | INSERTS_ONLY | CHANGE_SINCE | BULK_CSV | OBJECT_TREE
-  // type === 'OBJECT' — mirrors models/shared's IObject (same shape backup-config's own `objects` uses).
   objects?: IObject[];
   records?: IRestoreScopeRecord[];
   fields?: IRestoreScopeField[];
@@ -70,8 +54,6 @@ export interface IRestoreScope {
   changeSince?: IRestoreChangeSince;
   bulkCsvIds?: IRestoreBulkCsvIds[];
   deletedOnly?: boolean;
-  // ARCHIVAL restores only (type === 'OBJECT_TREE') — see IRestoreArchivalObjectTree.
-  objectTree?: IRestoreArchivalObjectTree;
 }
 
 export interface IRestoreSource {
@@ -150,12 +132,6 @@ export interface IRestoreEdgeCases {
   parentMissing?: string;
   recordTypeMissing?: IRestoreRecordTypeMissing;
   missingRequiredFieldValue?: IRestoreMissingRequiredFieldValue;
-  // Which child objects (Master-Detail/lookup relationships off the restored
-  // object) get pulled in alongside it. BACKUP/NORMAL-sourced restores only —
-  // an ARCHIVAL restore's object tree already states its own hierarchy
-  // explicitly (see IRestoreArchivalObjectTree), so this has nothing to add there.
-  //   REQUIRED_AND_MASTER_DETAIL — Include Required AND Master-Detail Child Objects
-  //   SKIP_CHILDREN              — Skip Child Objects
   includeChilds?: 'REQUIRED_CHILDRENS_ONLY' | 'SKIP_CHILDREN';
 }
 

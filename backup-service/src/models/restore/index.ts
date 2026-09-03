@@ -1,8 +1,10 @@
 import { IScheduleConfig } from '../backup-config';
 
 export interface IRestoreScopeRecord {
+  id: string;
   objectName: string;
   recordIds: string[];
+  children?: IRestoreScopeRecord[];
 }
 
 export interface IRestoreScopeField {
