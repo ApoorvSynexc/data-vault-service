@@ -42,10 +42,13 @@ const buildChildRelationshipTree = async (params: {
   filteredObjectNames: string[];
   visitedObjectNames: Set<string>;
   depth: number;
+  maxDepth?: number;
 }): Promise<ISalesforceChildTreeNode[]> => {
+  let { maxDepth } = params;
   const { user, objectDescription, objectName, apexMode, filteredObjectNames, visitedObjectNames, depth } = params;
 
-  if (depth >= MAX_RELATIONSHIP_DEPTH) return [];
+  if(!maxDepth) maxDepth = MAX_RELATIONSHIP_DEPTH;
+  if (depth >= maxDepth) return [];
 
   const rawChildren = filterChildRelationships(objectDescription.childRelationships, objectName, apexMode, filteredObjectNames);
   if (!rawChildren.length) return [];
@@ -333,7 +336,8 @@ const getSalesforceRecordTypes = async (req: IRequest, res: IResponse) => {
 // getSalesforceDescribeObject's single-level children.
 const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
-  const { objectName, mode, type } = req.query;
+  let maxDepth;
+  const { objectName, mode, type  } = req.query;
 
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
@@ -346,6 +350,8 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
 
+  if(maxDepth) maxDepth = Number(maxDepth);
+
   const children = await buildChildRelationshipTree({
     user,
     objectDescription,
@@ -354,6 +360,7 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
     filteredObjectNames,
     visitedObjectNames: new Set([String(objectName)]),
     depth: 0,
+    maxDepth
   });
 
   return makeResponse(req, res, 200, true, 'fetch', { children });
