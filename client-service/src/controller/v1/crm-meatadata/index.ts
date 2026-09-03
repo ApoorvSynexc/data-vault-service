@@ -27,13 +27,6 @@ interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
 
 const MAX_RELATIONSHIP_DEPTH = 5;
 
-// Depth-first walk of childRelationships, stopping at whichever comes first:
-// MAX_RELATIONSHIP_DEPTH levels, no more children, or a child object that's
-// already in the current ancestor chain (visitedObjectNames, seeded with the
-// root req.query objectName) — that last case is what stops a self-referencing
-// or circular relationship graph (A -> B -> A) from recursing forever. A
-// repeated object is still returned as a leaf (its edge is real), just not
-// expanded further.
 const buildChildRelationshipTree = async (params: {
   user: IUser;
   objectDescription: ISalesforceObjectDescribeResponse;
@@ -44,10 +37,9 @@ const buildChildRelationshipTree = async (params: {
   depth: number;
   maxDepth?: number;
 }): Promise<ISalesforceChildTreeNode[]> => {
-  let { maxDepth } = params;
   const { user, objectDescription, objectName, apexMode, filteredObjectNames, visitedObjectNames, depth } = params;
+  const maxDepth = Math.min(params.maxDepth ?? MAX_RELATIONSHIP_DEPTH, MAX_RELATIONSHIP_DEPTH);
 
-  if(!maxDepth) maxDepth = MAX_RELATIONSHIP_DEPTH;
   if (depth >= maxDepth) return [];
 
   const rawChildren = filterChildRelationships(objectDescription.childRelationships, objectName, apexMode, filteredObjectNames);
@@ -84,6 +76,7 @@ const buildChildRelationshipTree = async (params: {
         filteredObjectNames,
         visitedObjectNames: new Set(visitedObjectNames).add(child.name),
         depth: depth + 1,
+        maxDepth,
       });
 
       return { ...child, children };
@@ -330,18 +323,16 @@ const getSalesforceRecordTypes = async (req: IRequest, res: IResponse) => {
   return makeResponse(req, res, 200, true, 'fetch', recordTypes);
 }
 
-// GET /crm-metadata/depth-children?objectName=&mode=&type=
-// Full recursive child-relationship tree for an object, capped at
 // MAX_RELATIONSHIP_DEPTH levels — the depth-aware counterpart to
-// getSalesforceDescribeObject's single-level children.
 const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const user = req.user!;
-  let maxDepth;
-  const { objectName, mode, type  } = req.query;
+  const { objectName, mode, type, maxDepth: maxDepthParam } = req.query;
 
   if (!objectName) {
     return makeResponse(req, res, 400, false, 'object_name_required');
   }
+
+  const maxDepth = maxDepthParam ? Number(maxDepthParam) : undefined;
 
   const apexMode = toApexMode(mode) ?? 'backup';
   const apexType = toApexType(type ?? mode);
@@ -349,8 +340,6 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
-
-  if((req as any)?.maxDepth) maxDepth = Number(maxDepth);
 
   const children = await buildChildRelationshipTree({
     user,
