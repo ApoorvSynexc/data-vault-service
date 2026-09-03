@@ -328,15 +328,15 @@ export const exportIncremental = async (
     }
 
     const fieldNames: string[] = [];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
     fieldsMetadata.fields.forEach((f) => {
-      if (f.referenceTo.length > 1 && f.name.toLowerCase().includes('id')) {
+      if (f.referenceTo.length > 1 && !excludeName.includes(f.name.toLowerCase()) && f.name.toLowerCase().includes('id')) {
         const nameWithType = f.name.toLowerCase().replace('id', '.type');
         fieldNames.push(nameWithType)
       }
       fieldNames.push(f.name);
     });
 
-    console.log(JSON.stringify({fieldNames}))
     const allFieldNames = withSystemFields(
       fieldNames
     );
