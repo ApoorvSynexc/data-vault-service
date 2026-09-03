@@ -155,6 +155,7 @@ const restoreObjectData = async (
     return [];
   }
 
+  logger.info(`[Restore] Found ${keys.length} backed-up data files for object ${objectName}, restoreJobId=${restoreJobId}`);
   const submittedJobIds: string[] = [];
   let header: string | null = null;
   let chunk: CsvChunk | null = null;
@@ -183,6 +184,7 @@ const restoreObjectData = async (
       status: job.failed ? 'FAILED' : 'SUCCESS',
       errors: job.errors.length ? job.errors : undefined,
     });
+    logger.info(`[Restore] Ingested chunk for object ${objectName}, jobId=${job.jobId}, chunkCount=${chunk.rows.length || ''}, processed=${job.processed}, failed=${job.failed}`);
     chunk = newChunk(header!);
   };
 
@@ -243,7 +245,7 @@ export const runSalesforceRestore = async (
     );
     return 'SUCCESS';
   }
-  
+
   // let operation: 'insert' | 'update' | 'upsert';
   // switch (conflict.restoreMode) {
   //   case 'APPEND_NEW':
@@ -286,12 +288,9 @@ export const runSalesforceRestore = async (
     'upsert',
     externalIdFieldName
   );
-  logger.info(
-    `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${"upsert"}`
-  );
 
   logger.info(
-    `[restore] restore job completed, No operation found, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}`
+    `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${"upsert"}`
   );
   return 'SUCCESS';
 };
