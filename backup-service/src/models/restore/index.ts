@@ -37,9 +37,18 @@ export interface IRestoreScopeFilter {
   filter: IRestoreFilters;
 }
 
+// type === 'OBJECT' on IRestoreScope below — mirrors client-service's
+// models/shared IObject (same shape backup-config's own `objects` uses),
+// narrowed to what a restore's flat object selection actually needs.
+export interface IRestoreScopeObject {
+  id: string;
+  name: string;
+  type: string; // STANDARD | CUSTOM
+}
+
 export interface IRestoreScope {
   type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | INSERTS_ONLY | CHANGE_SINCE | BULK_CSV
-  objects?: string[];
+  objects?: IRestoreScopeObject[];
   records?: IRestoreScopeRecord[];
   fields?: IRestoreScopeField[];
   filters?: IRestoreScopeFilter[];

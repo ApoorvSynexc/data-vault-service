@@ -220,7 +220,8 @@ Full item (IRestore): restoreId, userId, crmId?, status (DRAFT | PENDING |
   'ENTIRE'|'PARTIAL'|'CHANGED_BETWEEN', startDate?, endDate?, backupJobIds),
   selection.restoreScope (type: ALL|OBJECT|RECORD|FIELD|FILTER|
   DELETED_ONLY|INSERTS_ONLY|CHANGE_SINCE|BULK_CSV, plus the matching
-  objects/records/fields/filters/changeSince/bulkCsvIds payload), destination
+  objects (IObject[] — same shape as backup-config's own `objects`, OBJECT
+  type only)/records/fields/filters/changeSince/bulkCsvIds payload), destination
   (type 'SAME'|'DIFFERENT', crmId?, tagRestoredRecord?), conflict
   (restoreMode, edgeCases?, mergeRule?), jobDetail (name?, description?,
   tags?), schedule, createdAt, updatedAt

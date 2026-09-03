@@ -986,7 +986,7 @@ const resolveDryRunObjects = async (
       return { objectNames: objects.map((o) => o.name), filterByObject };
     }
     case 'OBJECT':
-      return { objectNames: [...new Set(scope.objects ?? [])], filterByObject };
+      return { objectNames: [...new Set((scope.objects ?? []).map((o) => o.name))], filterByObject };
     case 'FIELD':
       return { objectNames: [...new Set((scope.fields ?? []).map((f) => f.objectName))], filterByObject };
     case 'FILTER':
@@ -1210,7 +1210,7 @@ const resolveDiffTargets = async (params: IDryRunDiffParams): Promise<IDiffTarge
     case 'ALL':
       return (await allRestorableObjects()).map((name) => target(name));
     case 'OBJECT':
-      return [...new Set(scope.objects ?? [])].map((name) => target(name));
+      return [...new Set((scope.objects ?? []).map((o) => o.name))].map((name) => target(name));
     case 'FIELD':
       return (scope.fields ?? []).map((f) => target(f.objectName, { columnNames: f.fieldNames }));
     case 'FILTER':

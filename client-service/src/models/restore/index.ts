@@ -1,4 +1,5 @@
 import { IScheduleConfig } from '../backup-config';
+import { IObject } from '../shared';
 
 export interface IRestoreScopeRecord {
   objectName: string;
@@ -61,7 +62,8 @@ export interface IRestoreArchivalObjectTree extends IRestoreArchivalChildObject 
 
 export interface IRestoreScope {
   type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | INSERTS_ONLY | CHANGE_SINCE | BULK_CSV | OBJECT_TREE
-  objects?: string[];
+  // type === 'OBJECT' — mirrors models/shared's IObject (same shape backup-config's own `objects` uses).
+  objects?: IObject[];
   records?: IRestoreScopeRecord[];
   fields?: IRestoreScopeField[];
   filters?: IRestoreScopeFilter[];

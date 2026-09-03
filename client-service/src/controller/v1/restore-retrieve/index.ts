@@ -542,6 +542,11 @@ const validateDryRunScope = (
     if (!Array.isArray(restoreScope.objects) || restoreScope.objects.length === 0) {
       return { ok: false, error: 'invalid_scope_objects' };
     }
+    for (const o of restoreScope.objects) {
+      if (!isPlainObject(o) || typeof o.name !== 'string' || !o.name.trim()) {
+        return { ok: false, error: 'invalid_scope_objects' };
+      }
+    }
   }
 
   if (restoreScope.type === 'FIELD') {
