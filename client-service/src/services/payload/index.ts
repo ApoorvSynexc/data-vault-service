@@ -337,6 +337,7 @@ async function buildPayload(backupConfigId: string) {
                 sourceName: crm.crmName,
                 orgId: crm.crmId,
             },
+            objects: backupConfig.objects,
             objectOperations,
             destinationConfigs: {
                 destinationName: destination.provider,
