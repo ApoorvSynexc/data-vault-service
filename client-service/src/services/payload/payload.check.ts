@@ -78,7 +78,7 @@ assert.deepStrictEqual(mapRestoreSource(legacySource), legacySource);
 // ─── 5. mapRestoreScope — only the selection field the scope type reads ───────
 const baseScope: IRestoreScope = {
   type: 'ALL',
-  objects: ['Account'],
+  objects: [{ id: 'obj-1', name: 'Account', type: 'STANDARD' }],
   records: [{ objectName: 'Account', recordIds: ['r1'] }],
   fields: [{ objectName: 'Account', fieldNames: ['Name'] }],
   filters: [{ objectName: 'Account', filter: { type: 'SOQL', soqlQuery: 'SELECT Id FROM Account' } }],
@@ -88,7 +88,7 @@ const baseScope: IRestoreScope = {
 };
 
 assert.deepStrictEqual(mapRestoreScope({ ...baseScope, type: 'ALL' }), { type: 'ALL' });
-assert.deepStrictEqual(mapRestoreScope({ ...baseScope, type: 'OBJECT' }), { type: 'OBJECT', objects: ['Account'] });
+assert.deepStrictEqual(mapRestoreScope({ ...baseScope, type: 'OBJECT' }), { type: 'OBJECT', objects: baseScope.objects });
 assert.deepStrictEqual(mapRestoreScope({ ...baseScope, type: 'RECORD' }), { type: 'RECORD', records: baseScope.records });
 assert.deepStrictEqual(mapRestoreScope({ ...baseScope, type: 'FIELD' }), { type: 'FIELD', fields: baseScope.fields });
 assert.deepStrictEqual(mapRestoreScope({ ...baseScope, type: 'FILTER' }), { type: 'FILTER', filters: baseScope.filters });
@@ -98,7 +98,7 @@ assert.deepStrictEqual(mapRestoreScope({ ...baseScope, type: 'DELETED_ONLY' }), 
 // deletedOnly missing on a DELETED_ONLY scope defaults true rather than sending undefined.
 assert.deepStrictEqual(mapRestoreScope({ type: 'DELETED_ONLY' }), { type: 'DELETED_ONLY', deletedOnly: true });
 // Unrecognised type (e.g. legacy INSERTS_ONLY): forwarded as-is.
-const legacyScope: IRestoreScope = { type: 'INSERTS_ONLY', objects: ['Account'] };
+const legacyScope: IRestoreScope = { type: 'INSERTS_ONLY', objects: [{ id: 'obj-1', name: 'Account', type: 'STANDARD' }] };
 assert.deepStrictEqual(mapRestoreScope(legacyScope), legacyScope);
 
 console.log('payload.check.ts — all assertions passed');

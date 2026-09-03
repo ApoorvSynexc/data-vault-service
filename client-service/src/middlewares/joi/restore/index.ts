@@ -2,6 +2,7 @@ import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 import { DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_TYPE, STATUS, WEEK_DAY } from '../../../constant';
+import { objectSchema } from '../shared';
 
 // OBJECT_TREE is ARCHIVAL-only (enforced in createRestoreHandler, not here —
 // see the cross-check note above restoreScopeSchema's objectTree field).
@@ -109,9 +110,10 @@ const restoreScopeSchema = Joi.object({
   type: Joi.string()
     .valid(...RESTORE_SCOPE_TYPE)
     .required(),
+  // Mirrors models/shared's IObject (same shape backup-config's own `objects` uses).
   objects: Joi.when('type', {
     is: 'OBJECT',
-    then: Joi.array().items(Joi.string()).min(1).required(),
+    then: Joi.array().items(objectSchema).min(1).required(),
     otherwise: Joi.forbidden(),
   }),
   records: Joi.when('type', {

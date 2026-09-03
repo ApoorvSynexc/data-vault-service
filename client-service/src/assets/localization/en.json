@@ -103,7 +103,7 @@
   "invalid_selection": "selection must be an object",
   "invalid_restore_scope": "selection.restoreScope must be an object",
   "invalid_restore_scope_type": "selection.restoreScope.type is not supported",
-  "invalid_scope_objects": "restoreScope.objects must be an array of object names",
+  "invalid_scope_objects": "restoreScope.objects must be a non-empty array of objects with a name",
   "invalid_scope_records": "each restoreScope.records entry must have a string objectName and a recordIds array",
   "invalid_scope_fields": "each restoreScope.fields entry must have a string objectName and a fieldNames array",
   "invalid_scope_filters": "each restoreScope.filters entry must have a string objectName and a filter object",
