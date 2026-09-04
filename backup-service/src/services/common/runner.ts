@@ -29,7 +29,10 @@ import { httpRequest } from '../../utils/http-request';
 // client-service to resume the deferred /payload compression for this config. Reuses
 // the existing internal event channel + secret. Best-effort — a missed callback is
 // recovered by the next external /payload trigger.
-const notifySchemaSyncCompleted = async (backupConfigId: string, triggerSource?:{ name: string; entityId: string; }): Promise<void> => {
+const notifySchemaSyncCompleted = async (
+  backupConfigId: string,
+  triggerSource?: { name: string; entityId: string }
+): Promise<void> => {
   try {
     await httpRequest({
       url: `${CORE_SERVICE}/v1/internal/backup-payload`,
@@ -75,7 +78,14 @@ export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> 
 // Entry point — call this fire-and-forget from the controller
 // ---------------------------------------------------------------------------
 export const runBackupJob = async (job: IBackupJob): Promise<void> => {
-  const { backupConfigId, backupJobId, source: encryptedSource, destination, object, triggerSource } = job;
+  const {
+    backupConfigId,
+    backupJobId,
+    source: encryptedSource,
+    destination,
+    object,
+    triggerSource,
+  } = job;
   const startedAt = dayjs().toISOString();
 
   activeJobs.add(backupJobId);

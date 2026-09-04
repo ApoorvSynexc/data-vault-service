@@ -223,8 +223,8 @@ export interface IBackupJob {
    */
   lastCompletedAt?: string;
 
-  triggerSource?:{
+  triggerSource?: {
     name: string;
     entityId: string;
-  }
+  };
 }

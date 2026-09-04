@@ -324,22 +324,24 @@ export const exportIncremental = async (
     );
 
     if (!fieldsMetadata?.fields) {
-      return
+      return;
     }
 
     const fieldNames: string[] = [];
     const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
     fieldsMetadata.fields.forEach((f) => {
-      if (f.referenceTo.length > 1 && !excludeName.includes(f.name.toLowerCase()) && f.name.toLowerCase().includes('id')) {
+      if (
+        f.referenceTo.length > 1 &&
+        !excludeName.includes(f.name.toLowerCase()) &&
+        f.name.toLowerCase().includes('id')
+      ) {
         const nameWithType = f.name.toLowerCase().replace('id', '.type');
-        fieldNames.push(nameWithType)
+        fieldNames.push(nameWithType);
       }
       fieldNames.push(f.name);
     });
 
-    const allFieldNames = withSystemFields(
-      fieldNames
-    );
+    const allFieldNames = withSystemFields(fieldNames);
 
     // ── Phase 1: query new + updated + deleted records in one queryAll job ────
     let bulkJobId = object.bulkJobId;
