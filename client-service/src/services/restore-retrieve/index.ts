@@ -20,7 +20,7 @@ import { S3Config } from '../../utils/validate-aws-credentials';
 
 export { FilterError, buildAthenaFilterWhere } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import { buildAthenaFilterWhere } from './athena-filter';
+import { buildAthenaFilterWhere, buildDeltaFilterWhere } from './athena-filter';
 import {
   pairedColumns,
   IPageKey,
@@ -881,10 +881,12 @@ const retrieveMissingFields = async (
 
 export type DryRunSourceType = 'ENTIRE' | 'CHANGED_BETWEEN';
 
-// Only the scope types the dry-run endpoint knows how to resolve to an object
-// list. Every other IRestoreScope type (RECORD, DELETED_ONLY, INSERTS_ONLY,
-// CHANGE_SINCE, BULK_CSV) is rejected up front by the controller.
-export type DryRunScopeType = 'ALL' | 'OBJECT' | 'FIELD' | 'FILTER';
+// The scope types the dry-run endpoint knows how to resolve to a count.
+// INSERTS_ONLY, CHANGE_SINCE and OBJECT_TREE stay unsupported — the first two
+// have no restore-side implementation to mirror, and OBJECT_TREE is
+// ARCHIVAL/Spark-side. Every other IRestoreScope type is rejected up front by
+// the controller.
+export type DryRunScopeType = 'ALL' | 'OBJECT' | 'FIELD' | 'FILTER' | 'RECORD' | 'BULK_CSV' | 'DELETED_ONLY';
 
 export interface IDryRunParams {
   backupConfigId: string;
@@ -918,7 +920,10 @@ export interface IDryRunResult {
 
 export type IDryRunOutcome =
   | { ok: true; value: IDryRunResult }
-  | { ok: false; error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' };
+  | {
+      ok: false;
+      error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' | 'archival_dry_run_entire_only';
+    };
 
 // A table not yet compressed (no backup job has run for this object) is
 // "nothing to count", not an error — checked with a real Glue lookup
@@ -954,44 +959,71 @@ const runDeltaCount = async (
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : 'unknown_error');
 
+// One object's resolved slice of a dry-run count: which records to count,
+// carried as the RAW scope selection rather than a pre-compiled WHERE — RECORD
+// / BULK_CSV ids and FILTER conditions compile to a DIFFERENT Athena
+// expression depending on whether they are about to run against the Hudi
+// table (ENTIRE) or the delta table (CHANGED_BETWEEN), so the caller compiles
+// each into the right shape for the query it is about to run.
+interface ICountTarget {
+  objectApiName: string;
+  recordIds: string[] | null;
+  filter: IRestoreFilters | null;
+}
+
 /**
- * Resolves an IRestoreScope down to the object list a dry-run counts, plus (for
- * FILTER scope) the per-object Athena WHERE body to narrow each count with —
- * same scope behaviour /get-objectlist-by-configid and the restore creation
- * flow already apply:
+ * Resolves an IRestoreScope down to the per-object targets a dry-run counts —
+ * same scope semantics resolveDiffTargets applies for /dry-run-diff:
  *
- *   ALL    — every restore-eligible object on the config (getRestoreObjectListByConfigId).
- *   OBJECT — exactly the objects named in restoreScope.objects.
- *   FIELD  — the objects named in restoreScope.fields[].objectName (the field
- *            names themselves narrow columns, not which/how many records match).
- *   FILTER — the objects named in restoreScope.filters[].objectName, each
- *            paired with its own filter compiled to Athena SQL.
+ *   ALL          — every restore-eligible object on the config.
+ *   OBJECT       — exactly the objects named in restoreScope.objects.
+ *   FIELD        — the objects named in restoreScope.fields[].objectName (the
+ *                  field names themselves narrow columns, not which/how many
+ *                  records match, so a COUNT ignores them beyond object selection).
+ *   FILTER       — the objects named in restoreScope.filters[].objectName,
+ *                  each paired with its own filter.
+ *   RECORD       — the objects named in restoreScope.records[].objectName,
+ *                  each paired with its own record id list.
+ *   BULK_CSV     — as RECORD, with the ids that came out of the uploaded CSV.
+ *   DELETED_ONLY — every restore-eligible object; the CHANGED_BETWEEN branch
+ *                  reports only the DELETE half of the count for these.
  *
  * Returns null for any other scope type — the caller maps that to
  * invalid_restore_scope_type.
  */
-const resolveDryRunObjects = async (
-  params: IDryRunParams
-): Promise<{ objectNames: string[]; filterByObject: Map<string, IRestoreFilters> } | null> => {
+const resolveDryRunObjects = async (params: IDryRunParams): Promise<ICountTarget[] | null> => {
   const scope = params.restoreScope;
-  const filterByObject = new Map<string, IRestoreFilters>();
+  const target = (objectApiName: string, rest: Partial<ICountTarget> = {}): ICountTarget => ({
+    objectApiName,
+    recordIds: null,
+    filter: null,
+    ...rest,
+  });
+
+  const allRestorableObjects = async (): Promise<string[]> => {
+    const { objects } = await getRestoreObjectListByConfigId(
+      params.backupConfigId,
+      params.configType!,
+      params.userId
+    );
+    return objects.map((o) => o.name);
+  };
 
   switch (scope.type as DryRunScopeType) {
-    case 'ALL': {
-      const { objects } = await getRestoreObjectListByConfigId(
-        params.backupConfigId,
-        params.configType!,
-        params.userId
-      );
-      return { objectNames: objects.map((o) => o.name), filterByObject };
-    }
+    case 'ALL':
+      return (await allRestorableObjects()).map((name) => target(name));
     case 'OBJECT':
-      return { objectNames: [...new Set((scope.objects ?? []).map((o) => o.name))], filterByObject };
+      return [...new Set((scope.objects ?? []).map((o) => o.name))].map((name) => target(name));
     case 'FIELD':
-      return { objectNames: [...new Set((scope.fields ?? []).map((f) => f.objectName))], filterByObject };
+      return [...new Set((scope.fields ?? []).map((f) => f.objectName))].map((name) => target(name));
     case 'FILTER':
-      for (const f of scope.filters ?? []) filterByObject.set(f.objectName, f.filter);
-      return { objectNames: [...filterByObject.keys()], filterByObject };
+      return (scope.filters ?? []).map((f) => target(f.objectName, { filter: f.filter }));
+    case 'RECORD':
+      return (scope.records ?? []).map((r) => target(r.objectName, { recordIds: r.recordIds ?? [] }));
+    case 'BULK_CSV':
+      return (scope.bulkCsvIds ?? []).map((b) => target(b.objectName, { recordIds: b.ids ?? [] }));
+    case 'DELETED_ONLY':
+      return (await allRestorableObjects()).map((name) => target(name));
     default:
       return null;
   }
@@ -1002,15 +1034,19 @@ const resolveDryRunObjects = async (
  * read-only, no CSV, no Hudi/delta write, no restore execution.
  *
  * ENTIRE          — COUNT(*) on the object's Hudi table (current state) only,
- *                   narrowed by a FILTER scope's Athena WHERE body when given.
- *                   Deleted records (which fetch-records reconstructs from the
- *                   delta table) are deliberately excluded — the dry-run
- *                   contract counts main Hudi data only.
+ *                   narrowed by a RECORD/BULK_CSV id list or a FILTER scope's
+ *                   Athena WHERE body when given. Deleted records (which
+ *                   fetch-records reconstructs from the delta table) are
+ *                   deliberately excluded — the dry-run contract counts main
+ *                   Hudi data only. Archival configs are ENTIRE-only (see
+ *                   parseDryRunParams) since archival has no delta table.
  * CHANGED_BETWEEN — total/UPDATE/DELETE counts out of the delta table's
  *                   record-level rows (is_schema_change excluded) whose
- *                   change_time falls in [startDate, endDate]. See
- *                   buildDeltaCountSql for why FILTER-scope field conditions
- *                   don't reach this path.
+ *                   change_time falls in [startDate, endDate], narrowed the
+ *                   same way by RECORD/BULK_CSV/FILTER (FILTER compiled
+ *                   through buildDeltaFilterWhere instead — see its own
+ *                   ponytail note for what it does and doesn't match).
+ *                   DELETED_ONLY reports only the DELETE half of that count.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
@@ -1018,10 +1054,23 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
   const config = await getBackupConfigById(params.backupConfigId);
   if (!config || config.userId !== params.userId) return { ok: false, error: 'not_exist' };
 
-  const resolved = await resolveDryRunObjects(params);
-  if (!resolved) return { ok: false, error: 'invalid_restore_scope_type' };
+  // Archival has no delta table — its count only ever runs against main Hudi,
+  // same contract as backup's ENTIRE. (dry-run-diff enforces its own, stricter
+  // ARCHIVAL rule — see dryRunDiff — since it rejects ARCHIVAL outright rather
+  // than falling back to ENTIRE.)
+  if (params.configType === 'ARCHIVAL' && params.type !== 'ENTIRE') {
+    return { ok: false, error: 'archival_dry_run_entire_only' };
+  }
 
-  const { objectNames, filterByObject } = resolved;
+  // DELETED_ONLY has no meaning under ENTIRE — ENTIRE never reads the delta
+  // table a deleted record's last state lives in (see the ENTIRE doc above).
+  if (params.restoreScope.type === 'DELETED_ONLY' && params.type !== 'CHANGED_BETWEEN') {
+    return { ok: false, error: 'invalid_restore_scope_type' };
+  }
+
+  const targets = await resolveDryRunObjects(params);
+  if (!targets) return { ok: false, error: 'invalid_restore_scope_type' };
+
   const databaseName = toGlueId(params.backupConfigId);
   const outputLocation = await buildRetrieveOutputLocation(config);
   const tableFor = (objectApiName: string) =>
@@ -1029,19 +1078,22 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
 
   if (params.type === 'ENTIRE') {
     const objects = await Promise.all(
-      objectNames.map(async (objectApiName): Promise<IDryRunObjectCount> => {
+      targets.map(async (t): Promise<IDryRunObjectCount> => {
         try {
-          const filter = filterByObject.get(objectApiName);
-          const whereBody = filter ? buildAthenaFilterWhere(filter) : null;
+          const whereBody = t.recordIds
+            ? recordIdsWhere(t.recordIds)
+            : t.filter
+              ? buildAthenaFilterWhere(t.filter)
+              : null;
           const count = await runHudiCount(
             databaseName,
-            `${tableFor(objectApiName)}_hudi`,
-            buildHudiCountSql(`${tableFor(objectApiName)}_hudi`, whereBody),
+            `${tableFor(t.objectApiName)}_hudi`,
+            buildHudiCountSql(`${tableFor(t.objectApiName)}_hudi`, whereBody),
             outputLocation
           );
-          return { objectApiName, ok: true, count };
+          return { objectApiName: t.objectApiName, ok: true, count };
         } catch (e) {
-          return { objectApiName, ok: false, count: 0, error: errorMessage(e) };
+          return { objectApiName: t.objectApiName, ok: false, count: 0, error: errorMessage(e) };
         }
       })
     );
@@ -1059,29 +1111,36 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
   // CHANGED_BETWEEN
   if (!params.startDate || !params.endDate) return { ok: false, error: 'date_range_required' };
   const deltaPartition = buildDeltaPartitionWhere(params.startDate, params.endDate);
+  const deletedOnly = params.restoreScope.type === 'DELETED_ONLY';
 
   const objects = await Promise.all(
-    objectNames.map(async (objectApiName): Promise<IDryRunObjectCount> => {
+    targets.map(async (t): Promise<IDryRunObjectCount> => {
       try {
+        const scopeWhere = t.recordIds
+          ? recordIdsWhere(t.recordIds, 'record_id')
+          : t.filter
+            ? buildDeltaFilterWhere(t.filter)
+            : null;
         const counts = await runDeltaCount(
           databaseName,
-          `${tableFor(objectApiName)}_delta`,
-          buildDeltaCountSql(`${tableFor(objectApiName)}_delta`, {
+          `${tableFor(t.objectApiName)}_delta`,
+          buildDeltaCountSql(`${tableFor(t.objectApiName)}_delta`, {
             startDate: params.startDate!,
             endDate: params.endDate!,
             deltaPartition,
+            scopeWhere,
           }),
           outputLocation
         );
         return {
-          objectApiName,
+          objectApiName: t.objectApiName,
           ok: true,
-          count: counts.total,
+          count: deletedOnly ? counts.delete : counts.total,
           updateCount: counts.update,
           deleteCount: counts.delete,
         };
       } catch (e) {
-        return { objectApiName, ok: false, count: 0, updateCount: 0, deleteCount: 0, error: errorMessage(e) };
+        return { objectApiName: t.objectApiName, ok: false, count: 0, updateCount: 0, deleteCount: 0, error: errorMessage(e) };
       }
     })
   );
@@ -1110,14 +1169,6 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
 // records in total".
 export const DIFF_DEFAULT_LIMIT = 50;
 export const DIFF_MAX_LIMIT = 200;
-
-// Scope types dry-run-diff resolves to records. A superset of DryRunScopeType:
-// RECORD/BULK_CSV (id lists) and DELETED_ONLY (deleted-delta rows) select
-// records rather than whole objects, so they have no meaning for a per-object
-// COUNT but a clear one for a diff. INSERTS_ONLY, CHANGE_SINCE and OBJECT_TREE
-// stay unsupported — the first two have no restore-side implementation to
-// mirror, and OBJECT_TREE is ARCHIVAL/Spark-side.
-export type DiffScopeType = DryRunScopeType | 'RECORD' | 'BULK_CSV' | 'DELETED_ONLY';
 
 export interface IDryRunDiffParams extends IDryRunParams {
   // The diff's second half is a live Salesforce read, so unlike the count-only
@@ -1171,7 +1222,10 @@ export interface IDryRunDiffResult {
 
 export type IDryRunDiffOutcome =
   | { ok: true; value: IDryRunDiffResult }
-  | { ok: false; error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' };
+  | {
+      ok: false;
+      error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' | 'dry_run_diff_backup_only';
+    };
 
 /**
  * Resolves an IRestoreScope to the per-object record selection a diff reads —
@@ -1206,7 +1260,7 @@ const resolveDiffTargets = async (params: IDryRunDiffParams): Promise<IDiffTarge
     return objects.map((o) => o.name);
   };
 
-  switch (scope.type as DiffScopeType) {
+  switch (scope.type as DryRunScopeType) {
     case 'ALL':
       return (await allRestorableObjects()).map((name) => target(name));
     case 'OBJECT':
@@ -1374,11 +1428,18 @@ const pairWithSalesforce = async (
  * has never been compressed, whose schema is missing, or whose describe fails
  * comes back with ok:false and its error, rather than failing the whole diff.
  *
+ * BACKUP configs only — an archival restore has no delta history and no live
+ * "current state" to reconstruct against beyond what /dry-run's ENTIRE count
+ * already answers, so an ARCHIVAL config is rejected outright rather than
+ * silently diffing something ENTIRE-only.
+ *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
 const dryRunDiff = async (params: IDryRunDiffParams): Promise<IDryRunDiffOutcome> => {
   const config = await getBackupConfigById(params.backupConfigId);
   if (!config || config.userId !== params.userId) return { ok: false, error: 'not_exist' };
+
+  if (params.configType === 'ARCHIVAL') return { ok: false, error: 'dry_run_diff_backup_only' };
 
   if (params.type === 'CHANGED_BETWEEN' && (!params.startDate || !params.endDate)) {
     return { ok: false, error: 'date_range_required' };
