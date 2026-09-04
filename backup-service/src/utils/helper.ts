@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../lib';
 import { logger } from '../middlewares';
-import { IBackupObject, IRestoreObjectHierarchyNode } from '../models';
+import { IBackupObject } from '../models';
 import { SYSTEM_FIELDS } from '../constant';
 
 type IHandler = (req: IRequest, res: IResponse) => Promise<void>;
