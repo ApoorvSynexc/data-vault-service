@@ -23,7 +23,7 @@ import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { runSalesforceRestore } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
-import { getRestoreExecutionPlan, recursivelyFlatten } from '../../../utils/helper';
+import { recursivelyFlatten } from '../../../utils/helper';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -359,38 +359,9 @@ const salesforceHandler: ICrmBackupHandler = {
         instanceUrl: destination.instanceUrl,
       };
 
-      const objectsByName = new Map(objects.map((object) => [object.name, object]));
-      const { order, directParentNamesByChild } = getRestoreExecutionPlan(objectHierarchy ?? []);
-
-      // Keep only the names actually selected for this restore, in the order
-      // the plan puts them — every parent still precedes every one of its
-      // children (see getRestoreExecutionPlan for how a diamond, e.g. Contact
-      // reachable via both Account and Opportunity->Product, is placed only
-      // after ALL of its parents). Objects the hierarchy never mentioned at
-      // all restore independently, appended in their original order.
-      const orderedNames = order.filter((name) => objectsByName.has(name));
-      const standaloneNames = objects
-        .map((object) => object.name)
-        .filter((name) => !order.includes(name));
-
-      console.log(JSON.stringify({ orderedNames, standaloneNames }));
-      // Restore parents before children, one object at a time — no
-      // batching/parallelism, since a child's own restore depends on every
-      // one of its parents having already landed.
-      let hasAnyFailure = false;
-      const failedNames = new Set<string>();
-      for (const name of [...orderedNames, ...standaloneNames]) {
-        const object = objectsByName.get(name)!;
-        const parentNames = directParentNamesByChild.get(name);
-        if (parentNames && Array.from(parentNames).some((parentName) => failedNames.has(parentName))) {
-          failedNames.add(name);
-          hasAnyFailure = true;
-          logger.error(
-            `[restore] object skipped, objectName:${name}, restoreJobId:${restoreJobId}, reason: a parent object failed to restore`
-          );
-          continue;
-        }
-
+      
+      let hasAnyFailure = false; 
+      for (const object of objects) {
         try {
           await runSalesforceRestore({
             restoreId,
@@ -401,10 +372,9 @@ const salesforceHandler: ICrmBackupHandler = {
             conflict,
           });
         } catch (err: any) {
-          failedNames.add(name);
           hasAnyFailure = true;
           logger.error(
-            `[restore] object failed, objectName:${name}, restoreJobId:${restoreJobId}, error:${err?.message}`
+            `[restore] object failed, objectName:${object.name}, restoreJobId:${restoreJobId}, error:${err?.message}`
           );
         }
       }
