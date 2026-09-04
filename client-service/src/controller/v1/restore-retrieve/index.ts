@@ -487,15 +487,11 @@ const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void>
 };
 
 
-// Scope types the dry-run endpoint can resolve to an object list — see
-// resolveDryRunObjects. RECORD/DELETED_ONLY/INSERTS_ONLY/CHANGE_SINCE/BULK_CSV
-// aren't asked for by the dry-run contract, so they 400 rather than silently
-// counting the wrong thing.
-const VALID_DRYRUN_SCOPE_TYPES = ['ALL', 'OBJECT', 'FIELD', 'FILTER'];
-// /dry-run-diff resolves three more: RECORD and BULK_CSV select records by id,
-// DELETED_ONLY selects the deleted ones — all meaningless to a per-object COUNT
-// but not to a record-level diff. See DiffScopeType in the service.
-const VALID_DIFF_SCOPE_TYPES = [...VALID_DRYRUN_SCOPE_TYPES, 'RECORD', 'BULK_CSV', 'DELETED_ONLY'];
+// Scope types /dry-run and /dry-run-diff can resolve to an object list — see
+// resolveDryRunObjects/resolveDiffTargets. INSERTS_ONLY/CHANGE_SINCE/OBJECT_TREE
+// aren't asked for by either contract, so they 400 rather than silently
+// counting/diffing the wrong thing.
+const VALID_DRYRUN_SCOPE_TYPES = ['ALL', 'OBJECT', 'FIELD', 'FILTER', 'RECORD', 'BULK_CSV', 'DELETED_ONLY'];
 const VALID_FILTER_TYPES = ['AND', 'OR', 'SOQL'];
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
@@ -531,13 +527,22 @@ const validateFilterShape = (
   return { ok: true };
 };
 
-// Validates the object list/filter shape a scope type demands, and — for
-// FILTER — compiles every per-object filter up front so a bad operator or
+// Validates the object list/filter/id-list shape a scope type demands, and —
+// for FILTER — compiles every per-object filter up front so a bad operator or
 // unsupported SOQL shape 400s here rather than surfacing as a per-object
-// failure after Athena has already been queried for the others.
+// failure after Athena has already been queried for the others. DELETED_ONLY
+// needs no shape check — the scope type IS the selection, and the objects it
+// covers are resolved from the config, not the request.
 const validateDryRunScope = (
   restoreScope: IRestoreScope
 ): { ok: true } | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  if (restoreScope.type === 'RECORD') {
+    return validateIdEntries(restoreScope.records, 'recordIds', 'invalid_scope_records');
+  }
+  if (restoreScope.type === 'BULK_CSV') {
+    return validateIdEntries(restoreScope.bulkCsvIds, 'ids', 'invalid_scope_records');
+  }
+
   if (restoreScope.type === 'OBJECT') {
     if (!Array.isArray(restoreScope.objects) || restoreScope.objects.length === 0) {
       return { ok: false, error: 'invalid_scope_objects' };
@@ -602,35 +607,17 @@ const validateIdEntries = (
   return { ok: true };
 };
 
-// validateDryRunScope plus the three record-selecting scopes only the diff
-// accepts. DELETED_ONLY needs no shape check — the scope type IS the selection,
-// and the objects it covers are resolved from the config, not the request.
-const validateDiffScope = (
-  restoreScope: IRestoreScope
-): { ok: true } | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  if (restoreScope.type === 'RECORD') {
-    return validateIdEntries(restoreScope.records, 'recordIds', 'invalid_scope_records');
-  }
-  if (restoreScope.type === 'BULK_CSV') {
-    return validateIdEntries(restoreScope.bulkCsvIds, 'ids', 'invalid_scope_records');
-  }
-  return validateDryRunScope(restoreScope);
-};
-
 /**
  * Parses the /dry-run body — the same source.type/startDate/endDate and
  * selection.restoreScope shape the restore-creation body (POST /) carries,
  * narrowed to what counting needs: no destination, conflict, or schedule.
  *
- * /dry-run-diff sends the identical body, so it shares this parser and passes
- * its own (wider) scope-type list and validator — everything else about the
- * two requests is the same.
+ * /dry-run-diff sends the identical body and shares this parser as-is — both
+ * endpoints now resolve the same scope types (see VALID_DRYRUN_SCOPE_TYPES).
  */
 const parseDryRunParams = (
   body: Record<string, unknown>,
-  userId: string,
-  scopeTypes: string[] = VALID_DRYRUN_SCOPE_TYPES,
-  validateScope: (s: IRestoreScope) => { ok: true } | { ok: false; error: Parameters<typeof makeResponse>[4] } = validateDryRunScope
+  userId: string
 ):
   | { ok: true; value: IDryRunParams }
   | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
@@ -647,16 +634,20 @@ const parseDryRunParams = (
   if (!VALID_RETRIEVE_TYPES.includes(type)) {
     return { ok: false, error: 'invalid_retrieve_type' };
   }
+  // The ARCHIVAL restriction differs by endpoint — /dry-run is ENTIRE-only,
+  // /dry-run-diff rejects ARCHIVAL outright — so each checks it itself
+  // (dryRunRestore / dryRunDiff) rather than this shared parser picking one
+  // error message for both.
 
   const restoreScope = selection?.restoreScope as IRestoreScope | undefined;
   if (!restoreScope || typeof restoreScope !== 'object') {
     return { ok: false, error: 'invalid_restore_scope' };
   }
-  if (!scopeTypes.includes(restoreScope.type)) {
+  if (!VALID_DRYRUN_SCOPE_TYPES.includes(restoreScope.type)) {
     return { ok: false, error: 'invalid_restore_scope_type' };
   }
 
-  const scopeCheck = validateScope(restoreScope);
+  const scopeCheck = validateDryRunScope(restoreScope);
   if (!scopeCheck.ok) return scopeCheck;
 
   const value: IDryRunParams = {
@@ -694,12 +685,16 @@ const parseDryRunParams = (
  *   backupConfigId: string
  *   configType:     'BACKUP' | 'ARCHIVAL'   (required — which config type backupConfigId belongs to)
  *   source: { type: 'ENTIRE' | 'CHANGED_BETWEEN', startDate?, endDate? }
- *   selection: { restoreScope: IRestoreScope }   (type: ALL | OBJECT | FIELD | FILTER)
+ *   selection: { restoreScope: IRestoreScope }
+ *       (type: ALL | OBJECT | FIELD | FILTER | RECORD | BULK_CSV | DELETED_ONLY)
  * }
  *
  * Counts how many records a restore matching this configuration would touch —
  * read-only. Never writes, restores, or produces a CSV. See dryRunRestore for
  * what ENTIRE vs CHANGED_BETWEEN each count.
+ *
+ * ARCHIVAL configs only support source.type ENTIRE — archival has no delta
+ * table, so CHANGED_BETWEEN 400s with archival_dry_run_entire_only.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
@@ -752,15 +747,12 @@ const dryRunHandler = async (req: IRequest, res: IResponse): Promise<void> => {
  * fieldNames), RECORD and BULK_CSV only their listed ids, and DELETED_ONLY only
  * the deleted records.
  *
+ * BACKUP configs only — ARCHIVAL 400s with dry_run_diff_backup_only.
+ *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
 const dryRunDiffHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const parsed = parseDryRunParams(
-    req.body as Record<string, unknown>,
-    req.user!.userId,
-    VALID_DIFF_SCOPE_TYPES,
-    validateDiffScope
-  );
+  const parsed = parseDryRunParams(req.body as Record<string, unknown>, req.user!.userId);
   if (!parsed.ok) {
     makeResponse(req, res, 400, false, parsed.error);
     return;
