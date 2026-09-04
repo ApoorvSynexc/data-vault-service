@@ -239,7 +239,10 @@
     summary: Get record counts a restore configuration would touch (read-only)
     description: >
       ENTIRE returns main Hudi-only counts; CHANGED_BETWEEN returns delta
-      total/UPDATE/DELETE counts. No restore is performed.
+      total/UPDATE/DELETE counts. selection.restoreScope.type supports ALL,
+      OBJECT, FIELD, FILTER, RECORD, BULK_CSV, DELETED_ONLY (DELETED_ONLY only
+      under CHANGED_BETWEEN). ARCHIVAL configs only support source.type
+      ENTIRE — they have no delta table. No restore is performed.
     security: [{ cookieAuth: [] }]
     requestBody:
       required: true
@@ -261,6 +264,7 @@
     summary: Same as dry-run, but returns the records themselves paired with the destination org's current version
     description: >
       Each result pairs {changeRecord, salesforceRecord}, capped per object.
+      BACKUP configs only — ARCHIVAL 400s with dry_run_diff_backup_only.
       Read-only, no restore is performed.
     security: [{ cookieAuth: [] }]
     requestBody:

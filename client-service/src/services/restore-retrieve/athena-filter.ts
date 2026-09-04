@@ -1,3 +1,8 @@
+// Referenced explicitly so the self-check at the bottom (`require`, `module`)
+// type-checks under `ts-node src/services/restore-retrieve/athena-filter.ts` —
+// same directive athena-fetch.ts and restore-reconstruct.ts carry for the same reason.
+/// <reference types="node" />
+
 import { parseQuery } from '@jetstreamapp/soql-parser-js';
 import type { IRestoreFilters, IRestoreFilterField } from '../../models';
 
@@ -40,6 +45,12 @@ const quoteIdentifier = (name: string): string => {
   if (!IDENTIFIER.test(name)) throw new FilterError('invalid_filter_field');
   return `"${name}"`;
 };
+
+// Resolves a filter field name to the SQL expression to compare against.
+// Defaults to a plain quoted column (the Hudi table); the delta table's
+// FILTER-scope count instead resolves through deltaFieldExpr below, since its
+// fields live inside a JSON column rather than as flat columns of their own.
+type ColExpr = (name: string) => string;
 
 // Restore filter operator token (FILTER_OPERATOR's stored symbol, e.g. '>=',
 // 'LIKE', 'IN' — see constant/index.ts) → Presto operator. The set is closed:
@@ -94,8 +105,8 @@ const formatLike = (raw: unknown): string => {
   return `'${pattern}'`;
 };
 
-const buildFieldCondition = (f: IRestoreFilterField): string => {
-  const column = quoteIdentifier(f.name);
+const buildFieldCondition = (f: IRestoreFilterField, colExpr: ColExpr): string => {
+  const column = colExpr(f.name);
   const op = resolveOperator(f.operator);
   const dataType = f.dataType || 'string';
 
@@ -115,9 +126,13 @@ const buildFieldCondition = (f: IRestoreFilterField): string => {
   return `${column} ${op} ${formatValue(f.value, dataType)}`;
 };
 
-const buildStructuredWhere = (fields: IRestoreFilterField[], joiner: ' AND ' | ' OR '): string | null => {
+const buildStructuredWhere = (
+  fields: IRestoreFilterField[],
+  joiner: ' AND ' | ' OR ',
+  colExpr: ColExpr
+): string | null => {
   if (fields.length === 0) return null;
-  return fields.map(buildFieldCondition).join(joiner);
+  return fields.map((f) => buildFieldCondition(f, colExpr)).join(joiner);
 };
 
 // ── SOQL filters ──────────────────────────────────────────────────────────────
@@ -143,7 +158,7 @@ interface WhereNode {
 // query needs it.
 const UNSUPPORTED_LITERALS = new Set(['DATE_LITERAL', 'DATE_N_LITERAL', 'DATE', 'DATETIME']);
 
-const renderSoqlLeaf = (n: WhereNode): string => {
+const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr): string => {
   const field = n.field ?? '';
   if (field.includes('.')) throw new FilterError('soql_relationship_not_supported');
   if (n.valueQuery || n.literalType === 'SUBQUERY') throw new FilterError('soql_subquery_not_supported');
@@ -157,20 +172,20 @@ const renderSoqlLeaf = (n: WhereNode): string => {
   const value = Array.isArray(n.value) ? `(${n.value.join(', ')})` : String(n.value ?? '');
   const open = '('.repeat(n.openParen ?? 0);
   const close = ')'.repeat(n.closeParen ?? 0);
-  return `${open}${quoteIdentifier(field)} ${op} ${value}${close}`;
+  return `${open}${colExpr(field)} ${op} ${value}${close}`;
 };
 
-const renderSoqlWhere = (n: WhereNode | null | undefined): string => {
+const renderSoqlWhere = (n: WhereNode | null | undefined, colExpr: ColExpr): string => {
   if (!n) return '';
-  if (n.field) return renderSoqlLeaf(n);
-  const left = renderSoqlWhere(n.left);
-  const right = renderSoqlWhere(n.right);
+  if (n.field) return renderSoqlLeaf(n, colExpr);
+  const left = renderSoqlWhere(n.left, colExpr);
+  const right = renderSoqlWhere(n.right, colExpr);
   if (!right) return left;
   // At a branch node the operator is the AND / OR connective.
   return `${left} ${n.operator} ${right}`;
 };
 
-const buildSoqlWhere = (soqlQuery: string): string | null => {
+const buildSoqlWhere = (soqlQuery: string, colExpr: ColExpr): string | null => {
   const trimmed = soqlQuery.trim();
   if (!trimmed) return null;
 
@@ -186,17 +201,41 @@ const buildSoqlWhere = (soqlQuery: string): string | null => {
     throw new FilterError('invalid_soql');
   }
 
-  const body = renderSoqlWhere(ast.where as unknown as WhereNode).trim();
+  const body = renderSoqlWhere(ast.where as unknown as WhereNode, colExpr).trim();
   return body || null;
 };
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-export const buildAthenaFilterWhere = (filters: IRestoreFilters): string | null => {
-  if (filters.type === 'SOQL') return buildSoqlWhere(filters.soqlQuery ?? '');
+export const buildAthenaFilterWhere = (filters: IRestoreFilters, colExpr: ColExpr = quoteIdentifier): string | null => {
+  if (filters.type === 'SOQL') return buildSoqlWhere(filters.soqlQuery ?? '', colExpr);
   const joiner = filters.type === 'OR' ? ' OR ' : ' AND ';
-  return buildStructuredWhere(filters.fields ?? [], joiner);
+  return buildStructuredWhere(filters.fields ?? [], joiner, colExpr);
 };
+
+/**
+ * Delta-table column resolver for FILTER-scope conditions under
+ * CHANGED_BETWEEN: change_data is JSON, not flat columns, and its shape
+ * depends on change_type — a DELETE row is a flat snapshot
+ * ({"Field": value}), an UPDATE row nests {"Field": {"old":..., "new":...}}
+ * per changed field only.
+ *
+ * ponytail: matches only deltas whose payload actually names the field — an
+ * UPDATE delta that didn't touch this field has no value here to compare, so
+ * it's excluded even if the record's current (untouched) state would match.
+ * Upgrade path: LEFT JOIN the object's _hudi table and COALESCE onto its
+ * current value for fields absent from change_data, if a delta filter needs
+ * full correctness.
+ */
+const deltaFieldExpr: ColExpr = (name) => {
+  quoteIdentifier(name); // validates; throws FilterError before name is interpolated below
+  const del = `json_extract_scalar(change_data, '$["${name}"]')`;
+  const upd = `json_extract_scalar(change_data, '$["${name}"]."new"')`;
+  return `CASE WHEN change_type = 'DELETE' THEN ${del} ELSE ${upd} END`;
+};
+
+export const buildDeltaFilterWhere = (filters: IRestoreFilters): string | null =>
+  buildAthenaFilterWhere(filters, deltaFieldExpr);
 
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npx ts-node src/services/restore-retrieve/athena-filter.ts
@@ -267,6 +306,29 @@ if (require.main === module) {
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Owner.Name = 'x'" }), 'soql_relationship_not_supported');
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate = LAST_N_DAYS:7' }), 'soql_date_filter_not_supported');
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'this is not soql !!' }), 'invalid_soql');
+
+  // Delta-table FILTER (buildDeltaFilterWhere): fields resolve through a
+  // change_type-aware CASE over json_extract_scalar instead of a plain column.
+  assert.strictEqual(
+    buildDeltaFilterWhere({ type: 'AND', fields: [{ name: 'Amount', dataType: 'number', operator: '>=', value: '100' }] }),
+    `CASE WHEN change_type = 'DELETE' THEN json_extract_scalar(change_data, '$["Amount"]') ELSE json_extract_scalar(change_data, '$["Amount"]."new"') END >= 100`
+  );
+  // Same operator/value/AND-OR handling as the Hudi path — only the column
+  // expression differs.
+  assert.strictEqual(
+    buildDeltaFilterWhere({ type: 'OR', fields: [{ name: 'Stage', dataType: 'string', operator: 'LIKE', value: 'Won' }] }),
+    `CASE WHEN change_type = 'DELETE' THEN json_extract_scalar(change_data, '$["Stage"]') ELSE json_extract_scalar(change_data, '$["Stage"]."new"') END LIKE '%Won%'`
+  );
+  // Injection defence still fires through the delta path.
+  expectError(
+    () => buildDeltaFilterWhere({ type: 'AND', fields: [{ name: 'Name; DROP', dataType: 'string', operator: '=', value: 'x' }] }),
+    'invalid_filter_field'
+  );
+  // Omitted colExpr on buildAthenaFilterWhere still defaults to the Hudi path.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'X', dataType: 'string', operator: '=', value: 'y' }] }),
+    `"X" = 'y'`
+  );
 
   console.log('athena-filter self-check passed');
 }
