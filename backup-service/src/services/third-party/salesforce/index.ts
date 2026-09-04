@@ -359,8 +359,7 @@ const salesforceHandler: ICrmBackupHandler = {
         instanceUrl: destination.instanceUrl,
       };
 
-      
-      let hasAnyFailure = false; 
+      let hasAnyFailure = false;
       for (const object of objects) {
         try {
           await runSalesforceRestore({

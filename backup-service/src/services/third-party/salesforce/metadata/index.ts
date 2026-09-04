@@ -21,7 +21,6 @@ export const salesforceMetadataHandler = async (
   salesforceContext?: ISalesforceContext
 ) => {
   const { metadataType, backupConfig, backupJobId, object } = params;
-  let { objectNames = [] } = params as { objectNames?: string[] };
   const backupConfigId = backupConfig.backupConfigId;
   const objectName = object.name;
   try {
@@ -43,9 +42,9 @@ export const salesforceMetadataHandler = async (
       case 'fields': {
         let fields = describedObject.fields;
         const nonNullCompoundFieldNames = describedObject.fields
-          .filter(f => (f.compoundFieldName && f.compoundFieldName !== f.name))
-          .map(f => f.compoundFieldName);
-        fields = fields.filter(f => !nonNullCompoundFieldNames.includes(f.name));
+          .filter((f) => f.compoundFieldName && f.compoundFieldName !== f.name)
+          .map((f) => f.compoundFieldName);
+        fields = fields.filter((f) => !nonNullCompoundFieldNames.includes(f.name));
         fields = fields.filter(isQueryableField);
         const diff = await schemaHandler(params, fields);
         return { diff, metadataType, fields };
@@ -60,7 +59,7 @@ export const salesforceMetadataHandler = async (
           backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule'
         );
         if (filteredObjects.length) {
-          const objectNames = filteredObjects.map(o => o.name);
+          const objectNames = filteredObjects.map((o) => o.name);
           children = children.filter((child) => objectNames.includes(child.childSObject));
         }
         const diff = await childHandler(params, children);
