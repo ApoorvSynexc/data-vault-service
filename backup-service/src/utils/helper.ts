@@ -471,67 +471,125 @@ interface HierarchyNode {
   children: HierarchyNode[];
 }
 
-function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
+function buildParentToChildHierarchy(
+  data: InputNode[]
+): HierarchyNode[] {
+
+  // name -> possible parents
+  const parentMap = new Map<string, Set<string>>();
+
+  function collect(node: InputNode) {
+    if (!parentMap.has(node.name)) {
+      parentMap.set(node.name, new Set());
+    }
+
+    for (const parent of node.parents ?? []) {
+      parentMap.get(node.name)!.add(parent.name);
+      collect(parent);
+    }
+  }
+
+  // Collect all relationships
+  for (const item of data) {
+    collect(item);
+  }
+
+  // Calculate how deep a node can be from the root
+  const depthCache = new Map<string, number>();
+
+  function getDepth(
+    name: string,
+    visiting = new Set<string>()
+  ): number {
+
+    if (depthCache.has(name)) {
+      return depthCache.get(name)!;
+    }
+
+    // Protect against circular relationships
+    if (visiting.has(name)) {
+      return 0;
+    }
+
+    visiting.add(name);
+
+    const parents = parentMap.get(name);
+
+    if (!parents || parents.size === 0) {
+      depthCache.set(name, 0);
+      return 0;
+    }
+
+    let maxDepth = 0;
+
+    for (const parent of parents) {
+      maxDepth = Math.max(
+        maxDepth,
+        getDepth(parent, new Set(visiting)) + 1
+      );
+    }
+
+    depthCache.set(name, maxDepth);
+
+    return maxDepth;
+  }
+
+  // --------------------------------------------------
+  // Select the deepest parent for every node
+  // --------------------------------------------------
+
+  const selectedParent = new Map<string, string>();
+
+  for (const [child, parents] of parentMap) {
+
+    let bestParent: string | undefined;
+    let bestDepth = -1;
+
+    for (const parent of parents) {
+      const depth = getDepth(parent);
+
+      if (depth > bestDepth) {
+        bestDepth = depth;
+        bestParent = parent;
+      }
+    }
+
+    if (bestParent) {
+      selectedParent.set(child, bestParent);
+    }
+  }
+
+  // --------------------------------------------------
+  // Build final hierarchy
+  // --------------------------------------------------
+
   const nodes = new Map<string, HierarchyNode>();
 
-  function merge(target: HierarchyNode, source: HierarchyNode) {
-    for (const sourceChild of source.children) {
-      const existingChild = target.children.find(
-        child => child.name === sourceChild.name
-      );
-
-      if (existingChild) {
-        merge(existingChild, sourceChild);
-      } else {
-        target.children.push(sourceChild);
-      }
-    }
-  }
-
-  function process(item: InputNode): HierarchyNode {
-    let node = nodes.get(item.name);
-
-    if (!node) {
-      node = {
-        name: item.name,
+  function getNode(name: string): HierarchyNode {
+    if (!nodes.has(name)) {
+      nodes.set(name, {
+        name,
         children: []
-      };
-
-      nodes.set(item.name, node);
+      });
     }
 
-    for (const parent of item.parents ?? []) {
-      const parentNode = process(parent);
-
-      // We are building from parent -> child
-      const existingChild = parentNode.children.find(
-        child => child.name === node!.name
-      );
-
-      if (existingChild) {
-        merge(existingChild, node);
-      } else {
-        parentNode.children.push(node);
-      }
-    }
-
-    return node;
+    return nodes.get(name)!;
   }
 
-  data.forEach(process);
+  for (const [child, parent] of selectedParent) {
+    const parentNode = getNode(parent);
+    const childNode = getNode(child);
 
-  // Find root nodes
-  const children = new Set<string>();
-
-  for (const node of nodes.values()) {
-    for (const child of node.children) {
-      children.add(child.name);
+    if (!parentNode.children.some(x => x.name === child)) {
+      parentNode.children.push(childNode);
     }
   }
 
-  return [...nodes.values()].filter(
-    node => !children.has(node.name)
-  );
+  // Find roots
+  const children = new Set(selectedParent.keys());
+
+  return [...nodes.values()]
+    .filter(node => !children.has(node.name));
 }
 
 export {
