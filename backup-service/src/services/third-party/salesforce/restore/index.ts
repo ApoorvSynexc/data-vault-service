@@ -1,6 +1,6 @@
 import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
-import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
+import { listS3Objects, listS3Prefixes, streamCsvLinesFromS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
 import { SalesforceTokens } from '../api-request';
 import {
@@ -292,6 +292,74 @@ export const runSalesforceRestore = async (
     'upsert',
     externalIdFieldName
   );
+
+  logger.info(
+    `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${'upsert'}`
+  );
+  return 'SUCCESS';
+};
+
+export const runSalesforceRollback = async (
+  payload: RunSalesforceRestorePayload
+): Promise<'SUCCESS' | 'FAILED'> => {
+  let externalIdFieldName = 'Id';
+  const {
+    restoreId,
+    restoreJobId,
+    object,
+    sourceS3Credentials,
+    destinationSalesforceCredentials,
+  } = payload;
+
+  logger.info(
+    `[Rollback] execution requested, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}`
+  );
+
+  const s3Config: IDestinationConfig = {
+    bucketName: sourceS3Credentials.bucketName,
+    region: sourceS3Credentials.region,
+    accessKeyId: sourceS3Credentials.accessKeyId,
+    secretAccessKey: sourceS3Credentials.secretAccessKey,
+  };
+
+  const tokens: SalesforceTokens = {
+    accessToken: destinationSalesforceCredentials.access_token,
+    refreshToken: destinationSalesforceCredentials.refresh_token,
+    crmId: '', // not carried on this payload — unused by the plain-fetch calls below
+    backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
+  };
+
+  const path = `${sourceS3Credentials.csvFilePath}/rollback/${object.name}`;
+  const keys = await listS3Objects(s3Config, path);
+
+  if (keys.length) {
+    for (let index = 0; index < keys.length; index++) {
+      let lastIndex = 1;
+      const key = keys[index];
+
+      if (key.endsWith('/')) {
+        lastIndex = 2;
+      }
+
+      const splitKeys = key.split('/');
+      const operation = splitKeys[splitKeys.length - lastIndex] as "update" | "delete";
+
+      if(operation === 'delete'){
+        externalIdFieldName = 'DC_External_Id__c';
+      }
+
+      await restoreObjectData(
+        restoreJobId,
+        s3Config,
+        path,
+        object.name,
+        destinationSalesforceCredentials.instanceUrl,
+        tokens,
+        operation,
+        externalIdFieldName
+      );
+    }
+  }
 
   logger.info(
     `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${'upsert'}`

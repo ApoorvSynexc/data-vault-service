@@ -14,6 +14,7 @@ import {
   OBJECT_STATUS,
   CORE_SERVICE,
   INTERNAL_SECRET,
+  RESTORE_JOB_STATUS,
 } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
@@ -159,7 +160,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
   } finally {
     activeJobs.delete(backupJobId);
   }
@@ -272,8 +273,8 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
         status: JOB_STATUS.failed,
         completedAt: dayjs().toISOString(),
         errorMessage: err?.message ?? 'Unknown error',
-      }).catch(() => {}),
-      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => {}),
+      }).catch(() => { }),
+      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => { }),
     ]);
   } finally {
     activeJobs.delete(backupJobId);
@@ -332,12 +333,12 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
 
     await updateRestoreJobStatus({
       restoreJobId,
-      status: result === 'FAILED' ? JOB_STATUS.failed : JOB_STATUS.success,
+      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.completed,
       completedAt: dayjs().toISOString(),
     });
     await updateRestore({
       restoreId,
-      status: result === 'FAILED' ? JOB_STATUS.failed : JOB_STATUS.success,
+      status: 'SUCCESS'
     });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
@@ -346,7 +347,83 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
+    await updateRestore({
+      restoreId,
+      status: 'SUCCESS'
+    });
+  } finally {
+    activeJobs.delete(restoreJobId);
+  }
+};
+
+export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
+  const { restoreId, restoreJobId, source, destination, conflict } = job;
+  const startedAt = dayjs().toISOString();
+
+  activeJobs.add(restoreJobId);
+
+  // Same atomic RUNNING transition as backup/archival — see runBackupJob for the
+  // concurrent-resume rationale.
+  try {
+    await updateRestoreJobStatus({
+      restoreJobId,
+      status: JOB_STATUS.running,
+      startedAt,
+      conditionExpression: '#status <> :runningStatus',
+      conditionExpressionValues: { ':runningStatus': JOB_STATUS.running },
+    });
+  } catch (err: any) {
+    activeJobs.delete(restoreJobId);
+    if (err.name === 'ConditionalCheckFailedException') {
+      throw new HttpError(409, `Restore job ${restoreJobId} is already running`);
+    }
+    throw err;
+  }
+
+  try {
+    if (!source) {
+      throw new Error(`Restore job ${restoreJobId}: source credentials are missing`);
+    }
+
+    const restore = await getRestoreById(restoreId);
+    if (!restore) {
+      throw new Error(`Restore job ${restoreJobId}: parent restore ${restoreId} not found`);
+    }
+
+    const restoreSource = source as unknown as IRestoreJobSource;
+    const restoreDestination = destination as unknown as IRestoreJobDestination;
+
+    const handler = getRestoreCrmHandler(restoreDestination.crmName);
+    const result = await handler.runRollback(
+      restoreId,
+      restoreJobId,
+      restoreSource,
+      restoreDestination,
+      conflict,
+    );
+
+    await updateRestoreJobStatus({
+      restoreJobId,
+      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.completed,
+      completedAt: dayjs().toISOString(),
+    });
+    await updateRestore({
+      restoreId,
+      status: 'SUCCESS'
+    });
+  } catch (err: any) {
+    logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
+    await updateRestoreJobStatus({
+      restoreJobId,
+      status: JOB_STATUS.failed,
+      completedAt: dayjs().toISOString(),
+      errorMessage: err?.message ?? 'Unknown error',
+    }).catch(() => { });
+    await updateRestore({
+      restoreId,
+      status: 'SUCCESS'
+    });
   } finally {
     activeJobs.delete(restoreJobId);
   }
