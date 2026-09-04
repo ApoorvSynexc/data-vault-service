@@ -451,7 +451,7 @@ const salesforceHandler: ICrmBackupHandler = {
       }
 
       logger.info(
-        `Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, result=${finalStatus}`
+        `Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`
       );
 
       const freshJob = await getRestoreJobById(restoreJobId);
