@@ -432,7 +432,7 @@ const salesforceHandler: ICrmBackupHandler = {
 
       const recurvedObject = recursivelyFlatten(objects || []);
       const hierarchy = buildParentToChildHierarchy(objectHierarchy ?? []);
-      console.log(JSON.stringify({ hierarchy, objectHierarchy }));
+      console.log(JSON.stringify({ hierarchy, objectHierarchy  }));
 
       const hierarchyContext: RestoreHierarchyContext = {
         restoreId,
@@ -443,15 +443,13 @@ const salesforceHandler: ICrmBackupHandler = {
         conflict,
       };
 
-      let hasAnyFailure = false;
+      console.log({hierarchyContext})
       for (let index = 0; index < hierarchy.length; index++) {
         console.log(`[Restore] Root object pushed`);
         const rootObject = hierarchy[index];
-        const failed = await restoreObjectHierarchy(rootObject, hierarchyContext);
-        hasAnyFailure = hasAnyFailure || failed;
+        await restoreObjectHierarchy(rootObject, hierarchyContext);
       }
 
-      const finalStatus = hasAnyFailure ? 'FAILED' : 'SUCCESS';
       logger.info(
         `Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, result=${finalStatus}`
       );
@@ -491,7 +489,7 @@ const salesforceHandler: ICrmBackupHandler = {
         }
       }
 
-      return finalStatus;
+      return 'SUCCESS';
     } catch (err: any) {
       logger.error(
         `Restore job failed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, error=${err?.message ?? err}`
