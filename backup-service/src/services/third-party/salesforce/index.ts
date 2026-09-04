@@ -23,7 +23,7 @@ import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { runSalesforceRestore } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
-import { recursivelyFlatten } from '../../../utils/helper';
+import { buildParentToChildHierarchy, recursivelyFlatten } from '../../../utils/helper';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -332,7 +332,7 @@ const salesforceHandler: ICrmBackupHandler = {
     objectHierarchy?: IRestoreObjectHierarchyNode[]
   ): Promise<'SUCCESS' | 'FAILED'> => {
     try {
-      const objects = destination.objects;
+      const objects = destination.objects as any;
       const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
         'ciphertext' in source.encryptedKeys
           ? JSON.parse(decrypt(source.encryptedKeys))
@@ -359,8 +359,16 @@ const salesforceHandler: ICrmBackupHandler = {
         instanceUrl: destination.instanceUrl,
       };
 
+      const recurvedObject = recursivelyFlatten(objects || []);
+      const hierarchy = buildParentToChildHierarchy(objectHierarchy ?? []);
+      console.log(JSON.stringify({ hierarchy }));
       let hasAnyFailure = false;
-      for (const object of objects) {
+      for (const hierarchyObject of hierarchy) {
+        const object = recurvedObject.find((obj) => obj.name === hierarchyObject.name);
+        if (!object) {
+          continue;
+        }
+
         try {
           await runSalesforceRestore({
             restoreId,

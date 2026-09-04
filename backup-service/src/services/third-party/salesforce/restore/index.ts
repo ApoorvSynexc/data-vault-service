@@ -14,7 +14,7 @@ import {
 interface RunSalesforceRestorePayload {
   restoreId: string;
   restoreJobId: string;
-  object: { id: string; name: string; status: string };
+  object: { id: string; name: string; status?: string };
   sourceS3Credentials: {
     accessKeyId: string;
     secretAccessKey: string;
