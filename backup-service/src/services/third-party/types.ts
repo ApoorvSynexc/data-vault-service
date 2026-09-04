@@ -36,6 +36,13 @@ export interface ICrmBackupHandler {
     conflict: IRestoreConflict,
     objectHierarchy?: IRestoreObjectHierarchyNode[]
   ): Promise<'SUCCESS' | 'FAILED'>;
+  runRollback(
+    restoreId: string,
+    restoreJobId: string,
+    source: IRestoreJobSource,
+    destination: IRestoreJobDestination,
+    conflict: IRestoreConflict,
+  ): Promise<'SUCCESS' | 'FAILED'>;
 }
 
 export interface ICrmRealtimeHandler {
