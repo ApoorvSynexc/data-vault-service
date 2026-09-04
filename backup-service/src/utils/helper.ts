@@ -387,6 +387,80 @@ const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
 const withSystemFields = (fieldNames: string[]): string[] =>
   Array.from(new Set([...fieldNames, ...SYSTEM_FIELDS]));
 
+// interface InputNode {
+//   name: string;
+//   parents?: InputNode[];
+// }
+
+// interface HierarchyNode {
+//   name: string;
+//   children: HierarchyNode[];
+// }
+
+// interface InternalNode {
+//   name: string;
+//   children: Map<string, InternalNode>;
+// }
+
+// function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
+//   const nodes = new Map<string, InternalNode>();
+
+//   function getNode(name: string): InternalNode {
+//     let node = nodes.get(name);
+
+//     if (!node) {
+//       node = {
+//         name,
+//         children: new Map<string, InternalNode>(),
+//       };
+
+//       nodes.set(name, node);
+//     }
+
+//     return node;
+//   }
+
+//   function process(item: InputNode): void {
+//     const child = getNode(item.name);
+
+//     for (const parent of item.parents ?? []) {
+//       const parentNode = getNode(parent.name);
+
+//       // parent -> child
+//       parentNode.children.set(child.name, child);
+
+//       // Process parent's parents
+//       process(parent);
+//     }
+//   }
+
+//   // Build the complete relationship tree
+//   for (const item of data) {
+//     process(item);
+//   }
+
+//   // Find root nodes
+//   const hasParent = new Set<string>();
+
+//   for (const node of nodes.values()) {
+//     for (const child of node.children.values()) {
+//       hasParent.add(child.name);
+//     }
+//   }
+
+//   // Convert internal Map structure to final array structure
+//   function convert(node: InternalNode): HierarchyNode {
+//     return {
+//       name: node.name,
+//       children: Array.from(node.children.values()).map(convert),
+//     };
+//   }
+
+//   return Array.from(nodes.values())
+//     .filter((node) => !hasParent.has(node.name))
+//     .map(convert);
+// }
+
 interface InputNode {
   name: string;
   parents?: InputNode[];
@@ -397,68 +471,67 @@ interface HierarchyNode {
   children: HierarchyNode[];
 }
 
-interface InternalNode {
-  name: string;
-  children: Map<string, InternalNode>;
-}
-
 function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
-  const nodes = new Map<string, InternalNode>();
+  const nodes = new Map<string, HierarchyNode>();
 
-  function getNode(name: string): InternalNode {
-    let node = nodes.get(name);
+  function merge(target: HierarchyNode, source: HierarchyNode) {
+    for (const sourceChild of source.children) {
+      const existingChild = target.children.find(
+        child => child.name === sourceChild.name
+      );
+
+      if (existingChild) {
+        merge(existingChild, sourceChild);
+      } else {
+        target.children.push(sourceChild);
+      }
+    }
+  }
+
+  function process(item: InputNode): HierarchyNode {
+    let node = nodes.get(item.name);
 
     if (!node) {
       node = {
-        name,
-        children: new Map<string, InternalNode>(),
+        name: item.name,
+        children: []
       };
 
-      nodes.set(name, node);
+      nodes.set(item.name, node);
+    }
+
+    for (const parent of item.parents ?? []) {
+      const parentNode = process(parent);
+
+      // We are building from parent -> child
+      const existingChild = parentNode.children.find(
+        child => child.name === node!.name
+      );
+
+      if (existingChild) {
+        merge(existingChild, node);
+      } else {
+        parentNode.children.push(node);
+      }
     }
 
     return node;
   }
 
-  function process(item: InputNode): void {
-    const child = getNode(item.name);
-
-    for (const parent of item.parents ?? []) {
-      const parentNode = getNode(parent.name);
-
-      // parent -> child
-      parentNode.children.set(child.name, child);
-
-      // Process parent's parents
-      process(parent);
-    }
-  }
-
-  // Build the complete relationship tree
-  for (const item of data) {
-    process(item);
-  }
+  data.forEach(process);
 
   // Find root nodes
-  const hasParent = new Set<string>();
+  const children = new Set<string>();
 
   for (const node of nodes.values()) {
-    for (const child of node.children.values()) {
-      hasParent.add(child.name);
+    for (const child of node.children) {
+      children.add(child.name);
     }
   }
 
-  // Convert internal Map structure to final array structure
-  function convert(node: InternalNode): HierarchyNode {
-    return {
-      name: node.name,
-      children: Array.from(node.children.values()).map(convert),
-    };
-  }
-
-  return Array.from(nodes.values())
-    .filter((node) => !hasParent.has(node.name))
-    .map(convert);
+  return [...nodes.values()].filter(
+    node => !children.has(node.name)
+  );
 }
 
 export {
