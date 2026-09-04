@@ -444,7 +444,9 @@ const salesforceHandler: ICrmBackupHandler = {
       };
 
       let hasAnyFailure = false;
-      for (const rootObject of hierarchy) {
+      for (let index = 0; index < hierarchy.length; index++) {
+        console.log(`[Restore] Root object pushed`);
+        const rootObject = hierarchy[index];
         const failed = await restoreObjectHierarchy(rootObject, hierarchyContext);
         hasAnyFailure = hasAnyFailure || failed;
       }
