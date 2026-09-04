@@ -15,7 +15,7 @@ const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   });
 
   // Fire-and-forget: errors are caught inside runBackupJob and persisted to DynamoDB
-  runBackupJob({...job, triggerSource}).catch(() => {});
+  runBackupJob({ ...job, triggerSource }).catch(() => {});
 };
 
 const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
