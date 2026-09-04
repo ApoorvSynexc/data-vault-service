@@ -21,7 +21,7 @@ import { getRestoreJobById } from '../../restore-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
-import { runSalesforceRestore } from './restore';
+import { runSalesforceRestore, runSalesforceRollback } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
 import { buildParentToChildHierarchy, recursivelyFlatten } from '../../../utils/helper';
@@ -432,7 +432,7 @@ const salesforceHandler: ICrmBackupHandler = {
 
       const recurvedObject = recursivelyFlatten(objects || []);
       const hierarchy = buildParentToChildHierarchy(objectHierarchy ?? []);
-      console.log(JSON.stringify({ hierarchy, objectHierarchy  }));
+      console.log(JSON.stringify({ hierarchy, objectHierarchy }));
 
       const hierarchyContext: RestoreHierarchyContext = {
         restoreId,
@@ -492,6 +492,104 @@ const salesforceHandler: ICrmBackupHandler = {
     } catch (err: any) {
       logger.error(
         `Restore job failed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, error=${err?.message ?? err}`
+      );
+      throw err;
+    }
+  },
+  runRollback: async (
+    restoreId: string,
+    restoreJobId: string,
+    source: IRestoreJobSource,
+    destination: IRestoreJobDestination,
+    conflict: IRestoreConflict,
+  ): Promise<'SUCCESS' | 'FAILED'> => {
+    try {
+      const objects = destination.objects as any;
+      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+        'ciphertext' in source.encryptedKeys
+          ? JSON.parse(decrypt(source.encryptedKeys))
+          : source.encryptedKeys;
+
+      const destinationSalesforceCredentials: {
+        access_token: string;
+        refresh_token: string;
+        instanceUrl: string;
+      } =
+        'ciphertext' in destination.encryptedTokens
+          ? JSON.parse(decrypt(destination.encryptedTokens))
+          : destination.encryptedTokens;
+
+      const resolvedSourceS3Credentials = {
+        ...sourceS3Credentials,
+        backupConfigId: source.backupConfigId,
+        bucketName: source.bucketName,
+        region: source.region,
+        csvFilePath: source.csvFilePath,
+      };
+      const resolvedDestinationCredentials = {
+        ...destinationSalesforceCredentials,
+        instanceUrl: destination.instanceUrl,
+      };
+
+      const hierarchyContext = {
+        restoreId,
+        restoreJobId,
+        sourceS3Credentials: resolvedSourceS3Credentials,
+        destinationSalesforceCredentials: resolvedDestinationCredentials,
+        conflict,
+      };
+
+      for (let index = 0; index < objects.length; index++) {
+        const object = objects[index];
+        await runSalesforceRollback({
+          ...hierarchyContext,
+          object
+        });
+      }
+
+      logger.info(
+        `Rollback job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`
+      );
+
+      const freshJob = await getRestoreJobById(restoreJobId);
+      const failedObjects = (freshJob?.destination.objects ?? []).filter(
+        (obj) => obj.status === 'FAILED'
+      );
+
+      if (failedObjects.length) {
+        const restore = await getRestoreById(restoreId);
+        if (restore) {
+          const objectNames = failedObjects.map((obj) => obj.name).join(', ');
+          const configLabel = restore.jobDetail?.name ?? restoreId;
+
+          try {
+            await createNotification({
+              userId: restore.userId,
+              crmId: destination.crmId,
+              title:
+                failedObjects.length === 1
+                  ? `1 object failed to rollback`
+                  : `${failedObjects.length} objects failed to rollback`,
+              body: `Your rollback "${configLabel}" finished, but ${objectNames} could not be rollback. Please check the logs for more details.`,
+              targetScreen: 'rollback',
+              targetId: restoreId,
+            });
+          } catch (err: any) {
+            logger.error(
+              `Failed to notify user about failed objects | restoreJobId:${restoreJobId} err:${err?.message ?? err}`
+            );
+          }
+
+          logger.info(
+            `Rollback job notify to user, restoreJobId=${restoreJobId}, restoreId=${restoreId}, failedObjects=${failedObjects.length}`
+          );
+        }
+      }
+
+      return 'SUCCESS';
+    } catch (err: any) {
+      logger.error(
+        `Rollback job failed, restoreId=${restoreId}, restoreJobId=${restoreJobId}, error=${err?.message ?? err}`
       );
       throw err;
     }
