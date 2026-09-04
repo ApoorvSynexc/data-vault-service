@@ -1,4 +1,5 @@
-import { BACKUP_STATUS, OBJECT_STATUS } from '../../../constant';
+import { BACKUP_STATUS, OBJECT_STATUS, RESTORE_JOB_STATUS } from '../../../constant';
+import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../../middlewares/logger';
 import {
   IBackupConfig,
@@ -139,7 +140,7 @@ const restoreObjectHierarchy = async (
   ctx: RestoreHierarchyContext
 ): Promise<boolean> => {
   let hasFailure = false;
-  const currentNode = { name: node.name, id: node.name, status: "" };
+  const currentNode = { name: node.name, id: uuidv4(), status: RESTORE_JOB_STATUS.inProgress };
   const object = ctx.recurvedObject.find((obj) => obj.name === node.name);
 
   console.log(`Found object ${object?.name}`);
