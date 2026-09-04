@@ -308,7 +308,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     console.log(JSON.stringify({ restoreJob, restore, decrypted }));
-    await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).objects });
+    await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
 
     // EMR succeeded — continue automatically to the ingest stage. Background,
     // fire-and-forget (the response below doesn't wait on it), same as every
