@@ -48,8 +48,10 @@ import {
   triggerBackupJob,
   getDecryptedCrmCredential,
   initalizeRestoreTransform,
+  getRestoreJobById,
+  updateRestoreJob,
 } from '../../../services';
-import { BACKUP_JOB_TABLE } from '../../../constant';
+import { BACKUP_JOB_TABLE, RESTORE_JOB_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
@@ -58,7 +60,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { removeCsvColumnsInFolder } from '../../../utils/restore-csv-format';
 import { ensureRestoreTrackingFields } from '../../../services/third-party/salesforce/restore-fields';
-import { salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
+import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission, sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -1208,6 +1210,19 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   }
 }
 
+const createRollbackHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { restoreJobId } = req.query as { restoreJobId: string };
+  const restoreJob = await getRestoreJobById(restoreJobId);
+  if (!restoreJob) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+  const objectPayload = restoreJob.destination.objects.map((obj => ({ name: obj.name, id: obj.id, status: RESTORE_JOB_STATUS.inProgress })));
+  await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload });
+
+  makeResponse(req, res, 200, true, 'update');
+  await createRollbackService(restoreJob);
+};
+
 const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreId } = req.body as Record<string, string>;
   const userId = req.user!.userId;
@@ -1306,5 +1321,6 @@ export const restoreRetrieveJobController = wrapController({
   listRestoresHandler,
   getRestoreJobHandler,
   getRestoreJobStatsHandler,
-  createRestoreHandler2
+  createRestoreHandler2,
+  createRollbackHandler
 });
