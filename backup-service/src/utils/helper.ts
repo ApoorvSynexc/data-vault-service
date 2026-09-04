@@ -387,6 +387,80 @@ const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
 const withSystemFields = (fieldNames: string[]): string[] =>
   Array.from(new Set([...fieldNames, ...SYSTEM_FIELDS]));
 
+interface InputNode {
+  name: string;
+  parents?: InputNode[];
+}
+
+interface HierarchyNode {
+  name: string;
+  children: HierarchyNode[];
+}
+
+interface InternalNode {
+  name: string;
+  children: Map<string, InternalNode>;
+}
+
+function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
+  const nodes = new Map<string, InternalNode>();
+
+  function getNode(name: string): InternalNode {
+    let node = nodes.get(name);
+
+    if (!node) {
+      node = {
+        name,
+        children: new Map<string, InternalNode>(),
+      };
+
+      nodes.set(name, node);
+    }
+
+    return node;
+  }
+
+  function process(item: InputNode): void {
+    const child = getNode(item.name);
+
+    for (const parent of item.parents ?? []) {
+      const parentNode = getNode(parent.name);
+
+      // parent -> child
+      parentNode.children.set(child.name, child);
+
+      // Process parent's parents
+      process(parent);
+    }
+  }
+
+  // Build the complete relationship tree
+  for (const item of data) {
+    process(item);
+  }
+
+  // Find root nodes
+  const hasParent = new Set<string>();
+
+  for (const node of nodes.values()) {
+    for (const child of node.children.values()) {
+      hasParent.add(child.name);
+    }
+  }
+
+  // Convert internal Map structure to final array structure
+  function convert(node: InternalNode): HierarchyNode {
+    return {
+      name: node.name,
+      children: Array.from(node.children.values()).map(convert),
+    };
+  }
+
+  return Array.from(nodes.values())
+    .filter((node) => !hasParent.has(node.name))
+    .map(convert);
+}
+
 export {
   randomNumber,
   parseExpiryToSeconds,
@@ -405,6 +479,7 @@ export {
   recursivelyFlatten,
   withSystemFields,
   escapeHtml,
+  buildParentToChildHierarchy,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
