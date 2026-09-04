@@ -37,6 +37,7 @@ router.post('/', createRestoreValidation, restoreRetrieveJobController.createRes
 router.post('/activate', restoreRetrieveJobController.activateRestoreHandler);
 router.get('/config/list', restoreRetrieveJobController.listRestoresHandler);
 router.get('/job', restoreRetrieveJobController.getRestoreJobHandler);
+router.get('/job/rollback', restoreRetrieveJobController.createRollbackHandler);
 router.get('/job/stats', restoreRetrieveJobController.getRestoreJobStatsHandler);
 router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler);
 router.get('/get-objectlist-by-configid', restoreRetrieveJobController.getObjectListByConfigIdHandler);
