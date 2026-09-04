@@ -106,17 +106,22 @@ const keysetWhere = (
     : null;
 
 /**
- * `Id IN (...)` for the RECORD and BULK_CSV restore scopes — both name the
- * records to restore by id, so both compile to the same predicate.
+ * `<column> IN (...)` for the RECORD and BULK_CSV restore scopes — both name
+ * the records to restore by id, so both compile to the same predicate.
  *
  * Ids are client-supplied (a CSV upload, in the BULK_CSV case), so every value
  * goes through `lit` rather than being interpolated raw. Returns null for an
  * empty list: "no ids" is not "match everything", and the caller decides what
  * an empty selection means rather than silently getting an unscoped read.
+ *
+ * `columnExpr` defaults to the Hudi table's quoted "Id" column. The delta-side
+ * dry-run count passes the raw, unquoted `record_id` column instead — the same
+ * fixed internal column name buildWindowDeltasSql/buildHudiChangedSql already
+ * reference unquoted, since it is not a caller-supplied identifier.
  */
-export const recordIdsWhere = (recordIds: string[]): string | null => {
+export const recordIdsWhere = (recordIds: string[], columnExpr: string = quoteCol(ID)): string | null => {
   const ids = [...new Set(recordIds.filter(Boolean))];
-  return ids.length ? `${quoteCol(ID)} IN (${idList(ids)})` : null;
+  return ids.length ? `${columnExpr} IN (${idList(ids)})` : null;
 };
 
 // =============================================================================
@@ -565,22 +570,26 @@ export const buildHudiCountSql = (hudiTable: string, whereBody?: string | null):
  * record-level rows (is_schema_change excluded via RECORD_ROWS_ONLY) whose
  * change_time falls in [startDate, endDate].
  *
- * ponytail: FILTER-scope field conditions are not applied here — change_data
- * is a JSON snapshot (DELETE) or {prev,new} diff (UPDATE), not flat columns,
- * so the same WHERE body ENTIRE uses cannot bind to it as-is. Object/field
- * scope (which objects to count) still applies via which table this runs
- * against. Add per-field json_extract_scalar conditions, split by change_type,
- * if a per-field CHANGE_BETWEEN count is needed later.
+ * `scopeWhere` narrows WHICH delta rows match — an Id list (RECORD / BULK_CSV,
+ * via recordIdsWhere(ids, 'record_id')) or FILTER-scope field conditions (via
+ * athena-filter's buildDeltaFilterWhere, which extracts each field out of
+ * change_data since it is JSON, not flat columns — see that function's own
+ * ponytail note for what it does and doesn't match). Object/field scope
+ * (which objects to count) applies via which table this runs against, same as
+ * before.
  */
 export const buildDeltaCountSql = (
   deltaTable: string,
-  p: { startDate: string; endDate: string; deltaPartition?: string | null }
+  p: { startDate: string; endDate: string; deltaPartition?: string | null; scopeWhere?: string | null }
 ): string =>
   `SELECT COUNT(*) AS total_cnt, ` +
   `SUM(CASE WHEN change_type = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
   `SUM(CASE WHEN change_type = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt ` +
   `FROM "${deltaTable}"` +
-  whereClause([RECORD_ROWS_ONLY, inWindow('change_time', p.startDate, p.endDate), p.deltaPartition], 'WHERE');
+  whereClause(
+    [RECORD_ROWS_ONLY, inWindow('change_time', p.startDate, p.endDate), p.deltaPartition, p.scopeWhere],
+    'WHERE'
+  );
 
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npx ts-node src/services/restore-retrieve/athena-fetch.ts
@@ -732,6 +741,9 @@ if (require.main === module) {
   assert.strictEqual(recordIdsWhere(['001A', '001A', '']), `"Id" IN ('001A')`);
   assert.strictEqual(recordIdsWhere([]), null, 'no ids is not "match everything"');
   assert.strictEqual(recordIdsWhere(["0'1"]), `"Id" IN ('0''1')`);
+  // Delta-side dry-run counts pass the raw, unquoted record_id column instead
+  // of the default quoted "Id".
+  assert.strictEqual(recordIdsWhere(['001A'], 'record_id'), `record_id IN ('001A')`);
 
   // scopeWhere reaches all three record builders, so a scoped read matches the
   // same records whichever half of the Hudi/delta pair it comes out of.
@@ -770,6 +782,18 @@ if (require.main === module) {
   );
   const deltaCountNoPrune = buildDeltaCountSql('t_delta', { startDate: START, endDate: END });
   assert.ok(!deltaCountNoPrune.includes('year >'), 'no deltaPartition passed → no partition prune');
+  // scopeWhere (RECORD/BULK_CSV/FILTER) binds alongside the window/partition.
+  const deltaCountScoped = buildDeltaCountSql('t_delta', {
+    startDate: START,
+    endDate: END,
+    scopeWhere: recordIdsWhere(['001A'], 'record_id')!,
+  });
+  assert.ok(deltaCountScoped.includes(`(record_id IN ('001A'))`));
+  assert.strictEqual(
+    buildDeltaCountSql('t_delta', { startDate: START, endDate: END }),
+    buildDeltaCountSql('t_delta', { startDate: START, endDate: END, scopeWhere: null }),
+    'omitted scopeWhere reads exactly as before'
+  );
 
   console.log('athena-fetch self-check passed');
 }
