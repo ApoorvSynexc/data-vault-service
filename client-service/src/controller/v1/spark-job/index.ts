@@ -3,14 +3,24 @@ import { buildPayload, buildRestorePayload } from '../../../services/payload';
 import { getBackupConfigById, updateBackupConfig } from '../../../services/backup-config';
 import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
-import { COMPRESSION_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
-import { wrapController } from '../../../utils/helper';
+import { COMPRESSION_STATUS, RESTORE_JOB_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
+import { flattenBackupObjects, wrapController } from '../../../utils/helper';
 import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
 import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, RESTORE_FIELD_JOB_STATUS, RESTORE_BACKUP_STATUS, toTreeSummary, filterObjectTree } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 import { sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
+
+interface IFlattenParentObjects {
+  name: string;
+  parents: IFlattenParentObjects[];
+}
+
+const flattenParentObjects = (objects: IFlattenParentObjects[]): IFlattenParentObjects[] => {
+  if (!objects.length) return [];
+  return objects.flatMap((obj) => [obj, ...(obj.parents ? flattenParentObjects(obj.parents) : [])]);
+};
 
 // Decrypts a request, or returns null if it isn't decryptable. Accepts both shapes
 // Spark sends: a base64 transport string, or the raw { ciphertext, iv } envelope
@@ -267,57 +277,37 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       return makeResponse(req, res, 200, true, 'update');
     }
 
-    // ARCHIVAL never rebuilds destination.objects here — it's a tree, and this
-    // rebuild flattens EMR's reported object list into flat sibling entries,
-    // which would destroy the hierarchy right before the ingest stage needs
-    // it. ARCHIVAL restores currently only support source.type ENTIRE anyway
-    // (see ARCHIVAL_SOURCE_TYPE), so this branch is BACKUP/NORMAL-only in
-    // practice; guarded explicitly rather than relying on that staying true.
-    if (restore.source.configType !== 'ARCHIVAL' && restore.source.type !== 'ENTIRE') {
-      // EMR/Spark resolves its own object list independently of this
-      // workflow's per-object pass/fail tracking, so it can include an object
-      // that already failed the RESTORN FIELD JOB or RUN BACKUP JOB stage —
-      // exclude those here, using the pre-rebuild snapshot's own statuses,
-      // rather than letting the rebuild silently resurrect a failed object
-      // back to PENDING and send it on to ingest.
-      const failedObjectNames = new Set(
-        (restoreJob.destination.objects ?? [])
-          .filter(
-            (object) =>
-              object.status === RESTORE_FIELD_JOB_STATUS.failed || object.status === RESTORE_BACKUP_STATUS.failed
-          )
-          .map((object) => object.name)
-      );
+    let objectsToBeAffected: IFlattenParentObjects[] = (decrypted as any).restore.objects || [];
+    objectsToBeAffected = flattenParentObjects(objectsToBeAffected);
+    const restoreJobObjectNames = restoreJob.destination.objects.map(o => o.name);
 
-      // if (objects && objects?.length) {
-      //   const updatedObjects: { id: string; name: string; status: "PENDING" }[] = objects
-      //     .filter((object) => !failedObjectNames.has(object))
-      //     .map((object) => ({
-      //       id: uuidv4(),
-      //       name: object,
-      //       status: "PENDING",
-      //     }));
+    const objectToBeInsert = objectsToBeAffected.filter(o => !restoreJobObjectNames.includes(o.name));
+    if (objectToBeInsert.length) {
+      const backupConfig = await getBackupConfigById(restoreJob.source.backupConfigId);
+      if (backupConfig) {
+        const backupConfigObjects = flattenBackupObjects(backupConfig.objects || []);
 
-      //   await updateRestoreJob({
-      //     restoreJobId: restoreConfigId,
-      //     replaceObjects: updatedObjects,
-      //   });
+        const objectPayload = objectToBeInsert.map(obj => {
+          const backupConfigObject = backupConfigObjects.find(o => o.name === obj.name);
+          if (backupConfigObject) {
+            return {
+              ...obj,
+              id: backupConfigObject.id || uuidv4(),
+              status: RESTORE_JOB_STATUS.inProgress
+            };
+          }
+          return { ...obj, id: uuidv4(), status: RESTORE_JOB_STATUS.inProgress };
+        });
 
-      //   restoreJob.destination.objects = updatedObjects;
-      // }
+        await updateRestoreJob({
+          restoreJobId: restoreConfigId,
+          replaceObjects: [...restoreJob.destination.objects, ...objectPayload]
+        });
+      }
     }
 
     console.log(JSON.stringify({ restoreJob, restore, decrypted }));
     await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
-
-    // EMR succeeded — continue automatically to the ingest stage. Background,
-    // fire-and-forget (the response below doesn't wait on it), same as every
-    // other restore stage transition in this workflow.
-    // runRestoreIngestJob(restoreJob, restore.source.configType).catch((error) => {
-    //   logger.error(
-    //     `[restore-ingest] failed | restoreJobId=${restoreConfigId} err:${error?.message ?? error}`
-    //   );
-    // });
     return makeResponse(req, res, 200, true, 'update');
   }
 };

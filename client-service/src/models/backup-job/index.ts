@@ -7,6 +7,7 @@ export interface IBackupField {
 }
 
 export interface IBackupObject {
+  id?:string
   name: string;
   condition?: {
     type: string;
