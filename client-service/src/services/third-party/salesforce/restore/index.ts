@@ -14,6 +14,9 @@ const sendRestoreToBackupService = async (
     conflict: restorejob.conflict,
     ...(restorejob.objectHierarchy && { objectHierarchy: restorejob.objectHierarchy }),
   }
+
+  console.log(JSON.stringify({payload}));
+
   try {
     result = await httpRequest({
       url: `${BACKUP_SERVICE}/v1/restore`,
