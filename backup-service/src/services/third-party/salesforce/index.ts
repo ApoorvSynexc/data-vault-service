@@ -101,6 +101,76 @@ const exportWithRetry = async (
   throw lastError;
 };
 
+interface RestoreHierarchyNode {
+  name: string;
+  children: RestoreHierarchyNode[];
+}
+
+interface RestoreHierarchyContext {
+  restoreId: string;
+  restoreJobId: string;
+  recurvedObject: Array<{ id: string; name: string; status?: string }>;
+  sourceS3Credentials: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    bucketName: string;
+    region: string;
+    csvFilePath: string;
+    backupConfigId: string;
+  };
+  destinationSalesforceCredentials: {
+    access_token: string;
+    refresh_token: string;
+    instanceUrl: string;
+  };
+  conflict: IRestoreConflict;
+}
+
+// buildParentToChildHierarchy returns root objects with their descendants nested
+// under `children`, so restoring a subtree means walking it depth-first: a node
+// is restored, then each child is restored the same recursive way, on down to
+// however many levels deep the hierarchy goes — a child's records can reference
+// its parent's, so the parent must finish first. A failure is logged and does
+// not stop the walk, matching runRestore's existing best-effort behavior (the
+// caller determines overall success from each object's persisted status, not
+// from this return value).
+const restoreObjectHierarchy = async (
+  node: RestoreHierarchyNode,
+  ctx: RestoreHierarchyContext
+): Promise<boolean> => {
+  let hasFailure = false;
+  const currentNode = { name: node.name, id: node.name, status: "" };
+  const object = ctx.recurvedObject.find((obj) => obj.name === node.name);
+
+  console.log(`Found object ${object?.name}`);
+  if (object) {
+    currentNode.status = object.status || "";
+    currentNode.id = object.id;
+  }
+  try {
+    await runSalesforceRestore({
+      restoreId: ctx.restoreId,
+      restoreJobId: ctx.restoreJobId,
+      object: currentNode,
+      sourceS3Credentials: ctx.sourceS3Credentials,
+      destinationSalesforceCredentials: ctx.destinationSalesforceCredentials,
+      conflict: ctx.conflict,
+    });
+  } catch (err: any) {
+    hasFailure = true;
+    logger.error(
+      `[restore] object failed, objectName:${currentNode.name}, restoreJobId:${ctx.restoreJobId}, error:${err?.message}`
+    );
+  }
+
+  for (const child of node.children ?? []) {
+    const childFailed = await restoreObjectHierarchy(child, ctx);
+    hasFailure = hasFailure || childFailed;
+  }
+
+  return hasFailure;
+};
+
 const salesforceHandler: ICrmBackupHandler = {
   runBackup: async (
     backupConfigId: string,
@@ -362,28 +432,20 @@ const salesforceHandler: ICrmBackupHandler = {
       const recurvedObject = recursivelyFlatten(objects || []);
       const hierarchy = buildParentToChildHierarchy(objectHierarchy ?? []);
       console.log(JSON.stringify({ hierarchy, objectHierarchy }));
-      let hasAnyFailure = false;
-      for (const hierarchyObject of hierarchy) {
-        const object = recurvedObject.find((obj) => obj.name === hierarchyObject.name);
-        if (!object) {
-          continue;
-        }
 
-        try {
-          await runSalesforceRestore({
-            restoreId,
-            restoreJobId,
-            object,
-            sourceS3Credentials: resolvedSourceS3Credentials,
-            destinationSalesforceCredentials: resolvedDestinationCredentials,
-            conflict,
-          });
-        } catch (err: any) {
-          hasAnyFailure = true;
-          logger.error(
-            `[restore] object failed, objectName:${object.name}, restoreJobId:${restoreJobId}, error:${err?.message}`
-          );
-        }
+      const hierarchyContext: RestoreHierarchyContext = {
+        restoreId,
+        restoreJobId,
+        recurvedObject,
+        sourceS3Credentials: resolvedSourceS3Credentials,
+        destinationSalesforceCredentials: resolvedDestinationCredentials,
+        conflict,
+      };
+
+      let hasAnyFailure = false;
+      for (const rootObject of hierarchy) {
+        const failed = await restoreObjectHierarchy(rootObject, hierarchyContext);
+        hasAnyFailure = hasAnyFailure || failed;
       }
 
       const finalStatus = hasAnyFailure ? 'FAILED' : 'SUCCESS';
