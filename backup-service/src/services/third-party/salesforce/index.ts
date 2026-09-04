@@ -443,7 +443,7 @@ const salesforceHandler: ICrmBackupHandler = {
         conflict,
       };
 
-      console.log({hierarchyContext})
+      console.log({hierarchyContext, len: hierarchy.length})
       for (let index = 0; index < hierarchy.length; index++) {
         console.log(`[Restore] Root object pushed`);
         const rootObject = hierarchy[index];
