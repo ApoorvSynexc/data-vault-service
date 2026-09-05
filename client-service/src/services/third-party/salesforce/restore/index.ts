@@ -47,6 +47,7 @@ const createRollbackService = async (
     ...(restoreJob.objectHierarchy && { objectHierarchy: restoreJob.objectHierarchy }),
   }
 
+  console.log(JSON.stringify({ payload }));
   try {
     result = await httpRequest({
       url: `${BACKUP_SERVICE}/v1/restore/rollback`,
