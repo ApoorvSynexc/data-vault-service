@@ -393,17 +393,19 @@ export class CursorError extends Error {
 
 /**
  * Where Athena writes result files for a config's queries: the client's own
- * destination bucket, under {backupConfigId}/retrieve/ — one prefix per config,
- * so results sit with the data they came from and the client owns their
- * lifecycle. Returns undefined when the destination isn't a resolvable S3
- * bucket; Athena then falls back to the workgroup's own result setting.
+ * destination bucket, under salesforce/{crmId}/retrieve/ — the same
+ * salesforce/{crmId}/ prefix the backup files themselves live under (see
+ * backup-service's buildCompressionRootKey), so results sit next to the data
+ * they came from and the client owns their lifecycle. Returns undefined when
+ * the destination isn't a resolvable S3 bucket; Athena then falls back to the
+ * workgroup's own result setting.
  */
 const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<string | undefined> => {
   const destination = await getDestinationById(config.destinationId);
   if (!destination) return undefined;
 
   const { bucketName } = getDecryptedDestinationConfig(destination) as S3Config;
-  return bucketName ? `s3://${bucketName}/${config.backupConfigId}/retrieve/` : undefined;
+  return bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined;
 };
 
 /**
