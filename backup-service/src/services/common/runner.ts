@@ -338,7 +338,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
     });
     await updateRestore({
       restoreId,
-      status: 'SUCCESS'
+      status: result === 'FAILED' ? 'FAILED' : 'SUCCESS',
     });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
@@ -350,7 +350,8 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
     }).catch(() => { });
     await updateRestore({
       restoreId,
-      status: 'SUCCESS'
+      status: 'FAILED',
+      errorMessage: err?.message ?? 'Unknown error',
     });
   } finally {
     activeJobs.delete(restoreJobId);
@@ -410,7 +411,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
     });
     await updateRestore({
       restoreId,
-      status: 'SUCCESS'
+      status: result === 'FAILED' ? 'FAILED' : 'SUCCESS',
     });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
@@ -422,7 +423,8 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
     }).catch(() => { });
     await updateRestore({
       restoreId,
-      status: 'SUCCESS'
+      status: 'FAILED',
+      errorMessage: err?.message ?? 'Unknown error',
     });
   } finally {
     activeJobs.delete(restoreJobId);
