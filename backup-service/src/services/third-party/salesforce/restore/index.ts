@@ -333,15 +333,9 @@ export const runSalesforceRollback = async (
 
   if (keys.length) {
     for (let index = 0; index < keys.length; index++) {
-      let lastIndex = 1;
       const key = keys[index];
-
-      if (key.endsWith('/')) {
-        lastIndex = 2;
-      }
-
       const splitKeys = key.split('/');
-      const operation = splitKeys[splitKeys.length - lastIndex] as 'update' | 'delete';
+      const operation = splitKeys[splitKeys.length - 2] as 'update' | 'delete';
 
       console.log(JSON.stringify({ operation, splitKeys, key }));
 
