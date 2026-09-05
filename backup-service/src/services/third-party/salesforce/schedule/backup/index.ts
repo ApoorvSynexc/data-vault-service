@@ -362,6 +362,7 @@ export const exportIncremental = async (
       const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} WITH USER_MODE ORDER BY Id ASC`;
 
+      console.log(JSON.stringify({soql, fieldNames}))
       // queryAll so Salesforce includes soft-deleted records in the result set
       try {
         bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
