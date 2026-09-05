@@ -1223,7 +1223,7 @@ const createRollbackHandler = async (req: IRequest, res: IResponse): Promise<voi
     return makeResponse(req, res, 400, false, 'not_exist');
   }
   const objectPayload = restoreJob.destination.objects.map((obj => ({ name: obj.name, id: obj.id, status: RESTORE_JOB_STATUS.inProgress })));
-  await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload });
+  await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload, status: RESTORE_JOB_STATUS.inProgress });
 
   makeResponse(req, res, 200, true, 'update');
   await createRollbackService(restoreJob);
