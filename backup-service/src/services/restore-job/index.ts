@@ -1,7 +1,7 @@
 import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { RESTORE_JOB_TABLE, JOB_STATUS } from '../../constant';
-import { IRestoreJob } from '../../models';
+import { IRestoreJob, IRestoreJobObject } from '../../models';
 
 interface UpdateRestoreJobStatusParams {
   restoreJobId: string;
@@ -9,8 +9,6 @@ interface UpdateRestoreJobStatusParams {
   startedAt?: string;
   completedAt?: string;
   errorMessage?: string;
-  // When set, the update is rejected (ConditionalCheckFailedException) if the
-  // condition is not satisfied — use for atomic check-and-set transitions.
   conditionExpression?: string;
   conditionExpressionValues?: Record<string, any>;
 }
@@ -44,11 +42,9 @@ const updateRestoreJobStatus = async (params: UpdateRestoreJobStatusParams): Pro
     expressionParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
   } else if (status === JOB_STATUS.running) {
-    // Clear stale error from a previous failed run when the job is retried.
     removeParts.push('errorMessage');
   }
 
-  // Check if record exists, merge with any additional condition
   let finalCondition = 'attribute_exists(restoreJobId)';
   if (conditionExpression) {
     finalCondition = `${finalCondition} AND ${conditionExpression}`;
@@ -71,7 +67,6 @@ const updateRestoreJobStatus = async (params: UpdateRestoreJobStatusParams): Pro
       })
     );
   } catch (error: any) {
-    // If record doesn't exist, silently return instead of throwing
     if (error.name === 'ConditionalCheckFailedException') {
       return;
     }
@@ -83,39 +78,12 @@ interface UpdateRestoreObjectParams {
   restoreJobId: string;
   objectName: string;
   status?: 'FAILED' | 'SUCCESS';
-  // Accumulated across chunks — submitIngestChunk reports a delta per chunk, and
-  // a single object can span multiple chunks/ingest jobs, so this must add to
-  // the running total rather than overwrite it.
   processedRecordCount?: number;
   failedRecordCount?: number;
   errorMessage?: string;
   errors?: string[];
 }
 
-// Mirrors updateBackupObject's array-index update pattern (backup-job service),
-// just against RESTORE_JOB_TABLE's smaller destination.objects[] shape. Called
-// after each ingest chunk so per-object restore progress is visible mid-run,
-// not just once the whole job finishes.
-//
-// DynamoDB only supports targeted array-element updates by literal numeric
-// index, not by matching a property value, so objectName has to be resolved to
-// its current index with a fresh read before every write. Object names are
-// unique within destination.objects[], so this always resolves to exactly one
-// element (or none, if the name doesn't exist).
-//
-// Counts are computed in JS and written as a literal SET, not via ADD or
-// if_not_exists(). Both were tried and both fail on this specific shape:
-//  - ADD can only implicitly create a *top-level* item attribute; it can't
-//    create a brand-new attribute nested inside a list element, which is
-//    exactly what processedRecordCount/failedRecordCount are the first time
-//    an object is touched (objects[] entries start as just {id, name, status}).
-//  - if_not_exists(path, default) is unreliable once path includes a list
-//    index (objects[n].field) — DynamoDB's expression parser doesn't
-//    consistently validate/evaluate that combination, and errors with the same
-//    "document path provided in the update expression is invalid" message.
-// Since getRestoreJobById already reads the current item to resolve
-// objectIndex, the current counts are already in hand — compute the new total
-// here and SET a plain literal value, which has no such restriction.
 const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<void> => {
   const {
     restoreJobId,
@@ -227,9 +195,172 @@ const getRestoreJobsByRestoreId = async (restoreId: string): Promise<IRestoreJob
   return (result.Items as IRestoreJob[] | undefined) ?? [];
 };
 
+interface RestoreJobObjectUpdate {
+  name: string;
+  status?: string;
+  processedRecordCount?: number;
+  failedRecordCount?: number;
+  errorMessage?: string;
+}
+
+interface UpdateRestoreJobParams {
+  restoreJobId: string;
+  status?: string;
+  startedAt?: string;
+  completedAt?: string;
+  errorMessage?: string;
+  objects?: RestoreJobObjectUpdate[];
+  replaceObjects?: IRestoreJobObject[];
+  conditionExpression?: string;
+  conditionExpressionValues?: Record<string, any>;
+}
+
+const findObjectPath = (nodes: IRestoreJobObject[], name: string): number[] | null => {
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].name === name) {
+      return [i];
+    }
+    const childPath = nodes[i].children?.length ? findObjectPath(nodes[i].children!, name) : null;
+    if (childPath) {
+      return [i, ...childPath];
+    }
+  }
+  return null;
+};
+
+const getObjectAtPath = (nodes: IRestoreJobObject[], path: number[]): IRestoreJobObject => {
+  let current = nodes[path[0]];
+  for (let depth = 1; depth < path.length; depth++) {
+    current = current.children![path[depth]];
+  }
+  return current;
+};
+
+const buildObjectPathExpression = (path: number[]): string =>
+  path.map((index, depth) => `${depth === 0 ? '#objects' : '#children'}[${index}]`).join('.');
+
+const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean> => {
+  const {
+    restoreJobId,
+    status,
+    startedAt,
+    completedAt,
+    errorMessage,
+    objects,
+    replaceObjects,
+    conditionExpression,
+    conditionExpressionValues,
+  } = params;
+  const now = new Date().toISOString();
+
+  const job = objects?.length ? await getRestoreJobById(restoreJobId) : null;
+
+  const setParts = ['updatedAt = :updatedAt'];
+  const removeParts: string[] = [];
+  const expressionNames: Record<string, string> = {};
+  const expressionValues: Record<string, any> = { ':updatedAt': now };
+
+  if (status !== undefined) {
+    setParts.push('#status = :status');
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = status;
+  }
+  if (startedAt) {
+    setParts.push('startedAt = :startedAt');
+    expressionValues[':startedAt'] = startedAt;
+  }
+  if (completedAt) {
+    setParts.push('completedAt = :completedAt');
+    expressionValues[':completedAt'] = completedAt;
+  }
+  if (errorMessage) {
+    setParts.push('errorMessage = :errorMessage');
+    expressionValues[':errorMessage'] = errorMessage;
+  } else if (status === JOB_STATUS.running) {
+    removeParts.push('errorMessage');
+  }
+
+  if (replaceObjects) {
+    setParts.push('#destination.#objects = :replaceObjects');
+    expressionNames['#destination'] = 'destination';
+    expressionNames['#objects'] = 'objects';
+    expressionValues[':replaceObjects'] = replaceObjects;
+  }
+
+  if (job && objects?.length) {
+    expressionNames['#destination'] = 'destination';
+    expressionNames['#objects'] = 'objects';
+
+    objects.forEach((object, position) => {
+      const path = findObjectPath(job.destination.objects, object.name);
+      if (!path) {
+        return;
+      }
+      const currentObject = getObjectAtPath(job.destination.objects, path);
+      const objectPath = `#destination.${buildObjectPathExpression(path)}`;
+      if (path.length > 1) {
+        expressionNames['#children'] = 'children';
+      }
+
+      if (object.status !== undefined) {
+        setParts.push(`${objectPath}.#objectStatus = :objectStatus${position}`);
+        expressionNames['#objectStatus'] = 'status';
+        expressionValues[`:objectStatus${position}`] = object.status;
+      }
+      if (object.errorMessage !== undefined) {
+        setParts.push(`${objectPath}.#objectErrorMessage = :objectErrorMessage${position}`);
+        expressionNames['#objectErrorMessage'] = 'errorMessage';
+        expressionValues[`:objectErrorMessage${position}`] = object.errorMessage;
+      }
+      if (object.processedRecordCount) {
+        setParts.push(`${objectPath}.#processedRecordCount = :processedRecordCount${position}`);
+        expressionNames['#processedRecordCount'] = 'processedRecordCount';
+        expressionValues[`:processedRecordCount${position}`] =
+          (currentObject?.processedRecordCount ?? 0) + object.processedRecordCount;
+      }
+      if (object.failedRecordCount) {
+        setParts.push(`${objectPath}.#failedRecordCount = :failedRecordCount${position}`);
+        expressionNames['#failedRecordCount'] = 'failedRecordCount';
+        expressionValues[`:failedRecordCount${position}`] =
+          (currentObject?.failedRecordCount ?? 0) + object.failedRecordCount;
+      }
+    });
+  }
+
+  const updateExpression = [
+    `SET ${setParts.join(', ')}`,
+    ...(removeParts.length ? [`REMOVE ${removeParts.join(', ')}`] : []),
+  ].join(' ');
+
+  let finalCondition = 'attribute_exists(restoreJobId)';
+  if (conditionExpression) {
+    finalCondition = `${finalCondition} AND ${conditionExpression}`;
+  }
+
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: RESTORE_JOB_TABLE,
+        Key: { restoreJobId },
+        UpdateExpression: updateExpression,
+        ...(Object.keys(expressionNames).length > 0 && { ExpressionAttributeNames: expressionNames }),
+        ExpressionAttributeValues: { ...expressionValues, ...conditionExpressionValues },
+        ConditionExpression: finalCondition,
+      })
+    );
+    return true;
+  } catch (error: any) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      return false;
+    }
+    throw error;
+  }
+};
+
 export {
   updateRestoreJobStatus,
   updateRestoreObject,
+  updateRestoreJob,
   getRestoreJobById,
   getRestoreJobsByUserId,
   getRestoreJobsByRestoreId,
