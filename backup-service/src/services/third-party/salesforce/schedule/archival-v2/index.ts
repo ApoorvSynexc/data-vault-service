@@ -220,9 +220,27 @@ const archiveObject = async (payload: IArchiveObject) => {
       },
       { instanceUrl, tokens }
     );
-    const allFieldNames = withSystemFields(
-      fieldsMetadata?.metadataType === 'fields' ? fieldsMetadata.fields.map((f) => f.name) : []
-    );
+
+
+    if (!fieldsMetadata?.fields) {
+      return;
+    }
+
+    const fieldNames: string[] = [];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
+    fieldsMetadata.fields.forEach((f) => {
+      if (
+        f.referenceTo.length > 1 &&
+        !excludeName.includes(f.name.toLowerCase()) &&
+        f.name.toLowerCase().includes('id')
+      ) {
+        const nameWithType = f.name.toLowerCase().replace('id', '.type');
+        fieldNames.push(nameWithType);
+      }
+      fieldNames.push(f.name);
+    });
+
+    const allFieldNames = withSystemFields(fieldNames);
     // Same schema-metadata set the backup flow stores (fields already ran
     // above) — picklist values, record types, and child relationships,
     // scoped to this config's own Object List via objectNames.
