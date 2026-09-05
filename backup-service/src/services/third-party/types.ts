@@ -41,7 +41,7 @@ export interface ICrmBackupHandler {
     restoreJobId: string,
     source: IRestoreJobSource,
     destination: IRestoreJobDestination,
-    conflict: IRestoreConflict,
+    conflict: IRestoreConflict
   ): Promise<'SUCCESS' | 'FAILED'>;
 }
 

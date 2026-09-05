@@ -145,7 +145,7 @@ const restoreObjectHierarchy = async (
 
   console.log(`Found object ${object?.name}`);
   if (object) {
-    currentNode.status = object.status || "";
+    currentNode.status = object.status || '';
     currentNode.id = object.id;
   }
   try {
@@ -449,9 +449,7 @@ const salesforceHandler: ICrmBackupHandler = {
         await restoreObjectHierarchy(rootObject, hierarchyContext);
       }
 
-      logger.info(
-        `Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`
-      );
+      logger.info(`Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`);
 
       const freshJob = await getRestoreJobById(restoreJobId);
       const failedObjects = (freshJob?.destination.objects ?? []).filter(
@@ -501,7 +499,7 @@ const salesforceHandler: ICrmBackupHandler = {
     restoreJobId: string,
     source: IRestoreJobSource,
     destination: IRestoreJobDestination,
-    conflict: IRestoreConflict,
+    conflict: IRestoreConflict
   ): Promise<'SUCCESS' | 'FAILED'> => {
     try {
       const objects = destination.objects as any;
@@ -543,7 +541,7 @@ const salesforceHandler: ICrmBackupHandler = {
         const object = objects[index];
         await runSalesforceRollback({
           ...hierarchyContext,
-          object
+          object,
         });
       }
 
@@ -565,9 +563,7 @@ const salesforceHandler: ICrmBackupHandler = {
         });
       }
 
-      logger.info(
-        `Rollback job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`
-      );
+      logger.info(`Rollback job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`);
 
       const freshJob = await getRestoreJobById(restoreJobId);
       const failedObjects = (freshJob?.destination.objects ?? []).filter(

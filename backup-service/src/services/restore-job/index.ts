@@ -343,7 +343,9 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
         TableName: RESTORE_JOB_TABLE,
         Key: { restoreJobId },
         UpdateExpression: updateExpression,
-        ...(Object.keys(expressionNames).length > 0 && { ExpressionAttributeNames: expressionNames }),
+        ...(Object.keys(expressionNames).length > 0 && {
+          ExpressionAttributeNames: expressionNames,
+        }),
         ExpressionAttributeValues: { ...expressionValues, ...conditionExpressionValues },
         ConditionExpression: finalCondition,
       })
