@@ -78,6 +78,26 @@ const restorePermissions = [
         path : '/restore/dry-run-diff',
         method: 'POST',
         permissions: ['restore.read']
+    },
+    {
+        path: '/restore/list',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path: '/restore/restore',
+        method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path: '/restore/activate',
+        method: 'POST',
+        permissions: ['restore.write']
+    },
+    {
+        path: '/restore/job/rollback',
+        method: 'PUT',
+        permissions: ['restore.write']
     }
 ];
 
