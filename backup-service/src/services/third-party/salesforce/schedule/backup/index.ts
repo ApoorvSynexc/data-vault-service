@@ -124,9 +124,26 @@ export const exportFirstTime = async (
       },
       { instanceUrl, tokens }
     );
-    const allFieldNames = withSystemFields(
-      fieldsMetadata?.metadataType === 'fields' ? fieldsMetadata.fields.map((f) => f.name) : []
-    );
+
+    if (!fieldsMetadata?.fields) {
+      return;
+    }
+
+    const fieldNames: string[] = [];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
+    fieldsMetadata.fields.forEach((f) => {
+      if (
+        f.referenceTo.length > 1 &&
+        !excludeName.includes(f.name.toLowerCase()) &&
+        f.name.toLowerCase().includes('id')
+      ) {
+        const nameWithType = f.name.toLowerCase().replace('id', '.type');
+        fieldNames.push(nameWithType);
+      }
+      fieldNames.push(f.name);
+    });
+
+    const allFieldNames = withSystemFields(fieldNames);
     await salesforceMetadataHandler(
       {
         metadataType: 'picklist',
@@ -183,6 +200,7 @@ export const exportFirstTime = async (
       const whereClause = buildWhereClause(object);
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
 
+      console.log(JSON.stringify({soql}))
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
         salesforceApiCount += 2;
@@ -362,7 +380,6 @@ export const exportIncremental = async (
       const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} WITH USER_MODE ORDER BY Id ASC`;
 
-      console.log(JSON.stringify({soql, fieldNames}))
       // queryAll so Salesforce includes soft-deleted records in the result set
       try {
         bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
