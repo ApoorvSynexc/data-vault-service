@@ -160,7 +160,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => { });
+    }).catch(() => {});
   } finally {
     activeJobs.delete(backupJobId);
   }
@@ -273,8 +273,8 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
         status: JOB_STATUS.failed,
         completedAt: dayjs().toISOString(),
         errorMessage: err?.message ?? 'Unknown error',
-      }).catch(() => { }),
-      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => { }),
+      }).catch(() => {}),
+      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => {}),
     ]);
   } finally {
     activeJobs.delete(backupJobId);
@@ -347,7 +347,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => { });
+    }).catch(() => {});
     await updateRestore({
       restoreId,
       status: 'FAILED',
@@ -401,7 +401,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       restoreJobId,
       restoreSource,
       restoreDestination,
-      conflict,
+      conflict
     );
 
     await updateRestoreJobStatus({
@@ -420,7 +420,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       status: JOB_STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => { });
+    }).catch(() => {});
     await updateRestore({
       restoreId,
       status: 'FAILED',
