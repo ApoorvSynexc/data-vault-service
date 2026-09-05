@@ -304,7 +304,8 @@ export const deleteUserTrigger = async () => {
             const count = await deleteTriggers(
                 "https://hyudaitextolic.my.salesforce-setup.com/",
                 {
-                    accessToken: "00DdN00000wY1pt!AQEAQD61pSHSEx8QrApedKVh.jsP2.kN2dolJbecF3XGBxqNnkhLS5gRV.xHbYuuTR9LPFhzFI.GPC5anKTLiCIS6XGV8VvC",
+                    //accessToken: "00DdN00000wY1pt!AQEAQD61pSHSEx8QrApedKVh.jsP2.kN2dolJbecF3XGBxqNnkhLS5gRV.xHbYuuTR9LPFhzFI.GPC5anKTLiCIS6XGV8VvC",
+                    accessToken: "",
                     refreshToken: "",
                 },
                 backupConfig
