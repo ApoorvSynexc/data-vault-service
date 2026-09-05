@@ -111,7 +111,7 @@ const submitIngestChunk = async (
   await closeBulkJob(instanceUrl, tokens, job.id);
   const status = await pollBulkJobUntilDone(instanceUrl, tokens, job.id);
 
-  logger.info(`[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({status:status.state})}`);
+  logger.info(`[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({status:status})}`);
   let errors: string[] = [];
   if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
