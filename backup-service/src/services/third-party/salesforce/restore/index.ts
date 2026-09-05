@@ -1,6 +1,6 @@
 import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
-import { listS3Objects, listS3Prefixes, streamCsvLinesFromS3 } from '../../../destination/s3';
+import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
 import { SalesforceTokens } from '../api-request';
 import {
