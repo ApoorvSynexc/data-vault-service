@@ -17,7 +17,7 @@ import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getBackupJob } from '../../backup-job';
 import { createNotification } from '../../notification';
 import { getRestoreById } from '../../restore';
-import { getRestoreJobById, updateRestoreJob, updateRestoreJobStatus } from '../../restore-job';
+import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
