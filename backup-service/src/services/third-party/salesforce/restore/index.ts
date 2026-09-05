@@ -165,6 +165,12 @@ const restoreObjectData = async (
   const submittedJobIds: string[] = [];
   let header: string | null = null;
   let chunk: CsvChunk | null = null;
+  // Salesforce's Bulk API 'delete' job rejects a batch containing any column
+  // besides the id ("InvalidBatch: The 'delete' batch must contain only ids")
+  // — the backed-up CSV carries every field, so a delete pass has to project
+  // each row down to just its id column before upload, unlike insert/update/
+  // upsert which pass the CSV through unchanged.
+  let idColumnIndex = -1;
 
   const flushChunk = async () => {
     if (!chunk || !chunk.rows.length) {
@@ -204,7 +210,19 @@ const restoreObjectData = async (
         // Capture the header once, from the first file only — every subsequent
         // file's own header line is a duplicate and gets skipped here.
         if (header === null) {
-          header = line;
+          if (operation === 'delete') {
+            idColumnIndex = parseCsvRow(line).findIndex(
+              (field) => field.trim().toLowerCase() === externalIdFieldName.toLowerCase()
+            );
+            if (idColumnIndex === -1) {
+              throw new Error(
+                `Column "${externalIdFieldName}" not found in backed-up data for object ${objectName}`
+              );
+            }
+            header = externalIdFieldName;
+          } else {
+            header = line;
+          }
           chunk = newChunk(header);
         }
         continue;
@@ -213,11 +231,16 @@ const restoreObjectData = async (
         continue; // skip blank lines
       }
 
-      const lineBytes = Buffer.byteLength(line, 'utf8') + 1; // +1 for the newline joiner
+      const row = operation === 'delete' ? parseCsvRow(line)[idColumnIndex] ?? '' : line;
+      if (operation === 'delete' && !row) {
+        continue; // no id to delete on this row
+      }
+
+      const lineBytes = Buffer.byteLength(row, 'utf8') + 1; // +1 for the newline joiner
       if (chunk!.byteLength + lineBytes > MAX_CHUNK_BYTES) {
         await flushChunk();
       }
-      chunk!.rows.push(line);
+      chunk!.rows.push(row);
       chunk!.byteLength += lineBytes;
     }
   }
@@ -335,7 +358,11 @@ export const runSalesforceRollback = async (
     for (let index = 0; index < keys.length; index++) {
       const key = keys[index];
       const splitKeys = key.split('/');
-      const operation = splitKeys[splitKeys.length - 2] as 'update' | 'delete';
+      let operation = splitKeys[splitKeys.length - 1] as 'update' | 'delete';
+
+      if(!['update', 'delete'].includes(operation)) {
+        operation = splitKeys[splitKeys.length - 2] as 'update' | 'delete';
+      }
 
       console.log(JSON.stringify({ operation, splitKeys, key }));
 
