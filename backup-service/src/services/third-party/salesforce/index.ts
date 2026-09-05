@@ -17,7 +17,7 @@ import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getBackupJob } from '../../backup-job';
 import { createNotification } from '../../notification';
 import { getRestoreById } from '../../restore';
-import { getRestoreJobById } from '../../restore-job';
+import { getRestoreJobById, updateRestoreJob, updateRestoreJobStatus } from '../../restore-job';
 
 import { SalesforceTokens } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
@@ -544,6 +544,24 @@ const salesforceHandler: ICrmBackupHandler = {
         await runSalesforceRollback({
           ...hierarchyContext,
           object
+        });
+      }
+
+      const restoreJob = await getRestoreJobById(restoreJobId);
+      if (restoreJob) {
+        const updatedObjects = restoreJob.destination.objects.map((obj) => {
+          if (obj.status === RESTORE_JOB_STATUS.inProgress) {
+            return {
+              ...obj,
+              status: 'COMPLETED',
+            };
+          }
+          return obj;
+        });
+
+        await updateRestoreJob({
+          restoreJobId,
+          replaceObjects: updatedObjects,
         });
       }
 
