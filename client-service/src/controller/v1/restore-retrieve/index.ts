@@ -1180,33 +1180,39 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   // Step 1: compare metadata comparison
   const changedObjectNames: string[] = [];
   try {
-    const result = await runMetadataComparisonForConfig(backupConfig);
-    for (const { objectName, result: metadataResult } of result) {
-      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-        changedObjectNames.push(objectName);
+    if (backupConfig.type === 'NORMAL') {
+      const result = await runMetadataComparisonForConfig(backupConfig);
+      for (const { objectName, result: metadataResult } of result) {
+        if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+          changedObjectNames.push(objectName);
+        }
       }
-    }
 
-    if (changedObjectNames.length) {
-      await triggerBackupJob({
-        user: backupConfigUser,
-        config: backupConfig,
-        type: 'backup',
-        lastUpdatedAt: backupConfig.lastSchemaSyncAt,
-        schemaSync: true,
-        triggerSource: {
-          name: "CREATE_RESTORE",
-          entityId: restoreJob.restoreJobId,
-        },
-        ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
-      });
+      if (changedObjectNames.length) {
+        await triggerBackupJob({
+          user: backupConfigUser,
+          config: backupConfig,
+          type: 'backup',
+          lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+          schemaSync: true,
+          triggerSource: {
+            name: "CREATE_RESTORE",
+            entityId: restoreJob.restoreJobId,
+          },
+          ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
+        });
+      }{
+        await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
+        await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
+        await initalizeRestoreTransform(restoreJob.restoreJobId);
+      }
     } else {
       await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
       await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
       await initalizeRestoreTransform(restoreJob.restoreJobId);
     }
   } catch (error) {
-    logger.error(`[Restore creation metadata comparison] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+    logger.error(`[Restore creation handler] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
   }
 }
 
