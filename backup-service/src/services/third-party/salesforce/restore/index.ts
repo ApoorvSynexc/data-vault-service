@@ -118,6 +118,7 @@ const submitIngestChunk = async (
   if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
     errors = parseFirstNErrors(failedCsv, 25);
+    errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
 
   return {
@@ -341,6 +342,8 @@ export const runSalesforceRollback = async (
 
       const splitKeys = key.split('/');
       const operation = splitKeys[splitKeys.length - lastIndex] as 'update' | 'delete';
+
+      console.log(JSON.stringify({ operation, splitKeys, key }));
 
       if (operation === 'delete') {
         externalIdFieldName = 'DC_External_Id__c';
