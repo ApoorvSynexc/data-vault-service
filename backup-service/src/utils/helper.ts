@@ -471,10 +471,7 @@ interface HierarchyNode {
   children: HierarchyNode[];
 }
 
-function buildParentToChildHierarchy(
-  data: InputNode[]
-): HierarchyNode[] {
-
+function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
   // name -> possible parents
   const parentMap = new Map<string, Set<string>>();
 
@@ -497,11 +494,7 @@ function buildParentToChildHierarchy(
   // Calculate how deep a node can be from the root
   const depthCache = new Map<string, number>();
 
-  function getDepth(
-    name: string,
-    visiting = new Set<string>()
-  ): number {
-
+  function getDepth(name: string, visiting = new Set<string>()): number {
     if (depthCache.has(name)) {
       return depthCache.get(name)!;
     }
@@ -523,10 +516,7 @@ function buildParentToChildHierarchy(
     let maxDepth = 0;
 
     for (const parent of parents) {
-      maxDepth = Math.max(
-        maxDepth,
-        getDepth(parent, new Set(visiting)) + 1
-      );
+      maxDepth = Math.max(maxDepth, getDepth(parent, new Set(visiting)) + 1);
     }
 
     depthCache.set(name, maxDepth);
@@ -541,7 +531,6 @@ function buildParentToChildHierarchy(
   const selectedParent = new Map<string, string>();
 
   for (const [child, parents] of parentMap) {
-
     let bestParent: string | undefined;
     let bestDepth = -1;
 
@@ -569,7 +558,7 @@ function buildParentToChildHierarchy(
     if (!nodes.has(name)) {
       nodes.set(name, {
         name,
-        children: []
+        children: [],
       });
     }
 
@@ -580,7 +569,7 @@ function buildParentToChildHierarchy(
     const parentNode = getNode(parent);
     const childNode = getNode(child);
 
-    if (!parentNode.children.some(x => x.name === child)) {
+    if (!parentNode.children.some((x) => x.name === child)) {
       parentNode.children.push(childNode);
     }
   }
@@ -588,8 +577,7 @@ function buildParentToChildHierarchy(
   // Find roots
   const children = new Set(selectedParent.keys());
 
-  return [...nodes.values()]
-    .filter(node => !children.has(node.name));
+  return [...nodes.values()].filter((node) => !children.has(node.name));
 }
 
 export {

@@ -111,7 +111,9 @@ const submitIngestChunk = async (
   await closeBulkJob(instanceUrl, tokens, job.id);
   const status = await pollBulkJobUntilDone(instanceUrl, tokens, job.id);
 
-  logger.info(`[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({status:status})}`);
+  logger.info(
+    `[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({ status: status })}`
+  );
   let errors: string[] = [];
   if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
@@ -304,13 +306,8 @@ export const runSalesforceRollback = async (
   payload: RunSalesforceRestorePayload
 ): Promise<'SUCCESS' | 'FAILED'> => {
   let externalIdFieldName = 'Id';
-  const {
-    restoreId,
-    restoreJobId,
-    object,
-    sourceS3Credentials,
-    destinationSalesforceCredentials,
-  } = payload;
+  const { restoreId, restoreJobId, object, sourceS3Credentials, destinationSalesforceCredentials } =
+    payload;
 
   logger.info(
     `[Rollback] execution requested, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}`
@@ -343,9 +340,9 @@ export const runSalesforceRollback = async (
       }
 
       const splitKeys = key.split('/');
-      const operation = splitKeys[splitKeys.length - lastIndex] as "update" | "delete";
+      const operation = splitKeys[splitKeys.length - lastIndex] as 'update' | 'delete';
 
-      if(operation === 'delete'){
+      if (operation === 'delete') {
         externalIdFieldName = 'DC_External_Id__c';
       }
 

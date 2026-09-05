@@ -5,7 +5,10 @@ import { runRestoreJob, runRollbackJob } from '../../../services/common/runner';
 import { wrapController } from '../../../utils/helper';
 
 const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { restoreJobId, objectHierarchy } = req.body as { restoreJobId: string, objectHierarchy: IRestoreObjectHierarchyNode[] };
+  const { restoreJobId, objectHierarchy } = req.body as {
+    restoreJobId: string;
+    objectHierarchy: IRestoreObjectHierarchyNode[];
+  };
 
   const restoreJob = await getRestoreJobById(restoreJobId);
   if (!restoreJob) {
@@ -17,7 +20,7 @@ const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<v
   }
 
   makeResponse(req, res, 200, true, 'create');
-  runRestoreJob({...restoreJob, objectHierarchy}).catch(() => {});
+  runRestoreJob({ ...restoreJob, objectHierarchy }).catch(() => {});
 };
 
 const createRollbackJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -38,5 +41,5 @@ const createRollbackJobHandler = async (req: IRequest, res: IResponse): Promise<
 
 export const restoreController = wrapController({
   createRestoreJobHandler,
-  createRollbackJobHandler
+  createRollbackJobHandler,
 });
