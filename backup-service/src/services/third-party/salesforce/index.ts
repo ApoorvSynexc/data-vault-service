@@ -456,6 +456,18 @@ const salesforceHandler: ICrmBackupHandler = {
         (obj) => obj.status === 'FAILED'
       );
 
+      const updatedObjects = (freshJob?.destination.objects ?? []).map((obj) => {
+        if (obj.status === RESTORE_JOB_STATUS.inProgress) {
+          return { ...obj, status: RESTORE_JOB_STATUS.completed }
+        }
+        return obj;
+      });
+
+      await updateRestoreJob({
+        restoreJobId,
+        replaceObjects: updatedObjects
+      });
+
       if (failedObjects.length) {
         const restore = await getRestoreById(restoreId);
         if (restore) {
