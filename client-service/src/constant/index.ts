@@ -215,6 +215,7 @@ const RESTORE_JOB_STATUS = {
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
   completed: 'COMPLETED',
+  success: 'SUCCESS',
   failed: 'FAILED',
 };
 // Compression lifecycle. Written to the same `status` field as JOB_STATUS, so a
