@@ -116,6 +116,7 @@ const RESTORE_JOB_STATUS = {
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
   completed: 'COMPLETED',
+  success: 'SUCCESS',
   failed: 'FAILED',
 };
 
