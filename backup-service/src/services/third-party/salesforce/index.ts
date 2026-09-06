@@ -458,7 +458,7 @@ const salesforceHandler: ICrmBackupHandler = {
 
       const updatedObjects = (freshJob?.destination.objects ?? []).map((obj) => {
         if (obj.status === RESTORE_JOB_STATUS.inProgress) {
-          return { ...obj, status: RESTORE_JOB_STATUS.completed }
+          return { ...obj, status: RESTORE_JOB_STATUS.success }
         }
         return obj;
       });
