@@ -565,6 +565,13 @@ function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
     return nodes.get(name)!;
   }
 
+  // Ensure every collected node (including those without a parent) is
+  // represented, so a parentless node that no one else references is
+  // still returned as a root instead of being dropped.
+  for (const name of parentMap.keys()) {
+    getNode(name);
+  }
+
   for (const [child, parent] of selectedParent) {
     const parentNode = getNode(parent);
     const childNode = getNode(child);
