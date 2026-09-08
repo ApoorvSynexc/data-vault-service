@@ -100,6 +100,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
         modules: role.permissions,
         roleId: role.roleId,
         roleName: role.name,
+        roleDescription: role.description ?? '',
         lastSyncDate: element.updatedAt ?? null,
       });
     }
@@ -199,25 +200,27 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
 const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
   const { crmId } = crm;
-  // DataVaultPermissionService.createRole() (Apex) sends { orgId, name, modules, createdBy }
-  // — `modules` on the wire maps to IRole.permissions in storage. `createdBy` is
-  // derived server-side in Apex from UserInfo.getName(), not user-entered.
-  const { name, modules, createdBy } = JSON.parse(plaintext);
+  // DataVaultPermissionService.createRole() (Apex) sends
+  // { orgId, name, description, modules, createdBy } — `modules` on the wire
+  // maps to IRole.permissions in storage. `createdBy` is derived server-side
+  // in Apex from UserInfo.getName(), not user-entered.
+  const { name, description, modules, createdBy } = JSON.parse(plaintext);
 
   // req.salesforcePayload already required a registered CRM (with its own
   // encryption key) to decrypt this request at all, so crmId above is always
   // valid here — no need to look up or auto-create the CRM record separately.
   const roleId = uuidv4();
-  await createRole({ roleId, crmId, name, permissions: modules ?? {}, createdBy });
+  await createRole({ roleId, crmId, name, description, permissions: modules ?? {}, createdBy });
 
   res.status(201).json(encryptSalesforceResponse(crm, { roleId }));
 };
 
 const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  // DataVaultPermissionService.updateRole() (Apex) sends { orgId, roleId, name, modules }
-  // — `modules` on the wire maps to IRole.permissions in storage.
-  const { roleId, name, modules } = JSON.parse(plaintext);
+  // DataVaultPermissionService.updateRole() (Apex) sends
+  // { orgId, roleId, name, description, modules } — `modules` on the wire
+  // maps to IRole.permissions in storage.
+  const { roleId, name, description, modules } = JSON.parse(plaintext);
 
   const existingRole = await getRole({ roleId: String(roleId) });
   if (!existingRole) {
@@ -229,6 +232,7 @@ const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
     { roleId: String(roleId) },
     {
       ...(name !== undefined && { name }),
+      ...(description !== undefined && { description }),
       ...(modules !== undefined && { permissions: modules }),
     }
   );
