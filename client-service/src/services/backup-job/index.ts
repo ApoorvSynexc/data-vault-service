@@ -19,7 +19,7 @@ import { buildBackupScheduleName, computeNextScheduledRun } from '../../utils/ev
 // includeChildren: archival's cascade pipeline needs each object's children
 // tree to build its per-level WHERE clauses, so archival keeps forwarding it;
 // plain backup has no use for it, so it's dropped there.
-const getSourceObjects = (objects?: IObject[], includeChildren = false) => {
+export const getSourceObjects = (objects?: IObject[], includeChildren = false) => {
   if (objects?.length) {
     return objects.map((object) => ({
       name: object.name,
