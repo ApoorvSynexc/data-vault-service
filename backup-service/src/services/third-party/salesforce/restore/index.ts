@@ -231,7 +231,7 @@ const restoreObjectData = async (
         continue; // skip blank lines
       }
 
-      const row = operation === 'delete' ? parseCsvRow(line)[idColumnIndex] ?? '' : line;
+      const row = operation === 'delete' ? (parseCsvRow(line)[idColumnIndex] ?? '') : line;
       if (operation === 'delete' && !row) {
         continue; // no id to delete on this row
       }
@@ -360,7 +360,7 @@ export const runSalesforceRollback = async (
       const splitKeys = key.split('/');
       let operation = splitKeys[splitKeys.length - 1] as 'update' | 'delete';
 
-      if(!['update', 'delete'].includes(operation)) {
+      if (!['update', 'delete'].includes(operation)) {
         operation = splitKeys[splitKeys.length - 2] as 'update' | 'delete';
       }
 
