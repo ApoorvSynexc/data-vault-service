@@ -16,7 +16,7 @@ export interface ISoqlCountQuery {
 // this side, so this list (and the branches below) only cover what the type
 // actually allows.
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
-const ALLOWED_OPERATORS = new Set(['=', '!=', 'LIKE', 'IN']);
+const ALLOWED_OPERATORS = new Set(['=', '!=', 'LIKE', 'IN', 'INCLUDES', 'EXCLUDES']);
 const DATE_LITERALS = new Set([
   'TODAY', 'YESTERDAY', 'TOMORROW',
   'LAST_WEEK', 'THIS_WEEK', 'NEXT_WEEK',
@@ -52,6 +52,18 @@ const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number]
   if (operator === 'IN') {
     const parts = rawValue.split(',').map((v) => v.trim()).filter(Boolean);
     return `${name} IN (${parts.map((v) => formatSalesforceValueByDataType(v, dataType)).join(', ')})`;
+  }
+
+  // Multi-Select Picklist membership test: Salesforce's own syntax is a
+  // SINGLE quoted string with the candidate values semicolon-joined inside
+  // it — Field INCLUDES ('A;B') — not a parenthesized list of separately
+  // quoted literals the way IN's values are. The UI still submits the raw
+  // value comma-separated like every other multi-value filter here; only the
+  // wire format changes to match what Salesforce expects.
+  if (operator === 'INCLUDES' || operator === 'EXCLUDES') {
+    const parts = rawValue.split(',').map((v) => v.trim()).filter(Boolean);
+    const joined = parts.map((v) => v.replace(/'/g, "''")).join(';');
+    return `${name} ${operator} ('${joined}')`;
   }
 
   const ldt = dataType.toLowerCase();
