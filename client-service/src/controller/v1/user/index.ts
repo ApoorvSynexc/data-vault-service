@@ -23,7 +23,11 @@ const myProfileHandler = async (req: IRequest, res: IResponse) => {
   }
 
   const role = await getRole({ roleId: user!.role.roleId });
-  makeResponse(req, res, 200, true, 'fetch', { ...user, role: { ...user.role, permissions: role?.permissions }, password: undefined });
+  makeResponse(req, res, 200, true, 'fetch', {
+    ...user,
+    role: { ...user.role, description: role?.description ?? '', permissions: role?.permissions },
+    password: undefined,
+  });
 };
 
 const permissionHandler = async (req: IRequest, res: IResponse) => {

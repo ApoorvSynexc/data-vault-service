@@ -62,13 +62,14 @@ const modulePermissionsSchema = Joi.object()
   .optional();
 
 // DataVaultPermissionService.createRole()/updateRole() (Apex) send
-// { orgId, name, modules, createdBy } / { orgId, roleId, name, modules } — not
-// organizationId/environment/description/permissions, which nothing on the
-// Salesforce side ever sends.
+// { orgId, name, description, modules, createdBy } / { orgId, roleId, name, description, modules } —
+// not organizationId/environment/permissions, which nothing on the Salesforce
+// side ever sends.
 export const createRoleValidation = (req: IRequest, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     orgId: Joi.string().optional(),
     name: Joi.string().trim().required(),
+    description: Joi.string().trim().allow('').optional(),
     modules: modulePermissionsSchema,
     createdBy: Joi.string().optional(),
   });
@@ -90,6 +91,7 @@ export const updateRoleValidation = (req: IRequest, res: Response, next: NextFun
     orgId: Joi.string().optional(),
     roleId: Joi.string().required(),
     name: Joi.string().trim().optional(),
+    description: Joi.string().trim().allow('').optional(),
     modules: modulePermissionsSchema,
   });
 
