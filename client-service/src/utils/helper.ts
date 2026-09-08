@@ -124,6 +124,15 @@ const formatFieldValuesForSOQL = (fields: any[]): any[] => {
   });
 };
 
+// Strips currency symbols, thousands-separator commas, and surrounding
+// whitespace before a numeric-type value is embedded as a bare (unquoted)
+// SOQL literal. A Currency field's UI input is the one numeric type likely to
+// arrive formatted (e.g. "$1,234.56") — unlike Integer/Decimal/Percent, which
+// typically don't get symbol/grouping treatment — and an unstripped comma or
+// symbol there produces invalid SOQL ("Field = $1,234.56" / "Field = 1,234.56",
+// a bare comma outside any list context), which Salesforce rejects outright.
+const sanitizeNumericValue = (value: string): string => value.trim().replace(/[^0-9.-]/g, '');
+
 const formatSalesforceValueByDataType = (value: string, dataType: string): string => {
   if (!value && value !== '0' && value !== 'false') return value;
 
@@ -152,7 +161,7 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
     case 'currency':
     case 'percent':
     case 'number':
-      return value;
+      return sanitizeNumericValue(value);
 
     case 'boolean':
       return isTruthy(value) ? 'true' : 'false';
