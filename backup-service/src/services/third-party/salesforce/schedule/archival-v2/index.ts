@@ -36,7 +36,19 @@ interface IArchiveObject {
 
 const MAX_RETRIES = 3;
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
-const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN', 'INCLUDES', 'EXCLUDES']);
+const ALLOWED_OPERATORS = new Set([
+  '=',
+  '!=',
+  '>',
+  '<',
+  '>=',
+  '<=',
+  'LIKE',
+  'IN',
+  'NOT IN',
+  'INCLUDES',
+  'EXCLUDES',
+]);
 const DATE_LITERALS = new Set([
   'TODAY',
   'YESTERDAY',
@@ -235,7 +247,6 @@ const archiveObject = async (payload: IArchiveObject) => {
       },
       { instanceUrl, tokens }
     );
-
 
     if (!fieldsMetadata?.fields) {
       return;
