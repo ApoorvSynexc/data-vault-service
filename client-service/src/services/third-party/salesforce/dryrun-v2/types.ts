@@ -7,7 +7,9 @@
 
 export type SalesforceObjectType = 'CUSTOM' | 'STANDARD';
 
-export type FilterOperator = '=' | '!=' | 'LIKE' | 'IN';
+// INCLUDES/EXCLUDES are Multi-Select Picklist's own operators — Salesforce
+// has no other way to test membership against that field type.
+export type FilterOperator = '=' | '!=' | 'LIKE' | 'IN' | 'INCLUDES' | 'EXCLUDES';
 
 export interface IFieldFilter {
   name: string;

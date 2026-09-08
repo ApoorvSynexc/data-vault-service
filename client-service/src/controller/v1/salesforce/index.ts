@@ -206,6 +206,26 @@ const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
   // in Apex from UserInfo.getName(), not user-entered.
   const { name, description, modules, createdBy } = JSON.parse(plaintext);
 
+  // Role names must be unique within an org — case/whitespace-insensitive so
+  // "Sales" and " sales " aren't treated as different roles.
+  const existingRoles = await getRolesByCrmId(crmId);
+  const nameTaken = existingRoles.some(
+    (role) => role.name.trim().toLowerCase() === String(name).trim().toLowerCase()
+  );
+  if (nameTaken) {
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ROLE_NAME_EXISTS' }));
+    return;
+  }
+
+  // A role with no module granted anything is not a usable role — every other
+  // path that creates one (upsertUsersHandler) already treats "no grants" as
+  // "delete/never-create the role", so reject it explicitly here too rather
+  // than storing one nothing can ever pass hasAnyGrant() for.
+  if (!hasAnyGrant(modules)) {
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'PERMISSIONS_REQUIRED' }));
+    return;
+  }
+
   // req.salesforcePayload already required a registered CRM (with its own
   // encryption key) to decrypt this request at all, so crmId above is always
   // valid here — no need to look up or auto-create the CRM record separately.
