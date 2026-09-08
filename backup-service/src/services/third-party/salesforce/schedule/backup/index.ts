@@ -11,14 +11,16 @@ import { salesforceMetadataHandler } from '../../metadata';
 // SOQL injection guards.
 // Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")
 // Operators:    must be one of the Joi-validated enum values
-// Values:       allow the character set needed for SOQL literals
-//               (quoted strings, numbers, dates, booleans, IN lists)
-//               while blocking SQL/SOQL meta-characters like ; ` -- /* */
+// Values:       allow the character set needed for SOQL literals (quoted
+//               strings, numbers, dates, booleans, IN lists, and the
+//               semicolon-joined value INCLUDES/EXCLUDES need for a
+//               Multi-Select Picklist) while blocking SQL/SOQL meta-characters
+//               like ` -- /* */ that have no legitimate use in a filter value
 // Expression:   CUSTOM expressions must only contain index numbers,
 //               whitespace, parentheses, and the keywords AND / OR / NOT
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
-const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
-const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
+const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+;-]+$/;
+const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN', 'INCLUDES', 'EXCLUDES']);
 
 const buildFilterCondition = (name: string, operator: string, value: string): string => {
   if (!SAFE_FIELD_NAME_RE.test(name)) {
@@ -29,6 +31,17 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
   }
   if (!SAFE_VALUE_RE.test(value)) {
     throw new Error(`Invalid SOQL filter value: "${value}"`);
+  }
+
+  // Multi-Select Picklist membership test: Salesforce's own syntax is a
+  // SINGLE quoted string with the candidate values semicolon-joined inside
+  // it — Field INCLUDES ('A;B') — not a parenthesized list the way IN's
+  // values are. The raw value arrives comma-separated, same convention every
+  // other multi-value filter here uses; only the wire format changes.
+  if (operator === 'INCLUDES' || operator === 'EXCLUDES') {
+    const parts = value.split(',').map((v) => v.trim()).filter(Boolean);
+    const joined = parts.map((v) => v.replace(/'/g, "''")).join(';');
+    return `${name} ${operator} ('${joined}')`;
   }
 
   // If value is not already quoted and not a number/boolean, wrap it in single quotes

@@ -174,6 +174,10 @@ const FILTER_OPERATOR = {
   neq: '!=',
   in: 'IN',
   like: 'LIKE',
+  // Multi-Select Picklist's own membership operators — no other operator can
+  // test against that field type.
+  includes: 'INCLUDES',
+  excludes: 'EXCLUDES',
 };
 
 const STATUS = {
