@@ -611,7 +611,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
         }
       } else if (job.status === JOB_STATUS.running || job.status === JOB_STATUS.pending) {
         runningCount++;
-      } else if (job.status === JOB_STATUS.failed) {
+      } else if (job.status === JOB_STATUS.failed || job.status === COMPRESSION_STATUS.failed) {
         failedCount++;
       }
     }
