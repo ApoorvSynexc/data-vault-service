@@ -29,16 +29,18 @@ const HANDLER_CLASS_NAME = SALESFORCE_HANDLER_CLASS_NAME;
 // trigger ships with a generated Test Class (see createSingleTrigger below).
 // ---------------------------------------------------------------------------
 const triggerNameFor = (objectApiName: string): string =>
-  `DataVault_${objectApiName.replace('__c', '')}_Trigger`;
+  `DataCraft_${objectApiName.replace('__c', '')}_Trigger`;
 
 // Older configs (written before this file briefly moved real-time sync onto
 // Flows) may only have `triggerName` stored, not `objectApiName`. Recover the
 // exact SObject API name from the config's own objectNames, falling back to
-// undoing the string surgery.
+// undoing the string surgery. The fallback strips EITHER prefix — triggers
+// deployed before the Data Vault -> Data Craft rename still carry the old
+// `DataVault_` name in storage, and only newly (re)created ones get the new one.
 const objectApiNameOf = (config: IBackupConfig, result: ITriggerResult): string =>
   result.objectApiName ??
   (config.objectNames ?? []).find((name) => triggerNameFor(name) === result.triggerName) ??
-  String(result.triggerName).replace('DataVault_', '').replace('_Trigger', '');
+  String(result.triggerName).replace(/^(DataCraft|DataVault)_/, '').replace('_Trigger', '');
 
 // testClassNameFor is deterministic today, but the stored value is what's
 // actually deployed in the org — preferring it (falling back to recompute for
@@ -773,7 +775,7 @@ const setupPermissionSet = async (
       instanceUrl,
       tokens,
       PERMISSION_SET_NAME,
-      'DataVault Real-Time Trigger Access',
+      'Data Craft Real-Time Trigger Access',
       withNamespace(SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL)
     );
 
@@ -840,7 +842,7 @@ const fetchApexClassId = async (
 // ---------------------------------------------------------------------------
 // Permission Set helpers
 // ---------------------------------------------------------------------------
-const PERMISSION_SET_NAME = 'DataVaultRealTimeTriggerAccess';
+const PERMISSION_SET_NAME = 'DataCraftRealTimeTriggerAccess';
 
 const fetchPermissionSetId = async (
   instanceUrl: string,
@@ -868,9 +870,9 @@ const upsertPermissionSet = async (
       method: 'POST',
       body: JSON.stringify({
         Name: PERMISSION_SET_NAME,
-        Label: 'DataVault Real-Time Trigger Access',
+        Label: 'Data Craft Real-Time Trigger Access',
         Description:
-          'Grants access to the DataVault handler class and all real-time backup triggers created by DataVault.',
+          'Grants access to the Data Craft handler class and all real-time backup triggers created by Data Craft.',
       }),
     },
     tokens
@@ -1123,7 +1125,7 @@ const deletePermissionSetAssignments = async (
 };
 
 // ---------------------------------------------------------------------------
-// Delete the DataVaultRealTimeTriggerAccess permission set via Metadata API
+// Delete the DataCraftRealTimeTriggerAccess permission set via Metadata API
 // deploy — assignments first (see deletePermissionSetAssignments), since the
 // set can't be meaningfully in use once its own triggers are gone. Called
 // after all triggers are deleted so the permission set is cleaned up too.

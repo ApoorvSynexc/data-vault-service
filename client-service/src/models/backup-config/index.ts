@@ -77,7 +77,8 @@ export interface IObjectRelationshipNode {
 export interface ITriggerResult {
   // The object this real-time trigger belongs to.
   objectApiName: string;
-  // The deployed Apex trigger's name (DataVault_<Object>_Trigger).
+  // The deployed Apex trigger's name (DataCraft_<Object>_Trigger; older
+  // records may carry the pre-rename DataVault_<Object>_Trigger instead).
   triggerName?: string;
   // The deployed Apex Test Class name that covers it (<triggerName>Test, or a
   // truncated+hashed form past the 40-char Apex identifier cap). Needed on
