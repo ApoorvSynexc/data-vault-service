@@ -1,5 +1,4 @@
 import { v4 as uuidv4 } from 'uuid';
-import { fullAccessPermissions } from '../../../assets';
 import {
   JWT_ACCESS_EXPIRY,
   JWT_REFRESH_EXPIRY,
@@ -222,7 +221,7 @@ const socialLoginCallbackHandler = async (
 
       const roleName = 'Custom';
       const roleId = uuidv4();
-      await createRole({ roleId, name: roleName, permissions: fullAccessPermissions });
+      await createRole({ roleId, name: roleName, permissions: [] });
 
       const userId = uuidv4();
       const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId, firstName, lastName };

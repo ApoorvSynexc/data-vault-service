@@ -532,36 +532,18 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.driver.maxResultSize=2g',
             '--conf spark.emr-serverless.driver.disk=20g',
 
-            // Executors
+            // Executors — fixed at 4, dynamic allocation OFF. Every job requests the
+            // full 4 executors (4 cores / 16g / 20g disk each) up front and holds them
+            // for the run's duration; no ramp-up/ramp-down, no scaling between a min
+            // and a max. executor.instances is the sole executor-count control here —
+            // it's a no-op while dynamicAllocation.enabled=true (below), so it only
+            // takes effect once dynamic allocation is off.
             '--conf spark.executor.cores=4',
             '--conf spark.executor.memory=16g',
             '--conf spark.executor.memoryOverhead=3g',
             '--conf spark.emr-serverless.executor.disk=20g',
-
-            // Dynamic Allocation
-            // executor.instances must be set explicitly — EMR Serverless defaults it to 3,
-            // which fails validation once it exceeds maxExecutors.
-            // Starts at 1 executor and scales up to 6 only if the workload actually needs
-            // it — most runs (a handful of cascade/delta records) never will. Previously
-            // min=initial=executor.instances=6 held allocation static at the cap for no
-            // ramp-up delay on large bulk loads, but that meant EVERY run — regardless of
-            // size — requested the full 26vCPU (driver 2 + 6x4 executor) peak immediately,
-            // which trips the account's EMR Serverless concurrent-vCPU service quota even
-            // when nothing else is running. maxExecutors stays 6 so a genuinely large bulk
-            // load (e.g. a first-run 1M+ record insert) can still scale up to it; it just
-            // no longer starts there. NOTE: initial executor count is
-            // min(maxExecutors, max(initialExecutors, minExecutors, executor.instances)) —
-            // all three of the "floor" settings below must move together, or leaving any
-            // one at 6 pins the floor back to 6 regardless of the other two.
-            '--conf spark.executor.instances=1',
-            '--conf spark.dynamicAllocation.enabled=true',
-            '--conf spark.dynamicAllocation.minExecutors=1',
-            '--conf spark.dynamicAllocation.initialExecutors=1',
-            '--conf spark.dynamicAllocation.maxExecutors=6',
-            '--conf spark.dynamicAllocation.executorIdleTimeout=60s',
-            '--conf spark.dynamicAllocation.schedulerBacklogTimeout=1s',
-            '--conf spark.dynamicAllocation.sustainedSchedulerBacklogTimeout=1s',
-            '--conf spark.dynamicAllocation.shuffleTracking.enabled=true',
+            '--conf spark.executor.instances=4',
+            '--conf spark.dynamicAllocation.enabled=false',
 
             // Memory
             '--conf spark.memory.fraction=0.7',
