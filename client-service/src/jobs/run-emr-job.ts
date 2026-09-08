@@ -1,6 +1,8 @@
 import { logger } from "../middlewares";
 import { getBackupConfigsInBatches, getUser, initalizePayloadTransform, triggerBackupJob, runMetadataComparisonForConfig, hasMetadataChanged, updateBackupConfig } from "../services";
 import { BACKUP_STATUS } from '../constant';
+import { IUser } from "../models";
+import { syncObjects } from "./sync-objects";
 
 const runEmrJob = async () => {
   try {
@@ -8,6 +10,7 @@ const runEmrJob = async () => {
       async (configs) => {
         for (let index = 0; index < configs.length; index++) {
           const config = configs[index];
+          let user: IUser | null = null;
 
           if ([BACKUP_STATUS.pending].includes(config.backupStatus ?? '')) {
             continue;
@@ -28,7 +31,7 @@ const runEmrJob = async () => {
             }
 
             if (changedObjectNames.length) {
-              const user = await getUser({ userId: config.userId });
+              user = await getUser({ userId: config.userId });
               if (!user) {
                 logger.warn(
                   `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
@@ -45,6 +48,13 @@ const runEmrJob = async () => {
           // Other config hit EMR
           else {
             await initalizePayloadTransform(config.backupConfigId);
+          }
+
+          if (!user) {
+            user = await getUser({ userId: config.userId });
+            if (user) {
+              await syncObjects({ backupConfig: config, user });
+            }
           }
         }
       },
