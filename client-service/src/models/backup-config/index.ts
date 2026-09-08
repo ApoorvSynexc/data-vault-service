@@ -56,7 +56,7 @@ export interface IObject {
   type: string; // STANDARD | CUSTOM
   isUserSelected?: boolean;
   sizeInBytes?: number;
-  field: IObjectField[];
+  field?: IObjectField[];
   condition?: IObjectCondition;
   scheduleConfig?: IScheduleConfig;
   children?: IObjectRelationshipNode[];
