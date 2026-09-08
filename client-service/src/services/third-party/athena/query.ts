@@ -29,16 +29,6 @@ const POLL_MAX_MS = 2000;
 // when queries are fast.
 const QUERY_TIMEOUT_MS = 300_000;
 
-// Deferred via setImmediate: `logger` comes through the middlewares barrel,
-// which has a circular import back to this module — logging synchronously at
-// the top level can run before that cycle resolves and crash on `undefined`.
-setImmediate(() => {
-  logger.info(
-    `[athena] settings | region:${AWS_REGION} roleArn:${AWS_ATHENA_ROLE_ARN} keyless:true ` +
-    `pollFirstMs:${POLL_FIRST_MS} pollInitialMs:${POLL_INITIAL_MS} pollMaxMs:${POLL_MAX_MS} queryTimeoutMs:${QUERY_TIMEOUT_MS}`
-  );
-});
-
 const TERMINAL_STATES = new Set<QueryExecutionState>([
   QueryExecutionState.SUCCEEDED,
   QueryExecutionState.FAILED,
