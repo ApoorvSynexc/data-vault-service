@@ -160,7 +160,7 @@ const socialLoginCallbackHandler = async (
   const encrptedCrm = encrypt(JSON.stringify(crmCredential));
 
   // Check if user exists by email (only match active users)
-  let user = await getUserByCrmProfileUserId(sfProfile.user_id);
+  let user = await getUserByCrmProfileUserId(sfProfile.user_id, sfProfile.organization_id);
   // Set when the user is created below — skips the redundant updateUser call
   // that would otherwise immediately follow a brand-new user's first write.
   let userJustCreated = false;
