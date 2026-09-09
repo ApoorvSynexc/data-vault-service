@@ -50,6 +50,8 @@ import {
   initalizeRestoreTransform,
   getRestoreJobById,
   updateRestoreJob,
+  listS3Objects,
+  getPresignedDownloadUrl,
 } from '../../../services';
 import { BACKUP_JOB_TABLE, RESTORE_JOB_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -1201,7 +1203,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           },
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
-      }{
+      } {
         await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
         await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
         await initalizeRestoreTransform(restoreJob.restoreJobId);
@@ -1308,6 +1310,49 @@ const getRestoreJobStatsHandler = async (req: IRequest, res: IResponse): Promise
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
+const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { restoreJobId, objectName } = req.query as Record<string, string>;
+  if (!restoreJobId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const restoreJob = await getRestoreJobById(restoreJobId);
+  if (!restoreJob) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  if (restoreJob.status !== 'COMPLETED') {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const path = `${restoreJob.source.csvFilePath}/${objectName}/csv`;
+  const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+    'ciphertext' in restoreJob.source.encryptedKeys
+      ? JSON.parse(decrypt(restoreJob.source.encryptedKeys))
+      : restoreJob.source.encryptedKeys;
+  const s3Config = {
+    ...sourceS3Credentials,
+    backupConfigId: restoreJob.source.backupConfigId,
+    bucketName: restoreJob.source.bucketName,
+    region: restoreJob.source.region,
+    csvFilePath: restoreJob.source.csvFilePath,
+  }
+  const keys = await listS3Objects(s3Config, path);
+
+  if (keys.length === 0) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const files = await Promise.all(
+    keys.map(async (key) => ({
+      fileName: key.split('/').pop()!,
+      url: await getPresignedDownloadUrl(s3Config, key),
+    }))
+  );
+
+  makeResponse(req, res, 200, true, 'fetch', { files });
+}
+
 export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
@@ -1328,5 +1373,6 @@ export const restoreRetrieveJobController = wrapController({
   getRestoreJobHandler,
   getRestoreJobStatsHandler,
   createRestoreHandler2,
-  createRollbackHandler
+  createRollbackHandler,
+  downloadCsvFile
 });
