@@ -295,7 +295,7 @@ export const deleteUserTrigger = async () => {
                 // },
             ]
         }
-        const user = await getUserByCrmProfileUserId("005dN00000B4141QAB");
+        const user = await getUserByCrmProfileUserId("005dN00000B4141QAB", ""); // TODO: fill in orgId before running
         if (true) {
             console.log("Deleting trigger");
 

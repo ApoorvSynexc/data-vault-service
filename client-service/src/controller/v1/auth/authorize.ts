@@ -129,7 +129,7 @@ const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise
   }
 
 
-  const existingUser = await getUserByCrmProfileUserId(crmUserId);
+  const existingUser = await getUserByCrmProfileUserId(crmUserId, orgId);
   if (existingUser) {
     await updateUser(
       { userId: existingUser.userId },
