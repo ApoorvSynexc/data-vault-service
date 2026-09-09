@@ -166,6 +166,7 @@ const socialLoginCallbackHandler = async (
   let userJustCreated = false;
   const isAdminProvisioningFlow = Boolean(oauthState.isAdminUser && oauthState.adminUserSfProfile);
 
+  console.log(JSON.stringify({sfProfile, isAdminProvisioningFlow}))
   if (isAdminProvisioningFlow) {
     const adminProfile = oauthState.adminUserSfProfile!;
     // Salesforce's OAuth token response carries its own authoritative
@@ -325,6 +326,7 @@ const socialLoginCallbackHandler = async (
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
   const tokens = generateTokens(user.userId, session.sessionId);
 
+  console.log(JSON.stringify({user}))
   // Set cookies
   res.cookie('accessToken', tokens.accessToken, {
     ...baseCookieOptions,
