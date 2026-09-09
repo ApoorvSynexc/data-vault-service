@@ -357,16 +357,21 @@ const getUsersWithPagination = async (
   };
 };
 
-const getUserByCrmProfileUserId = async (crmProfileUserId: string): Promise<IUser | null> => {
+const getUserByCrmProfileUserId = async (crmProfileUserId: string, orgId: string): Promise<IUser | null> => {
   const result = await docClient.send(
     new QueryCommand({
       TableName: USER_TABLE,
       IndexName: 'crmProfileUserId-index',
       KeyConditionExpression: 'crmProfileUserId = :crmProfileUserId',
+      // The same Salesforce user id can show up under more than one org connection,
+      // so orgId disambiguates which row to return. No Limit here — DynamoDB applies
+      // Limit before FilterExpression, so capping items read could discard the
+      // matching org's row before the filter ever sees it.
+      FilterExpression: 'crmProfile.organizationId = :orgId',
       ExpressionAttributeValues: {
         ':crmProfileUserId': crmProfileUserId,
+        ':orgId': orgId,
       },
-      Limit: 1,
     })
   );
   return (result.Items?.[0] as IUser) ?? null;

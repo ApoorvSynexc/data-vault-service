@@ -54,14 +54,14 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 // pick a role and customize its modules from a single screen.
 const updatePermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  const { userId, modules, roleId } = JSON.parse(plaintext);
+  const { userId, modules, roleId, organizationId } = JSON.parse(plaintext);
 
   if (!userId || !roleId) {
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
     return;
   }
 
-  const existingUser = await getUserByCrmProfileUserId(userId);
+  const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
   if (!existingUser) {
     res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'USER_NOT_FOUND' }));
     return;
@@ -126,7 +126,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
       const { profile, role, ...rest } = user;
       const crmProfileUserId = profile.userId;
       const orgId = profile.organizationId;
-      const existingUser = await getUserByCrmProfileUserId(crmProfileUserId);
+      const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, orgId);
 
       const hasGrant = hasAnyGrant(role.permissions);
       if (!hasGrant) {
@@ -270,14 +270,14 @@ const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
 
 const confirmAdminUserCreatedHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  const { userId } = JSON.parse(plaintext);
+  const { userId, organizationId } = JSON.parse(plaintext);
 
   if (!userId) {
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
     return;
   }
 
-  const existingUser = await getUserByCrmProfileUserId(userId);
+  const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
   if (!existingUser) {
     res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'USER_NOT_FOUND' }));
     return;
