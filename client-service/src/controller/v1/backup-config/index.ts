@@ -44,6 +44,7 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils/event-bridge';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
+import { syncObjects } from '../../../jobs/sync-objects';
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -437,6 +438,12 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
     return;
   }
 
+  const backupCreatedUser = await getUser({ userId: config.userId });
+  if (!backupCreatedUser) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
   const changedObjectNames: any = [];
   const result = await runMetadataComparisonForConfig(config);
  for (const { objectName, result: metadataResult } of result) {
@@ -445,7 +452,7 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
       }
     }
   makeResponse(req, res, 201, true, 'create', result);
-  // await syncMetadataAndTriggers(config.backupConfigId);
+  await syncObjects({backupConfig: config, user: backupCreatedUser});
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
