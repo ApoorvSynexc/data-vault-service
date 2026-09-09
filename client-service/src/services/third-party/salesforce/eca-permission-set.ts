@@ -295,25 +295,17 @@ export const provisionEcaPermissionSet = async (
   crm: ICrm,
   permissionSetName: string
 ): Promise<EcaProvisionResult> => {
-  // permissionSetName comes from oauthState (configure-org's permission_set_name)
-  // — an admin-supplied, already-existing Permission Set. It is never created
-  // here, only looked up and referenced by the ECA OAuth policy, so a missing
-  // name is a caller error rather than something to substitute a default for.
   if (!permissionSetName) {
     throw new Error('permission_set_name_required: no Permission Set name was supplied for this org');
   }
 
-  console.log('[eca-permission-set] Checking org capabilities...');
   const { mode, developerName } = await resolveEcaDeveloperName(instanceUrl, tokens);
 
-  console.log('[eca-permission-set] Checking permission set...');
   if (!(await permissionSetExists(instanceUrl, tokens, permissionSetName))) {
     throw new Error(`permission_set_not_found: Permission Set '${permissionSetName}' does not exist in this org`);
   }
-  console.log('[eca-permission-set] Permission set found:', permissionSetName);
 
   if (!developerName) {
-    console.log('[eca-permission-set] Skipping unsupported/missing ECA step — the permission set itself was verified.');
     return {
       mode,
       ecaFound: false,
@@ -324,23 +316,11 @@ export const provisionEcaPermissionSet = async (
     };
   }
 
-  console.log('[eca-permission-set] Checking ECA permission-set assignment...');
   const existingPermittedPermissionSets = await fetchExistingPermittedPermissionSets(instanceUrl, tokens, developerName);
   const alreadyAssigned = existingPermittedPermissionSets.includes(permissionSetName);
 
-  if (alreadyAssigned) {
-    console.log('[eca-permission-set] Permission set already assigned to ECA OAuth policy — skipping deploy.');
-  } else {
-    console.log('[eca-permission-set] Resolving OAuth policy record...');
-    // Salesforce auto-generates this record per-org when the ECA is created —
-    // its fullName is never the ECA's own name (see resolveEcaOauthPolicyName)
-    // and must be discovered, not assumed, or the deploy creates a colliding
-    // duplicate instead of updating the real one.
-    // Never namespaced when creating: ExtlClntAppOauthConfigurablePolicies
-    // isn't packageable, so a subscriber org can only create it under its own
-    // (unnamespaced) namespace — see unnamespacedEcaName's docblock above.
+  if (!alreadyAssigned) {
     const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${unnamespacedEcaName(developerName)}_oauthPlcy`;
-    console.log('[eca-permission-set] Deploying ECA OAuth policy:', policyName);
     const union = Array.from(new Set([...existingPermittedPermissionSets, permissionSetName]));
 
     try {

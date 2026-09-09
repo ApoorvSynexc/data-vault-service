@@ -166,18 +166,14 @@ const socialLoginCallbackHandler = async (
   let userJustCreated = false;
   const isAdminProvisioningFlow = Boolean(oauthState.isAdminUser && oauthState.adminUserSfProfile);
 
-  console.log(JSON.stringify({sfProfile, isAdminProvisioningFlow}))
+  console.log(JSON.stringify({ sfProfile, isAdminProvisioningFlow }))
   if (isAdminProvisioningFlow) {
     const adminProfile = oauthState.adminUserSfProfile!;
-    // Salesforce's OAuth token response carries its own authoritative
-    // instance_url — the only domain guaranteed to accept this access_token.
-    // It can differ from whatever domain was reported separately (e.g. Apex's
-    // URL.getOrgDomainUrl() during admin authorization), so it must win here;
-    // otherwise later API calls made against the wrong domain fail with
-    // INVALID_SESSION_ID even though the token itself is perfectly valid.
-    const instanceUrl = token.instance_url ?? user?.crmProfile?.instanceUrl ?? adminProfile.instanceUrl;
-    const organizationId = user?.crmProfile?.organizationId ?? adminProfile.organizationId;
-    const crmId = user?.crmId ?? (await getCrmByOrgId(organizationId))?.crmId ?? uuidv4();
+    
+    const instanceUrl = token.instance_url;
+    const organizationId = sfProfile.organization_id;
+    const crm = await getCrmByOrgId(organizationId);
+    const crmId = crm?.organizationId ?? uuidv4();
 
     if (!instanceUrl) {
       makeResponse(req, res, 500, false, 'admin_provisioning_failed');
@@ -187,15 +183,12 @@ const socialLoginCallbackHandler = async (
     const salesforceTokens: SalesforceTokens = {
       accessToken: token.access_token,
       refreshToken: token.refresh_token,
-      userId: user?.userId,
-      customUrl: user?.customUrl ?? oauthState.customUrl,
+      userId: sfProfile.user_id,
+      customUrl: oauthState.customUrl,
     };
-    // provisionEcaPermissionSet doesn't dereference crm's fields today — pass
-    // the identity that's about to be persisted below rather than delay
-    // resolving it until after provisioning has already succeeded.
     const crmIdentity: ICrm = {
       crmId,
-      organizationId,
+      organizationId : organizationId,
       crmName: 'salesforce',
       status: STATUS.active,
       updatedAt: new Date().toISOString(),
@@ -215,28 +208,27 @@ const socialLoginCallbackHandler = async (
     }
 
     if (!user) {
-      // First-time admin: configure-org deferred role + user creation to
-      // here, after Salesforce has confirmed the login and ECA provisioning
-      // above has already succeeded.
-      const { username, email, firstName, lastName } = adminProfile;
-
       const roleName = 'Custom';
       const roleId = uuidv4();
       await createRole({ roleId, name: roleName, permissions: [] });
 
       const userId = uuidv4();
-      const crmProfile = { username, email, userId: sfProfile.user_id, instanceUrl, organizationId, firstName, lastName };
-      // createUser is idempotent by crmProfile.userId (sfProfile.user_id) via
-      // the lookup above — this branch only runs when no user was found for
-      // this Salesforce user id, so repeated admin logins update rather than
-      // duplicate the user (see the update path below).
+      const crmProfile = {
+        username: sfProfile.preferred_username,
+        email: sfProfile.email,
+        userId: sfProfile.user_id,
+        instanceUrl,
+        organizationId : sfProfile.organization_id,
+        firstName : sfProfile.given_name,
+        lastName : sfProfile.family_name
+      };
       await createUser({
         crmProfile,
         role: { name: roleName, roleId },
         userId,
         crmId,
-        firstName,
-        lastName,
+        firstName : crmProfile.firstName,
+        lastName : crmProfile.lastName,
         status: STATUS.active,
         crmCredential: encrptedCrm,
         isCrmConnected: true,
@@ -254,6 +246,15 @@ const socialLoginCallbackHandler = async (
       // use the record we just wrote for the rest of the login flow.
       user = { userId, crmId, crmProfile, status: STATUS.active, isCrmConnected: true, customUrl: oauthState.customUrl } as IUser;
       userJustCreated = true;
+    } else {
+      await updateUser(
+      { userId: user.userId },
+      {
+        crmCredential: encrptedCrm,
+        isCrmConnected: true,
+        ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
+        ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
+      });
     }
 
     const settingsExist = await getSettingsByUserAndCrm(user.userId);
@@ -326,7 +327,7 @@ const socialLoginCallbackHandler = async (
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
   const tokens = generateTokens(user.userId, session.sessionId);
 
-  console.log(JSON.stringify({user}))
+  console.log(JSON.stringify({ user }))
   // Set cookies
   res.cookie('accessToken', tokens.accessToken, {
     ...baseCookieOptions,
