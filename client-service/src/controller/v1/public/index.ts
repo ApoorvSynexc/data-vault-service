@@ -81,7 +81,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
 
   for (const config of realtimeConfigs) {
     const ojectNames = config.objects?.map(o => o.name) || [];
-    if (!ojectNames.includes(objectApiName)) continue;
+    if (!ojectNames.includes(objectApiName) || config.backupStatus === STATUS.paused) continue;
 
     const destination = await getDestinationById(config.destinationId);
     if (!destination) {
