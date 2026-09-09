@@ -30,6 +30,9 @@ import { createRestoreValidation } from '../../middlewares';
  *                                         ({changeRecord, salesforceRecord}). Capped per object;
  *                                         read-only, no restore is performed
  * GET  /                                — single restore/retrieve job (by backupJobId)
+ * GET  /download-csv                    — for a completed restore job, returns presigned S3 URLs
+ *                                         (one per part) so the client downloads the exported
+ *                                         CSV(s) for one object directly from S3
  */
 const router = Router();
 
@@ -54,5 +57,6 @@ router.post('/dry-run', restoreRetrieveJobController.dryRunHandler);
 router.post('/dry-run-diff', restoreRetrieveJobController.dryRunDiffHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
+router.get('/download-csv', restoreRetrieveJobController.downloadCsvFile);
 
 export const restoreRetrieveRouter = router;
