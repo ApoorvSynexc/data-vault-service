@@ -4,6 +4,7 @@ import {
     PutObjectCommand,
     S3Client,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { IAwsCredentials, IS3Config } from '../../../models';
 import { NODE_ENV } from '../../../constant';
 
@@ -53,6 +54,24 @@ const downloadFromS3 = async (
         }
         throw err;
     }
+};
+
+const DEFAULT_PRESIGNED_URL_EXPIRY_SECONDS = 3600 * 24;
+
+// Signs a time-limited URL the client downloads directly from S3 — for large/multi-part
+// exports where proxying bytes through this server (buffered or streamed) doesn't scale:
+// no server memory/CPU/connection is held for the transfer, S3 handles the throughput,
+// and the client can fetch multiple part URLs in parallel with Range-based resume.
+// Signing is a local HMAC computation, not a network call, so this resolves near-instantly
+// regardless of the object's size.
+const getPresignedDownloadUrl = async (
+    config: IS3Config,
+    key: string,
+    expiresInSeconds: number = DEFAULT_PRESIGNED_URL_EXPIRY_SECONDS
+): Promise<string> => {
+    const client = getS3Client(config);
+    const command = new GetObjectCommand({ Bucket: config.bucketName, Key: key });
+    return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 };
 
 const uploadToS3 = async (
@@ -106,6 +125,7 @@ const listS3Objects = async (
 
 export {
     downloadFromS3,
+    getPresignedDownloadUrl,
     listS3Objects,
     uploadToS3,
 }
