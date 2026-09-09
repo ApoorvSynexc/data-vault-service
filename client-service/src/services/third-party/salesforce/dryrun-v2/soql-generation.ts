@@ -43,6 +43,13 @@ const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number]
     throw new Error(`Disallowed SOQL operator: "${operator}"`);
   }
 
+  if (rawValue === null || rawValue === undefined) {
+    if (operator === '=' || operator === '!=') {
+      return `${name} ${operator} null`;
+    }
+    throw new Error(`Operator "${operator}" does not support a null value for field "${name}"`);
+  }
+
   if (operator === 'LIKE') {
     const escaped = rawValue.replace(/'/g, "''");
     const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
