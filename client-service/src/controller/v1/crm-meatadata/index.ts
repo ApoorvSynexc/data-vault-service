@@ -213,7 +213,7 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
 
 
 
-  if (relationshipDepth && relationshipDepth > 0) {
+  if (relationshipDepth && relationshipDepth >= 0) {
     const uniqueChildObjectNames = Array.from(new Set(children.map((child) => child.name)));
     const childDescriptions = await Promise.all(
       uniqueChildObjectNames.map((childObjectName) => salesforceObjectDescribe({ user, objectName: childObjectName }))
