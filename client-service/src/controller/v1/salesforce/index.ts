@@ -111,98 +111,64 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 };
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  console.log('[upsertUsersHandler] ==== START ====');
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  console.log('[upsertUsersHandler] crm:', JSON.stringify(crm));
   const decryptedBody = JSON.parse(plaintext);
-  console.log('[upsertUsersHandler] decryptedBody:', JSON.stringify(decryptedBody));
   const { users, environment, organizationId } = decryptedBody;
-  console.log('[upsertUsersHandler] users count:', users?.length, 'environment:', environment, 'organizationId:', organizationId);
 
   if (!users?.length) {
-    console.log('[upsertUsersHandler] no users in payload -> 400 ID_REQUIRED');
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
     return;
   }
 
   const result = [];
   for await (const user of users) {
-    console.log('[upsertUsersHandler] ---- processing user ----', JSON.stringify(user));
     try {
       const { profile, role, ...rest } = user;
-      console.log('[upsertUsersHandler] profile:', JSON.stringify(profile));
-      console.log('[upsertUsersHandler] role:', JSON.stringify(role));
-      console.log('[upsertUsersHandler] rest:', JSON.stringify(rest));
       const crmProfileUserId = profile.userId;
       const orgId = profile.organizationId;
-      console.log('[upsertUsersHandler] crmProfileUserId:', crmProfileUserId, 'orgId:', orgId);
       const existingUser = await getUserByCrmProfileUserId(crmProfileUserId);
-      console.log('[upsertUsersHandler] existingUser:', JSON.stringify(existingUser));
 
       const hasGrant = hasAnyGrant(role.permissions);
-      console.log('[upsertUsersHandler] hasAnyGrant(role.permissions):', hasGrant);
-
-      //If permission not exist, then clean up user and role
       if (!hasGrant) {
-        console.log('[upsertUsersHandler] branch: no permissions -> delete path');
         if (existingUser?.userId) {
-          console.log('[upsertUsersHandler] existingUser found, checking backups for userId:', existingUser.userId);
           // check if user created any restore
           const backups = await getBackupConfigsByUser(existingUser?.userId);
-          console.log('[upsertUsersHandler] backups:', JSON.stringify(backups));
           if (!backups?.length) {
-            console.log('[upsertUsersHandler] no backups -> deleting role', existingUser.role.roleId, 'and user', existingUser.userId);
             await deleteRole({ roleId: existingUser.role.roleId });
             await deleteUser(existingUser.userId);
-            console.log('[upsertUsersHandler] delete complete for user', existingUser.userId);
           } else {
-            console.log('[upsertUsersHandler] user has backups -> cannot delete, pushing failed result');
             result.push({ ...user, status: "failed", message: "user has backups, archival or restores" });
           }
         } else {
-          console.log('[upsertUsersHandler] no existingUser found, nothing to delete');
         }
 
         result.push({ ...user, staus: 'success', action: 'deleted' });
-        console.log('[upsertUsersHandler] pushed deleted result for user', crmProfileUserId);
       } else {
         // If permission exist and if User exist then update user and role
         if (existingUser) {
-          console.log('[upsertUsersHandler] branch: has permissions, existingUser found -> update path');
-          console.log('[upsertUsersHandler] updating user', existingUser.userId, 'with crmProfile:', JSON.stringify({ ...existingUser.profile, ...profile }));
           await updateUser(
             { userId: existingUser.userId },
             {
               userId: existingUser.userId,
               crmProfile: { ...existingUser.profile, ...profile },
             });
-          console.log('[upsertUsersHandler] updateUser complete, updating role', existingUser.role.roleId, 'with permissions:', JSON.stringify(role.permissions));
           await updateRole(
             { roleId: existingUser.role.roleId },
             { permissions: role.permissions }
           )
-          console.log('[upsertUsersHandler] updateRole complete');
           result.push({ ...user, staus: 'success', action: 'updated' });
-          console.log('[upsertUsersHandler] pushed updated result for user', crmProfileUserId);
           // If permission exist and if user not exist then create user and role
         } else {
-          console.log('[upsertUsersHandler] branch: has permissions, no existingUser -> create path');
           const roleName = 'Custom';
           const userId = uuidv4();
           const roleId = uuidv4();
           let crmId = uuidv4();
-          console.log('[upsertUsersHandler] generated userId:', userId, 'roleId:', roleId, 'default crmId:', crmId);
           const crmExist = await getCrmByOrgId(orgId);
-          console.log('[upsertUsersHandler] crmExist for orgId', orgId, ':', JSON.stringify(crmExist));
           if (crmExist) {
             crmId = crmExist.crmId;
-            console.log('[upsertUsersHandler] using existing crmId:', crmId);
           }
-          console.log('[upsertUsersHandler] creating role', roleId, 'name:', roleName, 'permissions:', JSON.stringify(role.permissions));
           await createRole({ roleId, name: roleName, permissions: role.permissions });
-          console.log('[upsertUsersHandler] createRole complete, creating user', userId);
           await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, userId, crmId, isCrmConnected: false });
-          console.log('[upsertUsersHandler] createUser complete, upserting crm', crmId);
           await upsertCrm({
             userId,
             crmId,
@@ -210,31 +176,14 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             organizationId: orgId,
             crmName: 'salesforce',
           });
-          console.log('[upsertUsersHandler] upsertCrm complete');
           result.push({ ...user, staus: 'success', action: 'created' });
-          console.log('[upsertUsersHandler] pushed created result for user', crmProfileUserId);
         }
       }
     } catch (error: any) {
-      console.log('[upsertUsersHandler] ERROR processing user', JSON.stringify(user), '->', error?.message, error?.stack);
       result.push({ ...user, staus: 'failed', errorMessage: error.message });
     }
   }
 
-  console.log('[upsertUsersHandler] final result:', JSON.stringify(result));
-
-  // // If all user and role delete from db then delete crm
-  // if (organizationId) {
-  //   const crm = await getCrmByOrgId(organizationId);
-  //   if (crm) {
-  //     const usersByCrmId = await getUsersByCrmId(crm.crmId);
-  //     if (!usersByCrmId.length) {
-  //       await deleteCrm(crm.crmId);
-  //     }
-  //   }
-  // }
-
-  console.log('[upsertUsersHandler] ==== END, responding 201 ====');
   res.status(201).json(encryptSalesforceResponse(crm, result));
 };
 
