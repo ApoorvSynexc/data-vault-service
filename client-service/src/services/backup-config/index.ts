@@ -428,14 +428,13 @@ const getBackupConfigsWithPagination = async (
     ...(backupStatus && { '#backupStatus': 'backupStatus' }),
   };
 
-  // Equality/contains filters shared by both the Query and Scan paths.
+  // Equality filters shared by both the Query and Scan paths. `search` is deliberately
+  // excluded here — DynamoDB's contains() is case-sensitive with no case-folding option,
+  // so name matching for search is done as a post-filter in JS instead (see isSearch branch).
   const buildFilters = (expressionAttributeValues: Record<string, any>): string[] => {
     const expressions: string[] = [];
 
-    if (isSearch) {
-      expressionAttributeValues[':search'] = search!;
-      expressions.push('contains(#name, :search)');
-    } else if (name) {
+    if (!isSearch && name) {
       expressionAttributeValues[':name'] = name;
       expressions.push('#name = :name');
     }
@@ -469,7 +468,8 @@ const getBackupConfigsWithPagination = async (
   // table is exhausted, capping each request's Limit to the remaining need so results
   // never overshoot the page boundary reported back via nextCursor.
   const collectPage = async (
-    sendPage: (pageLimit: number, startKey?: Record<string, any>) => Promise<{ Items?: any[]; LastEvaluatedKey?: Record<string, any> }>
+    sendPage: (pageLimit: number, startKey?: Record<string, any>) => Promise<{ Items?: any[]; LastEvaluatedKey?: Record<string, any> }>,
+    filterItems?: (items: IBackupConfig[]) => IBackupConfig[]
   ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
     const documents: IBackupConfig[] = [];
     let startKey = exclusiveStartKey;
@@ -477,7 +477,8 @@ const getBackupConfigsWithPagination = async (
 
     do {
       const pageResult = await sendPage(limit - documents.length, startKey);
-      documents.push(...((pageResult.Items as IBackupConfig[] | undefined) ?? []));
+      const items = (pageResult.Items as IBackupConfig[] | undefined) ?? [];
+      documents.push(...(filterItems ? filterItems(items) : items));
       lastEvaluatedKey = pageResult.LastEvaluatedKey;
       startKey = lastEvaluatedKey;
     } while (documents.length < limit && lastEvaluatedKey);
@@ -503,18 +504,22 @@ const getBackupConfigsWithPagination = async (
       filterExpressions.push('crmId = :crmId');
     }
 
-    return collectPage((pageLimit, startKey) =>
-      docClient.send(
-        new ScanCommand({
-          TableName: BACKUP_CONFIG_TABLE,
-          ProjectionExpression: projectionExpression,
-          ExpressionAttributeNames: expressionAttributeNames,
-          ExpressionAttributeValues: expressionAttributeValues,
-          FilterExpression: filterExpressions.join(' AND '),
-          Limit: pageLimit,
-          ...(startKey && { ExclusiveStartKey: startKey }),
-        })
-      )
+    const searchLower = search!.toLowerCase();
+
+    return collectPage(
+      (pageLimit, startKey) =>
+        docClient.send(
+          new ScanCommand({
+            TableName: BACKUP_CONFIG_TABLE,
+            ProjectionExpression: projectionExpression,
+            ExpressionAttributeNames: expressionAttributeNames,
+            ExpressionAttributeValues: expressionAttributeValues,
+            FilterExpression: filterExpressions.join(' AND '),
+            Limit: pageLimit,
+            ...(startKey && { ExclusiveStartKey: startKey }),
+          })
+        ),
+      (items) => items.filter((item) => (item.name ?? '').toLowerCase().includes(searchLower))
     );
   }
 
