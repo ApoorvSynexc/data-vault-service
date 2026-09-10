@@ -470,14 +470,16 @@ const archiveObject = async (payload: IArchiveObject) => {
   }
 };
 
-const deleteObjectRecords = async (payload: IArchiveObject) => {
+const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => {
   const { backupConfig, backupJobId, source, destConfig, object, s3Keys } = payload;
+
+  let anyChildFailed = false;
 
   if (payload.object.children?.length) {
     for (let index = 0; index < payload.object.children.length; index++) {
       const childObject = payload.object.children[index];
       try {
-        await exportWithRetryArchivalV2({
+        const childStatus = await exportWithRetryArchivalV2({
           type: 'delete',
           backupConfig,
           backupJobId,
@@ -486,7 +488,19 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
           object: childObject,
           s3Keys,
         });
+
+        if (childStatus !== OBJECT_STATUS.completed) {
+          // Child didn't fully delete (some records rejected by Salesforce). Keep
+          // going on remaining siblings, but remember to block the parent below —
+          // deleting it now would let Salesforce cascade-delete this child's
+          // leftovers itself, which is what trips DELETE_OPERATION_TOO_LARGE.
+          anyChildFailed = true;
+          logger.error(
+            `Archival job ${payload.backupJobId}: child ${childObject.name} did not fully delete (status=${childStatus}) - will block delete of ${object.name}`
+          );
+        }
       } catch (error: any) {
+        anyChildFailed = true;
         logger.error(
           `Archival job ${payload.backupJobId}: failed to delete ${childObject.name} - ${error?.message}`
         );
@@ -500,6 +514,19 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
         });
       }
     }
+  }
+
+  if (anyChildFailed) {
+    const blockedMessage = `blocked: one or more children did not fully delete`;
+    await updateArchivalObject({
+      backupJobId,
+      object: {
+        id: object.id,
+        status: OBJECT_STATUS.deletionJobFailed,
+        errorMessage: blockedMessage,
+      },
+    });
+    return OBJECT_STATUS.deletionJobFailed;
   }
 
   const backupConfigId = backupConfig.backupConfigId;
@@ -519,7 +546,7 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
       },
     });
 
-    await bulkDeleteRecords({
+    const status = await bulkDeleteRecords({
       backupJobId: backupJobId,
       backupConfigId: backupConfigId,
       crmId: source.crmId,
@@ -538,6 +565,8 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
     //     status: OBJECT_STATUS.completed,
     //   },
     // });
+
+    return status;
   } catch (error: any) {
     logger.error(
       `Archival job ${backupJobId}: failed to delete ${object.name} - ${error?.message}`
@@ -564,7 +593,7 @@ const exportWithRetryArchivalV2 = async (data: {
   parentWhereClause?: string;
   s3Keys?: IS3ObjectKey[];
   objectNames?: string[];
-}): Promise<void> => {
+}): Promise<string | void> => {
   const { type, ...payload } = data;
   const objectName = payload.object.name;
   let lastError: any;
@@ -573,10 +602,9 @@ const exportWithRetryArchivalV2 = async (data: {
     try {
       if (type === 'backup') {
         await archiveObject(payload);
-      } else {
-        await deleteObjectRecords(payload);
+        return;
       }
-      return;
+      return await deleteObjectRecords(payload);
     } catch (err: any) {
       lastError = err;
       if (attempt < MAX_RETRIES) {
