@@ -213,20 +213,19 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
 
 
 
-  if (relationshipDepth !== undefined && relationshipDepth >= 0) {
-    const uniqueChildObjectNames = Array.from(new Set(children.map((child) => child.name)));
-    const childDescriptions = await Promise.all(
-      uniqueChildObjectNames.map((childObjectName) => salesforceObjectDescribe({ user, objectName: childObjectName }))
-    );
-    const childFieldsByObject = new Map(
-      uniqueChildObjectNames.map((name, index) => [name, childDescriptions[index].fields])
-    );
+  const uniqueChildObjectNames = Array.from(new Set(children.map((child) => child.name)));
+  const childDescriptions = await Promise.all(
+    uniqueChildObjectNames.map((childObjectName) => salesforceObjectDescribe({ user, objectName: childObjectName }))
+  );
+  const childFieldsByObject = new Map(
+    uniqueChildObjectNames.map((name, index) => [name, childDescriptions[index].fields])
+  );
 
-    children = children.filter((child) => {
-      const linkingField = childFieldsByObject.get(child.name)?.find((field) => field.name === child.field);
-      return !linkingField?.polymorphicForeignKey;
-    });
-  }
+  children = children.filter((child) => {
+    const linkingField = childFieldsByObject.get(child.name)?.find((field) => field.name === child.field);
+    return !linkingField?.polymorphicForeignKey;
+  });
+  
 
   return makeResponse(req, res, 200, true, 'fetch', { children, fields, });
 }
