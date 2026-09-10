@@ -91,6 +91,31 @@ const parseFirstNErrors = (failedCsv: string, limit: number): string[] => {
     .filter(Boolean) as string[];
 };
 
+// Reduces a successfulResults CSV (which carries every original column plus
+// Salesforce's sf__Id/sf__Created columns) down to just the ids of newly
+// created records (sf__Created === "true"), under a plain "Id" header —
+// upsert-ed rows that matched an existing record are excluded.
+const extractSuccessfulIdsCsv = (successfulCsv: string): string => {
+  const lines = successfulCsv
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line.trim());
+  if (!lines.length) {
+    return 'Id';
+  }
+  const headers = parseCsvRow(lines[0]);
+  const idColIndex = headers.findIndex((h) => h.trim() === 'sf__Id');
+  const createdColIndex = headers.findIndex((h) => h.trim() === 'sf__Created');
+  if (idColIndex === -1) {
+    return 'Id';
+  }
+  const ids = lines
+    .slice(1)
+    .filter((line) => createdColIndex === -1 || parseCsvRow(line)[createdColIndex]?.trim() === 'true')
+    .map((line) => parseCsvRow(line)[idColIndex]?.trim() ?? '');
+  return ['Id', ...ids].join('\n');
+};
+
 // Submits one closed Bulk API 2.0 ingest job for a single ≤MAX_CHUNK_BYTES CSV chunk.
 const submitIngestChunk = async (
   instanceUrl: string,
@@ -130,7 +155,8 @@ const submitIngestChunk = async (
 
   if (type === 'RESTORE' && processed - failed > 0) {
     const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, job.id);
-    await uploadToS3(s3Config, `${successfulResultsPath}/${job.id}.csv`, Buffer.from(successfulCsv, 'utf8'));
+    const idsOnlyCsv = extractSuccessfulIdsCsv(successfulCsv);
+    await uploadToS3(s3Config, `${successfulResultsPath}/${job.id}.csv`, Buffer.from(idsOnlyCsv, 'utf8'));
   }
 
   return {
