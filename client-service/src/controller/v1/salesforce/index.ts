@@ -105,6 +105,9 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
       });
     }
   }
+
+  console.log('USERS ==> ' + JSON.stringify(users));
+  console.log('CRM ==> ' + JSON.stringify(crm));
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
   res.status(200).json(encryptSalesforceResponse(crm, { users }));
