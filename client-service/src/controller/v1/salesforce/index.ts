@@ -128,7 +128,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     try {
       const { profile, role, ...rest } = user;
       const crmProfileUserId = profile.userId;
-      const orgId = profile.organizationId;
+      const orgId = organizationId;
       const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, orgId);
 
       const hasGrant = hasAnyGrant(role.permissions);
