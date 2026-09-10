@@ -175,7 +175,7 @@ const submitIngestChunk = async (
 const restoreObjectData = async (
   restoreJobId: string,
   s3Config: IDestinationConfig,
-  csvFilePath: string,
+  baseCsvFilePath: string,
   objectName: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -183,8 +183,9 @@ const restoreObjectData = async (
   externalIdFieldName: string,
   type: 'RESTORE' | 'ROLLBACK'
 ): Promise<string[]> => {
+  let csvFilePath = baseCsvFilePath;
   if (type === 'RESTORE') {
-    csvFilePath = `${csvFilePath}/${objectName}/csv`;
+    csvFilePath = `${baseCsvFilePath}/${objectName}/csv`;
   }
   const keys = await listS3Objects(s3Config, `${csvFilePath}`);
 
@@ -205,7 +206,7 @@ const restoreObjectData = async (
     `[Restore] Found ${keys.length} backed-up data files for object ${objectName}, restoreJobId=${restoreJobId}`
   );
 
-  const successfulResultsPath = `${csvFilePath}/rollback/${objectName}/delete/`;
+  const successfulResultsPath = `${baseCsvFilePath}/rollback/${objectName}/delete/`;
   const submittedJobIds: string[] = [];
   let header: string | null = null;
   let chunk: CsvChunk | null = null;
