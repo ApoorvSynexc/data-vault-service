@@ -85,6 +85,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   const { crm }: { crm: ICrm } = req.salesforcePayload;
   const { crmId } = crm;
 
+  console.log('CRM ==> ' + JSON.stringify(crm));
   const usersByCrmId = await getUsersByCrmId(crmId);
   const users = [];
   for await (const element of usersByCrmId) {
@@ -105,6 +106,9 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
       });
     }
   }
+
+  console.log('USERS ==> ' + JSON.stringify(users));
+  console.log('CRM ==> ' + JSON.stringify(crm));
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
   res.status(200).json(encryptSalesforceResponse(crm, { users }));
@@ -125,7 +129,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     try {
       const { profile, role, ...rest } = user;
       const crmProfileUserId = profile.userId;
-      const orgId = profile.organizationId;
+      const orgId = organizationId;
       const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, orgId);
 
       const hasGrant = hasAnyGrant(role.permissions);
@@ -183,6 +187,9 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
       result.push({ ...user, staus: 'failed', errorMessage: error.message });
     }
   }
+
+  console.log('RESULTS ==> ' + JSON.stringify(result));
+  console.log('CRM == > ' + JSON.stringify(crm));
 
   res.status(201).json(encryptSalesforceResponse(crm, result));
 };
