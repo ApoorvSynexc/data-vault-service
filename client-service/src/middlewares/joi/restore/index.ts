@@ -8,7 +8,7 @@ import { objectSchema } from '../shared';
 // see the cross-check note above restoreScopeSchema's objectTree field).
 const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'INSERTS_ONLY', 'CHANGE_SINCE', 'BULK_CSV', 'OBJECT_TREE'];
 const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
-const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT'];
+const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT', 'EXPORT'];
 const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP'];
 // MASTER_DETAIL_ONLY: Include Master-Detail Child Objects
 // REQUIRED_AND_MASTER_DETAIL: Include Required AND Master-Detail Child Objects
