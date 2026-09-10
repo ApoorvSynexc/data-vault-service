@@ -87,6 +87,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
   console.log('CRM ==> ' + JSON.stringify(crm));
   const usersByCrmId = await getUsersByCrmId(crmId);
+  console.log('GETTING USERS ==> ' + JSON.stringify(usersByCrmId));
   const users = [];
   for await (const element of usersByCrmId) {
     const role = await getRole({ roleId: element.role.roleId });
