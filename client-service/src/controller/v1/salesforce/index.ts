@@ -187,6 +187,9 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     }
   }
 
+  console.log('RESULTS ==> ' + JSON.stringify(result));
+  console.log('CRM == > ' + JSON.stringify(crm));
+
   res.status(201).json(encryptSalesforceResponse(crm, result));
 };
 
