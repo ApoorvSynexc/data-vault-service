@@ -100,7 +100,8 @@ const submitIngestChunk = async (
   externalIdFieldName: string | undefined,
   chunk: CsvChunk,
   s3Config: IDestinationConfig,
-  successfulResultsPath: string
+  successfulResultsPath: string,
+  type: 'RESTORE' | 'ROLLBACK'
 ): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({
@@ -127,7 +128,7 @@ const submitIngestChunk = async (
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
 
-  if (processed - failed > 0) {
+  if (type === 'RESTORE' && processed - failed > 0) {
     const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, job.id);
     await uploadToS3(s3Config, `${successfulResultsPath}/${job.id}.csv`, Buffer.from(successfulCsv, 'utf8'));
   }
@@ -153,8 +154,12 @@ const restoreObjectData = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   operation: 'insert' | 'update' | 'upsert' | 'delete',
-  externalIdFieldName: string
+  externalIdFieldName: string,
+  type: 'RESTORE' | 'ROLLBACK'
 ): Promise<string[]> => {
+  if (type === 'RESTORE') {
+    csvFilePath = `${csvFilePath}/${objectName}/csv`;
+  }
   const keys = await listS3Objects(s3Config, `${csvFilePath}`);
 
   if (!keys.length) {
@@ -174,7 +179,7 @@ const restoreObjectData = async (
     `[Restore] Found ${keys.length} backed-up data files for object ${objectName}, restoreJobId=${restoreJobId}`
   );
 
-  const successfulResultsPath = csvFilePath.replace('restore', 'restore-result');
+  const successfulResultsPath = `${csvFilePath}/rollback/${objectName}/delete/`;
   const submittedJobIds: string[] = [];
   let header: string | null = null;
   let chunk: CsvChunk | null = null;
@@ -197,7 +202,8 @@ const restoreObjectData = async (
       externalIdFieldName,
       chunk,
       s3Config,
-      successfulResultsPath
+      successfulResultsPath,
+      type
     );
     submittedJobIds.push(job.jobId);
     // Accumulate this chunk's processed/failed counts onto the object's running
@@ -321,18 +327,19 @@ export const runSalesforceRestore = async (
     backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
   };
 
-  const path = `${sourceS3Credentials.csvFilePath}/${object.name}/csv`;
-  console.log(JSON.stringify({ path }));
+  // const path = `${sourceS3Credentials.csvFilePath}/${object.name}/csv`;
+  // console.log(JSON.stringify({ path }));
 
   await restoreObjectData(
     restoreJobId,
     s3Config,
-    path,
+    sourceS3Credentials.csvFilePath,
     object.name,
     destinationSalesforceCredentials.instanceUrl,
     tokens,
     'upsert',
-    externalIdFieldName
+    externalIdFieldName,
+    'RESTORE'
   );
 
   logger.info(
@@ -393,7 +400,8 @@ export const runSalesforceRollback = async (
         destinationSalesforceCredentials.instanceUrl,
         tokens,
         operation,
-        externalIdFieldName
+        externalIdFieldName,
+        'ROLLBACK'
       );
     }
   }
