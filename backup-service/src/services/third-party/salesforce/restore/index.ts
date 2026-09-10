@@ -1,6 +1,6 @@
 import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
-import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
+import { listS3Objects, streamCsvLinesFromS3, uploadToS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
 import { SalesforceTokens } from '../api-request';
 import {
@@ -9,6 +9,7 @@ import {
   closeBulkJob,
   pollBulkJobUntilDone,
   getFailedResults,
+  getSuccessfulResults,
 } from './bulk';
 
 interface RunSalesforceRestorePayload {
@@ -97,7 +98,9 @@ const submitIngestChunk = async (
   objectName: string,
   operation: 'insert' | 'update' | 'upsert' | 'delete',
   externalIdFieldName: string | undefined,
-  chunk: CsvChunk
+  chunk: CsvChunk,
+  s3Config: IDestinationConfig,
+  successfulResultsPath: string
 ): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({
@@ -114,17 +117,25 @@ const submitIngestChunk = async (
   logger.info(
     `[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({ status: status })}`
   );
+  const processed = status.numberRecordsProcessed ?? 0;
+  const failed = status.numberRecordsFailed ?? 0;
+
   let errors: string[] = [];
-  if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
+  if (failed > 0 || status.state === 'Failed') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
     errors = parseFirstNErrors(failedCsv, 25);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
 
+  if (processed - failed > 0) {
+    const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, job.id);
+    await uploadToS3(s3Config, `${successfulResultsPath}/${job.id}.csv`, Buffer.from(successfulCsv, 'utf8'));
+  }
+
   return {
     jobId: job.id,
-    processed: status.numberRecordsProcessed ?? 0,
-    failed: status.numberRecordsFailed ?? 0,
+    processed,
+    failed,
     errors,
   };
 };
@@ -162,6 +173,8 @@ const restoreObjectData = async (
   logger.info(
     `[Restore] Found ${keys.length} backed-up data files for object ${objectName}, restoreJobId=${restoreJobId}`
   );
+
+  const successfulResultsPath = csvFilePath.replace('restore', 'restore-result');
   const submittedJobIds: string[] = [];
   let header: string | null = null;
   let chunk: CsvChunk | null = null;
@@ -182,7 +195,9 @@ const restoreObjectData = async (
       objectName,
       operation,
       externalIdFieldName,
-      chunk
+      chunk,
+      s3Config,
+      successfulResultsPath
     );
     submittedJobIds.push(job.jobId);
     // Accumulate this chunk's processed/failed counts onto the object's running
