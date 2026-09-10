@@ -173,7 +173,7 @@ const socialLoginCallbackHandler = async (
     const instanceUrl = token.instance_url;
     const organizationId = sfProfile.organization_id;
     const crm = await getCrmByOrgId(organizationId);
-    const crmId = crm?.organizationId ?? uuidv4();
+    const crmId = crm?.crmId ?? uuidv4();
 
     if (!instanceUrl) {
       makeResponse(req, res, 500, false, 'admin_provisioning_failed');
