@@ -134,7 +134,6 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
       const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, orgId);
 
       const hasGrant = hasAnyGrant(role.permissions);
-      const crmExist = await getCrmByOrgId(orgId);
       if (!hasGrant) {
         if (existingUser?.userId) {
           // check if user created any restore
@@ -156,7 +155,6 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             { userId: existingUser.userId },
             {
               userId: existingUser.userId,
-              crmId: crmExist?.crmId ?? uuidv4(),
               crmProfile: { ...existingUser.profile, ...profile },
             });
           await updateRole(
@@ -170,6 +168,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           const userId = uuidv4();
           const roleId = uuidv4();
           let crmId = uuidv4();
+          const crmExist = await getCrmByOrgId(orgId);
           if (crmExist) {
             crmId = crmExist.crmId;
           }
