@@ -85,6 +85,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   const { crm }: { crm: ICrm } = req.salesforcePayload;
   const { crmId } = crm;
 
+  console.log('CRM ==> ' + JSON.stringify(crm));
   const usersByCrmId = await getUsersByCrmId(crmId);
   const users = [];
   for await (const element of usersByCrmId) {
