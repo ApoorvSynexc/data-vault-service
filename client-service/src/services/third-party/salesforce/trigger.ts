@@ -28,8 +28,12 @@ const HANDLER_CLASS_NAME = SALESFORCE_HANDLER_CLASS_NAME;
 // package's own tests do not count towards subscriber-org coverage, so every
 // trigger ships with a generated Test Class (see createSingleTrigger below).
 // ---------------------------------------------------------------------------
+// Namespaced custom objects (e.g. `tdc_tsw__SMS_Logs__c`) still have their
+// namespace separator `__` left in the middle after the `__c` suffix is
+// stripped — collapse any remaining double (or longer) underscore runs to one,
+// since Apex identifiers reject consecutive underscores.
 const triggerNameFor = (objectApiName: string): string =>
-  `DataCraft_${objectApiName.replace('__c', '')}_Trigger`;
+  `DataCraft_${objectApiName.replace(/__c$/, '').replace(/_{2,}/g, '_')}_Trigger`;
 
 // Older configs (written before this file briefly moved real-time sync onto
 // Flows) may only have `triggerName` stored, not `objectApiName`. Recover the
