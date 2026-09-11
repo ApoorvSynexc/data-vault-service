@@ -121,6 +121,14 @@ const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE 
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
 const AWS_S3_LOGS_BUCKET = String(process.env.AWS_S3_LOGS_BUCKET);
 
+// 360 Data Craft (360degreeapps) payment/provisioning API —
+// see services/third-party/payment. Bearer token is a credential, no default.
+const PAYMENT_API_BASE_URL = String(
+  process.env.PAYMENT_API_BASE_URL || 'https://testingv2.360degreeapps.com/v2/api/v3'
+).trim();
+const PAYMENT_API_AUTH_TOKEN = String(process.env.PAYMENT_API_AUTH_TOKEN);
+const PAYMENT_PRODUCT_NAME = String(process.env.PAYMENT_PRODUCT_NAME || '360 Data Craft');
+
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
   schedule: 'SCHEDULE',
@@ -392,6 +400,11 @@ export {
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
   AWS_S3_LOGS_BUCKET,
+
+  // 360 Data Craft payment/provisioning API
+  PAYMENT_API_BASE_URL,
+  PAYMENT_API_AUTH_TOKEN,
+  PAYMENT_PRODUCT_NAME,
 
   // Enums
   STATUS,
