@@ -260,9 +260,10 @@ interface ISalesforceApiLimitUsage {
   percentageUsed: number;
 }
 
-const getSalesforceApiLimitUsage = async (
+const checkSalesforceApiLimitUsage = async (
   instanceUrl: string,
-  tokens: SalesforceTokens
+  tokens: SalesforceTokens,
+  thresholdPercentage: number
 ): Promise<ISalesforceApiLimitUsage> => {
   const limits = await getSalesforceOrgLimits(instanceUrl, tokens);
   const dailyApiRequests = limits.DailyApiRequests;
@@ -274,6 +275,10 @@ const getSalesforceApiLimitUsage = async (
   const used = max - remaining;
   const percentageUsed = max > 0 ? Number(((used / max) * 100).toFixed(2)) : 0;
 
+  if (percentageUsed > thresholdPercentage) {
+    throw new Error(`Salesforce API limit exceeded (${percentageUsed}%)`);
+  }
+
   return { max, remaining, used, percentageUsed };
 };
 
@@ -284,7 +289,7 @@ export {
   refreashSalesforceToken,
   salesforceRequest,
   getSalesforceOrgLimits,
-  getSalesforceApiLimitUsage,
+  checkSalesforceApiLimitUsage,
 };
 export type { SalesforceEnvironment };
 export type { SalesforceTokens, SalesforceRequestResult };
