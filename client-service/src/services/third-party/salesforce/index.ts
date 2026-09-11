@@ -4,6 +4,7 @@ import {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
+  SALESFORCE_METADATA_API_VERSION,
 } from '../../../constant';
 import { encrypt } from '../../../utils/encryption';
 import { updateUser } from '../../user';
@@ -234,12 +235,56 @@ const getSalesforceProfile = async (
   return salesforceRequest({ url, method: 'GET' }, tokens);
 };
 
+interface ISalesforceLimit {
+  Max: number;
+  Remaining: number;
+}
+
+type SalesforceOrgLimits = Record<string, ISalesforceLimit>;
+
+const getSalesforceOrgLimits = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens
+): Promise<SalesforceOrgLimits> => {
+  const { data } = await salesforceRequest<SalesforceOrgLimits>(
+    { url: `${instanceUrl}/services/data/v${SALESFORCE_METADATA_API_VERSION}/limits`, method: 'GET' },
+    tokens
+  );
+  return data;
+};
+
+interface ISalesforceApiLimitUsage {
+  max: number;
+  remaining: number;
+  used: number;
+  percentageUsed: number;
+}
+
+const getSalesforceApiLimitUsage = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens
+): Promise<ISalesforceApiLimitUsage> => {
+  const limits = await getSalesforceOrgLimits(instanceUrl, tokens);
+  const dailyApiRequests = limits.DailyApiRequests;
+  if (!dailyApiRequests) {
+    throw new Error('DailyApiRequests limit not returned by Salesforce');
+  }
+
+  const { Max: max, Remaining: remaining } = dailyApiRequests;
+  const used = max - remaining;
+  const percentageUsed = max > 0 ? Number(((used / max) * 100).toFixed(2)) : 0;
+
+  return { max, remaining, used, percentageUsed };
+};
+
 export {
   getSalesforceLoginUrl,
   getSalesforceToken,
   getSalesforceProfile,
   refreashSalesforceToken,
   salesforceRequest,
+  getSalesforceOrgLimits,
+  getSalesforceApiLimitUsage,
 };
 export type { SalesforceEnvironment };
 export type { SalesforceTokens, SalesforceRequestResult };
