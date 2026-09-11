@@ -4,6 +4,7 @@ import { attachDecryptedSalesforceRequest } from '../../middlewares';
 
 const router = Router();
 
+router.post('/test', publicController.testHandler);
 router.post('/payload', publicController.payloadHandler);
 router.post('/backup-trigger', publicController.eventBridgeHandler);
 router.put('/webhook/salesforce', attachDecryptedSalesforceRequest('body'), publicController.salesForceRealTimeHandler);
