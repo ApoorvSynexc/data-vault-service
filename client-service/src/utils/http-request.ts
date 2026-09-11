@@ -59,7 +59,13 @@ export async function httpRequest<TResponse = any, TBody = any>(
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`HTTP Error ${response.status}: ${errorText}`);
+      const err = new Error(`HTTP Error ${response.status}: ${errorText}`);
+      // Structured access for callers that want to unwrap the raw response
+      // (e.g. a JSON body's own `.message`) instead of parsing it back out
+      // of this Error's formatted message string.
+      (err as any).status = response.status;
+      (err as any).body = errorText;
+      throw err;
     }
 
     const text = await response.text();
