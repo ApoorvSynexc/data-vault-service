@@ -94,6 +94,7 @@ const objectChildrenSchema = Joi.object({
         .required(),
     condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).required(),
+    includeChild: Joi.boolean().optional(),
     children: Joi.array().items(Joi.link("#objectChildren")).optional(),
 })
 .id("objectChildren");
@@ -104,6 +105,7 @@ const objectSchema = Joi.object({
     type: Joi.string()
         .valid(...Object.values(OBJECT_TYPE))
         .required(),
+    includeChild: Joi.boolean().optional(),
     condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).required(),
     scheduleConfig: scheduleConfigSchema.optional(),
