@@ -118,6 +118,27 @@ const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> =>
   makeResponse(req, res, 200, true, 'fetch', items);
 };
 
+const overviewV2Handler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const userId = req.user!.userId;
+  const module = req.params.module as 'backup' | 'archival' | 'restore';
+
+  switch (module) {
+    case 'backup':
+      
+      break;
+    case 'archival':
+      
+      break;
+    case 'restore':
+      
+      break;
+  
+    default:
+      break;
+  }
+
+}
+
 export const dashboardController = wrapController({
   overviewHandler,
   getLastBackupJob
