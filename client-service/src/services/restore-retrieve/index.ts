@@ -763,6 +763,67 @@ const diffFields = (prevJson: string, newJson: string): string => {
   return JSON.stringify(changes);
 };
 
+const jsonFieldToString = (value: unknown): string =>
+  value === null || value === undefined ? '' : String(value);
+
+/**
+ * Synthesizes a ranked row directly from a realtime UPDATE event's "new"
+ * half, for a record with NO base row anywhere (no compressed Hudi state, no
+ * pending CSV/JSON snapshot) — i.e. this pending update is the only thing
+ * the vault has ever seen for this Id. A field diff alone can only describe
+ * the fields it touched, so every other requested column stays blank rather
+ * than guessed — this is a partial view, not a full record, and there is no
+ * way to do better without either a prior snapshot or waiting for the next
+ * compression run.
+ *
+ * `rowsForRecord` is every json-delta row for this one record_id inside the
+ * window (a record can be updated more than once); the NEWEST one's `new`
+ * half is the latest known state to synthesize from, since undoWindowDeltas
+ * (run by the caller afterward, over every one of these rows) reverts from
+ * there back to the pre-window value the same way it already does for a real
+ * base row.
+ */
+const synthesizeFromJsonDelta = (
+  rowsForRecord: Record<string, string>[],
+  columns: string[]
+): IRankedRecord => {
+  const newest = [...rowsForRecord].sort((a, b) =>
+    (b['change_time'] ?? '').localeCompare(a['change_time'] ?? '')
+  )[0];
+  let newFields: Record<string, unknown> = {};
+  try {
+    newFields = JSON.parse(newest['new_json'] || '{}');
+  } catch {
+    /* malformed — falls back to an id/timestamp-only stub below */
+  }
+  const record: Record<string, string> = { Id: newest['record_id'] ?? '' };
+  for (const col of columns) {
+    if (col.toLowerCase() === 'id') continue;
+    record[col] = col in newFields ? jsonFieldToString(newFields[col]) : '';
+  }
+  // The event's own LastModifiedDate is a top-level field on the raw payload
+  // (change_time), not one of the changed fields inside "new" — only fall
+  // back to it when the caller didn't already ask for (and get) it above.
+  if (!record['LastModifiedDate']) record['LastModifiedDate'] = newest['change_time'] ?? '';
+  record[OPERATION_FIELD] = 'UPDATE';
+  return { record, key: { lmd: record['LastModifiedDate'], id: record['Id'] } };
+};
+
+// Groups json-delta rows by record_id — the caller needs every row for a
+// record to feed undoWindowDeltas, but only the group as a whole to decide
+// whether that record needs a synthesized base row.
+const groupByRecordId = (rows: Record<string, string>[]): Map<string, Record<string, string>[]> => {
+  const byRecord = new Map<string, Record<string, string>[]>();
+  for (const row of rows) {
+    const id = row['record_id'];
+    if (!id) continue;
+    const list = byRecord.get(id);
+    if (list) list.push(row);
+    else byRecord.set(id, [row]);
+  }
+  return byRecord;
+};
+
 /**
  * Entry point for POST /retrieve/fetch-records.
  *
@@ -929,6 +990,26 @@ const retrieveRecords = async (
   const mainRanked = toRankedRows(main, columns, derived).filter(
     ({ record }) => !pendingDeletedIds.has(record['Id'])
   );
+  const deletedRanked = toRankedRows(deleted, columns, derived);
+
+  // A pending realtime UPDATE carries only a field diff, never a full
+  // record — undoWindowDeltas below can only REVERT a row already in the
+  // block from some other source (Hudi, a pending snapshot). For a record
+  // this pending update is the ONLY thing the vault has ever seen (no base
+  // anywhere), that diff would otherwise have nothing to attach to and
+  // silently vanish. Synthesized rows are lowest precedence (added last, see
+  // dedupeById below) — a real base row, with every column instead of just
+  // the changed ones, always wins when one exists.
+  const knownIds = new Set(
+    [...rawSnapshotRanked, ...mainRanked, ...deletedRanked, ...rawDeletedRanked]
+      .map(({ record }) => record['Id'])
+      .filter(Boolean)
+  );
+  const synthesizedRanked = changed
+    ? [...groupByRecordId(rawJsonDelta.rows).entries()]
+        .filter(([recordId]) => !knownIds.has(recordId))
+        .map(([, rows]) => synthesizeFromJsonDelta(rows, columns))
+    : [];
 
   // Pending snapshot rows go FIRST — they are strictly newer than anything
   // already compressed, so they must win any same-Id collision dedupeById
@@ -938,8 +1019,9 @@ const retrieveRecords = async (
   const block = dedupeById([
     ...[...rawSnapshotRanked].sort(byKeyDesc),
     ...mainRanked,
-    ...toRankedRows(deleted, columns, derived),
+    ...deletedRanked,
     ...rawDeletedRanked,
+    ...synthesizedRanked,
   ])
     .sort(byKeyDesc)
     .slice(0, BLOCK_SIZE);
@@ -1819,12 +1901,26 @@ const fetchDiffBlock = async (
   const mainRanked = toRankedRows(main, columns, derived).filter(
     ({ record }) => !pendingDeletedIds.has(record['Id'])
   );
+  const deletedRanked = toRankedRows(deleted, columns, derived);
+
+  // See retrieveRecords for why: a pending realtime UPDATE with no base row
+  // anywhere would otherwise have nothing for undoWindowDeltas to revert and
+  // silently vanish, even though the query above found it.
+  const knownIds = new Set(
+    [...rawSnapshotRanked, ...mainRanked, ...deletedRanked, ...rawDeletedRanked]
+      .map(({ record }) => record['Id'])
+      .filter(Boolean)
+  );
+  const synthesizedRanked = [...groupByRecordId(rawJsonDelta.rows).entries()]
+    .filter(([recordId]) => !knownIds.has(recordId))
+    .map(([, rows]) => synthesizeFromJsonDelta(rows, columns));
 
   const block = dedupeById([
     ...[...rawSnapshotRanked].sort(byKeyDesc),
     ...mainRanked,
-    ...toRankedRows(deleted, columns, derived),
+    ...deletedRanked,
     ...rawDeletedRanked,
+    ...synthesizedRanked,
   ])
     .sort(byKeyDesc)
     .slice(0, limit);
