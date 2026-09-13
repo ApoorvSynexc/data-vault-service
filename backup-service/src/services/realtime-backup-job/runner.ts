@@ -6,6 +6,7 @@ import { decrypt } from '../../utils/encryption';
 import { getRealtimeCrmHandler } from '../third-party/registry';
 import { updateRealtimeJob } from './index';
 import { updateBackupConfig } from '../backup-config';
+import { ensureRawJsonSnapshotTable, ensureRawJsonDeltaTable } from '../third-party/glue';
 
 /**
  * runRealtimeBackupJob — processes one Salesforce webhook hit for an existing job.
@@ -108,6 +109,39 @@ export const runRealtimeBackupJob = async (
       schemaChanged,
       sizeInBytesIncrement: sizeInBytes,
       recordCountIncrement: payload.records.length,
+    });
+
+    // Best-effort: make this hit's raw_data queryable via Athena right away —
+    // UPDATE and DELETE only. INSERT/UNDELETE are deliberately skipped: they
+    // are excluded from the pending-tail feature entirely (see glue/index.ts's
+    // raw-table header), so there is no table for them to make queryable.
+    const op = payload.operation.toUpperCase();
+    const ensureRawTable =
+      op === 'UPDATE'
+        ? () =>
+            ensureRawJsonDeltaTable({
+              crmId: crmId!,
+              crmName: crmName!,
+              backupConfigId,
+              objectName: payload.objectApiName,
+              destConfig,
+              policyConfigType: 'backup',
+            })
+        : op === 'DELETE'
+          ? () =>
+              ensureRawJsonSnapshotTable({
+                crmId: crmId!,
+                crmName: crmName!,
+                backupConfigId,
+                objectName: payload.objectApiName,
+                destConfig,
+                policyConfigType: 'backup',
+              })
+          : null;
+    ensureRawTable?.().catch((err: any) => {
+      logger.warn(
+        `[glue] ensureRawTable failed | backupJobId:${backupJobId} object:${payload.objectApiName} err:${err?.message ?? err}`
+      );
     });
 
     await updateBackupConfig(job.backupConfigId, { backupStatus: BACKUP_STATUS.success });

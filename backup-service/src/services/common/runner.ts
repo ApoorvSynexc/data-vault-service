@@ -19,6 +19,7 @@ import {
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
 import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
+import { ensureRawCsvTable } from '../third-party/glue';
 import { updateBackupConfig } from '../backup-config';
 import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
@@ -150,6 +151,30 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       completedAt: dayjs().toISOString(),
     });
 
+    // Best-effort: make this job's raw_data queryable via Athena right away,
+    // ahead of the next Spark compression run. Idempotent (safe no-op once
+    // the table already matches), so calling it on every job completion is
+    // intentional, not just the object's first-ever backup. Never allowed to
+    // fail the job — a Glue hiccup here is infrastructure noise, not a backup
+    // failure. Covers a realtime object's initial Bulk-API sync too, since it
+    // runs through this same runner — but that sync's own `inserts/` output
+    // is deliberately not tracked (see glue/index.ts's raw-table header for
+    // why inserts are excluded entirely).
+    for (const obj of object ?? []) {
+      ensureRawCsvTable({
+        crmId: source.crmId,
+        crmName: source.crmName,
+        backupConfigId,
+        objectName: obj.name,
+        destConfig,
+        policyConfigType: 'backup',
+      }).catch((err: any) => {
+        logger.warn(
+          `[glue] ensureRawCsvTable failed | backupJobId:${backupJobId} object:${obj.name} err:${err?.message ?? err}`
+        );
+      });
+    }
+
     if (job.schemaSync) {
       await notifySchemaSyncCompleted(backupConfigId, triggerSource);
     }
@@ -265,6 +290,12 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       status: finalJobStatus,
       completedAt: dayjs().toISOString(),
     });
+
+    // No raw-table readiness step here (unlike runBackupJob): archival-v2
+    // only ever writes full-snapshot `inserts/` (never updates/deletes), and
+    // inserts are deliberately excluded from the pending-tail feature
+    // entirely — see glue/index.ts's raw-table header for why. There is
+    // nothing for an archival job to make queryable.
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
     await Promise.all([

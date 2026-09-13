@@ -591,6 +591,199 @@ export const buildDeltaCountSql = (
     'WHERE'
   );
 
+// =============================================================================
+// Raw-data pending tail — backup jobs not yet folded into Hudi/Delta by Spark
+// compression, read directly via Athena over the raw_csv / raw_json_snapshot /
+// raw_json_delta tables backup-service creates (see its glue/index.ts
+// ensureRawCsvTable / ensureRawJsonSnapshotTable / ensureRawJsonDeltaTable).
+//
+// backupjobid is an `injected` partition-projection column on every one of
+// these tables — Athena rejects a query with no predicate on it outright, so
+// every builder below takes a non-empty jobIds list and always emits
+// `backupjobid IN (...)`. That is a feature, not just a constraint: it makes
+// an accidental full scan of a raw table structurally impossible.
+// =============================================================================
+
+// AWS caps an IN (...) list at 1,000 values against an injected partition
+// column — a hard protocol limit, not a design choice. Callers chunk jobIds
+// to this size and run one query per chunk (Promise.all'd alongside every
+// other chunk/table), never pass more in one call.
+export const MAX_RAW_JOB_IDS_PER_QUERY = 1000;
+
+export const chunkJobIds = (
+  jobIds: string[],
+  size: number = MAX_RAW_JOB_IDS_PER_QUERY
+): string[][] => {
+  const chunks: string[][] = [];
+  for (let i = 0; i < jobIds.length; i += size) chunks.push(jobIds.slice(i, i + size));
+  return chunks;
+};
+
+const backupJobIdWhere = (jobIds: string[]): string => `backupjobid IN (${idList(jobIds)})`;
+
+/**
+ * Full-record rows out of a raw CSV or raw JSON-snapshot table. UPDATES AND
+ * DELETES ONLY, never inserts — an "inserts" folder can hold an object's
+ * entire first-time full sync, which is the opposite of the small, bounded
+ * tail this feature assumes; a newly created record simply isn't visible
+ * here until the next Spark compression run.
+ *
+ *   - raw_csv, fileOperations ['updates'] or ['deletes'] — a CSV "update" row
+ *     is a complete row (schedule backups classify by comparing timestamps,
+ *     not a diff), so it is a snapshot, just never an inserted one.
+ *   - raw_json_snapshot, fileOperations null — this table has NO `operation`
+ *     column at all; it is dedicated to realtime DELETE events only (a
+ *     realtime UPDATE is a sparse {prev,new} diff, handled separately by
+ *     buildRawJsonDeltaSql; INSERT/UNDELETE are excluded, same reason as CSV).
+ *
+ * `opTag` mirrors buildHudiEntireSql/buildDeletedDeltaSql's OPERATION
+ * convention: 'UPDATE' for a live snapshot (the record still exists),
+ * 'INSERT' for a deletes-folder read (restoring a deleted record is an
+ * INSERT) — see buildRawDeletedSql / buildRawJsonDeletedSql.
+ *
+ * Windowed by the row's OWN CreatedDate/LastModifiedDate columns, same
+ * precision the compressed Hudi path already has — a raw file carries no
+ * per-file event time, only per-row timestamps.
+ */
+const buildRawFullRowSql = (
+  rawTable: string,
+  jobIds: string[],
+  fileOperations: string[] | null,
+  opTag: 'UPDATE' | 'INSERT',
+  p: IRetrieveSqlParams
+): string => {
+  const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
+  const windowed =
+    p.startDate && p.endDate ? inWindow(quoteCol(CREATED), p.startDate, p.endDate) : null;
+  return (
+    `SELECT ${cols}, ${lit(opTag)} AS ${quoteCol(OP)} FROM "${rawTable}"` +
+    whereClause(
+      [
+        backupJobIdWhere(jobIds),
+        fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
+        windowed,
+        p.scopeWhere,
+        searchWhere(p.columnNames, p.searchText),
+      ],
+      'WHERE'
+    )
+  );
+};
+
+// raw_csv only — fileOperations is always ['updates'] here (see file header).
+export const buildRawSnapshotSql = (
+  rawTable: string,
+  jobIds: string[],
+  fileOperations: string[],
+  p: IRetrieveSqlParams
+): string => buildRawFullRowSql(rawTable, jobIds, fileOperations, 'UPDATE', p);
+
+// Deletes folder of the raw CSV table — restoring a deleted record is an
+// INSERT, same convention buildDeletedDeltaSql uses.
+export const buildRawDeletedSql = (
+  rawTable: string,
+  jobIds: string[],
+  p: IRetrieveSqlParams
+): string => buildRawFullRowSql(rawTable, jobIds, ['deletes'], 'INSERT', p);
+
+// raw_json_snapshot — no `operation` column on this table (it only ever
+// holds DELETE events), so there is nothing to filter beyond the job-id list.
+export const buildRawJsonDeletedSql = (
+  rawJsonSnapshotTable: string,
+  jobIds: string[],
+  p: IRetrieveSqlParams
+): string => buildRawFullRowSql(rawJsonSnapshotTable, jobIds, null, 'INSERT', p);
+
+/**
+ * Realtime UPDATE events out of the raw_json_delta table — {Id,
+ * LastModifiedDate, prev, new} rows, one per changed record. Returns the two
+ * maps CAST to JSON strings rather than trying to build the final
+ * {field:{old,new}} shape in SQL (fighting Trino's map/JSON-object functions
+ * for no benefit) — the service layer merges them into the exact shape
+ * applyDelta/reconstructRecord already consume via a small diffFields(prev,new)
+ * helper, so those functions need no changes at all.
+ */
+export const buildRawJsonDeltaSql = (
+  rawJsonDeltaTable: string,
+  jobIds: string[],
+  p: { startDate?: string | null; endDate?: string | null }
+): string => {
+  const windowed =
+    p.startDate && p.endDate ? inWindow('lastmodifieddate', p.startDate, p.endDate) : null;
+  return (
+    `SELECT id AS record_id, lastmodifieddate AS change_time, 'UPDATE' AS change_type, ` +
+    `CAST(prev AS JSON) AS prev_json, CAST(new AS JSON) AS new_json FROM "${rawJsonDeltaTable}"` +
+    whereClause([backupJobIdWhere(jobIds), windowed], 'WHERE')
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Raw-table counts — folded into the dry-run endpoint's Hudi/Delta counts.
+// ---------------------------------------------------------------------------
+
+// window is omitted for an ENTIRE-count caller (no window to filter by, same
+// "no window" idiom the rest of this module uses) and required for a
+// CHANGED_BETWEEN caller, where pending counts fold straight into
+// buildDeltaCountSql's update_cnt/delete_cnt — pending rows can never already
+// be in that compressed count, so no reconciliation is needed there (unlike
+// the ENTIRE case, which needs buildRawIdsSql — see below).
+export const buildRawSnapshotCountSql = (
+  rawTable: string,
+  jobIds: string[],
+  fileOperations: string[] | null,
+  whereBody?: string | null,
+  window?: { startDate: string; endDate: string } | null
+): string =>
+  `SELECT COUNT(*) AS cnt FROM "${rawTable}"` +
+  whereClause(
+    [
+      backupJobIdWhere(jobIds),
+      fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
+      window ? inWindow(quoteCol(CREATED), window.startDate, window.endDate) : null,
+      whereBody,
+    ],
+    'WHERE'
+  );
+
+export const buildRawJsonDeltaCountSql = (
+  rawJsonDeltaTable: string,
+  jobIds: string[],
+  whereBody?: string | null,
+  window?: { startDate: string; endDate: string } | null
+): string =>
+  `SELECT COUNT(*) AS cnt FROM "${rawJsonDeltaTable}"` +
+  whereClause(
+    [
+      backupJobIdWhere(jobIds),
+      window ? inWindow('lastmodifieddate', window.startDate, window.endDate) : null,
+      whereBody,
+    ],
+    'WHERE'
+  );
+
+/**
+ * Distinct Ids only — used by dry-run's ENTIRE reconciliation step ("does this
+ * pending Id already exist in compressed Hudi?"), where only identity matters.
+ * No LIMIT: a dry-run count must see every pending id to stay accurate, not
+ * just a page of them — consistent with dry-run being allowed to take longer
+ * than the paginated fetch-records/dry-run-diff endpoints.
+ */
+export const buildRawIdsSql = (
+  rawTable: string,
+  jobIds: string[],
+  fileOperations: string[] | null,
+  scopeWhere?: string | null
+): string =>
+  `SELECT DISTINCT "Id" FROM "${rawTable}"` +
+  whereClause(
+    [
+      backupJobIdWhere(jobIds),
+      fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
+      scopeWhere,
+    ],
+    'WHERE'
+  );
+
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npx ts-node src/services/restore-retrieve/athena-fetch.ts
 if (require.main === module) {
@@ -794,6 +987,64 @@ if (require.main === module) {
     buildDeltaCountSql('t_delta', { startDate: START, endDate: END, scopeWhere: null }),
     'omitted scopeWhere reads exactly as before'
   );
+
+  // ── Raw-data pending tail ───────────────────────────────────────────────────
+  assert.deepStrictEqual(chunkJobIds(['a', 'b', 'c'], 2), [['a', 'b'], ['c']]);
+  assert.deepStrictEqual(chunkJobIds([]), []);
+  assert.strictEqual(chunkJobIds(Array.from({ length: 2500 }, (_, i) => `j${i}`)).length, 3);
+
+  const jobIds = ['job1', 'job2'];
+  // Updates and deletes only, never inserts — an inserts folder can be an
+  // object's entire first-time full sync, the opposite of the small, bounded
+  // tail this feature assumes.
+  const rawSnapshot = buildRawSnapshotSql('t_raw_csv', jobIds, ['updates'], win);
+  assert.ok(rawSnapshot.includes(`backupjobid IN ('job1', 'job2')`));
+  assert.ok(rawSnapshot.includes(`operation IN ('updates')`));
+  assert.ok(!rawSnapshot.includes('inserts'), 'inserts are never queried — see the file header');
+  assert.ok(rawSnapshot.includes(`'UPDATE' AS "dv_operation"`), 'a live raw snapshot is reported as UPDATE');
+  assert.ok(rawSnapshot.includes(`from_iso8601_timestamp('${START}')`), 'windowed by the row\'s own CreatedDate/LastModifiedDate, same as the compressed path');
+
+  const rawSnapshotNoWindow = buildRawSnapshotSql('t_raw_csv', jobIds, ['updates'], retrieve);
+  assert.ok(!rawSnapshotNoWindow.includes('from_iso8601_timestamp'), 'ENTIRE has no window to filter by');
+
+  const rawDeleted = buildRawDeletedSql('t_raw_csv', jobIds, win);
+  assert.ok(rawDeleted.includes(`operation IN ('deletes')`));
+  assert.ok(rawDeleted.includes(`'INSERT' AS "dv_operation"`), 'restoring a deleted record is an INSERT');
+
+  // raw_json_snapshot has no `operation` column — dedicated to DELETE events
+  // only, so fileOperations is always null here.
+  const rawJsonDeleted = buildRawJsonDeletedSql('t_raw_json_snapshot', jobIds, win);
+  assert.ok(rawJsonDeleted.includes(`backupjobid IN ('job1', 'job2')`));
+  assert.ok(!rawJsonDeleted.includes('operation IN'), 'no operation column on this table at all — dv_operation is the unrelated derived OPERATION alias');
+  assert.ok(rawJsonDeleted.includes(`'INSERT' AS "dv_operation"`));
+
+  const rawJsonDelta = buildRawJsonDeltaSql('t_raw_json_delta', jobIds, { startDate: START, endDate: END });
+  assert.ok(rawJsonDelta.startsWith(`SELECT id AS record_id, lastmodifieddate AS change_time, 'UPDATE' AS change_type, CAST(prev AS JSON) AS prev_json, CAST(new AS JSON) AS new_json FROM "t_raw_json_delta"`));
+  assert.ok(rawJsonDelta.includes(`backupjobid IN ('job1', 'job2')`));
+  assert.ok(rawJsonDelta.includes(`from_iso8601_timestamp('${START}')`));
+  const rawJsonDeltaNoWindow = buildRawJsonDeltaSql('t_raw_json_delta', jobIds, {});
+  assert.ok(!rawJsonDeltaNoWindow.includes('from_iso8601_timestamp'), 'ENTIRE / archival has no window');
+
+  const rawSnapshotCount = buildRawSnapshotCountSql('t_raw_csv', jobIds, ['updates']);
+  assert.strictEqual(rawSnapshotCount, `SELECT COUNT(*) AS cnt FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND (operation IN ('updates'))`);
+  const rawJsonDeletedCount = buildRawSnapshotCountSql('t_raw_json_snapshot', jobIds, null);
+  assert.strictEqual(rawJsonDeletedCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2'))`);
+  const rawJsonDeltaCount = buildRawJsonDeltaCountSql('t_raw_json_delta', jobIds);
+  assert.strictEqual(rawJsonDeltaCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_delta" WHERE (backupjobid IN ('job1', 'job2'))`);
+
+  const rawSnapshotCountWindowed = buildRawSnapshotCountSql('t_raw_csv', jobIds, ['updates'], null, { startDate: START, endDate: END });
+  assert.ok(rawSnapshotCountWindowed.includes(`from_iso8601_timestamp('${START}')`), 'CHANGED_BETWEEN pending counts are windowed by the row\'s own CreatedDate');
+  const rawJsonDeltaCountWindowed = buildRawJsonDeltaCountSql('t_raw_json_delta', jobIds, null, { startDate: START, endDate: END });
+  assert.ok(rawJsonDeltaCountWindowed.includes(`from_iso8601_timestamp('${START}')`));
+
+  const rawIds = buildRawIdsSql('t_raw_csv', jobIds, ['deletes'], `"Name" = 'Acme'`);
+  assert.strictEqual(rawIds, `SELECT DISTINCT "Id" FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND (operation IN ('deletes')) AND ("Name" = 'Acme')`);
+  assert.ok(!buildRawIdsSql('t', jobIds, ['deletes']).includes('LIMIT'), 'dry-run reconciliation must see every pending id, never a capped page');
+  const rawJsonDeletedIds = buildRawIdsSql('t_raw_json_snapshot', jobIds, null);
+  assert.strictEqual(rawJsonDeletedIds, `SELECT DISTINCT "Id" FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2'))`);
+
+  // Injection defence carries over — job ids are quoted/escaped like every other literal.
+  assert.ok(buildRawSnapshotSql('t', ["j'1"], ['inserts'], retrieve).includes(`'j''1'`));
 
   console.log('athena-fetch self-check passed');
 }
