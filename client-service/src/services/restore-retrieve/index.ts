@@ -1619,6 +1619,13 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
         // preserves whatever the compressed total already meant.
         const total = counts.total + pendingUpdate + pendingDelete;
 
+        logger.info(
+          `[dry-run] ${t.objectApiName} | compressed:{update:${counts.update},delete:${counts.delete},total:${counts.total}} ` +
+          `pendingJobIds:{csv:${pending.csvJobIds.length},jsonSnapshot:${pending.jsonSnapshotJobIds.length},jsonDelta:${pending.jsonDeltaJobIds.length}} ` +
+          `pendingCounts:{csvUpdate:${pendingCsvUpdate},csvDelete:${pendingCsvDelete},jsonDelete:${pendingJsonDelete},jsonUpdate:${pendingJsonUpdate}} ` +
+          `final:{update:${update},delete:${del},total:${total}}`
+        );
+
         return {
           objectApiName: t.objectApiName,
           ok: true,
