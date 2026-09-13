@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE } from '../../constant';
+import { BACKUP_JOB_TABLE, AWS_REGION } from '../../constant';
 import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { logger } from '../../middlewares/logger';
@@ -400,21 +400,37 @@ export class CursorError extends Error {
   }
 }
 
+// The Glue Data Catalog and Athena are regional AWS services. Every query
+// against a config's tables must run in the client's OWN destination bucket's
+// region, never the platform's own default region (which may not even match
+// where the client's S3 bucket actually lives) — otherwise Athena/Glue calls
+// fail outright (cross-region Glue Catalog access isn't just "slower", it's
+// generally not addressable the way same-region access is).
+export interface IAthenaLocation {
+  region: string;
+  outputLocation?: string;
+}
+
 /**
  * Where Athena writes result files for a config's queries: the client's own
  * destination bucket, under salesforce/{crmId}/retrieve/ — the same
  * salesforce/{crmId}/ prefix the backup files themselves live under (see
  * backup-service's buildCompressionRootKey), so results sit next to the data
- * they came from and the client owns their lifecycle. Returns undefined when
- * the destination isn't a resolvable S3 bucket; Athena then falls back to the
- * workgroup's own result setting.
+ * they came from and the client owns their lifecycle. `outputLocation` is
+ * undefined when the destination isn't a resolvable S3 bucket; Athena then
+ * falls back to the workgroup's own result setting. `region` falls back to
+ * the platform default only when the destination itself can't be resolved at
+ * all — a broken-config edge case with no data to query either way.
  */
-const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<string | undefined> => {
+const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthenaLocation> => {
   const destination = await getDestinationById(config.destinationId);
-  if (!destination) return undefined;
+  if (!destination) return { region: AWS_REGION };
 
-  const { bucketName } = getDecryptedDestinationConfig(destination) as S3Config;
-  return bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined;
+  const { bucketName, region } = getDecryptedDestinationConfig(destination) as S3Config;
+  return {
+    region: region || AWS_REGION,
+    outputLocation: bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined,
+  };
 };
 
 /**
@@ -426,6 +442,7 @@ const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<strin
  */
 const makeRunner = (
   databaseName: string,
+  region: string,
   replay: Record<string, string> | null,
   outputLocation?: string
 ) => {
@@ -435,8 +452,8 @@ const makeRunner = (
     const stored = replay?.[name];
     try {
       const result = stored
-        ? await fetchStoredResults(stored)
-        : await runAthenaQuery(sql(), databaseName, outputLocation);
+        ? await fetchStoredResults(stored, region)
+        : await runAthenaQuery(sql(), databaseName, region, outputLocation);
       if (result.queryExecutionId) executions[name] = result.queryExecutionId;
       return result;
     } catch (e: unknown) {
@@ -626,14 +643,15 @@ const runDeletedForEntire = async (
   sqlParams: IRetrieveSqlParams,
   run: (name: string, sql: () => string) => Promise<IQueryResult>,
   executions: Record<string, string>,
-  cacheable: boolean
+  cacheable: boolean,
+  region: string
 ): Promise<IQueryResult> => {
   const fingerprint = deletedCacheFingerprint(sqlParams.columnNames);
   const cached = cacheable ? config.deletedRecordsCache?.[objectApiName] : undefined;
 
   if (cached && cached.fingerprint === fingerprint) {
     try {
-      const replayed = await fetchStoredResults(cached.queryExecutionId, BLOCK_SIZE);
+      const replayed = await fetchStoredResults(cached.queryExecutionId, region, BLOCK_SIZE);
       executions['deleted'] = cached.queryExecutionId;
       logger.info(
         `[fetch-records] deleted-cache hit | cfg:${config.backupConfigId} obj:${objectApiName} execId:${cached.queryExecutionId}`
@@ -686,11 +704,12 @@ const runDeletedForEntire = async (
 // that is "no pending data", not an error.
 const runRawQuery = async (
   databaseName: string,
+  region: string,
   outputLocation: string | undefined,
   sql: string
 ): Promise<IQueryResult> => {
   try {
-    return await runAthenaQuery(sql, databaseName, outputLocation);
+    return await runAthenaQuery(sql, databaseName, region, outputLocation);
   } catch (e: unknown) {
     const message = String((e as Error).message);
     if (/TABLE_NOT_FOUND|does not exist/i.test(message)) return { columns: [], rows: [] };
@@ -704,13 +723,14 @@ const runRawQuery = async (
 // reflected, just as more (still parallel) Athena calls.
 const runChunkedRaw = async (
   databaseName: string,
+  region: string,
   outputLocation: string | undefined,
   jobIds: string[],
   buildSql: (chunk: string[]) => string
 ): Promise<IQueryResult> => {
   if (!jobIds.length) return { columns: [], rows: [] };
   const results = await Promise.all(
-    chunkJobIds(jobIds).map((chunk) => runRawQuery(databaseName, outputLocation, buildSql(chunk)))
+    chunkJobIds(jobIds).map((chunk) => runRawQuery(databaseName, region, outputLocation, buildSql(chunk)))
   );
   return { columns: results[0]?.columns ?? [], rows: results.flatMap((r) => r.rows) };
 };
@@ -816,8 +836,8 @@ const retrieveRecords = async (
   const endDate = changed ? params.endDate! : null;
 
   const page = resolvePage(fingerprintRetrieve(params), params.cursor);
-  const outputLocation = await buildRetrieveOutputLocation(config);
-  const { run, executions } = makeRunner(databaseName, page.replay, outputLocation);
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  const { run, executions } = makeRunner(databaseName, region, page.replay, outputLocation);
 
   const sql = {
     columnNames: params.columnNames,
@@ -853,23 +873,23 @@ const retrieveRecords = async (
           ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
           : buildHudiEntireSql(hudiTable, sql)
       ),
-      runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable),
+      runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable, region),
       // Updates only, never inserts — see the raw-table header on the
       // backup-service side for why (an inserts folder can be an entire
       // first-time full sync, not the small bounded tail this assumes).
-      runChunkedRaw(databaseName, outputLocation, pending.csvJobIds, (chunk) =>
+      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
         buildRawSnapshotSql(rawCsvTable, chunk, ['updates'], sql)
       ),
-      runChunkedRaw(databaseName, outputLocation, pending.csvJobIds, (chunk) =>
+      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
         buildRawDeletedSql(rawCsvTable, chunk, sql)
       ),
       // raw_json_snapshot is dedicated to DELETE events only — no operation
       // filter needed (or possible; the table has no such column).
-      runChunkedRaw(databaseName, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+      runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
         buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
       ),
       changed
-        ? runChunkedRaw(databaseName, outputLocation, pending.jsonDeltaJobIds, (chunk) =>
+        ? runChunkedRaw(databaseName, region, outputLocation, pending.jsonDeltaJobIds, (chunk) =>
             buildRawJsonDeltaSql(rawJsonDeltaTable, chunk, { startDate, endDate })
           )
         : Promise.resolve<IQueryResult>({ columns: [], rows: [] }),
@@ -966,7 +986,8 @@ const retrieveInactiveRecordTypes = async (
   const deltaTable = `${table}_delta`;
 
   const { startDate, endDate } = params;
-  const { run } = makeRunner(databaseName, null, await buildRetrieveOutputLocation(config));
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  const { run } = makeRunner(databaseName, region, null, outputLocation);
   const result = await run('recordTypeDeltas', () =>
     buildRecordTypeDeltaSql(deltaTable, {
       startDate,
@@ -1115,10 +1136,11 @@ const runHudiCount = async (
   databaseName: string,
   tableName: string,
   sql: string,
+  region: string,
   outputLocation?: string
 ): Promise<number> => {
-  if (!(await tableExists(databaseName, tableName))) return 0;
-  const result = await runAthenaQuery(sql, databaseName, outputLocation);
+  if (!(await tableExists(databaseName, tableName, region))) return 0;
+  const result = await runAthenaQuery(sql, databaseName, region, outputLocation);
   return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
 };
 
@@ -1126,10 +1148,11 @@ const runDeltaCount = async (
   databaseName: string,
   tableName: string,
   sql: string,
+  region: string,
   outputLocation?: string
 ): Promise<{ total: number; update: number; delete: number }> => {
-  if (!(await tableExists(databaseName, tableName))) return { total: 0, update: 0, delete: 0 };
-  const result = await runAthenaQuery(sql, databaseName, outputLocation);
+  if (!(await tableExists(databaseName, tableName, region))) return { total: 0, update: 0, delete: 0 };
+  const result = await runAthenaQuery(sql, databaseName, region, outputLocation);
   const row = result.rows[0] ?? {};
   return {
     total: parseInt(row['total_cnt'] ?? '0', 10) || 0,
@@ -1151,6 +1174,7 @@ const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : '
 
 const rawCount = async (
   databaseName: string,
+  region: string,
   outputLocation: string | undefined,
   tableName: string,
   jobIds: string[],
@@ -1158,12 +1182,13 @@ const rawCount = async (
   whereBody?: string | null,
   window?: { startDate: string; endDate: string } | null
 ): Promise<number> => {
-  if (!jobIds.length || !(await tableExists(databaseName, tableName))) return 0;
+  if (!jobIds.length || !(await tableExists(databaseName, tableName, region))) return 0;
   const counts = await Promise.all(
     chunkJobIds(jobIds).map(async (chunk) => {
       const result = await runAthenaQuery(
         buildRawSnapshotCountSql(tableName, chunk, fileOperations, whereBody, window),
         databaseName,
+        region,
         outputLocation
       );
       return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
@@ -1174,18 +1199,20 @@ const rawCount = async (
 
 const rawJsonDeltaCount = async (
   databaseName: string,
+  region: string,
   outputLocation: string | undefined,
   tableName: string,
   jobIds: string[],
   whereBody?: string | null,
   window?: { startDate: string; endDate: string } | null
 ): Promise<number> => {
-  if (!jobIds.length || !(await tableExists(databaseName, tableName))) return 0;
+  if (!jobIds.length || !(await tableExists(databaseName, tableName, region))) return 0;
   const counts = await Promise.all(
     chunkJobIds(jobIds).map(async (chunk) => {
       const result = await runAthenaQuery(
         buildRawJsonDeltaCountSql(tableName, chunk, whereBody, window),
         databaseName,
+        region,
         outputLocation
       );
       return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
@@ -1199,16 +1226,17 @@ const rawJsonDeltaCount = async (
 // or delete would change a total that already counts the compressed Hudi row.
 const rawDistinctIds = async (
   databaseName: string,
+  region: string,
   outputLocation: string | undefined,
   tableName: string,
   jobIds: string[],
   fileOperations: string[] | null,
   whereBody?: string | null
 ): Promise<Set<string>> => {
-  if (!jobIds.length || !(await tableExists(databaseName, tableName))) return new Set();
+  if (!jobIds.length || !(await tableExists(databaseName, tableName, region))) return new Set();
   const perChunk = await Promise.all(
     chunkJobIds(jobIds).map((chunk) =>
-      runAthenaQuery(buildRawIdsSql(tableName, chunk, fileOperations, whereBody), databaseName, outputLocation)
+      runAthenaQuery(buildRawIdsSql(tableName, chunk, fileOperations, whereBody), databaseName, region, outputLocation)
     )
   );
   const ids = new Set<string>();
@@ -1341,7 +1369,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
   if (!targets) return { ok: false, error: 'invalid_restore_scope_type' };
 
   const databaseName = toGlueId(params.backupConfigId);
-  const outputLocation = await buildRetrieveOutputLocation(config);
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
   const tableFor = (objectApiName: string) =>
     `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(objectApiName)}`;
 
@@ -1362,7 +1390,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
           const rawJsonSnapshotTable = `${tableFor(t.objectApiName)}_raw_json_snapshot`;
 
           const [count, pending] = await Promise.all([
-            runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, whereBody), outputLocation),
+            runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, whereBody), region, outputLocation),
             getPendingCompressionJobIds(params.backupConfigId, t.objectApiName),
           ]);
 
@@ -1373,13 +1401,13 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
           // exist in compressed Hudi?), not guessed, since the compressed
           // count alone can't say.
           const [csvDeletedIds, jsonDeletedIds] = await Promise.all([
-            rawDistinctIds(databaseName, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], whereBody),
-            rawDistinctIds(databaseName, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, whereBody),
+            rawDistinctIds(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], whereBody),
+            rawDistinctIds(databaseName, region, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, whereBody),
           ]);
           const removedIds = new Set([...csvDeletedIds, ...jsonDeletedIds]);
 
           const removedActuallyInHudi = removedIds.size
-            ? await runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, recordIdsWhere([...removedIds])), outputLocation)
+            ? await runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, recordIdsWhere([...removedIds])), region, outputLocation)
             : 0;
 
           return { objectApiName: t.objectApiName, ok: true, count: count - removedActuallyInHudi };
@@ -1423,6 +1451,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
             deltaPartition,
             scopeWhere,
           }),
+          region,
           outputLocation
         );
 
@@ -1443,12 +1472,12 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
         // definition (they aren't compressed yet) — a straight add, no
         // reconciliation needed here unlike ENTIRE.
         const [pendingCsvUpdate, pendingCsvDelete, pendingJsonDelete, pendingJsonUpdate] = await Promise.all([
-          rawCount(databaseName, outputLocation, rawCsvTable, pending.csvJobIds, ['updates'], rawWhereBody, countWindow),
-          rawCount(databaseName, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], rawWhereBody, countWindow),
+          rawCount(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['updates'], rawWhereBody, countWindow),
+          rawCount(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], rawWhereBody, countWindow),
           // raw_json_snapshot has no operation column — it only ever holds
           // DELETE events, so fileOperations is null here.
-          rawCount(databaseName, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, rawWhereBody, countWindow),
-          rawJsonDeltaCount(databaseName, outputLocation, rawJsonDeltaTable, pending.jsonDeltaJobIds, rawWhereBody, countWindow),
+          rawCount(databaseName, region, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, rawWhereBody, countWindow),
+          rawJsonDeltaCount(databaseName, region, outputLocation, rawJsonDeltaTable, pending.jsonDeltaJobIds, rawWhereBody, countWindow),
         ]);
         const pendingUpdate = pendingCsvUpdate + pendingJsonUpdate;
         const pendingDelete = pendingCsvDelete + pendingJsonDelete;
@@ -1636,6 +1665,7 @@ const fetchDiffBlock = async (
   target: IDiffTarget,
   columnNames: string[],
   limit: number,
+  region: string,
   outputLocation?: string
 ): Promise<IRankedRecord[]> => {
   const databaseName = toGlueId(params.backupConfigId);
@@ -1650,7 +1680,7 @@ const fetchDiffBlock = async (
   const startDate = changed ? params.startDate! : null;
   const endDate = changed ? params.endDate! : null;
 
-  const { run } = makeRunner(databaseName, null, outputLocation);
+  const { run } = makeRunner(databaseName, region, null, outputLocation);
   const sql: IRetrieveSqlParams = {
     columnNames,
     searchText: null,
@@ -1677,10 +1707,10 @@ const fetchDiffBlock = async (
   if (target.deletedOnly) {
     const [deleted, rawCsvDeleted, rawJsonDeleted] = await Promise.all([
       run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
-      runChunkedRaw(databaseName, outputLocation, pending.csvJobIds, (chunk) =>
+      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
         buildRawDeletedSql(rawCsvTable, chunk, sql)
       ),
-      runChunkedRaw(databaseName, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+      runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
         buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
       ),
     ]);
@@ -1702,13 +1732,13 @@ const fetchDiffBlock = async (
   if (!changed) {
     const [main, rawCsvSnapshot, rawCsvDeleted, rawJsonDeleted] = await Promise.all([
       run('main', () => buildHudiEntireSql(hudiTable, sql)),
-      runChunkedRaw(databaseName, outputLocation, pending.csvJobIds, (chunk) =>
+      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
         buildRawSnapshotSql(rawCsvTable, chunk, ['updates'], sql)
       ),
-      runChunkedRaw(databaseName, outputLocation, pending.csvJobIds, (chunk) =>
+      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
         buildRawDeletedSql(rawCsvTable, chunk, sql)
       ),
-      runChunkedRaw(databaseName, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+      runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
         buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
       ),
     ]);
@@ -1734,16 +1764,16 @@ const fetchDiffBlock = async (
   const [main, deleted, rawCsvSnapshot, rawCsvDeleted, rawJsonDeleted, rawJsonDelta] = await Promise.all([
     run('main', () => buildHudiChangedSql(hudiTable, deltaTable, windowSql)),
     run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
-    runChunkedRaw(databaseName, outputLocation, pending.csvJobIds, (chunk) =>
+    runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
       buildRawSnapshotSql(rawCsvTable, chunk, ['updates'], sql)
     ),
-    runChunkedRaw(databaseName, outputLocation, pending.csvJobIds, (chunk) =>
+    runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
       buildRawDeletedSql(rawCsvTable, chunk, sql)
     ),
-    runChunkedRaw(databaseName, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+    runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
       buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
     ),
-    runChunkedRaw(databaseName, outputLocation, pending.jsonDeltaJobIds, (chunk) =>
+    runChunkedRaw(databaseName, region, outputLocation, pending.jsonDeltaJobIds, (chunk) =>
       buildRawJsonDeltaSql(rawJsonDeltaTable, chunk, { startDate, endDate })
     ),
   ]);
@@ -1867,7 +1897,7 @@ const dryRunDiff = async (params: IDryRunDiffParams): Promise<IDryRunDiffOutcome
   if (!targets) return { ok: false, error: 'invalid_restore_scope_type' };
 
   const limit = Math.min(Math.max(params.limit ?? DIFF_DEFAULT_LIMIT, 1), DIFF_MAX_LIMIT);
-  const outputLocation = await buildRetrieveOutputLocation(config);
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
 
   const objects = await Promise.all(
     targets.map(async (target): Promise<IDryRunDiffObject> => {
@@ -1891,7 +1921,7 @@ const dryRunDiff = async (params: IDryRunDiffParams): Promise<IDryRunDiffOutcome
 
         validateColumns(columnNames);
 
-        const block = await fetchDiffBlock(params, target, columnNames, limit, outputLocation);
+        const block = await fetchDiffBlock(params, target, columnNames, limit, region, outputLocation);
         const records = await pairWithSalesforce(params, objectApiName, columnNames, block);
 
         return { objectApiName, ok: true, columns: columnNames, recordCount: records.length, records };
@@ -1978,7 +2008,8 @@ const retrieveMissingRecordTypes = async (
   }
 
   const databaseName = toGlueId(backupConfigId);
-  const { run } = makeRunner(databaseName, null, await buildRetrieveOutputLocation(config));
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  const { run } = makeRunner(databaseName, region, null, outputLocation);
   const deltaPartition = buildDeltaPartitionWhere(startDate ?? null, endDate ?? null);
 
   const perObject = await Promise.all(
