@@ -182,6 +182,15 @@ const OP = OPERATION_COLUMN;
 const CREATED_ALIAS = 'dv_created';
 const CREATED = 'CreatedDate';
 
+// Used ONLY to window a raw pending DELETE-folder row (see buildRawFullRowSql)
+// — SystemModstamp is bumped by every change Salesforce makes to a record,
+// including the delete itself, unlike CreatedDate (immutable — would wrongly
+// exclude the delete of a long-ago-created record from a recent window) or
+// LastModifiedDate (only bumped by user-visible edits, not guaranteed to
+// reflect the deletion). Pending UPDATE rows are unaffected — they keep
+// windowing by CreatedDate.
+const SYSTEM_MODSTAMP = 'SystemModstamp';
+
 /**
  * Parses a stored timestamp column to a real instant.
  *
@@ -683,9 +692,18 @@ const backupJobIdWhere = (jobIds: string[]): string => `backupjobid IN (${idList
  * 'INSERT' for a deletes-folder read (restoring a deleted record is an
  * INSERT) — see buildRawDeletedSql / buildRawJsonDeletedSql.
  *
- * Windowed by the row's OWN CreatedDate/LastModifiedDate columns, same
- * precision the compressed Hudi path already has — a raw file carries no
- * per-file event time, only per-row timestamps.
+ * Windowed by the row's own SystemModstamp, for BOTH operations — not
+ * CreatedDate. CreatedDate is immutable, so it only means something as a
+ * window column on the COMPRESSED Hudi path, where it disambiguates "this
+ * record was just CREATED" from "this record merely changed" within one
+ * table that holds every record regardless of age (see buildHudiChangedSql).
+ * A raw pending row has no such ambiguity to resolve — it already landed in
+ * the updates/ or deletes/ folder because backup-service already classified
+ * it as one or the other — so windowing it by CreatedDate would only ever
+ * wrongly exclude a change to a record created before the window, which is
+ * the common case, not an edge case. SystemModstamp is bumped by every
+ * change Salesforce makes to a record (including a delete), so it is the
+ * column that actually answers "did this row's event happen in the window."
  */
 const buildRawFullRowSql = (
   rawTable: string,
@@ -696,7 +714,7 @@ const buildRawFullRowSql = (
 ): string => {
   const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
   const windowed =
-    p.startDate && p.endDate ? inWindow(quoteCol(CREATED), p.startDate, p.endDate) : null;
+    p.startDate && p.endDate ? inWindow(quoteCol(SYSTEM_MODSTAMP), p.startDate, p.endDate) : null;
   return (
     `SELECT ${cols}, ${lit(opTag)} AS ${quoteCol(OP)} FROM "${rawTable}"` +
     whereClause(
@@ -743,6 +761,10 @@ export const buildRawDeletedSql = (
  * the snapshot half, 'INSERT' rows are the deleted half — the exact same two
  * groups buildRawSnapshotSql(['updates']) / buildRawDeletedSql() would have
  * produced separately, just sourced from one query.
+ *
+ * Both halves window by the same column (SystemModstamp — see
+ * buildRawFullRowSql for why), so one shared `inWindow(...)` call covers
+ * every row regardless of which folder it came from.
  */
 export const buildRawCsvChangedSql = (
   rawCsvTable: string,
@@ -751,7 +773,7 @@ export const buildRawCsvChangedSql = (
 ): string => {
   const cols = projectionColumns(p.columnNames).map(quoteCol).join(', ');
   const windowed =
-    p.startDate && p.endDate ? inWindow(quoteCol(CREATED), p.startDate, p.endDate) : null;
+    p.startDate && p.endDate ? inWindow(quoteCol(SYSTEM_MODSTAMP), p.startDate, p.endDate) : null;
   return (
     `SELECT ${cols}, CASE WHEN operation = 'deletes' THEN 'INSERT' ELSE 'UPDATE' END AS ${quoteCol(OP)} FROM "${rawCsvTable}"` +
     whereClause(
@@ -808,6 +830,11 @@ export const buildRawJsonDeltaSql = (
 // buildDeltaCountSql's update_cnt/delete_cnt — pending rows can never already
 // be in that compressed count, so no reconciliation is needed there (unlike
 // the ENTIRE case, which needs buildRawIdsSql — see below).
+//
+// Windows by SystemModstamp regardless of fileOperations — same reasoning as
+// buildRawFullRowSql: CreatedDate only means something on the compressed
+// Hudi path's created-vs-updated disambiguation, which doesn't apply to a
+// raw pending row already classified by its folder.
 export const buildRawSnapshotCountSql = (
   rawTable: string,
   jobIds: string[],
@@ -820,7 +847,7 @@ export const buildRawSnapshotCountSql = (
     [
       backupJobIdWhere(jobIds),
       fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
-      window ? inWindow(quoteCol(CREATED), window.startDate, window.endDate) : null,
+      window ? inWindow(quoteCol(SYSTEM_MODSTAMP), window.startDate, window.endDate) : null,
       whereBody,
     ],
     'WHERE'
@@ -1092,13 +1119,17 @@ if (require.main === module) {
   const jobIds = ['job1', 'job2'];
   // Updates and deletes only, never inserts — an inserts folder can be an
   // object's entire first-time full sync, the opposite of the small, bounded
-  // tail this feature assumes.
+  // tail this feature assumes. Both operations window by SystemModstamp, not
+  // CreatedDate — CreatedDate only means something on the compressed Hudi
+  // path's created-vs-updated disambiguation (see buildHudiChangedSql),
+  // which doesn't apply here: a raw row is already classified by its folder.
   const rawSnapshot = buildRawSnapshotSql('t_raw_csv', jobIds, ['updates'], win);
   assert.ok(rawSnapshot.includes(`backupjobid IN ('job1', 'job2')`));
   assert.ok(rawSnapshot.includes(`operation IN ('updates')`));
   assert.ok(!rawSnapshot.includes('inserts'), 'inserts are never queried — see the file header');
   assert.ok(rawSnapshot.includes(`'UPDATE' AS "dv_operation"`), 'a live raw snapshot is reported as UPDATE');
-  assert.ok(rawSnapshot.includes(`from_iso8601_timestamp('${START}')`), 'windowed by the row\'s own CreatedDate/LastModifiedDate, same as the compressed path');
+  assert.ok(rawSnapshot.includes(`"SystemModstamp"`) && rawSnapshot.includes(`from_iso8601_timestamp('${START}')`), 'a live snapshot windows by SystemModstamp');
+  assert.ok(!rawSnapshot.includes('"CreatedDate"'), 'never CreatedDate for a raw pending row');
 
   const rawSnapshotNoWindow = buildRawSnapshotSql('t_raw_csv', jobIds, ['updates'], retrieve);
   assert.ok(!rawSnapshotNoWindow.includes('from_iso8601_timestamp'), 'ENTIRE has no window to filter by');
@@ -1106,8 +1137,10 @@ if (require.main === module) {
   const rawDeleted = buildRawDeletedSql('t_raw_csv', jobIds, win);
   assert.ok(rawDeleted.includes(`operation IN ('deletes')`));
   assert.ok(rawDeleted.includes(`'INSERT' AS "dv_operation"`), 'restoring a deleted record is an INSERT');
+  assert.ok(rawDeleted.includes(`"SystemModstamp"`) && rawDeleted.includes(`from_iso8601_timestamp('${START}')`), 'deletes window by SystemModstamp');
+  assert.ok(!rawDeleted.includes('"CreatedDate"'));
 
-  // ── Merged raw_csv updates+deletes: one query, two tags ────────────────────
+  // ── Merged raw_csv updates+deletes: one query, two tags, ONE window column ─
   const rawCsvChanged = buildRawCsvChangedSql('t_raw_csv', jobIds, win);
   assert.ok(rawCsvChanged.includes(`operation IN ('updates', 'deletes')`), 'one query covers both folders');
   assert.ok(
@@ -1115,16 +1148,25 @@ if (require.main === module) {
     'tag derived per-row from which folder it came from, same convention as the separate builders'
   );
   assert.ok(rawCsvChanged.includes(`backupjobid IN ('job1', 'job2')`));
-  assert.ok(rawCsvChanged.includes(`from_iso8601_timestamp('${START}')`), 'windowed the same way as the separate builders');
+  // Both halves window by the same column now, so a single inWindow(...) call
+  // covers every row — no per-operation branching needed.
+  assert.ok(rawCsvChanged.includes(`"SystemModstamp"`) && rawCsvChanged.includes(`from_iso8601_timestamp('${START}')`));
+  assert.ok(!rawCsvChanged.includes('"CreatedDate"'));
+  // asInstant's own fallback parse contributes one from_iso8601_timestamp,
+  // plus the two window-bound literals — 3 total for ONE inWindow call; a
+  // per-operation split (the old design) would have doubled this to 6.
+  assert.strictEqual((rawCsvChanged.match(/from_iso8601_timestamp/g) ?? []).length, 3, 'one shared window parse, not one per operation');
   const rawCsvChangedNoWindow = buildRawCsvChangedSql('t_raw_csv', jobIds, retrieve);
   assert.ok(!rawCsvChangedNoWindow.includes('from_iso8601_timestamp'), 'ENTIRE has no window to filter by');
 
   // raw_json_snapshot has no `operation` column — dedicated to DELETE events
-  // only, so fileOperations is always null here.
+  // only, so fileOperations is always null here. Same SystemModstamp
+  // windowing as the CSV path.
   const rawJsonDeleted = buildRawJsonDeletedSql('t_raw_json_snapshot', jobIds, win);
   assert.ok(rawJsonDeleted.includes(`backupjobid IN ('job1', 'job2')`));
   assert.ok(!rawJsonDeleted.includes('operation IN'), 'no operation column on this table at all — dv_operation is the unrelated derived OPERATION alias');
   assert.ok(rawJsonDeleted.includes(`'INSERT' AS "dv_operation"`));
+  assert.ok(rawJsonDeleted.includes(`"SystemModstamp"`));
 
   const rawJsonDelta = buildRawJsonDeltaSql('t_raw_json_delta', jobIds, { startDate: START, endDate: END });
   assert.ok(rawJsonDelta.startsWith(`SELECT id AS record_id, lastmodifieddate AS change_time, 'UPDATE' AS change_type, CAST(prev AS JSON) AS prev_json, CAST(new AS JSON) AS new_json FROM "t_raw_json_delta"`));
@@ -1140,8 +1182,18 @@ if (require.main === module) {
   const rawJsonDeltaCount = buildRawJsonDeltaCountSql('t_raw_json_delta', jobIds);
   assert.strictEqual(rawJsonDeltaCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_delta" WHERE (backupjobid IN ('job1', 'job2'))`);
 
+  // Count windowing must agree with what fetch-records actually returns:
+  // updates count by CreatedDate, deletes count (CSV or the deletes-only
+  // JSON table) by SystemModstamp.
+  // Count windowing must agree with what fetch-records actually returns —
+  // SystemModstamp for both operations, same as buildRawFullRowSql.
   const rawSnapshotCountWindowed = buildRawSnapshotCountSql('t_raw_csv', jobIds, ['updates'], null, { startDate: START, endDate: END });
-  assert.ok(rawSnapshotCountWindowed.includes(`from_iso8601_timestamp('${START}')`), 'CHANGED_BETWEEN pending counts are windowed by the row\'s own CreatedDate');
+  assert.ok(rawSnapshotCountWindowed.includes(`"SystemModstamp"`) && rawSnapshotCountWindowed.includes(`from_iso8601_timestamp('${START}')`), 'updates count windows by SystemModstamp');
+  assert.ok(!rawSnapshotCountWindowed.includes('"CreatedDate"'));
+  const rawDeletedCountWindowed = buildRawSnapshotCountSql('t_raw_csv', jobIds, ['deletes'], null, { startDate: START, endDate: END });
+  assert.ok(rawDeletedCountWindowed.includes(`"SystemModstamp"`), 'deletes count windows by SystemModstamp too, agreeing with buildRawDeletedSql');
+  const rawJsonDeletedCountWindowed = buildRawSnapshotCountSql('t_raw_json_snapshot', jobIds, null, null, { startDate: START, endDate: END });
+  assert.ok(rawJsonDeletedCountWindowed.includes(`"SystemModstamp"`), 'the deletes-only JSON table also counts by SystemModstamp');
   const rawJsonDeltaCountWindowed = buildRawJsonDeltaCountSql('t_raw_json_delta', jobIds, null, { startDate: START, endDate: END });
   assert.ok(rawJsonDeltaCountWindowed.includes(`from_iso8601_timestamp('${START}')`));
 
