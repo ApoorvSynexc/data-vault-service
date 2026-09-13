@@ -206,7 +206,7 @@ const restoreObjectData = async (
     `[Restore] Found ${keys.length} backed-up data files for object ${objectName}, restoreJobId=${restoreJobId}`
   );
 
-  const successfulResultsPath = `${baseCsvFilePath}/rollback/${objectName}/delete/`;
+  const successfulResultsPath = `${baseCsvFilePath}/rollback/${objectName}/delete`;
   const submittedJobIds: string[] = [];
   let header: string | null = null;
   let chunk: CsvChunk | null = null;
@@ -378,7 +378,7 @@ export const runSalesforceRestore = async (
 export const runSalesforceRollback = async (
   payload: RunSalesforceRestorePayload
 ): Promise<'SUCCESS' | 'FAILED'> => {
-  let externalIdFieldName = 'Id';
+  const externalIdFieldName = 'Id';
   const { restoreId, restoreJobId, object, sourceS3Credentials, destinationSalesforceCredentials } =
     payload;
 
@@ -414,10 +414,6 @@ export const runSalesforceRollback = async (
       }
 
       console.log(JSON.stringify({ operation, splitKeys, key }));
-
-      if (operation === 'delete') {
-        externalIdFieldName = 'DC_External_Id__c';
-      }
 
       await restoreObjectData(
         restoreJobId,
