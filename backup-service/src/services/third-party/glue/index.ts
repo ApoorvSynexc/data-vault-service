@@ -9,16 +9,28 @@ import {
   Column,
   PartitionInput,
 } from '@aws-sdk/client-glue';
-import { AWS_REGION } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
 import { SCHEMA_KIND_FILE } from '../../../utils/helper';
 import { listS3Prefixes } from '../../destination/s3';
 import { getStoredEntries } from '../salesforce/metadata/common';
 
-// Keyless: no static access/secret key, ever — resolves through the SDK's
-// default credential provider chain (IAM role of the running environment).
-const glue = new GlueClient({ region: AWS_REGION });
+// One GlueClient per region, not one global client: the Glue Data Catalog is
+// regional, and every call here must run in the same region as the CLIENT's
+// own destination S3 bucket the table's data lives in — never the platform's
+// own default region, which may not even match where that bucket actually
+// is. Keyless: no static access/secret key, ever — resolves through the
+// SDK's default credential provider chain (IAM role of the running
+// environment).
+const glueClients = new Map<string, GlueClient>();
+const getGlueClient = (region: string): GlueClient => {
+  let client = glueClients.get(region);
+  if (!client) {
+    client = new GlueClient({ region });
+    glueClients.set(region, client);
+  }
+  return client;
+};
 
 const toGlueIdentifier = (value: string): string => value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 const buildGlueDatabaseName = (backupConfigId: string): string => toGlueIdentifier(backupConfigId);
@@ -27,7 +39,7 @@ const buildGlueTableName = (backupConfigId: string, objectName: string): string 
 
 const inFlightDatabaseCreate = new Map<string, Promise<void>>();
 
-const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
+const ensureGlueDatabase = async (databaseName: string, region: string): Promise<void> => {
   const existing = inFlightDatabaseCreate.get(databaseName);
   if (existing) {
     logger.info(
@@ -39,7 +51,7 @@ const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
   logger.info(`[glue] ensureGlueDatabase start | db:${databaseName}`);
   const create = (async () => {
     try {
-      await glue.send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
+      await getGlueClient(region).send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
       logger.info(`[glue] created database | db:${databaseName}`);
     } catch (err: any) {
       if (err.name !== 'AlreadyExistsException') {
@@ -61,9 +73,9 @@ const ensureGlueDatabase = async (databaseName: string): Promise<void> => {
   }
 };
 
-const glueTableExists = async (databaseName: string, tableName: string): Promise<boolean> => {
+const glueTableExists = async (databaseName: string, tableName: string, region: string): Promise<boolean> => {
   try {
-    await glue.send(new GetTableCommand({ DatabaseName: databaseName, Name: tableName }));
+    await getGlueClient(region).send(new GetTableCommand({ DatabaseName: databaseName, Name: tableName }));
     return true;
   } catch (err: any) {
     if (err instanceof EntityNotFoundException || err.name === 'EntityNotFoundException') {
@@ -228,7 +240,7 @@ const syncHudiTablePartitions = async (
 
   for (let i = 0; i < partitionInputs.length; i += 100) {
     const batch = partitionInputs.slice(i, i + 100);
-    const result = await glue.send(
+    const result = await getGlueClient(destConfig.region).send(
       new BatchCreatePartitionCommand({
         DatabaseName: databaseName,
         TableName: tableName,
@@ -297,6 +309,7 @@ const syncHudiTableSchema = async (
   dataset: 'main_backup_files' | 'delta'
 ): Promise<void> => {
   const { glueColumns } = await resolveTableShape(destConfig, identity, dataset);
+  const glue = getGlueClient(destConfig.region);
   const { Table } = await glue.send(
     new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
   );
@@ -366,7 +379,7 @@ const ensureHudiFormatTable = async (
 
   logger.info(`[glue] ensure ${label} table start | db:${databaseName} table:${tableName}`);
 
-  await ensureGlueDatabase(databaseName);
+  await ensureGlueDatabase(databaseName, destConfig.region);
 
   const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset);
 
@@ -377,7 +390,7 @@ const ensureHudiFormatTable = async (
       );
     });
 
-  if (await glueTableExists(databaseName, tableName)) {
+  if (await glueTableExists(databaseName, tableName, destConfig.region)) {
     logger.info(
       `[glue] ${label} table already exists, syncing schema + partitions | db:${databaseName} table:${tableName}`
     );
@@ -402,7 +415,7 @@ const ensureHudiFormatTable = async (
   );
 
   try {
-    await glue.send(
+    await getGlueClient(destConfig.region).send(
       new CreateTableCommand({
         DatabaseName: databaseName,
         TableInput: {
@@ -575,7 +588,8 @@ const ensureRawFormatTable = async (params: {
   const databaseName = buildGlueDatabaseName(backupConfigId);
 
   logger.info(`[glue] ensure raw ${classification} table start | db:${databaseName} table:${tableName}`);
-  await ensureGlueDatabase(databaseName);
+  await ensureGlueDatabase(databaseName, destConfig.region);
+  const glue = getGlueClient(destConfig.region);
 
   const rootKey = buildRawDataRootKey(crmName, crmId, policyConfigType, backupConfigId);
   const location = `s3://${destConfig.bucketName}/${rootKey}`;
@@ -620,7 +634,7 @@ const ensureRawFormatTable = async (params: {
     TableType: 'EXTERNAL_TABLE',
   };
 
-  if (await glueTableExists(databaseName, tableName)) {
+  if (await glueTableExists(databaseName, tableName, destConfig.region)) {
     const { Table } = await glue.send(
       new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
     );
