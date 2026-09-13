@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { computeJobStats, getBackupConfigById, getBackupConfigCount, getBackupJobsByUser } from '../../../services';
+import { computeJobStats, getBackupConfigById, getBackupConfigCount, getBackupJobsByUser, getBackupOverview, getRestoreOverview } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 import { BACKUP_STATUS, STATUS } from '../../../constant';
 
@@ -92,6 +92,7 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
 const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
+  const module = req.params.module as 'backup' | 'archival' | 'restore';
 
   const { items } = await getBackupJobsByUser(userId, { limit: 10 });
 
@@ -123,23 +124,25 @@ const overviewV2Handler = async (req: IRequest, res: IResponse): Promise<void> =
   const module = req.params.module as 'backup' | 'archival' | 'restore';
 
   switch (module) {
-    case 'backup':
-      
-      break;
-    case 'archival':
-      
-      break;
-    case 'restore':
-      
-      break;
-  
+    case 'backup': {
+      const overview = await getBackupOverview(userId, 'NORMAL');
+      return makeResponse(req, res, 200, true, 'fetch', overview);
+    }
+    case 'archival': {
+      const overview = await getBackupOverview(userId, 'ARCHIVAL');
+      return makeResponse(req, res, 200, true, 'fetch', overview);
+    }
+    case 'restore': {
+      const overview = await getRestoreOverview(userId);
+      return makeResponse(req, res, 200, true, 'fetch', overview);
+    }
     default:
-      break;
+      return makeResponse(req, res, 400, false, 'params_required');
   }
-
 }
 
 export const dashboardController = wrapController({
   overviewHandler,
-  getLastBackupJob
+  getLastBackupJob,
+  overviewV2Handler,
 });
