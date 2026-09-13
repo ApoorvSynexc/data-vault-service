@@ -39,6 +39,7 @@ import {
   validateColumns,
   chunkJobIds,
   buildRawDeletedSql,
+  buildRawSnapshotSql,
   buildRawCsvChangedSql,
   buildRawJsonDeletedSql,
   buildRawJsonDeltaSql,
@@ -1015,11 +1016,12 @@ const retrieveRecords = async (
   // that away for no benefit.
   const canMergeChangedDeleted = changed && hudiExists && deltaExists;
 
-  // Archival never contributes here — pending.csvJobIds is always empty for
-  // it (archival-v2 writes only inserts, excluded entirely; see
-  // getPendingCompressionJobIds), so these queries naturally no-op for
-  // archival configs without needing an isArchival special-case.
-  const [main, deleted, rawCsvChanged, rawJsonDeleted, rawJsonDelta] =
+  // pending.csvJobIds is always empty for an archival config (archival jobs
+  // classify into archivalJobIds instead — see getPendingCompressionJobIds),
+  // and pending.archivalJobIds is always empty for a backup config, so each
+  // query below naturally no-ops for the config type it doesn't apply to —
+  // no isArchival special-case needed.
+  const [main, deleted, rawCsvChanged, rawJsonDeleted, rawJsonDelta, rawArchivalInserts] =
     await Promise.all([
       canMergeChangedDeleted
         ? run('main', () => buildHudiChangedWithDeletedSql(hudiTable, deltaTable, windowSql))
@@ -1052,6 +1054,11 @@ const retrieveRecords = async (
             buildRawJsonDeltaSql(rawJsonDeltaTable, chunk, { startDate, endDate })
           )
         : Promise.resolve<IQueryResult>({ columns: [], rows: [] }),
+      // ARCHIVAL's ENTIRE listing — the only operation it ever writes.
+      // pending.archivalJobIds is always empty for a BACKUP config.
+      runChunkedRaw(databaseName, region, outputLocation, pending.archivalJobIds, (chunk) =>
+        buildRawSnapshotSql(rawCsvTable, chunk, ['inserts'], sql)
+      ),
     ]);
 
   const columns = pairedColumns(params.columnNames);
@@ -1059,9 +1066,14 @@ const retrieveRecords = async (
 
   // Single merged query returns both tags together — split back into the
   // same two groups buildRawSnapshotSql(['updates'])/buildRawDeletedSql()
-  // would have produced separately.
+  // would have produced separately. Archival's pending inserts join the same
+  // "pending snapshot" tier — same precedence as a pending CSV update: newer
+  // than anything already compressed.
   const rawCsvChangedRanked = toRankedRows(rawCsvChanged, columns, derived);
-  const rawSnapshotRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE');
+  const rawSnapshotRanked = [
+    ...rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE'),
+    ...toRankedRows(rawArchivalInserts, columns, derived),
+  ];
   const rawCsvDeletedRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT');
 
   const rawDeletedRanked = [
@@ -1597,9 +1609,9 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
     `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(objectApiName)}`;
 
   if (params.type === 'ENTIRE') {
-    // Archival never has a pending contribution here — getPendingCompressionJobIds
-    // returns empty csvJobIds for it (archival-v2 writes only inserts, which
-    // are excluded entirely), so no isArchival special-case is needed below.
+    // pending.csvJobIds and pending.archivalJobIds are mutually exclusive by
+    // construction and each naturally empty for the config type it doesn't
+    // apply to — no isArchival special-case needed below.
     const objects = await Promise.all(
       targets.map(async (t): Promise<IDryRunObjectCount> => {
         try {
@@ -1617,23 +1629,31 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
             getPendingCompressionJobIds(params.backupConfigId, t.objectApiName),
           ]);
 
-          // A pending update never changes the ENTIRE total (still 1 record
-          // either way), and inserts are excluded from this feature entirely
-          // — only a pending delete of an already-compressed Id can change
-          // it. Reconciled by identity (does this pending-deleted Id actually
-          // exist in compressed Hudi?), not guessed, since the compressed
-          // count alone can't say.
-          const [csvDeletedIds, jsonDeletedIds] = await Promise.all([
+          // A pending BACKUP update never changes the ENTIRE total (still 1
+          // record either way) — only a pending delete of an
+          // already-compressed Id can change it. A pending ARCHIVAL insert is
+          // different: archival never has updates/deletes, only inserts, and
+          // an insert CAN be a genuinely new record. Both are reconciled by
+          // identity against Hudi (does this pending Id already exist there?),
+          // not guessed, since the compressed count alone can't say either way.
+          const [csvDeletedIds, jsonDeletedIds, archivalInsertIds] = await Promise.all([
             rawDistinctIds(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], whereBody),
             rawDistinctIds(databaseName, region, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, whereBody),
+            rawDistinctIds(databaseName, region, outputLocation, rawCsvTable, pending.archivalJobIds, ['inserts'], whereBody),
           ]);
           const removedIds = new Set([...csvDeletedIds, ...jsonDeletedIds]);
 
-          const removedActuallyInHudi = removedIds.size
-            ? await runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, recordIdsWhere([...removedIds])), region, outputLocation)
-            : 0;
+          const [removedActuallyInHudi, archivalAlreadyInHudi] = await Promise.all([
+            removedIds.size
+              ? runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, recordIdsWhere([...removedIds])), region, outputLocation)
+              : 0,
+            archivalInsertIds.size
+              ? runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, recordIdsWhere([...archivalInsertIds])), region, outputLocation)
+              : 0,
+          ]);
+          const pendingArchivalNew = archivalInsertIds.size - archivalAlreadyInHudi;
 
-          return { objectApiName: t.objectApiName, ok: true, count: count - removedActuallyInHudi };
+          return { objectApiName: t.objectApiName, ok: true, count: count - removedActuallyInHudi + pendingArchivalNew };
         } catch (e) {
           return { objectApiName: t.objectApiName, ok: false, count: 0, error: errorMessage(e) };
         }
@@ -1813,7 +1833,7 @@ export type IDryRunDiffOutcome =
   | { ok: true; value: IDryRunDiffResult }
   | {
       ok: false;
-      error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' | 'dry_run_diff_backup_only';
+      error: 'not_exist' | 'invalid_restore_scope_type' | 'date_range_required' | 'archival_dry_run_diff_entire_only';
     };
 
 /**
@@ -1925,9 +1945,12 @@ const fetchDiffBlock = async (
   const columns = pairedColumns(columnNames);
   const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
 
-  // dryRunDiff is BACKUP-configs-only (archival is rejected in dryRunDiff
-  // itself), so pending.csvJobIds here is always a schedule/bulk job, never
-  // archival — no isArchival special-case needed.
+  // dryRunDiff rejects ARCHIVAL only for CHANGED_BETWEEN (no Delta table to
+  // diff against); ENTIRE reaches this function for both config types.
+  // pending.csvJobIds and pending.archivalJobIds are mutually exclusive by
+  // construction (a job is one type or the other) and each is naturally
+  // empty for the config type it doesn't apply to — no isArchival
+  // special-case needed.
   //
   // hudi/delta existence checked up front via a cheap Glue GetTable call —
   // same reasoning as retrieveRecords: skips a full Athena StartQueryExecution
@@ -1964,13 +1987,17 @@ const fetchDiffBlock = async (
   }
 
   // ENTIRE reads the main Hudi table only — the same contract the /dry-run
-  // count it pairs with applies, so the two agree on what ENTIRE means.
+  // count it pairs with applies, so the two agree on what ENTIRE means. Never
+  // touches Delta, which is exactly why this branch (unlike CHANGED_BETWEEN
+  // below) also works for ARCHIVAL configs, which have no Delta table at all
+  // — see dryRunDiff's own ARCHIVAL rule.
   // Deleted records are reachable through the DELETED_ONLY scope instead.
   // Pending CSV "updates" rows (full snapshots, not diffs) are merged in as
   // newer-than-Hudi state, and a pending delete suppresses a stale Hudi row
-  // for the same Id — same precedence rules retrieveRecords applies.
+  // for the same Id — same precedence rules retrieveRecords applies. An
+  // ARCHIVAL config's pending inserts join the same tier.
   if (!changed) {
-    const [main, rawCsvChanged, rawJsonDeleted] = await Promise.all([
+    const [main, rawCsvChanged, rawJsonDeleted, rawArchivalInserts] = await Promise.all([
       !hudiExists
         ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
         : run('main', () => buildHudiEntireSql(hudiTable, sql)),
@@ -1980,9 +2007,17 @@ const fetchDiffBlock = async (
       runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
         buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
       ),
+      // ARCHIVAL's ENTIRE listing — the only operation it ever writes.
+      // pending.archivalJobIds is always empty for a BACKUP config.
+      runChunkedRaw(databaseName, region, outputLocation, pending.archivalJobIds, (chunk) =>
+        buildRawSnapshotSql(rawCsvTable, chunk, ['inserts'], sql)
+      ),
     ]);
     const rawCsvChangedRanked = toRankedRows(rawCsvChanged, columns, derived);
-    const rawSnapshotRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE');
+    const rawSnapshotRanked = [
+      ...rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE'),
+      ...toRankedRows(rawArchivalInserts, columns, derived),
+    ];
     const rawCsvDeletedRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT');
     const pendingDeletedIds = new Set(
       [...rawCsvDeletedRanked, ...toRankedRows(rawJsonDeleted, columns, derived)]
@@ -2179,10 +2214,12 @@ const pairWithSalesforce = async (
  * has never been compressed, whose schema is missing, or whose describe fails
  * comes back with ok:false and its error, rather than failing the whole diff.
  *
- * BACKUP configs only — an archival restore has no delta history and no live
- * "current state" to reconstruct against beyond what /dry-run's ENTIRE count
- * already answers, so an ARCHIVAL config is rejected outright rather than
- * silently diffing something ENTIRE-only.
+ * ARCHIVAL configs only support source.type ENTIRE, same restriction /dry-run
+ * applies — archival has no delta table, so a CHANGED_BETWEEN diff has no
+ * field-level history to revert against; CHANGED_BETWEEN 400s with
+ * archival_dry_run_diff_entire_only. ENTIRE never touches Delta either way
+ * (see fetchDiffBlock's `!changed` branch), so it works identically for both
+ * config types.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
@@ -2190,7 +2227,9 @@ const dryRunDiff = async (params: IDryRunDiffParams): Promise<IDryRunDiffOutcome
   const config = await getBackupConfigById(params.backupConfigId);
   if (!config || config.userId !== params.userId) return { ok: false, error: 'not_exist' };
 
-  if (params.configType === 'ARCHIVAL') return { ok: false, error: 'dry_run_diff_backup_only' };
+  if (params.configType === 'ARCHIVAL' && params.type === 'CHANGED_BETWEEN') {
+    return { ok: false, error: 'archival_dry_run_diff_entire_only' };
+  }
 
   if (params.type === 'CHANGED_BETWEEN' && (!params.startDate || !params.endDate)) {
     return { ok: false, error: 'date_range_required' };
