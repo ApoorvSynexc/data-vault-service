@@ -344,26 +344,40 @@ const getBackupJobById = async (backupJobId: string): Promise<IBackupJob | null>
 
 const getBackupJobsByUser = async (
   userId: string,
-  options?: { limit?: number; cursor?: string; status?: string }
+  options?: { limit?: number; cursor?: string; status?: string; type?: string }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
   const exclusiveStartKey = decodeCursor(options?.cursor);
+
+  const filterParts: string[] = [];
+  const expressionNames: Record<string, string> = {};
+  const expressionValues: Record<string, any> = { ':userId': userId };
+
+  if (options?.status) {
+    filterParts.push('#status = :status');
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = options.status;
+  }
+
+  if (options?.type) {
+    filterParts.push('#type = :type');
+    expressionNames['#type'] = 'type';
+    expressionValues[':type'] = options.type;
+  }
 
   const queryParams: any = {
     TableName: BACKUP_JOB_TABLE,
     IndexName: 'userId-index',
     KeyConditionExpression: 'userId = :userId',
-    ExpressionAttributeValues: { ':userId': userId },
+    ExpressionAttributeValues: expressionValues,
     Limit: limit,
     ScanIndexForward: false,
+    ...(filterParts.length && {
+      FilterExpression: filterParts.join(' AND '),
+      ExpressionAttributeNames: expressionNames,
+    }),
     ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
   };
-
-  if (options?.status) {
-    queryParams.FilterExpression = '#status = :status';
-    queryParams.ExpressionAttributeNames = { '#status': 'status' };
-    queryParams.ExpressionAttributeValues[':status'] = options.status;
-  }
 
   const result = await docClient.send(new QueryCommand(queryParams));
 
