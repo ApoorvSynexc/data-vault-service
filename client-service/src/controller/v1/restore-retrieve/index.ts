@@ -638,10 +638,10 @@ const parseDryRunParams = (
   if (!VALID_RETRIEVE_TYPES.includes(type)) {
     return { ok: false, error: 'invalid_retrieve_type' };
   }
-  // The ARCHIVAL restriction differs by endpoint — /dry-run is ENTIRE-only,
-  // /dry-run-diff rejects ARCHIVAL outright — so each checks it itself
-  // (dryRunRestore / dryRunDiff) rather than this shared parser picking one
-  // error message for both.
+  // Both /dry-run and /dry-run-diff restrict ARCHIVAL to source.type ENTIRE
+  // (no delta table to diff/count CHANGED_BETWEEN against), but each returns
+  // its own error code — so each checks it itself (dryRunRestore / dryRunDiff)
+  // rather than this shared parser picking one error message for both.
 
   const restoreScope = selection?.restoreScope as IRestoreScope | undefined;
   if (!restoreScope || typeof restoreScope !== 'object') {
@@ -751,7 +751,9 @@ const dryRunHandler = async (req: IRequest, res: IResponse): Promise<void> => {
  * fieldNames), RECORD and BULK_CSV only their listed ids, and DELETED_ONLY only
  * the deleted records.
  *
- * BACKUP configs only — ARCHIVAL 400s with dry_run_diff_backup_only.
+ * ARCHIVAL configs only support source.type ENTIRE, same as /dry-run —
+ * archival has no delta table, so CHANGED_BETWEEN 400s with
+ * archival_dry_run_diff_entire_only.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */

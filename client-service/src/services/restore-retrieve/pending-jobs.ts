@@ -17,11 +17,8 @@ const RESTORE_JOB_TYPE = 'RESTORE';
 
 export interface IPendingJobIds {
   // BULK jobType, backup (NORMAL) configs only (schedule/bulk backups, and a
-  // realtime object's initial Bulk-API sync) — feeds the raw_csv table.
-  // Never archival: archival-v2 writes only full-snapshot inserts, and
-  // inserts are excluded from this feature entirely (see glue/index.ts's
-  // raw-table header on the backup-service side) — there is no raw_csv table
-  // for an archival config to query.
+  // realtime object's initial Bulk-API sync) — feeds the raw_csv table's
+  // updates/deletes "changed" listing. Never archival — see archivalJobIds.
   csvJobIds: string[];
   // REALTIME jobType, operation DELETE only — feeds the raw_json_snapshot
   // table (dedicated to deletes; INSERT/UNDELETE are excluded, same reason).
@@ -29,10 +26,30 @@ export interface IPendingJobIds {
   // REALTIME jobType, operation UPDATE — sparse {prev,new} JSON, feeds the
   // raw_json_delta table.
   jsonDeltaJobIds: string[];
+  // ARCHIVAL-type jobs, BULK jobType — feeds the SAME raw_csv table as
+  // csvJobIds, but its own operation partition ('inserts' only, since
+  // archival-v2 never writes updates/deletes — see glue/index.ts's raw-table
+  // header on the backup-service side). Kept separate from csvJobIds since
+  // the two are read with different fileOperations filters.
+  archivalJobIds: string[];
 }
 
 const isCompletedForObject = (obj: { name: string; status?: string }): boolean =>
   !/fail/i.test(obj.status ?? '');
+
+// An archival job's object tree nests (children get archived alongside their
+// parent — see backup-service's clearObjectError for the same shape) — a flat
+// BACKUP job's object array has no children and flattens to itself unchanged,
+// so this is safe to use for both without a type-specific branch.
+const flattenObjects = (
+  objects: { name: string; status?: string; children?: unknown[] }[]
+): { name: string; status?: string }[] =>
+  objects.flatMap((obj) => [
+    obj,
+    ...(Array.isArray(obj.children)
+      ? flattenObjects(obj.children as { name: string; status?: string; children?: unknown[] }[])
+      : []),
+  ]);
 
 /**
  * Every backup job for (backupConfigId, objectApiName) that has finished
@@ -40,10 +57,12 @@ const isCompletedForObject = (obj: { name: string; status?: string }): boolean =
  * — status is one of COMPRESSIBLE_STATUSES, the exact predicate the
  * compression pipeline itself already uses to decide what to compress next.
  *
- * Updates and deletes only, matching the raw tables backup-service actually
- * creates — a REALTIME job whose operation is INSERT/UNDELETE, or an
- * ARCHIVAL-type job, is deliberately dropped here rather than named in a
- * query against a table that doesn't exist.
+ * A REALTIME job whose operation is INSERT/UNDELETE is deliberately dropped
+ * here rather than named in a query against a table that doesn't exist for
+ * it (see glue/index.ts's raw-table header). A BULK job is classified into
+ * csvJobIds (BACKUP, updates/deletes) or archivalJobIds (ARCHIVAL, inserts
+ * only) — both read the same raw_csv table backup-service creates for either
+ * config type, just filtered to a different operation partition.
  *
  * No cap, no truncation — returns every matching job id. The caller chunks
  * these into groups of <=1000 before using them in an Athena IN(...)
@@ -54,7 +73,12 @@ export const getPendingCompressionJobIds = async (
   backupConfigId: string,
   objectApiName: string
 ): Promise<IPendingJobIds> => {
-  const result: IPendingJobIds = { csvJobIds: [], jsonSnapshotJobIds: [], jsonDeltaJobIds: [] };
+  const result: IPendingJobIds = {
+    csvJobIds: [],
+    jsonSnapshotJobIds: [],
+    jsonDeltaJobIds: [],
+    archivalJobIds: [],
+  };
   let exclusiveStartKey: Record<string, unknown> | undefined;
 
   do {
@@ -86,14 +110,15 @@ export const getPendingCompressionJobIds = async (
         // INSERT/UNDELETE: no raw table exists for these — dropped.
         continue;
       }
-      // BULK — never archival (no raw_csv table exists for it). A job can
-      // cover several objects; only pull in jobs that actually completed for
-      // THIS object.
-      if (item.type === 'ARCHIVAL') continue;
-      const matchesObject = (item.object ?? []).some(
+      // BULK — a job can cover several objects (and, for archival, a nested
+      // tree of parent+child objects); only pull in jobs that actually
+      // completed for THIS object.
+      const matchesObject = flattenObjects(item.object ?? []).some(
         (obj) => obj.name === objectApiName && isCompletedForObject(obj)
       );
-      if (matchesObject) result.csvJobIds.push(item.backupJobId);
+      if (!matchesObject) continue;
+      if (item.type === 'ARCHIVAL') result.archivalJobIds.push(item.backupJobId);
+      else result.csvJobIds.push(item.backupJobId);
     }
 
     exclusiveStartKey = page.LastEvaluatedKey;
@@ -111,6 +136,29 @@ if (require.main === module) {
   assert.strictEqual(isCompletedForObject({ name: 'Account', status: 'COMPLETED' }), true);
   assert.strictEqual(isCompletedForObject({ name: 'Account', status: 'FAILED' }), false);
   assert.strictEqual(isCompletedForObject({ name: 'Account', status: 'failed' }), false);
+
+  // flattenObjects: a flat (BACKUP) object array flattens to itself unchanged.
+  const flatOnly = [{ name: 'Account' }, { name: 'Contact' }];
+  assert.deepStrictEqual(flattenObjects(flatOnly), flatOnly);
+
+  // A nested (ARCHIVAL) tree — child objects surface alongside their parent,
+  // at any depth, so a match on a child's name (e.g. 'Contact' archived under
+  // 'Account') is found.
+  const nested = [
+    {
+      name: 'Account',
+      children: [
+        { name: 'Contact', status: 'COMPLETED' },
+        { name: 'Opportunity', children: [{ name: 'OpportunityLineItem' }] },
+      ],
+    },
+  ];
+  const flattened = flattenObjects(nested);
+  assert.deepStrictEqual(
+    flattened.map((o) => o.name),
+    ['Account', 'Contact', 'Opportunity', 'OpportunityLineItem']
+  );
+  assert.ok(flattened.some((o) => o.name === 'Contact' && isCompletedForObject(o)));
 
   console.log('pending-jobs self-check passed');
 }
