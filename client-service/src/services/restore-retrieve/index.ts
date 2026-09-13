@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE } from '../../constant';
+import { BACKUP_JOB_TABLE, AWS_REGION } from '../../constant';
 import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { logger } from '../../middlewares/logger';
@@ -28,6 +28,7 @@ import {
   OPERATION_COLUMN,
   buildHudiEntireSql,
   buildHudiChangedSql,
+  buildHudiChangedWithDeletedSql,
   buildDeletedDeltaSql,
   buildWindowDeltasSql,
   buildDeltaPartitionWhere,
@@ -36,8 +37,19 @@ import {
   buildDeltaCountSql,
   recordIdsWhere,
   validateColumns,
+  chunkJobIds,
+  buildRawDeletedSql,
+  buildRawCsvChangedSql,
+  buildRawJsonDeletedSql,
+  buildRawJsonDeltaSql,
+  buildRawSnapshotCountSql,
+  buildRawJsonDeltaCountSql,
+  buildRawIdsSql,
+  buildHudiByIdsSql,
+  buildRawCsvBaseByIdsSql,
 } from './athena-fetch';
 import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records-by-ids';
+import { getPendingCompressionJobIds } from './pending-jobs';
 
 const RESTORE_JOB_TYPE = 'RESTORE';
 
@@ -391,21 +403,37 @@ export class CursorError extends Error {
   }
 }
 
+// The Glue Data Catalog and Athena are regional AWS services. Every query
+// against a config's tables must run in the client's OWN destination bucket's
+// region, never the platform's own default region (which may not even match
+// where the client's S3 bucket actually lives) — otherwise Athena/Glue calls
+// fail outright (cross-region Glue Catalog access isn't just "slower", it's
+// generally not addressable the way same-region access is).
+export interface IAthenaLocation {
+  region: string;
+  outputLocation?: string;
+}
+
 /**
  * Where Athena writes result files for a config's queries: the client's own
  * destination bucket, under salesforce/{crmId}/retrieve/ — the same
  * salesforce/{crmId}/ prefix the backup files themselves live under (see
  * backup-service's buildCompressionRootKey), so results sit next to the data
- * they came from and the client owns their lifecycle. Returns undefined when
- * the destination isn't a resolvable S3 bucket; Athena then falls back to the
- * workgroup's own result setting.
+ * they came from and the client owns their lifecycle. `outputLocation` is
+ * undefined when the destination isn't a resolvable S3 bucket; Athena then
+ * falls back to the workgroup's own result setting. `region` falls back to
+ * the platform default only when the destination itself can't be resolved at
+ * all — a broken-config edge case with no data to query either way.
  */
-const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<string | undefined> => {
+const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthenaLocation> => {
   const destination = await getDestinationById(config.destinationId);
-  if (!destination) return undefined;
+  if (!destination) return { region: AWS_REGION };
 
-  const { bucketName } = getDecryptedDestinationConfig(destination) as S3Config;
-  return bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined;
+  const { bucketName, region } = getDecryptedDestinationConfig(destination) as S3Config;
+  return {
+    region: region || AWS_REGION,
+    outputLocation: bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined,
+  };
 };
 
 /**
@@ -417,6 +445,7 @@ const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<strin
  */
 const makeRunner = (
   databaseName: string,
+  region: string,
   replay: Record<string, string> | null,
   outputLocation?: string
 ) => {
@@ -426,8 +455,8 @@ const makeRunner = (
     const stored = replay?.[name];
     try {
       const result = stored
-        ? await fetchStoredResults(stored)
-        : await runAthenaQuery(sql(), databaseName, outputLocation);
+        ? await fetchStoredResults(stored, region)
+        : await runAthenaQuery(sql(), databaseName, region, outputLocation);
       if (result.queryExecutionId) executions[name] = result.queryExecutionId;
       return result;
     } catch (e: unknown) {
@@ -617,14 +646,15 @@ const runDeletedForEntire = async (
   sqlParams: IRetrieveSqlParams,
   run: (name: string, sql: () => string) => Promise<IQueryResult>,
   executions: Record<string, string>,
-  cacheable: boolean
+  cacheable: boolean,
+  region: string
 ): Promise<IQueryResult> => {
   const fingerprint = deletedCacheFingerprint(sqlParams.columnNames);
   const cached = cacheable ? config.deletedRecordsCache?.[objectApiName] : undefined;
 
   if (cached && cached.fingerprint === fingerprint) {
     try {
-      const replayed = await fetchStoredResults(cached.queryExecutionId, BLOCK_SIZE);
+      const replayed = await fetchStoredResults(cached.queryExecutionId, region, BLOCK_SIZE);
       executions['deleted'] = cached.queryExecutionId;
       logger.info(
         `[fetch-records] deleted-cache hit | cfg:${config.backupConfigId} obj:${objectApiName} execId:${cached.queryExecutionId}`
@@ -659,28 +689,254 @@ const runDeletedForEntire = async (
   return result;
 };
 
+// ---------------------------------------------------------------------------
+// Pending raw_data tail — backup jobs finished but not yet folded into
+// Hudi/Delta by Spark compression, read directly via Athena over the
+// raw_csv / raw_json_snapshot / raw_json_delta tables backup-service creates
+// per object (see its glue/index.ts ensureRawCsvTable / ensureRawJsonSnapshotTable
+// / ensureRawJsonDeltaTable). Never replayed/cached across pages the way the
+// Hudi/Delta block is — these are cheap, partition-projected point-lookups
+// scoped to a small, explicit job-id list, so re-running them on every page
+// (including "load more" calls) is what makes a pending job completing
+// mid-pagination, or a backlog spanning more than one 1000-id chunk, actually
+// reachable rather than stuck behind whichever page first queried it.
+// ---------------------------------------------------------------------------
+
+// Same TABLE_NOT_FOUND tolerance makeRunner's `run` already applies — a raw
+// table may not exist yet for an object with no backup history at all, and
+// that is "no pending data", not an error.
+const runRawQuery = async (
+  databaseName: string,
+  region: string,
+  outputLocation: string | undefined,
+  sql: string
+): Promise<IQueryResult> => {
+  try {
+    return await runAthenaQuery(sql, databaseName, region, outputLocation);
+  } catch (e: unknown) {
+    const message = String((e as Error).message);
+    if (/TABLE_NOT_FOUND|does not exist/i.test(message)) return { columns: [], rows: [] };
+    throw e;
+  }
+};
+
+// Chunks jobIds to <=1000 (AWS's hard cap on an IN(...) list against an
+// injected partition column) and runs one query per chunk, concatenated —
+// never truncated, so a pending backlog larger than one chunk is still fully
+// reflected, just as more (still parallel) Athena calls.
+const runChunkedRaw = async (
+  databaseName: string,
+  region: string,
+  outputLocation: string | undefined,
+  jobIds: string[],
+  buildSql: (chunk: string[]) => string
+): Promise<IQueryResult> => {
+  if (!jobIds.length) return { columns: [], rows: [] };
+  const results = await Promise.all(
+    chunkJobIds(jobIds).map((chunk) => runRawQuery(databaseName, region, outputLocation, buildSql(chunk)))
+  );
+  return { columns: results[0]?.columns ?? [], rows: results.flatMap((r) => r.rows) };
+};
+
+/**
+ * Turns a realtime UPDATE event's two field-value maps (prev/new — Athena
+ * returns them CAST to JSON, one flat {field:value} object each) into the
+ * {field:{old,new}} shape applyDelta/reconstructRecord already consume from
+ * the compressed Delta table's change_data column. A field present in only
+ * one side still reverts correctly — applyDelta already handles a missing
+ * `old` (Spark's to_json drops null fields the same way).
+ */
+const diffFields = (prevJson: string, newJson: string): string => {
+  let prev: Record<string, unknown> = {};
+  let next: Record<string, unknown> = {};
+  try {
+    prev = JSON.parse(prevJson || '{}');
+  } catch {
+    /* malformed — treat as empty */
+  }
+  try {
+    next = JSON.parse(newJson || '{}');
+  } catch {
+    /* malformed — treat as empty */
+  }
+  const changes: Record<string, { old?: unknown; new?: unknown }> = {};
+  for (const field of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+    changes[field] = { old: prev[field], new: next[field] };
+  }
+  return JSON.stringify(changes);
+};
+
+const jsonFieldToString = (value: unknown): string =>
+  value === null || value === undefined ? '' : String(value);
+
+/**
+ * Synthesizes a ranked row directly from a realtime UPDATE event's "new"
+ * half, for a record with NO base row anywhere (no compressed Hudi state, no
+ * pending CSV/JSON snapshot) — i.e. this pending update is the only thing
+ * the vault has ever seen for this Id. A field diff alone can only describe
+ * the fields it touched, so every other requested column stays blank rather
+ * than guessed — this is a partial view, not a full record, and there is no
+ * way to do better without either a prior snapshot or waiting for the next
+ * compression run.
+ *
+ * `rowsForRecord` is every json-delta row for this one record_id inside the
+ * window (a record can be updated more than once); the NEWEST one's `new`
+ * half is the latest known state to synthesize from, since undoWindowDeltas
+ * (run by the caller afterward, over every one of these rows) reverts from
+ * there back to the pre-window value the same way it already does for a real
+ * base row.
+ */
+const synthesizeFromJsonDelta = (
+  rowsForRecord: Record<string, string>[],
+  columns: string[]
+): IRankedRecord => {
+  const newest = [...rowsForRecord].sort((a, b) =>
+    (b['change_time'] ?? '').localeCompare(a['change_time'] ?? '')
+  )[0];
+  let newFields: Record<string, unknown> = {};
+  try {
+    newFields = JSON.parse(newest['new_json'] || '{}');
+  } catch {
+    /* malformed — falls back to an id/timestamp-only stub below */
+  }
+  const record: Record<string, string> = { Id: newest['record_id'] ?? '' };
+  for (const col of columns) {
+    if (col.toLowerCase() === 'id') continue;
+    record[col] = col in newFields ? jsonFieldToString(newFields[col]) : '';
+  }
+  // The event's own LastModifiedDate is a top-level field on the raw payload
+  // (change_time), not one of the changed fields inside "new" — only fall
+  // back to it when the caller didn't already ask for (and get) it above.
+  if (!record['LastModifiedDate']) record['LastModifiedDate'] = newest['change_time'] ?? '';
+  record[OPERATION_FIELD] = 'UPDATE';
+  // ponytail: temporary — this path only runs for a record with NO base row
+  // found anywhere (Hudi lookup, raw_csv lookup, or the window-scoped
+  // result), which should now be rare. Logs exactly what was available to
+  // build from, so a still-missing requested field is diagnosable instead of
+  // silently blank. Remove once confirmed there's no remaining defect here.
+  logger.info(
+    `[synthesize] no base row for id:${record['Id']} | requestedColumns:${columns.join(',')} newFieldsKeys:${Object.keys(newFields).join(',')}`
+  );
+  return { record, key: { lmd: record['LastModifiedDate'], id: record['Id'] } };
+};
+
+// Groups json-delta rows by record_id — the caller needs every row for a
+// record to feed undoWindowDeltas, but only the group as a whole to decide
+// whether that record needs a synthesized base row.
+const groupByRecordId = (rows: Record<string, string>[]): Map<string, Record<string, string>[]> => {
+  const byRecord = new Map<string, Record<string, string>[]>();
+  for (const row of rows) {
+    const id = row['record_id'];
+    if (!id) continue;
+    const list = byRecord.get(id);
+    if (list) list.push(row);
+    else byRecord.set(id, [row]);
+  }
+  return byRecord;
+};
+
+/**
+ * Resolves a pending realtime UPDATE's orphan ids (no base row anywhere in
+ * the already-fetched, window-scoped block) to a real full row, instead of
+ * leaving it to synthesizeFromJsonDelta's diff-only, mostly-blank stand-in.
+ *
+ * Two sources, tried in order, each only for ids the previous one didn't
+ * resolve:
+ *   1. Hudi, by Id, no window — the object HAS been compressed, but this Id's
+ *      only evidence of change is the not-yet-compressed realtime diff, so it
+ *      never showed up in the window-scoped Hudi query. A direct lookup finds
+ *      its current full row regardless.
+ *   2. The most recent full-row raw_csv snapshot (inserts or updates) out of
+ *      this object's still-pending BULK jobs — used when Hudi doesn't exist
+ *      yet, so there is no compressed base at all.
+ *
+ * Whatever's still unresolved after both is returned so the caller can fall
+ * back to the existing diff-only synthesis for it — not a regression, just
+ * the same floor as today for a record with truly no full-row history.
+ *
+ * Found rows come back tagged OPERATION: 'UPDATE', the same shape a
+ * Hudi-sourced row already has — merging them into `block` before the
+ * existing deltaRows/undoWindowDeltas step is enough; no new merge logic is
+ * needed; that step already applies this record's json_delta rows on top of
+ * whatever's in `block`.
+ */
+const resolveOrphanBaseRows = async (
+  databaseName: string,
+  region: string,
+  outputLocation: string | undefined,
+  hudiTable: string,
+  hudiExists: boolean,
+  rawCsvTable: string,
+  csvJobIds: string[],
+  orphanIds: string[],
+  columns: string[]
+): Promise<{ found: IRankedRecord[]; unresolved: string[] }> => {
+  const remaining = new Set(orphanIds);
+  const found: IRankedRecord[] = [];
+  const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
+
+  const resolveFrom = async (sql: string): Promise<void> => {
+    const result = await runAthenaQuery(sql, databaseName, region, outputLocation);
+    for (const ranked of toRankedRows(result, columns, derived)) {
+      const id = ranked.record['Id'];
+      if (id && remaining.has(id)) {
+        found.push(ranked);
+        remaining.delete(id);
+      }
+    }
+  };
+
+  if (hudiExists && remaining.size) {
+    await resolveFrom(buildHudiByIdsSql(hudiTable, [...remaining], columns));
+  }
+  if (remaining.size && csvJobIds.length) {
+    await resolveFrom(buildRawCsvBaseByIdsSql(rawCsvTable, csvJobIds, [...remaining], columns));
+  }
+
+  return { found, unresolved: [...remaining] };
+};
+
 /**
  * Entry point for POST /retrieve/fetch-records.
  *
- * Reads the compressed pair only — main_backup_files (`_hudi`) and the CDC
- * history (`_delta`). No CSV is touched.
+ * Reads the compressed pair — main_backup_files (`_hudi`) and the CDC history
+ * (`_delta`) — PLUS the not-yet-compressed pending tail directly over
+ * raw_data (`_raw_csv` / `_raw_json_snapshot` / `_raw_json_delta`), so a
+ * backup job's data is visible here the moment it finishes, not only after
+ * the next Spark compression run. All of it is queried concurrently — see
+ * the Promise.all below — so the pending tail costs latency, not correctness:
  *
- * Two Athena queries define a block, run concurrently because neither depends on
- * the other:
+ *   main            — the Hudi rows in scope, already tagged with OPERATION.
+ *   deleted         — records with no Hudi row left, rebuilt from their
+ *                     DELETE delta.
+ *   rawCsvSnapshot  — pending CSV "updates" rows (a schedule backup's update
+ *                     row is a complete row, not a diff, so it's a snapshot).
+ *   rawCsvDeleted / rawJsonDeleted   — pending deletes-folder rows (CSV and
+ *                     realtime JSON respectively).
+ *   rawJsonDelta    — pending realtime UPDATE events ({prev,new} field diffs).
  *
- *   main    — the Hudi rows in scope, already tagged with their OPERATION.
- *   deleted — records with no Hudi row left, rebuilt from their DELETE delta.
+ * Deliberately UPDATES AND DELETES ONLY, never inserts — an inserts folder
+ * can be an object's entire first-time full sync, the opposite of the small,
+ * bounded tail this feature assumes. A newly created record isn't visible
+ * here until the next Spark compression run. Archival never contributes at
+ * all (archival-v2 writes only inserts).
  *
- * Both order by `LastModifiedDate DESC, Id DESC` and seek from the same cursor
- * key, so merging them is a sort rather than a join, and one cursor paginates
- * the pair. Hudi rows are merged FIRST so a live record is never shadowed by a
- * stale tombstone for the same Id.
+ * Pending snapshot rows are merged FIRST (strictly newer than anything
+ * already compressed), then Hudi, then the compressed DELETE-delta snapshots,
+ * then pending deletes — with any Id a pending delete names explicitly
+ * dropped from the Hudi side first, since dedupeById only resolves which of
+ * two rows for the same Id wins, not "this Id should not appear at all".
  *
- * CHANGED_BETWEEN then runs ONE more query — the window's deltas for the block's
- * UPDATE-tagged ids, at most BLOCK_SIZE of them — and replays them in memory.
- * The undo is deterministic given the block, and the block is deterministic
- * given the two stored result sets, so a replayed page rebuilds byte-identical
- * rows without re-scanning anything.
+ * CHANGED_BETWEEN then runs the window's compressed deltas for the block's
+ * UPDATE-tagged ids (replayed in memory, deterministic given the block) AND
+ * folds in any pending realtime UPDATE events for the same ids.
+ *
+ * The pending tail is re-resolved and re-queried on every call — including
+ * "load more" pages — rather than cached/replayed like the Hudi/Delta block:
+ * it is cheap (small, explicit job-id lists against injected-partition
+ * tables), and re-running it is what makes a job completing mid-pagination,
+ * or a pending backlog spanning more than one 1000-id chunk, reachable on
+ * later pages instead of stuck behind whichever page first saw it.
  *
  * Ownership is checked once, on the config: it owns the tables the query names.
  *
@@ -696,18 +952,25 @@ const retrieveRecords = async (
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
   const hudiTable = `${table}_hudi`;
   const deltaTable = `${table}_delta`;
+  const rawCsvTable = `${table}_raw_csv`;
+  const rawJsonSnapshotTable = `${table}_raw_json_snapshot`;
+  const rawJsonDeltaTable = `${table}_raw_json_delta`;
 
-  const changed = params.type === 'CHANGED_BETWEEN';
+  // Archival ignores startDate/endDate entirely: it is always a combined
+  // current-state view (Hudi + pending CSV snapshots), the same shape ENTIRE
+  // already produces for BACKUP configs, regardless of the requested type.
+  // Archival raw_data is always full-snapshot inserts with no update/delete
+  // classification (archival-v2 never writes updates/deletes), so there is
+  // nothing to window here.
+  const isArchival = params.configType === 'ARCHIVAL';
+  const changed = !isArchival && params.type === 'CHANGED_BETWEEN';
   // ENTIRE means entire: the window is not read, so it must not reach the SQL.
   const startDate = changed ? params.startDate! : null;
   const endDate = changed ? params.endDate! : null;
 
   const page = resolvePage(fingerprintRetrieve(params), params.cursor);
-  const { run, executions } = makeRunner(
-    databaseName,
-    page.replay,
-    await buildRetrieveOutputLocation(config)
-  );
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  const { run, executions } = makeRunner(databaseName, region, page.replay, outputLocation);
 
   const sql = {
     columnNames: params.columnNames,
@@ -727,20 +990,156 @@ const retrieveRecords = async (
   // changes the SQL itself, and any later page must scan for real to seek.
   const deletedCacheable = !changed && !sql.searchText && page.cursor === null && page.replay === null;
 
-  const [main, deleted] = await Promise.all([
-    run('main', () =>
-      changed
-        ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
-        : buildHudiEntireSql(hudiTable, sql)
-    ),
-    runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable),
+  // Pending (not-yet-compressed) raw_data tail — resolved and re-queried on
+  // EVERY call, including replay pages (see the block comment above
+  // runRawQuery/runChunkedRaw for why that is the right tradeoff here).
+  //
+  // hudi/delta existence is checked up front via a cheap Glue GetTable call
+  // rather than firing the full Athena SELECT and catching TABLE_NOT_FOUND —
+  // a brand-new config with no compression run yet would otherwise pay a
+  // full StartQueryExecution+poll round trip (700ms-1s+) just to learn what
+  // this single metadata call already answers in a fraction of the time, and
+  // avoids competing for Athena's per-account query concurrency with queries
+  // that actually have data to return.
+  const [pending, hudiExists, deltaExists] = await Promise.all([
+    getPendingCompressionJobIds(params.backupConfigId, params.objectApiName),
+    tableExists(databaseName, hudiTable, region),
+    tableExists(databaseName, deltaTable, region),
   ]);
+
+  // Merged into one Athena query instead of two whenever CHANGED_BETWEEN has
+  // both tables to read (see buildHudiChangedWithDeletedSql) — halves the
+  // StartQueryExecution+poll round trips for the single most expensive pair.
+  // Not offered under ENTIRE: runDeletedForEntire's own execution-id cache
+  // already makes that path cheap on repeat calls, and merging would throw
+  // that away for no benefit.
+  const canMergeChangedDeleted = changed && hudiExists && deltaExists;
+
+  // Archival never contributes here — pending.csvJobIds is always empty for
+  // it (archival-v2 writes only inserts, excluded entirely; see
+  // getPendingCompressionJobIds), so these queries naturally no-op for
+  // archival configs without needing an isArchival special-case.
+  const [main, deleted, rawCsvChanged, rawJsonDeleted, rawJsonDelta] =
+    await Promise.all([
+      canMergeChangedDeleted
+        ? run('main', () => buildHudiChangedWithDeletedSql(hudiTable, deltaTable, windowSql))
+        : !hudiExists
+          ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+          : run('main', () =>
+              changed
+                ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
+                : buildHudiEntireSql(hudiTable, sql)
+            ),
+      canMergeChangedDeleted
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] }) // already folded into `main` above
+        : !deltaExists
+          ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+          : runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable, region),
+      // Updates+deletes as one query — see buildRawCsvChangedSql. Never
+      // inserts — see the raw-table header on the backup-service side for
+      // why (an inserts folder can be an entire first-time full sync, not
+      // the small bounded tail this assumes).
+      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
+        buildRawCsvChangedSql(rawCsvTable, chunk, sql)
+      ),
+      // raw_json_snapshot is dedicated to DELETE events only — no operation
+      // filter needed (or possible; the table has no such column).
+      runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+        buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
+      ),
+      changed
+        ? runChunkedRaw(databaseName, region, outputLocation, pending.jsonDeltaJobIds, (chunk) =>
+            buildRawJsonDeltaSql(rawJsonDeltaTable, chunk, { startDate, endDate })
+          )
+        : Promise.resolve<IQueryResult>({ columns: [], rows: [] }),
+    ]);
 
   const columns = pairedColumns(params.columnNames);
   const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
+
+  // Single merged query returns both tags together — split back into the
+  // same two groups buildRawSnapshotSql(['updates'])/buildRawDeletedSql()
+  // would have produced separately.
+  const rawCsvChangedRanked = toRankedRows(rawCsvChanged, columns, derived);
+  const rawSnapshotRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE');
+  const rawCsvDeletedRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT');
+
+  const rawDeletedRanked = [
+    ...rawCsvDeletedRanked,
+    ...toRankedRows(rawJsonDeleted, columns, derived),
+  ];
+  // A pending delete must suppress a stale compressed Hudi row for the same
+  // Id — dedupeById alone only resolves PRESENCE conflicts (which of two rows
+  // for the same Id wins), not absence, so this is an explicit filter rather
+  // than relying on merge order.
+  const pendingDeletedIds = new Set(
+    rawDeletedRanked.map(({ record }) => record['Id']).filter(Boolean)
+  );
+
+  // When main+deleted came back merged, `main` carries BOTH halves tagged
+  // together — split by OPERATION before applying the same filtering each
+  // half already had separately: the Hudi (UPDATE/DELETE-tagged) half is
+  // filtered by pendingDeletedIds exactly as before, the delta-deleted
+  // (INSERT-tagged) half is NOT (matching the original, unmerged behavior,
+  // where `deletedRanked` was never filtered by it either).
+  const mainCombinedRanked = toRankedRows(main, columns, derived);
+  const mainHudiPortion = canMergeChangedDeleted
+    ? mainCombinedRanked.filter(({ record }) => record[OPERATION_FIELD] !== 'INSERT')
+    : mainCombinedRanked;
+  const mainDeletedPortion = canMergeChangedDeleted
+    ? mainCombinedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT')
+    : toRankedRows(deleted, columns, derived);
+
+  const mainRanked = mainHudiPortion.filter(({ record }) => !pendingDeletedIds.has(record['Id']));
+  const deletedRanked = mainDeletedPortion;
+
+  // A pending realtime UPDATE carries only a field diff, never a full
+  // record — undoWindowDeltas below can only REVERT a row already in the
+  // block from some other source (Hudi, a pending snapshot). For a record
+  // this pending update is the ONLY thing the vault has ever seen (no base
+  // anywhere), that diff would otherwise have nothing to attach to and
+  // silently vanish. Synthesized rows are lowest precedence (added last, see
+  // dedupeById below) — a real base row, with every column instead of just
+  // the changed ones, always wins when one exists.
+  const knownIds = new Set(
+    [...rawSnapshotRanked, ...mainRanked, ...deletedRanked, ...rawDeletedRanked]
+      .map(({ record }) => record['Id'])
+      .filter(Boolean)
+  );
+  const orphanEntries = changed
+    ? [...groupByRecordId(rawJsonDelta.rows).entries()].filter(([recordId]) => !knownIds.has(recordId))
+    : [];
+  let synthesizedRanked: IRankedRecord[] = [];
+  if (orphanEntries.length) {
+    const { found, unresolved } = await resolveOrphanBaseRows(
+      databaseName,
+      region,
+      outputLocation,
+      hudiTable,
+      hudiExists,
+      rawCsvTable,
+      pending.csvJobIds,
+      orphanEntries.map(([id]) => id),
+      columns
+    );
+    const rowsById = new Map(orphanEntries);
+    synthesizedRanked = [
+      ...found,
+      ...unresolved.map((id) => synthesizeFromJsonDelta(rowsById.get(id) ?? [], columns)),
+    ];
+  }
+
+  // Pending snapshot rows go FIRST — they are strictly newer than anything
+  // already compressed, so they must win any same-Id collision dedupeById
+  // resolves. Sorted newest-first up front so multiple pending jobs touching
+  // the same Id resolve to the latest one, matching the DynamoDB query's own
+  // ScanIndexForward:false-equivalent recency ordering.
   const block = dedupeById([
-    ...toRankedRows(main, columns, derived),
-    ...toRankedRows(deleted, columns, derived),
+    ...[...rawSnapshotRanked].sort(byKeyDesc),
+    ...mainRanked,
+    ...deletedRanked,
+    ...rawDeletedRanked,
+    ...synthesizedRanked,
   ])
     .sort(byKeyDesc)
     .slice(0, BLOCK_SIZE);
@@ -750,13 +1149,36 @@ const retrieveRecords = async (
       .filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE')
       .map(({ record }) => record['Id'])
       .filter(Boolean);
-    if (recordIds.length) {
+    const deltaRows: Record<string, string>[] = [];
+    if (recordIds.length && deltaExists) {
       const deltas = await run('deltas', () =>
         buildWindowDeltasSql(deltaTable, recordIds, windowSql)
       );
+      deltaRows.push(...deltas.rows);
+    }
+    // Pending realtime UPDATE events — reshaped from the raw_json_delta
+    // table's prev/new maps into the {field:{old,new}} change_data shape
+    // undoWindowDeltas already expects. Rows that don't match anything in
+    // this block are simply ignored by undoWindowDeltas's own record-id map.
+    for (const row of rawJsonDelta.rows) {
+      const changeData = diffFields(row['prev_json'] ?? '{}', row['new_json'] ?? '{}');
+      // ponytail: temporary — confirms every field the raw prev/new maps
+      // actually carried survives diffFields intact before it's handed to
+      // undoWindowDeltas. Remove once confirmed there's no remaining defect.
+      logger.info(
+        `[json-delta] id:${row['record_id']} changedFields:${Object.keys(JSON.parse(changeData)).join(',')}`
+      );
+      deltaRows.push({
+        record_id: row['record_id'] ?? '',
+        change_time: row['change_time'] ?? '',
+        change_type: 'UPDATE',
+        change_data: changeData,
+      });
+    }
+    if (deltaRows.length) {
       // Each row's page key was taken before this point, so a delta that reverts
       // LastModifiedDate cannot move a record out from under the cursor.
-      undoWindowDeltas(block, deltas.rows, columns);
+      undoWindowDeltas(block, deltaRows, columns);
     }
   }
 
@@ -787,7 +1209,8 @@ const retrieveInactiveRecordTypes = async (
   const deltaTable = `${table}_delta`;
 
   const { startDate, endDate } = params;
-  const { run } = makeRunner(databaseName, null, await buildRetrieveOutputLocation(config));
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  const { run } = makeRunner(databaseName, region, null, outputLocation);
   const result = await run('recordTypeDeltas', () =>
     buildRecordTypeDeltaSql(deltaTable, {
       startDate,
@@ -936,10 +1359,11 @@ const runHudiCount = async (
   databaseName: string,
   tableName: string,
   sql: string,
+  region: string,
   outputLocation?: string
 ): Promise<number> => {
-  if (!(await tableExists(databaseName, tableName))) return 0;
-  const result = await runAthenaQuery(sql, databaseName, outputLocation);
+  if (!(await tableExists(databaseName, tableName, region))) return 0;
+  const result = await runAthenaQuery(sql, databaseName, region, outputLocation);
   return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
 };
 
@@ -947,10 +1371,11 @@ const runDeltaCount = async (
   databaseName: string,
   tableName: string,
   sql: string,
+  region: string,
   outputLocation?: string
 ): Promise<{ total: number; update: number; delete: number }> => {
-  if (!(await tableExists(databaseName, tableName))) return { total: 0, update: 0, delete: 0 };
-  const result = await runAthenaQuery(sql, databaseName, outputLocation);
+  if (!(await tableExists(databaseName, tableName, region))) return { total: 0, update: 0, delete: 0 };
+  const result = await runAthenaQuery(sql, databaseName, region, outputLocation);
   const row = result.rows[0] ?? {};
   return {
     total: parseInt(row['total_cnt'] ?? '0', 10) || 0,
@@ -960,6 +1385,87 @@ const runDeltaCount = async (
 };
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : 'unknown_error');
+
+// ---------------------------------------------------------------------------
+// Pending raw-data tail counts — folded into dry-run so its numbers agree
+// with what fetch-records would actually return for the same scope. Uncapped
+// and allowed to take longer than the paginated fetch-records/dry-run-diff
+// endpoints (see the "no time limit" note on the retrieve side) — a dry-run
+// count is already a full aggregate that can legitimately scan millions of
+// compressed rows, so a few extra small queries here is not a new cost class.
+// ---------------------------------------------------------------------------
+
+const rawCount = async (
+  databaseName: string,
+  region: string,
+  outputLocation: string | undefined,
+  tableName: string,
+  jobIds: string[],
+  fileOperations: string[] | null,
+  whereBody?: string | null,
+  window?: { startDate: string; endDate: string } | null
+): Promise<number> => {
+  if (!jobIds.length || !(await tableExists(databaseName, tableName, region))) return 0;
+  const counts = await Promise.all(
+    chunkJobIds(jobIds).map(async (chunk) => {
+      const result = await runAthenaQuery(
+        buildRawSnapshotCountSql(tableName, chunk, fileOperations, whereBody, window),
+        databaseName,
+        region,
+        outputLocation
+      );
+      return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
+    })
+  );
+  return counts.reduce((a, b) => a + b, 0);
+};
+
+const rawJsonDeltaCount = async (
+  databaseName: string,
+  region: string,
+  outputLocation: string | undefined,
+  tableName: string,
+  jobIds: string[],
+  whereBody?: string | null,
+  window?: { startDate: string; endDate: string } | null
+): Promise<number> => {
+  if (!jobIds.length || !(await tableExists(databaseName, tableName, region))) return 0;
+  const counts = await Promise.all(
+    chunkJobIds(jobIds).map(async (chunk) => {
+      const result = await runAthenaQuery(
+        buildRawJsonDeltaCountSql(tableName, chunk, whereBody, window),
+        databaseName,
+        region,
+        outputLocation
+      );
+      return parseInt(result.rows[0]?.['cnt'] ?? '0', 10) || 0;
+    })
+  );
+  return counts.reduce((a, b) => a + b, 0);
+};
+
+// Distinct pending Ids — used only by the ENTIRE reconciliation below, where
+// identity (not row count) is what's needed to tell whether a pending insert
+// or delete would change a total that already counts the compressed Hudi row.
+const rawDistinctIds = async (
+  databaseName: string,
+  region: string,
+  outputLocation: string | undefined,
+  tableName: string,
+  jobIds: string[],
+  fileOperations: string[] | null,
+  whereBody?: string | null
+): Promise<Set<string>> => {
+  if (!jobIds.length || !(await tableExists(databaseName, tableName, region))) return new Set();
+  const perChunk = await Promise.all(
+    chunkJobIds(jobIds).map((chunk) =>
+      runAthenaQuery(buildRawIdsSql(tableName, chunk, fileOperations, whereBody), databaseName, region, outputLocation)
+    )
+  );
+  const ids = new Set<string>();
+  for (const r of perChunk) for (const row of r.rows) if (row['Id']) ids.add(row['Id']);
+  return ids;
+};
 
 // One object's resolved slice of a dry-run count: which records to count,
 // carried as the RAW scope selection rather than a pre-compiled WHERE — RECORD
@@ -1035,6 +1541,13 @@ const resolveDryRunObjects = async (params: IDryRunParams): Promise<ICountTarget
  * Counts, per object and in total, how many records a restore would touch —
  * read-only, no CSV, no Hudi/delta write, no restore execution.
  *
+ * Both branches fold in the not-yet-compressed pending raw_data tail
+ * (raw_csv / raw_json_snapshot / raw_json_delta) on top of the compressed
+ * counts below, so a dry-run's numbers agree with what fetch-records would
+ * actually return for the same scope — this is allowed to take longer than
+ * the paginated fetch-records/dry-run-diff endpoints, since it is already a
+ * full aggregate that can legitimately scan millions of compressed rows.
+ *
  * ENTIRE          — COUNT(*) on the object's Hudi table (current state) only,
  *                   narrowed by a RECORD/BULK_CSV id list or a FILTER scope's
  *                   Athena WHERE body when given. Deleted records (which
@@ -1042,6 +1555,9 @@ const resolveDryRunObjects = async (params: IDryRunParams): Promise<ICountTarget
  *                   deliberately excluded — the dry-run contract counts main
  *                   Hudi data only. Archival configs are ENTIRE-only (see
  *                   parseDryRunParams) since archival has no delta table.
+ *                   Pending inserts/deletes are reconciled by Id against the
+ *                   compressed Hudi count (a pending update never changes an
+ *                   ENTIRE total) — see the rawDistinctIds calls below.
  * CHANGED_BETWEEN — total/UPDATE/DELETE counts out of the delta table's
  *                   record-level rows (is_schema_change excluded) whose
  *                   change_time falls in [startDate, endDate], narrowed the
@@ -1049,6 +1565,8 @@ const resolveDryRunObjects = async (params: IDryRunParams): Promise<ICountTarget
  *                   through buildDeltaFilterWhere instead — see its own
  *                   ponytail note for what it does and doesn't match).
  *                   DELETED_ONLY reports only the DELETE half of that count.
+ *                   Pending update/delete counts are a straight add here —
+ *                   they can never already be in the compressed count.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
@@ -1074,11 +1592,14 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
   if (!targets) return { ok: false, error: 'invalid_restore_scope_type' };
 
   const databaseName = toGlueId(params.backupConfigId);
-  const outputLocation = await buildRetrieveOutputLocation(config);
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
   const tableFor = (objectApiName: string) =>
     `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(objectApiName)}`;
 
   if (params.type === 'ENTIRE') {
+    // Archival never has a pending contribution here — getPendingCompressionJobIds
+    // returns empty csvJobIds for it (archival-v2 writes only inserts, which
+    // are excluded entirely), so no isArchival special-case is needed below.
     const objects = await Promise.all(
       targets.map(async (t): Promise<IDryRunObjectCount> => {
         try {
@@ -1087,13 +1608,32 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
             : t.filter
               ? buildAthenaFilterWhere(t.filter)
               : null;
-          const count = await runHudiCount(
-            databaseName,
-            `${tableFor(t.objectApiName)}_hudi`,
-            buildHudiCountSql(`${tableFor(t.objectApiName)}_hudi`, whereBody),
-            outputLocation
-          );
-          return { objectApiName: t.objectApiName, ok: true, count };
+          const hudiTable = `${tableFor(t.objectApiName)}_hudi`;
+          const rawCsvTable = `${tableFor(t.objectApiName)}_raw_csv`;
+          const rawJsonSnapshotTable = `${tableFor(t.objectApiName)}_raw_json_snapshot`;
+
+          const [count, pending] = await Promise.all([
+            runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, whereBody), region, outputLocation),
+            getPendingCompressionJobIds(params.backupConfigId, t.objectApiName),
+          ]);
+
+          // A pending update never changes the ENTIRE total (still 1 record
+          // either way), and inserts are excluded from this feature entirely
+          // — only a pending delete of an already-compressed Id can change
+          // it. Reconciled by identity (does this pending-deleted Id actually
+          // exist in compressed Hudi?), not guessed, since the compressed
+          // count alone can't say.
+          const [csvDeletedIds, jsonDeletedIds] = await Promise.all([
+            rawDistinctIds(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], whereBody),
+            rawDistinctIds(databaseName, region, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, whereBody),
+          ]);
+          const removedIds = new Set([...csvDeletedIds, ...jsonDeletedIds]);
+
+          const removedActuallyInHudi = removedIds.size
+            ? await runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, recordIdsWhere([...removedIds])), region, outputLocation)
+            : 0;
+
+          return { objectApiName: t.objectApiName, ok: true, count: count - removedActuallyInHudi };
         } catch (e) {
           return { objectApiName: t.objectApiName, ok: false, count: 0, error: errorMessage(e) };
         }
@@ -1115,6 +1655,8 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
   const deltaPartition = buildDeltaPartitionWhere(params.startDate, params.endDate);
   const deletedOnly = params.restoreScope.type === 'DELETED_ONLY';
 
+  const countWindow = { startDate: params.startDate!, endDate: params.endDate! };
+
   const objects = await Promise.all(
     targets.map(async (t): Promise<IDryRunObjectCount> => {
       try {
@@ -1132,14 +1674,59 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
             deltaPartition,
             scopeWhere,
           }),
+          region,
           outputLocation
         );
+
+        // Raw tables have flat native columns like Hudi (not the delta
+        // table's record_id/change_data shape), so they take the SAME where
+        // body the ENTIRE branch builds — not `scopeWhere` above.
+        const rawWhereBody = t.recordIds
+          ? recordIdsWhere(t.recordIds)
+          : t.filter
+            ? buildAthenaFilterWhere(t.filter)
+            : null;
+        const rawCsvTable = `${tableFor(t.objectApiName)}_raw_csv`;
+        const rawJsonSnapshotTable = `${tableFor(t.objectApiName)}_raw_json_snapshot`;
+        const rawJsonDeltaTable = `${tableFor(t.objectApiName)}_raw_json_delta`;
+        const pending = await getPendingCompressionJobIds(params.backupConfigId, t.objectApiName);
+
+        // Pending rows can never already be in the compressed delta count by
+        // definition (they aren't compressed yet) — a straight add, no
+        // reconciliation needed here unlike ENTIRE.
+        const [pendingCsvUpdate, pendingCsvDelete, pendingJsonDelete, pendingJsonUpdate] = await Promise.all([
+          rawCount(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['updates'], rawWhereBody, countWindow),
+          rawCount(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], rawWhereBody, countWindow),
+          // raw_json_snapshot has no operation column — it only ever holds
+          // DELETE events, so fileOperations is null here.
+          rawCount(databaseName, region, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, rawWhereBody, countWindow),
+          rawJsonDeltaCount(databaseName, region, outputLocation, rawJsonDeltaTable, pending.jsonDeltaJobIds, rawWhereBody, countWindow),
+        ]);
+        const pendingUpdate = pendingCsvUpdate + pendingJsonUpdate;
+        const pendingDelete = pendingCsvDelete + pendingJsonDelete;
+
+        const update = counts.update + pendingUpdate;
+        const del = counts.delete + pendingDelete;
+        // Additive on top of the compressed total_cnt rather than
+        // recomputed as update+delete — that count can include other
+        // change_type rows (e.g. UNDELETE) beyond what update/delete
+        // itemize, and pending never contributes one of those, so this
+        // preserves whatever the compressed total already meant.
+        const total = counts.total + pendingUpdate + pendingDelete;
+
+        logger.info(
+          `[dry-run] ${t.objectApiName} | compressed:{update:${counts.update},delete:${counts.delete},total:${counts.total}} ` +
+          `pendingJobIds:{csv:${pending.csvJobIds.length},jsonSnapshot:${pending.jsonSnapshotJobIds.length},jsonDelta:${pending.jsonDeltaJobIds.length}} ` +
+          `pendingCounts:{csvUpdate:${pendingCsvUpdate},csvDelete:${pendingCsvDelete},jsonDelete:${pendingJsonDelete},jsonUpdate:${pendingJsonUpdate}} ` +
+          `final:{update:${update},delete:${del},total:${total}}`
+        );
+
         return {
           objectApiName: t.objectApiName,
           ok: true,
-          count: deletedOnly ? counts.delete : counts.total,
-          updateCount: counts.update,
-          deleteCount: counts.delete,
+          count: deletedOnly ? del : total,
+          updateCount: update,
+          deleteCount: del,
         };
       } catch (e) {
         return { objectApiName: t.objectApiName, ok: false, count: 0, updateCount: 0, deleteCount: 0, error: errorMessage(e) };
@@ -1293,29 +1880,37 @@ const resolveDiffTargets = async (params: IDryRunDiffParams): Promise<IDiffTarge
 
 /**
  * Reads one object's slice of the vault — the same Hudi/delta model
- * fetch-records uses, run once at the diff's row cap instead of paged.
+ * fetch-records uses, PLUS the same not-yet-compressed pending raw_data tail
+ * (updates/deletes only, never inserts — see retrieveRecords / glue/index.ts's
+ * raw-table header for why), run once at the diff's row cap instead of paged.
  *
  * No cursor and no block/replay machinery: the cap is small and every row is
  * about to cost a live Salesforce read anyway, so there is nothing for a
- * second page to amortise.
+ * second page to amortise — which also means the pending tail is simpler
+ * here than in retrieveRecords: it is read exactly once per call, with no
+ * "re-query on every page" concern (there is no paging).
  */
 const fetchDiffBlock = async (
   params: IDryRunDiffParams,
   target: IDiffTarget,
   columnNames: string[],
   limit: number,
+  region: string,
   outputLocation?: string
 ): Promise<IRankedRecord[]> => {
   const databaseName = toGlueId(params.backupConfigId);
   const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(target.objectApiName)}`;
   const hudiTable = `${table}_hudi`;
   const deltaTable = `${table}_delta`;
+  const rawCsvTable = `${table}_raw_csv`;
+  const rawJsonSnapshotTable = `${table}_raw_json_snapshot`;
+  const rawJsonDeltaTable = `${table}_raw_json_delta`;
 
   const changed = params.type === 'CHANGED_BETWEEN';
   const startDate = changed ? params.startDate! : null;
   const endDate = changed ? params.endDate! : null;
 
-  const { run } = makeRunner(databaseName, null, outputLocation);
+  const { run } = makeRunner(databaseName, region, null, outputLocation);
   const sql: IRetrieveSqlParams = {
     columnNames,
     searchText: null,
@@ -1330,34 +1925,172 @@ const fetchDiffBlock = async (
   const columns = pairedColumns(columnNames);
   const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
 
+  // dryRunDiff is BACKUP-configs-only (archival is rejected in dryRunDiff
+  // itself), so pending.csvJobIds here is always a schedule/bulk job, never
+  // archival — no isArchival special-case needed.
+  //
+  // hudi/delta existence checked up front via a cheap Glue GetTable call —
+  // same reasoning as retrieveRecords: skips a full Athena StartQueryExecution
+  // + poll round trip for a config with no compression run yet.
+  const [pending, hudiExists, deltaExists] = await Promise.all([
+    getPendingCompressionJobIds(params.backupConfigId, target.objectApiName),
+    tableExists(databaseName, hudiTable, region),
+    tableExists(databaseName, deltaTable, region),
+  ]);
+
   // DELETED_ONLY asks for exactly the records the vault holds ONLY as a DELETE
   // delta, so the main Hudi query is skipped rather than filtered — a deleted
-  // record has no Hudi row for it to return.
+  // record has no Hudi row for it to return. Pending deletes (not yet in the
+  // compressed delta table) are folded in the same way.
   if (target.deletedOnly) {
-    const deleted = await run('deleted', () => buildDeletedDeltaSql(deltaTable, sql));
-    return toRankedRows(deleted, columns, derived).slice(0, limit);
+    const [deleted, rawCsvDeleted, rawJsonDeleted] = await Promise.all([
+      !deltaExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
+      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
+        buildRawDeletedSql(rawCsvTable, chunk, sql)
+      ),
+      runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+        buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
+      ),
+    ]);
+    return dedupeById([
+      ...toRankedRows(rawCsvDeleted, columns, derived),
+      ...toRankedRows(rawJsonDeleted, columns, derived),
+      ...toRankedRows(deleted, columns, derived),
+    ])
+      .sort(byKeyDesc)
+      .slice(0, limit);
   }
 
   // ENTIRE reads the main Hudi table only — the same contract the /dry-run
   // count it pairs with applies, so the two agree on what ENTIRE means.
   // Deleted records are reachable through the DELETED_ONLY scope instead.
+  // Pending CSV "updates" rows (full snapshots, not diffs) are merged in as
+  // newer-than-Hudi state, and a pending delete suppresses a stale Hudi row
+  // for the same Id — same precedence rules retrieveRecords applies.
   if (!changed) {
-    const main = await run('main', () => buildHudiEntireSql(hudiTable, sql));
-    return toRankedRows(main, columns, derived).slice(0, limit);
+    const [main, rawCsvChanged, rawJsonDeleted] = await Promise.all([
+      !hudiExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('main', () => buildHudiEntireSql(hudiTable, sql)),
+      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
+        buildRawCsvChangedSql(rawCsvTable, chunk, sql)
+      ),
+      runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+        buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
+      ),
+    ]);
+    const rawCsvChangedRanked = toRankedRows(rawCsvChanged, columns, derived);
+    const rawSnapshotRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE');
+    const rawCsvDeletedRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT');
+    const pendingDeletedIds = new Set(
+      [...rawCsvDeletedRanked, ...toRankedRows(rawJsonDeleted, columns, derived)]
+        .map(({ record }) => record['Id'])
+        .filter(Boolean)
+    );
+    const mainRanked = toRankedRows(main, columns, derived).filter(
+      ({ record }) => !pendingDeletedIds.has(record['Id'])
+    );
+    return dedupeById([...[...rawSnapshotRanked].sort(byKeyDesc), ...mainRanked])
+      .sort(byKeyDesc)
+      .slice(0, limit);
   }
 
   // CHANGED_BETWEEN: created/updated Hudi rows and deleted-delta rows both
   // count as "changed in the window" — /dry-run's own CHANGED_BETWEEN count
   // reports DELETEs too — so the pair is merged exactly as fetch-records does,
-  // Hudi first so a live record is never shadowed by a stale tombstone.
-  const [main, deleted] = await Promise.all([
-    run('main', () => buildHudiChangedSql(hudiTable, deltaTable, windowSql)),
-    run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
+  // pending snapshots first, then Hudi (with pending-deleted ids removed),
+  // then the compressed DELETE-delta snapshots, then pending deletes.
+  //
+  // main+deleted merged into one Athena query when both tables exist — see
+  // retrieveRecords for the same reasoning (runDeletedForEntire's cache never
+  // applied here anyway, since it's ENTIRE-only).
+  const canMergeChangedDeleted = hudiExists && deltaExists;
+
+  const [main, deleted, rawCsvChanged, rawJsonDeleted, rawJsonDelta] = await Promise.all([
+    canMergeChangedDeleted
+      ? run('main', () => buildHudiChangedWithDeletedSql(hudiTable, deltaTable, windowSql))
+      : !hudiExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('main', () => buildHudiChangedSql(hudiTable, deltaTable, windowSql)),
+    canMergeChangedDeleted
+      ? Promise.resolve<IQueryResult>({ columns: [], rows: [] }) // already folded into `main` above
+      : !deltaExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
+    runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
+      buildRawCsvChangedSql(rawCsvTable, chunk, sql)
+    ),
+    runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+      buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
+    ),
+    runChunkedRaw(databaseName, region, outputLocation, pending.jsonDeltaJobIds, (chunk) =>
+      buildRawJsonDeltaSql(rawJsonDeltaTable, chunk, { startDate, endDate })
+    ),
   ]);
 
+  const rawCsvChangedRanked = toRankedRows(rawCsvChanged, columns, derived);
+  const rawSnapshotRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE');
+  const rawCsvDeletedRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT');
+  const rawDeletedRanked = [
+    ...rawCsvDeletedRanked,
+    ...toRankedRows(rawJsonDeleted, columns, derived),
+  ];
+  const pendingDeletedIds = new Set(rawDeletedRanked.map(({ record }) => record['Id']).filter(Boolean));
+
+  // Split a merged main result the same way retrieveRecords does: the Hudi
+  // (UPDATE/DELETE-tagged) portion gets the pendingDeletedIds filter, the
+  // delta-deleted (INSERT-tagged) portion does not — matching the original,
+  // unmerged behavior where `deletedRanked` was never filtered by it.
+  const mainCombinedRanked = toRankedRows(main, columns, derived);
+  const mainHudiPortion = canMergeChangedDeleted
+    ? mainCombinedRanked.filter(({ record }) => record[OPERATION_FIELD] !== 'INSERT')
+    : mainCombinedRanked;
+  const mainDeletedPortion = canMergeChangedDeleted
+    ? mainCombinedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT')
+    : toRankedRows(deleted, columns, derived);
+
+  const mainRanked = mainHudiPortion.filter(({ record }) => !pendingDeletedIds.has(record['Id']));
+  const deletedRanked = mainDeletedPortion;
+
+  // See retrieveRecords for why: a pending realtime UPDATE with no base row
+  // anywhere would otherwise have nothing for undoWindowDeltas to revert and
+  // silently vanish, even though the query above found it.
+  const knownIds = new Set(
+    [...rawSnapshotRanked, ...mainRanked, ...deletedRanked, ...rawDeletedRanked]
+      .map(({ record }) => record['Id'])
+      .filter(Boolean)
+  );
+  const orphanEntries = [...groupByRecordId(rawJsonDelta.rows).entries()].filter(
+    ([recordId]) => !knownIds.has(recordId)
+  );
+  let synthesizedRanked: IRankedRecord[] = [];
+  if (orphanEntries.length) {
+    const { found, unresolved } = await resolveOrphanBaseRows(
+      databaseName,
+      region,
+      outputLocation,
+      hudiTable,
+      hudiExists,
+      rawCsvTable,
+      pending.csvJobIds,
+      orphanEntries.map(([id]) => id),
+      columns
+    );
+    const rowsById = new Map(orphanEntries);
+    synthesizedRanked = [
+      ...found,
+      ...unresolved.map((id) => synthesizeFromJsonDelta(rowsById.get(id) ?? [], columns)),
+    ];
+  }
+
   const block = dedupeById([
-    ...toRankedRows(main, columns, derived),
-    ...toRankedRows(deleted, columns, derived),
+    ...[...rawSnapshotRanked].sort(byKeyDesc),
+    ...mainRanked,
+    ...deletedRanked,
+    ...rawDeletedRanked,
+    ...synthesizedRanked,
   ])
     .sort(byKeyDesc)
     .slice(0, limit);
@@ -1369,10 +2102,26 @@ const fetchDiffBlock = async (
     .filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE')
     .map(({ record }) => record['Id'])
     .filter(Boolean);
-  if (recordIds.length) {
+  const deltaRows: Record<string, string>[] = [];
+  if (recordIds.length && deltaExists) {
     const deltas = await run('deltas', () => buildWindowDeltasSql(deltaTable, recordIds, windowSql));
-    undoWindowDeltas(block, deltas.rows, columns);
+    deltaRows.push(...deltas.rows);
   }
+  // Pending realtime UPDATE events, reshaped the same way retrieveRecords does.
+  for (const row of rawJsonDelta.rows) {
+    const changeData = diffFields(row['prev_json'] ?? '{}', row['new_json'] ?? '{}');
+    // ponytail: temporary — see the matching log in retrieveRecords.
+    logger.info(
+      `[json-delta] id:${row['record_id']} changedFields:${Object.keys(JSON.parse(changeData)).join(',')}`
+    );
+    deltaRows.push({
+      record_id: row['record_id'] ?? '',
+      change_time: row['change_time'] ?? '',
+      change_type: 'UPDATE',
+      change_data: changeData,
+    });
+  }
+  if (deltaRows.length) undoWindowDeltas(block, deltaRows, columns);
 
   return block;
 };
@@ -1451,7 +2200,7 @@ const dryRunDiff = async (params: IDryRunDiffParams): Promise<IDryRunDiffOutcome
   if (!targets) return { ok: false, error: 'invalid_restore_scope_type' };
 
   const limit = Math.min(Math.max(params.limit ?? DIFF_DEFAULT_LIMIT, 1), DIFF_MAX_LIMIT);
-  const outputLocation = await buildRetrieveOutputLocation(config);
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
 
   const objects = await Promise.all(
     targets.map(async (target): Promise<IDryRunDiffObject> => {
@@ -1475,7 +2224,7 @@ const dryRunDiff = async (params: IDryRunDiffParams): Promise<IDryRunDiffOutcome
 
         validateColumns(columnNames);
 
-        const block = await fetchDiffBlock(params, target, columnNames, limit, outputLocation);
+        const block = await fetchDiffBlock(params, target, columnNames, limit, region, outputLocation);
         const records = await pairWithSalesforce(params, objectApiName, columnNames, block);
 
         return { objectApiName, ok: true, columns: columnNames, recordCount: records.length, records };
@@ -1562,7 +2311,8 @@ const retrieveMissingRecordTypes = async (
   }
 
   const databaseName = toGlueId(backupConfigId);
-  const { run } = makeRunner(databaseName, null, await buildRetrieveOutputLocation(config));
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  const { run } = makeRunner(databaseName, region, null, outputLocation);
   const deltaPartition = buildDeltaPartitionWhere(startDate ?? null, endDate ?? null);
 
   const perObject = await Promise.all(

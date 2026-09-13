@@ -666,6 +666,7 @@ export {
     initalizePayloadTransform,
     initalizeRestoreTransform,
     isCompressible,
+    COMPRESSIBLE_STATUSES,
     // exported for payload.check.ts — the per-job grouping contract with Spark
     processObjectOperations,
     processArchivalObjectOperations,
