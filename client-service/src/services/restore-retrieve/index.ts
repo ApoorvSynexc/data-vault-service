@@ -28,6 +28,7 @@ import {
   OPERATION_COLUMN,
   buildHudiEntireSql,
   buildHudiChangedSql,
+  buildHudiChangedWithDeletedSql,
   buildDeletedDeltaSql,
   buildWindowDeltasSql,
   buildDeltaPartitionWhere,
@@ -37,8 +38,8 @@ import {
   recordIdsWhere,
   validateColumns,
   chunkJobIds,
-  buildRawSnapshotSql,
   buildRawDeletedSql,
+  buildRawCsvChangedSql,
   buildRawJsonDeletedSql,
   buildRawJsonDeltaSql,
   buildRawSnapshotCountSql,
@@ -935,30 +936,40 @@ const retrieveRecords = async (
     tableExists(databaseName, deltaTable, region),
   ]);
 
+  // Merged into one Athena query instead of two whenever CHANGED_BETWEEN has
+  // both tables to read (see buildHudiChangedWithDeletedSql) — halves the
+  // StartQueryExecution+poll round trips for the single most expensive pair.
+  // Not offered under ENTIRE: runDeletedForEntire's own execution-id cache
+  // already makes that path cheap on repeat calls, and merging would throw
+  // that away for no benefit.
+  const canMergeChangedDeleted = changed && hudiExists && deltaExists;
+
   // Archival never contributes here — pending.csvJobIds is always empty for
   // it (archival-v2 writes only inserts, excluded entirely; see
   // getPendingCompressionJobIds), so these queries naturally no-op for
   // archival configs without needing an isArchival special-case.
-  const [main, deleted, rawCsvSnapshot, rawCsvDeleted, rawJsonDeleted, rawJsonDelta] =
+  const [main, deleted, rawCsvChanged, rawJsonDeleted, rawJsonDelta] =
     await Promise.all([
-      !hudiExists
-        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
-        : run('main', () =>
-            changed
-              ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
-              : buildHudiEntireSql(hudiTable, sql)
-          ),
-      !deltaExists
-        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
-        : runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable, region),
-      // Updates only, never inserts — see the raw-table header on the
-      // backup-service side for why (an inserts folder can be an entire
-      // first-time full sync, not the small bounded tail this assumes).
+      canMergeChangedDeleted
+        ? run('main', () => buildHudiChangedWithDeletedSql(hudiTable, deltaTable, windowSql))
+        : !hudiExists
+          ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+          : run('main', () =>
+              changed
+                ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
+                : buildHudiEntireSql(hudiTable, sql)
+            ),
+      canMergeChangedDeleted
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] }) // already folded into `main` above
+        : !deltaExists
+          ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+          : runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable, region),
+      // Updates+deletes as one query — see buildRawCsvChangedSql. Never
+      // inserts — see the raw-table header on the backup-service side for
+      // why (an inserts folder can be an entire first-time full sync, not
+      // the small bounded tail this assumes).
       runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
-        buildRawSnapshotSql(rawCsvTable, chunk, ['updates'], sql)
-      ),
-      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
-        buildRawDeletedSql(rawCsvTable, chunk, sql)
+        buildRawCsvChangedSql(rawCsvTable, chunk, sql)
       ),
       // raw_json_snapshot is dedicated to DELETE events only — no operation
       // filter needed (or possible; the table has no such column).
@@ -975,9 +986,15 @@ const retrieveRecords = async (
   const columns = pairedColumns(params.columnNames);
   const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
 
-  const rawSnapshotRanked = toRankedRows(rawCsvSnapshot, columns, derived);
+  // Single merged query returns both tags together — split back into the
+  // same two groups buildRawSnapshotSql(['updates'])/buildRawDeletedSql()
+  // would have produced separately.
+  const rawCsvChangedRanked = toRankedRows(rawCsvChanged, columns, derived);
+  const rawSnapshotRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE');
+  const rawCsvDeletedRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT');
+
   const rawDeletedRanked = [
-    ...toRankedRows(rawCsvDeleted, columns, derived),
+    ...rawCsvDeletedRanked,
     ...toRankedRows(rawJsonDeleted, columns, derived),
   ];
   // A pending delete must suppress a stale compressed Hudi row for the same
@@ -987,10 +1004,23 @@ const retrieveRecords = async (
   const pendingDeletedIds = new Set(
     rawDeletedRanked.map(({ record }) => record['Id']).filter(Boolean)
   );
-  const mainRanked = toRankedRows(main, columns, derived).filter(
-    ({ record }) => !pendingDeletedIds.has(record['Id'])
-  );
-  const deletedRanked = toRankedRows(deleted, columns, derived);
+
+  // When main+deleted came back merged, `main` carries BOTH halves tagged
+  // together — split by OPERATION before applying the same filtering each
+  // half already had separately: the Hudi (UPDATE/DELETE-tagged) half is
+  // filtered by pendingDeletedIds exactly as before, the delta-deleted
+  // (INSERT-tagged) half is NOT (matching the original, unmerged behavior,
+  // where `deletedRanked` was never filtered by it either).
+  const mainCombinedRanked = toRankedRows(main, columns, derived);
+  const mainHudiPortion = canMergeChangedDeleted
+    ? mainCombinedRanked.filter(({ record }) => record[OPERATION_FIELD] !== 'INSERT')
+    : mainCombinedRanked;
+  const mainDeletedPortion = canMergeChangedDeleted
+    ? mainCombinedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT')
+    : toRankedRows(deleted, columns, derived);
+
+  const mainRanked = mainHudiPortion.filter(({ record }) => !pendingDeletedIds.has(record['Id']));
+  const deletedRanked = mainDeletedPortion;
 
   // A pending realtime UPDATE carries only a field diff, never a full
   // record — undoWindowDeltas below can only REVERT a row already in the
@@ -1838,23 +1868,22 @@ const fetchDiffBlock = async (
   // newer-than-Hudi state, and a pending delete suppresses a stale Hudi row
   // for the same Id — same precedence rules retrieveRecords applies.
   if (!changed) {
-    const [main, rawCsvSnapshot, rawCsvDeleted, rawJsonDeleted] = await Promise.all([
+    const [main, rawCsvChanged, rawJsonDeleted] = await Promise.all([
       !hudiExists
         ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
         : run('main', () => buildHudiEntireSql(hudiTable, sql)),
       runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
-        buildRawSnapshotSql(rawCsvTable, chunk, ['updates'], sql)
-      ),
-      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
-        buildRawDeletedSql(rawCsvTable, chunk, sql)
+        buildRawCsvChangedSql(rawCsvTable, chunk, sql)
       ),
       runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
         buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
       ),
     ]);
-    const rawSnapshotRanked = toRankedRows(rawCsvSnapshot, columns, derived);
+    const rawCsvChangedRanked = toRankedRows(rawCsvChanged, columns, derived);
+    const rawSnapshotRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE');
+    const rawCsvDeletedRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT');
     const pendingDeletedIds = new Set(
-      [...toRankedRows(rawCsvDeleted, columns, derived), ...toRankedRows(rawJsonDeleted, columns, derived)]
+      [...rawCsvDeletedRanked, ...toRankedRows(rawJsonDeleted, columns, derived)]
         .map(({ record }) => record['Id'])
         .filter(Boolean)
     );
@@ -1871,18 +1900,25 @@ const fetchDiffBlock = async (
   // reports DELETEs too — so the pair is merged exactly as fetch-records does,
   // pending snapshots first, then Hudi (with pending-deleted ids removed),
   // then the compressed DELETE-delta snapshots, then pending deletes.
-  const [main, deleted, rawCsvSnapshot, rawCsvDeleted, rawJsonDeleted, rawJsonDelta] = await Promise.all([
-    !hudiExists
-      ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
-      : run('main', () => buildHudiChangedSql(hudiTable, deltaTable, windowSql)),
-    !deltaExists
-      ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
-      : run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
+  //
+  // main+deleted merged into one Athena query when both tables exist — see
+  // retrieveRecords for the same reasoning (runDeletedForEntire's cache never
+  // applied here anyway, since it's ENTIRE-only).
+  const canMergeChangedDeleted = hudiExists && deltaExists;
+
+  const [main, deleted, rawCsvChanged, rawJsonDeleted, rawJsonDelta] = await Promise.all([
+    canMergeChangedDeleted
+      ? run('main', () => buildHudiChangedWithDeletedSql(hudiTable, deltaTable, windowSql))
+      : !hudiExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('main', () => buildHudiChangedSql(hudiTable, deltaTable, windowSql)),
+    canMergeChangedDeleted
+      ? Promise.resolve<IQueryResult>({ columns: [], rows: [] }) // already folded into `main` above
+      : !deltaExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
     runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
-      buildRawSnapshotSql(rawCsvTable, chunk, ['updates'], sql)
-    ),
-    runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
-      buildRawDeletedSql(rawCsvTable, chunk, sql)
+      buildRawCsvChangedSql(rawCsvTable, chunk, sql)
     ),
     runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
       buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
@@ -1892,16 +1928,29 @@ const fetchDiffBlock = async (
     ),
   ]);
 
-  const rawSnapshotRanked = toRankedRows(rawCsvSnapshot, columns, derived);
+  const rawCsvChangedRanked = toRankedRows(rawCsvChanged, columns, derived);
+  const rawSnapshotRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'UPDATE');
+  const rawCsvDeletedRanked = rawCsvChangedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT');
   const rawDeletedRanked = [
-    ...toRankedRows(rawCsvDeleted, columns, derived),
+    ...rawCsvDeletedRanked,
     ...toRankedRows(rawJsonDeleted, columns, derived),
   ];
   const pendingDeletedIds = new Set(rawDeletedRanked.map(({ record }) => record['Id']).filter(Boolean));
-  const mainRanked = toRankedRows(main, columns, derived).filter(
-    ({ record }) => !pendingDeletedIds.has(record['Id'])
-  );
-  const deletedRanked = toRankedRows(deleted, columns, derived);
+
+  // Split a merged main result the same way retrieveRecords does: the Hudi
+  // (UPDATE/DELETE-tagged) portion gets the pendingDeletedIds filter, the
+  // delta-deleted (INSERT-tagged) portion does not — matching the original,
+  // unmerged behavior where `deletedRanked` was never filtered by it.
+  const mainCombinedRanked = toRankedRows(main, columns, derived);
+  const mainHudiPortion = canMergeChangedDeleted
+    ? mainCombinedRanked.filter(({ record }) => record[OPERATION_FIELD] !== 'INSERT')
+    : mainCombinedRanked;
+  const mainDeletedPortion = canMergeChangedDeleted
+    ? mainCombinedRanked.filter(({ record }) => record[OPERATION_FIELD] === 'INSERT')
+    : toRankedRows(deleted, columns, derived);
+
+  const mainRanked = mainHudiPortion.filter(({ record }) => !pendingDeletedIds.has(record['Id']));
+  const deletedRanked = mainDeletedPortion;
 
   // See retrieveRecords for why: a pending realtime UPDATE with no base row
   // anywhere would otherwise have nothing for undoWindowDeltas to revert and
