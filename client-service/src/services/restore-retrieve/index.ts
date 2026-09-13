@@ -45,6 +45,7 @@ import {
   buildRawSnapshotCountSql,
   buildRawJsonDeltaCountSql,
   buildRawIdsSql,
+  buildRawTimestampSampleSql,
 } from './athena-fetch';
 import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records-by-ids';
 import { getPendingCompressionJobIds } from './pending-jobs';
@@ -1291,6 +1292,29 @@ const runDeltaCount = async (
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : 'unknown_error');
 
+// ponytail: temporary diagnostic — see buildRawTimestampSampleSql. Only fires
+// when there ARE pending job ids but the windowed count came back 0, so it
+// costs nothing on the common "nothing pending" path.
+const sampleRawTimestampsIfZero = async (
+  databaseName: string,
+  region: string,
+  outputLocation: string | undefined,
+  tableName: string,
+  jobIds: string[],
+  fileOperations: string[] | null,
+  column: string,
+  count: number
+): Promise<string[]> => {
+  if (count > 0 || !jobIds.length || !(await tableExists(databaseName, tableName, region))) return [];
+  const result = await runAthenaQuery(
+    buildRawTimestampSampleSql(tableName, jobIds, fileOperations, column),
+    databaseName,
+    region,
+    outputLocation
+  );
+  return result.rows.map((r) => r['raw_ts'] ?? '(null)');
+};
+
 // ---------------------------------------------------------------------------
 // Pending raw-data tail counts — folded into dry-run so its numbers agree
 // with what fetch-records would actually return for the same scope. Uncapped
@@ -1625,6 +1649,23 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
           `pendingCounts:{csvUpdate:${pendingCsvUpdate},csvDelete:${pendingCsvDelete},jsonDelete:${pendingJsonDelete},jsonUpdate:${pendingJsonUpdate}} ` +
           `final:{update:${update},delete:${del},total:${total}}`
         );
+
+        // ponytail: temporary — only fires for a zero count that still has
+        // pending job ids, so it's silent on every object except the one
+        // actually under investigation.
+        const [csvUpdateSample, csvDeleteSample, jsonDeleteSample, jsonUpdateSample] = await Promise.all([
+          sampleRawTimestampsIfZero(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['updates'], 'SystemModstamp', pendingCsvUpdate),
+          sampleRawTimestampsIfZero(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], 'SystemModstamp', pendingCsvDelete),
+          sampleRawTimestampsIfZero(databaseName, region, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, 'SystemModstamp', pendingJsonDelete),
+          sampleRawTimestampsIfZero(databaseName, region, outputLocation, rawJsonDeltaTable, pending.jsonDeltaJobIds, null, 'lastmodifieddate', pendingJsonUpdate),
+        ]);
+        if (csvUpdateSample.length || csvDeleteSample.length || jsonDeleteSample.length || jsonUpdateSample.length) {
+          logger.info(
+            `[dry-run] ${t.objectApiName} | zero-count raw samples (window was ${countWindow.startDate}..${countWindow.endDate}) ` +
+            `csvUpdate:${JSON.stringify(csvUpdateSample)} csvDelete:${JSON.stringify(csvDeleteSample)} ` +
+            `jsonDelete:${JSON.stringify(jsonDeleteSample)} jsonUpdate:${JSON.stringify(jsonUpdateSample)}`
+          );
+        }
 
         return {
           objectApiName: t.objectApiName,
