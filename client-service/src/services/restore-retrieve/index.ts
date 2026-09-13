@@ -860,7 +860,19 @@ const retrieveRecords = async (
   // Pending (not-yet-compressed) raw_data tail — resolved and re-queried on
   // EVERY call, including replay pages (see the block comment above
   // runRawQuery/runChunkedRaw for why that is the right tradeoff here).
-  const pending = await getPendingCompressionJobIds(params.backupConfigId, params.objectApiName);
+  //
+  // hudi/delta existence is checked up front via a cheap Glue GetTable call
+  // rather than firing the full Athena SELECT and catching TABLE_NOT_FOUND —
+  // a brand-new config with no compression run yet would otherwise pay a
+  // full StartQueryExecution+poll round trip (700ms-1s+) just to learn what
+  // this single metadata call already answers in a fraction of the time, and
+  // avoids competing for Athena's per-account query concurrency with queries
+  // that actually have data to return.
+  const [pending, hudiExists, deltaExists] = await Promise.all([
+    getPendingCompressionJobIds(params.backupConfigId, params.objectApiName),
+    tableExists(databaseName, hudiTable, region),
+    tableExists(databaseName, deltaTable, region),
+  ]);
 
   // Archival never contributes here — pending.csvJobIds is always empty for
   // it (archival-v2 writes only inserts, excluded entirely; see
@@ -868,12 +880,16 @@ const retrieveRecords = async (
   // archival configs without needing an isArchival special-case.
   const [main, deleted, rawCsvSnapshot, rawCsvDeleted, rawJsonDeleted, rawJsonDelta] =
     await Promise.all([
-      run('main', () =>
-        changed
-          ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
-          : buildHudiEntireSql(hudiTable, sql)
-      ),
-      runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable, region),
+      !hudiExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('main', () =>
+            changed
+              ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
+              : buildHudiEntireSql(hudiTable, sql)
+          ),
+      !deltaExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable, region),
       // Updates only, never inserts — see the raw-table header on the
       // backup-service side for why (an inserts folder can be an entire
       // first-time full sync, not the small bounded tail this assumes).
@@ -934,7 +950,7 @@ const retrieveRecords = async (
       .map(({ record }) => record['Id'])
       .filter(Boolean);
     const deltaRows: Record<string, string>[] = [];
-    if (recordIds.length) {
+    if (recordIds.length && deltaExists) {
       const deltas = await run('deltas', () =>
         buildWindowDeltasSql(deltaTable, recordIds, windowSql)
       );
@@ -1698,7 +1714,15 @@ const fetchDiffBlock = async (
   // dryRunDiff is BACKUP-configs-only (archival is rejected in dryRunDiff
   // itself), so pending.csvJobIds here is always a schedule/bulk job, never
   // archival — no isArchival special-case needed.
-  const pending = await getPendingCompressionJobIds(params.backupConfigId, target.objectApiName);
+  //
+  // hudi/delta existence checked up front via a cheap Glue GetTable call —
+  // same reasoning as retrieveRecords: skips a full Athena StartQueryExecution
+  // + poll round trip for a config with no compression run yet.
+  const [pending, hudiExists, deltaExists] = await Promise.all([
+    getPendingCompressionJobIds(params.backupConfigId, target.objectApiName),
+    tableExists(databaseName, hudiTable, region),
+    tableExists(databaseName, deltaTable, region),
+  ]);
 
   // DELETED_ONLY asks for exactly the records the vault holds ONLY as a DELETE
   // delta, so the main Hudi query is skipped rather than filtered — a deleted
@@ -1706,7 +1730,9 @@ const fetchDiffBlock = async (
   // compressed delta table) are folded in the same way.
   if (target.deletedOnly) {
     const [deleted, rawCsvDeleted, rawJsonDeleted] = await Promise.all([
-      run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
+      !deltaExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
       runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
         buildRawDeletedSql(rawCsvTable, chunk, sql)
       ),
@@ -1731,7 +1757,9 @@ const fetchDiffBlock = async (
   // for the same Id — same precedence rules retrieveRecords applies.
   if (!changed) {
     const [main, rawCsvSnapshot, rawCsvDeleted, rawJsonDeleted] = await Promise.all([
-      run('main', () => buildHudiEntireSql(hudiTable, sql)),
+      !hudiExists
+        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+        : run('main', () => buildHudiEntireSql(hudiTable, sql)),
       runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
         buildRawSnapshotSql(rawCsvTable, chunk, ['updates'], sql)
       ),
@@ -1762,8 +1790,12 @@ const fetchDiffBlock = async (
   // pending snapshots first, then Hudi (with pending-deleted ids removed),
   // then the compressed DELETE-delta snapshots, then pending deletes.
   const [main, deleted, rawCsvSnapshot, rawCsvDeleted, rawJsonDeleted, rawJsonDelta] = await Promise.all([
-    run('main', () => buildHudiChangedSql(hudiTable, deltaTable, windowSql)),
-    run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
+    !hudiExists
+      ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+      : run('main', () => buildHudiChangedSql(hudiTable, deltaTable, windowSql)),
+    !deltaExists
+      ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
+      : run('deleted', () => buildDeletedDeltaSql(deltaTable, sql)),
     runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
       buildRawSnapshotSql(rawCsvTable, chunk, ['updates'], sql)
     ),
@@ -1805,7 +1837,7 @@ const fetchDiffBlock = async (
     .map(({ record }) => record['Id'])
     .filter(Boolean);
   const deltaRows: Record<string, string>[] = [];
-  if (recordIds.length) {
+  if (recordIds.length && deltaExists) {
     const deltas = await run('deltas', () => buildWindowDeltasSql(deltaTable, recordIds, windowSql));
     deltaRows.push(...deltas.rows);
   }
