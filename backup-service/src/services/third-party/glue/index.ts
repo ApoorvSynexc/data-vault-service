@@ -642,7 +642,13 @@ const ensureRawFormatTable = async (params: {
       cols.map((c) => `${c.Name}:${c.Type}`).join(',');
     if (
       signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns) &&
-      Table?.Parameters?.['projection.enabled'] === 'true'
+      Table?.Parameters?.['projection.enabled'] === 'true' &&
+      // Column signature alone misses a partition-projection value change
+      // (e.g. widening the operation enum) — that lives in table Parameters,
+      // not StorageDescriptor.Columns, so it must be compared explicitly or a
+      // code-level enum change would silently never reach an already-created
+      // table.
+      Table?.Parameters?.['projection.operation.values'] === projectionParams['projection.operation.values']
     ) {
       logger.info(`[glue] raw ${classification} table already up to date | table:${tableName}`);
       return false;
@@ -675,12 +681,16 @@ const ensureRawFormatTable = async (params: {
   return true;
 };
 
-// Full-row CSV table (schedule/bulk backups only — never archival, which is
-// inserts-only). Only ever partitioned over 'updates'/'deletes' — a schedule
-// backup's "update" row is a complete row (classified by timestamp, not a
-// diff), so it is a snapshot exactly like an insert would be, just never an
-// actual insert.
-const CSV_OPERATIONS: RawTableOperations = { kind: 'enum', values: ['updates', 'deletes'] };
+// Full-row CSV table (schedule/bulk backups only — never archival, which has
+// its own inserts-only table). Partitioned over 'updates'/'deletes'/'inserts':
+// a schedule backup's "update" row is already a complete row (classified by
+// timestamp, not a diff), same as an insert — both are full-field snapshots.
+// 'inserts' is included so a record's very first full sync (exportFirstTime
+// writes ENTIRELY here — see schedule/backup/index.ts) stays reachable as a
+// base-row lookup for reconstructing a realtime diff when nothing has been
+// compressed yet (client-service's fetch-records/dry-run-diff), even though
+// the "changed" listing itself still hard-filters to updates/deletes only.
+const CSV_OPERATIONS: RawTableOperations = { kind: 'enum', values: ['updates', 'deletes', 'inserts'] };
 
 export const ensureRawCsvTable = async (params: IEnsureRawTableParams): Promise<boolean> => {
   const columns = await resolveMainTableColumns(params.destConfig, params);
