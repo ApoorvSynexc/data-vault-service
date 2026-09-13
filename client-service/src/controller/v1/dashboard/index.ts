@@ -90,11 +90,8 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   }
 };
 
-const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> => {
-  const userId = req.user!.userId;
-  const module = req.params.module as 'backup' | 'archival' | 'restore';
-
-  const { items } = await getBackupJobsByUser(userId, { limit: 10 });
+const getLastNBackupJobs = async (userId: string, limit: number) => {
+  const { items } = await getBackupJobsByUser(userId, { limit });
 
   const backupConfigMapping: Record<string, object> = {};
   for (let index = 0; index < items.length; index++) {
@@ -116,7 +113,28 @@ const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> =>
     }
   }
 
-  makeResponse(req, res, 200, true, 'fetch', items);
+  return items;
+};
+
+const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> => {
+  const userId = req.user!.userId;
+  const module = req.params.module as 'backup' | 'archival' | 'restore';
+
+  switch (module) {
+    case 'backup': {
+      const jobs = await getLastNBackupJobs(userId, 10);
+      return makeResponse(req, res, 200, true, 'fetch', jobs);
+    }
+    case 'archival': {
+      return makeResponse(req, res, 200, true, 'fetch',);
+    }
+    case 'restore': {
+      return makeResponse(req, res, 200, true, 'fetch');
+    }
+    default:
+      return makeResponse(req, res, 400, false, 'params_required');
+  }
+
 };
 
 const overviewV2Handler = async (req: IRequest, res: IResponse): Promise<void> => {
