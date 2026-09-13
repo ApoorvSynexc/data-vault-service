@@ -14,23 +14,74 @@ interface Create360AccountResult {
   sf_secret: string;
 }
 
-// The org-derived key/IV scheme the 360 Data Craft API uses to encrypt its response:
-// key = first 16 chars of the Salesforce orgId, iv = first 16 chars of the reversed
-// orgId. Both halves come out to exactly 16 bytes for a standard 15/18-char orgId,
-// giving AES-128-CBC a valid key + IV — this is specific to this vendor's protocol,
-// unrelated to this service's own ENCRYPTION_KEY-based envelope scheme.
+interface GetSetupResponseApiResponse {
+  status: string;
+  message: string;
+  token: string;
+}
+
+interface SetupPaymentInput {
+  orgId: string;
+  productName: string;
+  // PHP token from createPaymentAccount, or the `token` returned by the previous
+  // setupPayment call — this API rotates it on every call (see setupPayment below).
+  token: string;
+  // sf_secret from createPaymentAccount's decrypted result: "<16-char iv>:<16-char key>".
+  sfSecret: string;
+  // The connected Salesforce org's own REST endpoint, e.g.
+  // "https://<org>.my.salesforce.com/services/apexrest/DataCraftRest" — differs per
+  // org (and sandbox vs production), so the caller supplies it rather than this
+  // module hardcoding one.
+  salesforceEndpoint: string;
+  // Plaintext org/usage info to report (storage used, edition, org type, admin
+  // contact, etc.) — shaped by the caller, encrypted here before sending.
+  orgInfo: Record<string, unknown>;
+}
+
+interface SetupPaymentResult {
+  data: Record<string, unknown>;
+  // Rotated PHP token — persist this and use it for the *next* call, not the one
+  // that was just passed in.
+  token: string;
+}
+
+// Shared AES-128-CBC primitive behind both of this vendor's key schemes: key/iv are
+// always 16-char UTF-8 strings (16 bytes = a valid AES-128 key/IV) and ciphertext is
+// base64. Only how the key/iv are derived differs per call — see callers below.
+const aesCbc128Encrypt = (key: string, iv: string, plaintext: string): string => {
+  const cipher = crypto.createCipheriv('aes-128-cbc', Buffer.from(key, 'utf8'), Buffer.from(iv, 'utf8'));
+  return Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]).toString('base64');
+};
+
+const aesCbc128Decrypt = (key: string, iv: string, encryptedBase64: string): string => {
+  const decipher = crypto.createDecipheriv('aes-128-cbc', Buffer.from(key, 'utf8'), Buffer.from(iv, 'utf8'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedBase64.replace(/\s/g, ''), 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
+};
+
+// The org-derived key/IV scheme the 360 Data Craft API uses to encrypt Create360Account's
+// response: key = first 16 chars of the Salesforce orgId, iv = first 16 chars of the
+// reversed orgId. Both halves come out to exactly 16 bytes for a standard 15/18-char
+// orgId — specific to this one handshake call, unrelated to sf_secret below.
 const decryptPayload = (orgId: string, encryptedBase64: string): string => {
   if (orgId.length < 16) {
     throw new Error(`Create360Account: orgId "${orgId}" is shorter than 16 characters`);
   }
   const key = orgId.substring(0, 16);
   const iv = orgId.split('').reverse().join('').substring(0, 16);
+  return aesCbc128Decrypt(key, iv, encryptedBase64);
+};
 
-  const decipher = crypto.createDecipheriv('aes-128-cbc', Buffer.from(key, 'utf8'), Buffer.from(iv, 'utf8'));
-  return Buffer.concat([
-    decipher.update(Buffer.from(encryptedBase64.replace(/\s/g, ''), 'base64')),
-    decipher.final(),
-  ]).toString('utf8');
+// sf_secret (returned by createPaymentAccount) is "<16-char iv>:<16-char key>" — the
+// key/iv pair used to encrypt/decrypt every subsequent request/response body for this org.
+const parseSfSecret = (sfSecret: string): { key: string; iv: string } => {
+  const [ivPart, keyPart] = sfSecret.split(':');
+  if (!ivPart || !keyPart || ivPart.length < 16 || keyPart.length < 16) {
+    throw new Error('setupPayment: invalid sf_secret, expected "<16-char iv>:<16-char key>"');
+  }
+  return { iv: ivPart.substring(0, 16), key: keyPart.substring(0, 16) };
 };
 
 // httpRequest throws "HTTP Error <status>: <raw body>" for non-2xx responses — the
@@ -60,6 +111,7 @@ const createPaymentAccount = async (orgId: string, userId: string): Promise<Crea
         user_id: userId,
       }),
     });
+    console.log({response})
   } catch (err: any) {
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'Create360Account request failed');
   }
@@ -75,5 +127,53 @@ const createPaymentAccount = async (orgId: string, userId: string): Promise<Crea
   return result;
 };
 
-export { createPaymentAccount };
-export type { Create360AccountResult };
+// Reports the connected Salesforce org's setup/usage info to the vendor and returns
+// its subscription status (e.g. { Success: { orgId, status, ExpiryDate } }). Every
+// call rotates the PHP auth token — the caller must persist result.token and use it
+// for the next call instead of the one just passed in.
+const setupPayment = async ({
+  orgId,
+  productName,
+  token,
+  sfSecret,
+  salesforceEndpoint,
+  orgInfo,
+}: SetupPaymentInput): Promise<SetupPaymentResult> => {
+  const { key, iv } = parseSfSecret(sfSecret);
+  const encryptedMessage = aesCbc128Encrypt(key, iv, JSON.stringify(orgInfo));
+
+  let response: GetSetupResponseApiResponse;
+  try {
+    response = await httpRequest<GetSetupResponseApiResponse>({
+      url: `${PAYMENT_API_BASE_URL}/getSetupResponse`,
+      method: 'POST',
+      headers: {
+        orgId,
+        'product-name': productName,
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        endpoint: salesforceEndpoint,
+        message: encryptedMessage,
+      }),
+    });
+    console.log({response})
+  } catch (err: any) {
+    throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
+  }
+
+  if (response?.status !== 'Success' || !response.message || !response.token) {
+    throw new Error(`getSetupResponse failed for org ${orgId}`);
+  }
+
+  const decrypted = aesCbc128Decrypt(key, iv, response.message);
+
+  logger.info(`[payment] setup response fetched for org ${orgId}`);
+  return {
+    data: JSON.parse(decrypted) as Record<string, unknown>,
+    token: response.token,
+  };
+};
+
+export { createPaymentAccount, setupPayment };
+export type { Create360AccountResult, SetupPaymentInput, SetupPaymentResult };
