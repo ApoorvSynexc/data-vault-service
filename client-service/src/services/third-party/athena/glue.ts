@@ -17,6 +17,13 @@ const getGlueClient = (region: string): GlueClient => {
   return client;
 };
 
+// A table, once created, is never un-created — so a `true` result is cached
+// forever. A `false` result is cached only briefly: the moment compression
+// first runs for an object, existence flips false→true, and a fetch-records
+// call landing right after that must see it, not a stale miss.
+const NOT_FOUND_TTL_MS = 30_000;
+const existsCache = new Map<string, { exists: boolean; checkedAt: number }>();
+
 // Whether a Glue table exists — checked before counting records so an object
 // that simply hasn't been compressed yet (no backup job has run for it) reads
 // as "0 records", not an Athena failure, while a genuine Glue/Athena error
@@ -28,11 +35,19 @@ export const tableExists = async (
   tableName: string,
   region: string
 ): Promise<boolean> => {
+  const cacheKey = `${region}:${databaseName}:${tableName}`;
+  const cached = existsCache.get(cacheKey);
+  if (cached && (cached.exists || Date.now() - cached.checkedAt < NOT_FOUND_TTL_MS)) {
+    return cached.exists;
+  }
+
   try {
     await getGlueClient(region).send(new GetTableCommand({ DatabaseName: databaseName, Name: tableName }));
+    existsCache.set(cacheKey, { exists: true, checkedAt: Date.now() });
     return true;
   } catch (err: any) {
     if (err instanceof EntityNotFoundException || err?.name === 'EntityNotFoundException') {
+      existsCache.set(cacheKey, { exists: false, checkedAt: Date.now() });
       return false;
     }
     logger.error(`[glue] tableExists failed | db:${databaseName} table:${tableName} err:${err?.name}: ${err?.message}`);
