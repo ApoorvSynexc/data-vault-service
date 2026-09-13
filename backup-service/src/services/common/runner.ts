@@ -423,6 +423,11 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       throw new Error(`Restore job ${restoreJobId}: parent restore ${restoreId} not found`);
     }
 
+    await updateRestore({
+      restoreId,
+      status: RESTORE_JOB_STATUS.rollbackInProgress,
+    });
+
     const restoreSource = source as unknown as IRestoreJobSource;
     const restoreDestination = destination as unknown as IRestoreJobDestination;
 
@@ -442,7 +447,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
     });
     await updateRestore({
       restoreId,
-      status: result === 'FAILED' ? 'FAILED' : 'SUCCESS',
+      status: result === 'FAILED' ? 'FAILED' : RESTORE_JOB_STATUS.rollbackCompleted,
     });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
