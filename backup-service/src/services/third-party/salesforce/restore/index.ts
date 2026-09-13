@@ -206,7 +206,7 @@ const restoreObjectData = async (
     `[Restore] Found ${keys.length} backed-up data files for object ${objectName}, restoreJobId=${restoreJobId}`
   );
 
-  const successfulResultsPath = `${baseCsvFilePath}/rollback/${objectName}/delete/`;
+  const successfulResultsPath = `${baseCsvFilePath}/rollback/${objectName}/delete`;
   const submittedJobIds: string[] = [];
   let header: string | null = null;
   let chunk: CsvChunk | null = null;
