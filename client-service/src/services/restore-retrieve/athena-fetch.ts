@@ -821,6 +821,55 @@ export const buildRawJsonDeltaSql = (
 };
 
 // ---------------------------------------------------------------------------
+// Orphan base-row lookups — point-lookups by Id, no window. A pending
+// realtime UPDATE (`_raw_json_delta`) is a field-diff only, never a full
+// row; when it has no base row anywhere in the already-fetched,
+// window-scoped result, the caller uses these to go get a real one instead
+// of leaving every untouched column blank.
+// ---------------------------------------------------------------------------
+
+/**
+ * Hudi's CURRENT full-row state for a specific set of Ids, no window. Hudi
+ * holds one row per Id regardless of whether that Id's change falls inside
+ * any particular window, so this is the right source when the object HAS
+ * been compressed but this Id's only evidence of change is a not-yet-
+ * compressed realtime diff — compression simply hasn't caught up with it yet,
+ * so it never showed up in the window-scoped Hudi query.
+ */
+export const buildHudiByIdsSql = (hudiTable: string, ids: string[], columnNames: string[]): string => {
+  const cols = projectionColumns(columnNames).map(quoteCol).join(', ');
+  return (
+    `SELECT ${cols}, 'UPDATE' AS ${quoteCol(OP)} FROM "${hudiTable}"` +
+    whereClause([recordIdsWhere(ids)], 'WHERE')
+  );
+};
+
+/**
+ * The most recent full-row CSV snapshot for a specific set of Ids, out of
+ * every still-pending (not yet compressed) BULK job for this object — used
+ * when Hudi doesn't exist yet, so there is no compressed base to fall back
+ * to. Searches BOTH `inserts` (the object's very first full sync — see
+ * backup-service's exportFirstTime) and `updates` (a later full-row
+ * snapshot, if any incremental run has happened since): either is a
+ * complete row, never a diff, so whichever is newest per Id wins via the
+ * same ROW_NUMBER-newest-wins idiom buildDeletedDeltaBody uses.
+ */
+export const buildRawCsvBaseByIdsSql = (
+  rawCsvTable: string,
+  jobIds: string[],
+  ids: string[],
+  columnNames: string[]
+): string => {
+  const cols = projectionColumns(columnNames).map(quoteCol).join(', ');
+  return (
+    `WITH ranked AS (SELECT ${cols}, ROW_NUMBER() OVER (PARTITION BY ${quoteCol(ID)} ` +
+    `ORDER BY ${asInstant(quoteCol(SYSTEM_MODSTAMP))} DESC) AS rn FROM "${rawCsvTable}"` +
+    whereClause([backupJobIdWhere(jobIds), `operation IN ('inserts', 'updates')`, recordIdsWhere(ids)], 'WHERE') +
+    `) SELECT ${cols}, 'UPDATE' AS ${quoteCol(OP)} FROM ranked WHERE rn = 1`
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Raw-table counts — folded into the dry-run endpoint's Hudi/Delta counts.
 // ---------------------------------------------------------------------------
 
@@ -852,24 +901,6 @@ export const buildRawSnapshotCountSql = (
     ],
     'WHERE'
   );
-
-// ponytail: temporary diagnostic for the "count 0 despite scanned bytes"
-// investigation — samples the raw timestamp text with no window filter, so a
-// format Trino's asInstant chain can't parse (e.g. a non-ISO offset) shows up
-// directly instead of silently reading as "outside the window". Remove once
-// the raw pending timestamp format is confirmed compatible.
-export const buildRawTimestampSampleSql = (
-  rawTable: string,
-  jobIds: string[],
-  fileOperations: string[] | null,
-  column: string
-): string =>
-  `SELECT ${quoteCol(column)} AS raw_ts FROM "${rawTable}"` +
-  whereClause(
-    [backupJobIdWhere(jobIds), fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null],
-    'WHERE'
-  ) +
-  ' LIMIT 3';
 
 export const buildRawJsonDeltaCountSql = (
   rawJsonDeltaTable: string,
@@ -1192,6 +1223,28 @@ if (require.main === module) {
   assert.ok(rawJsonDelta.includes(`from_iso8601_timestamp('${START}')`));
   const rawJsonDeltaNoWindow = buildRawJsonDeltaSql('t_raw_json_delta', jobIds, {});
   assert.ok(!rawJsonDeltaNoWindow.includes('from_iso8601_timestamp'), 'ENTIRE / archival has no window');
+
+  // ── Orphan base-row lookups: point-lookups by Id, no window ────────────────
+  const hudiByIds = buildHudiByIdsSql('t_hudi', ['001', '002'], ['Name']);
+  assert.strictEqual(
+    hudiByIds,
+    `SELECT "Id", "Name", "LastModifiedDate", 'UPDATE' AS "dv_operation" FROM "t_hudi" WHERE ("Id" IN ('001', '002'))`
+  );
+  assert.ok(!hudiByIds.includes('from_iso8601_timestamp'), 'no window on a point lookup by Id');
+  assert.ok(!hudiByIds.includes('BETWEEN'), 'no window on a point lookup by Id');
+  assert.ok(hudiByIds.includes(`"Id" IN ('001', '002')`));
+
+  const rawCsvBase = buildRawCsvBaseByIdsSql('t_raw_csv', jobIds, ['001'], ['Name']);
+  assert.ok(rawCsvBase.startsWith('WITH ranked AS (SELECT "Id", "Name", "LastModifiedDate", ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY'));
+  assert.ok(rawCsvBase.includes(`backupjobid IN ('job1', 'job2')`));
+  assert.ok(rawCsvBase.includes(`operation IN ('inserts', 'updates')`), 'searches both the initial full sync and any later full-row snapshot');
+  assert.ok(rawCsvBase.includes(`"Id" IN ('001')`));
+  assert.ok(rawCsvBase.includes('WHERE rn = 1'), 'newest per Id wins');
+  assert.ok(!rawCsvBase.includes('"CreatedDate"'), 'never windows/orders by CreatedDate for a raw pending row');
+
+  // Injection defence carries over to the new builders too.
+  assert.ok(buildHudiByIdsSql('t', ["i'1"], ['Name']).includes(`'i''1'`));
+  assert.ok(buildRawCsvBaseByIdsSql('t', ["j'1"], ['i1'], ['Name']).includes(`'j''1'`));
 
   const rawSnapshotCount = buildRawSnapshotCountSql('t_raw_csv', jobIds, ['updates']);
   assert.strictEqual(rawSnapshotCount, `SELECT COUNT(*) AS cnt FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND (operation IN ('updates'))`);
