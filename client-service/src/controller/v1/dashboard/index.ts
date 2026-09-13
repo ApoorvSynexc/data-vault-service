@@ -122,7 +122,7 @@ const getLastNRestoreJobs = async (userId: string, limit: number) => {
 
 const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
-  const module = req.params.module as 'backup' | 'archival' | 'restore';
+  const module = req.query.module as 'backup' | 'archival' | 'restore';
 
   switch (module) {
     case 'backup': {
@@ -145,7 +145,7 @@ const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> =>
 
 const overviewV2Handler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
-  const module = req.params.module as 'backup' | 'archival' | 'restore';
+  const module = req.query.module as 'backup' | 'archival' | 'restore';
 
   switch (module) {
     case 'backup': {
