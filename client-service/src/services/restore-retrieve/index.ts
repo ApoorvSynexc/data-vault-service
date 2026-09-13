@@ -1653,7 +1653,11 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
           ]);
           const pendingArchivalNew = archivalInsertIds.size - archivalAlreadyInHudi;
 
-          return { objectApiName: t.objectApiName, ok: true, count: count - removedActuallyInHudi + pendingArchivalNew };
+          return {
+            objectApiName: t.objectApiName,
+            ok: true,
+            count: count - removedActuallyInHudi + pendingArchivalNew,
+          };
         } catch (e) {
           return { objectApiName: t.objectApiName, ok: false, count: 0, error: errorMessage(e) };
         }
