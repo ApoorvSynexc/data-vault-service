@@ -673,15 +673,20 @@ export const chunkJobIds = (
 const backupJobIdWhere = (jobIds: string[]): string => `backupjobid IN (${idList(jobIds)})`;
 
 /**
- * Full-record rows out of a raw CSV or raw JSON-snapshot table. UPDATES AND
- * DELETES ONLY, never inserts — an "inserts" folder can hold an object's
- * entire first-time full sync, which is the opposite of the small, bounded
- * tail this feature assumes; a newly created record simply isn't visible
- * here until the next Spark compression run.
+ * Full-record rows out of a raw CSV or raw JSON-snapshot table. For a BACKUP
+ * config, UPDATES AND DELETES ONLY, never inserts — an "inserts" folder can
+ * hold an object's entire first-time full sync, which is the opposite of the
+ * small, bounded tail this feature assumes; a newly created record simply
+ * isn't visible here until the next Spark compression run. An ARCHIVAL
+ * config is the one exception: archival-v2 only ever writes `inserts/`
+ * (never updates/deletes), and an archival run is a bounded, policy-scoped
+ * batch rather than an open-ended full sync, so its ENTIRE listing passes
+ * `['inserts']` here deliberately — see buildRawSnapshotSql.
  *
- *   - raw_csv, fileOperations ['updates'] or ['deletes'] — a CSV "update" row
- *     is a complete row (schedule backups classify by comparing timestamps,
- *     not a diff), so it is a snapshot, just never an inserted one.
+ *   - raw_csv, fileOperations ['updates'] or ['deletes'] (BACKUP) or
+ *     ['inserts'] (ARCHIVAL) — either shape is a complete row (schedule
+ *     backups classify by comparing timestamps, not a diff; archival never
+ *     writes anything else), so it is a snapshot regardless of which folder.
  *   - raw_json_snapshot, fileOperations null — this table has NO `operation`
  *     column at all; it is dedicated to realtime DELETE events only (a
  *     realtime UPDATE is a sparse {prev,new} diff, handled separately by
@@ -730,7 +735,9 @@ const buildRawFullRowSql = (
   );
 };
 
-// raw_csv only — fileOperations is always ['updates'] here (see file header).
+// raw_csv only — fileOperations is ['updates'] for a BACKUP config's pending
+// snapshot rows, or ['inserts'] for an ARCHIVAL config's ENTIRE listing (see
+// file header above buildRawFullRowSql).
 export const buildRawSnapshotSql = (
   rawTable: string,
   jobIds: string[],
