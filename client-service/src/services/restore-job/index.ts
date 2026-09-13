@@ -337,6 +337,7 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
 interface RestoreJobStats {
   totalRestoreJobs: number;
   pendingRestore: number;
+  successRestore: number;
   failedRestore: number;
   // processedRecordCount already counts both successes and failures (matches
   // Salesforce Bulk API's numberRecordsProcessed semantics — see
@@ -356,6 +357,7 @@ const computeRestoreJobStats = async (query: {
 }): Promise<RestoreJobStats> => {
   let totalRestoreJobs = 0;
   let pendingRestore = 0;
+  let successRestore = 0;
   let failedRestore = 0;
   let totalProcessedRecordCount = 0;
   let totalFailedRecordCount = 0;
@@ -379,9 +381,11 @@ const computeRestoreJobStats = async (query: {
 
     for (const job of jobs) {
       totalRestoreJobs++;
-      if (job.status === 'PENDING') {
+      if (job.status === JOB_STATUS.pending) {
         pendingRestore++;
-      } else if (job.status === 'FAILED') {
+      } else if (job.status === JOB_STATUS.success) {
+        successRestore++;
+      } else if (job.status === JOB_STATUS.failed) {
         failedRestore++;
       }
 
@@ -395,8 +399,39 @@ const computeRestoreJobStats = async (query: {
   return {
     totalRestoreJobs,
     pendingRestore,
+    successRestore,
     failedRestore,
     successRecordCount: totalProcessedRecordCount - totalFailedRecordCount,
+  };
+};
+
+interface IRestoreOverview {
+  totalRecords: number;
+  totalSize: number;
+  pendingStatus: number;
+  successStatus: number;
+  failedStatus: number;
+}
+
+// Dashboard overview for restore jobs — same shape as backup-config's
+// getBackupOverview, built on top of computeRestoreJobStats instead of a
+// separate query+tally (that function already does the single paginated
+// userId-index pass this needs). There's no real size tracking for restores,
+// so totalSize is a records-based estimate (records * 2), same as backup
+// config's real sizeInBytes stands in for elsewhere.
+const getRestoreOverview = async (userId: string): Promise<IRestoreOverview> => {
+  const stats = await computeRestoreJobStats({
+    indexName: 'userId-index',
+    keyName: 'userId',
+    keyValue: userId,
+  });
+
+  return {
+    totalRecords: stats.successRecordCount,
+    totalSize: stats.successRecordCount * 2,
+    pendingStatus: stats.pendingRestore,
+    successStatus: stats.successRestore,
+    failedStatus: stats.failedRestore,
   };
 };
 
@@ -1279,5 +1314,6 @@ export {
   getRestoreJobsByUserId,
   getRestoreJobsByRestoreId,
   computeRestoreJobStats,
+  getRestoreOverview,
   tiggerRestoreJob,
 };
