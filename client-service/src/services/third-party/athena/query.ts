@@ -6,13 +6,24 @@ import {
   GetQueryResultsCommand,
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
-import { AWS_REGION, AWS_ATHENA_ROLE_ARN } from '../../../constant';
+import { AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { logger } from '../../../middlewares';
 
-// Keyless: no static access/secret key, ever — the SDK's default credential
-// provider chain resolves to whatever IAM role the running environment has
-// (ECS task role, EC2 instance role, etc.).
-const athena = new AthenaClient({ region: AWS_REGION });
+// One AthenaClient per region, not one global client: Athena is a regional
+// service, and a query must run in the same region as the client's own S3
+// bucket the Glue table's data lives in — never the platform's own default
+// region, which may not match. Keyless: no static access/secret key, ever —
+// the SDK's default credential provider chain resolves to whatever IAM role
+// the running environment has (ECS task role, EC2 instance role, etc.).
+const athenaClients = new Map<string, AthenaClient>();
+const getAthenaClient = (region: string): AthenaClient => {
+  let client = athenaClients.get(region);
+  if (!client) {
+    client = new AthenaClient({ region });
+    athenaClients.set(region, client);
+  }
+  return client;
+};
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check, then
 // poll on a 250ms→2s backoff ladder. These compressed Hudi/delta tables are
@@ -48,6 +59,7 @@ const TERMINAL_STATES = new Set<QueryExecutionState>([
 const startQuery = async (
   sql: string,
   database: string,
+  region: string,
   outputLocation?: string
 ): Promise<string> => {
   const input: StartQueryExecutionCommandInput = {
@@ -58,7 +70,7 @@ const startQuery = async (
 
   logger.info(`[athena] StartQueryExecution request | ${JSON.stringify(input)}`);
 
-  const response = await athena.send(new StartQueryExecutionCommand(input));
+  const response = await getAthenaClient(region).send(new StartQueryExecutionCommand(input));
 
   logger.info(
     `[athena] StartQueryExecution response | queryExecutionId:${response.QueryExecutionId} ` +
@@ -74,7 +86,7 @@ const startQuery = async (
 
 // Polls Athena until the query reaches a terminal state or the timeout is exceeded.
 // Throws if the query fails, is cancelled, or times out.
-const waitForQuery = async (queryExecutionId: string): Promise<void> => {
+const waitForQuery = async (queryExecutionId: string, region: string): Promise<void> => {
   const started = Date.now();
   const deadline = started + QUERY_TIMEOUT_MS;
   let interval = POLL_INITIAL_MS;
@@ -85,7 +97,7 @@ const waitForQuery = async (queryExecutionId: string): Promise<void> => {
 
   while (Date.now() < deadline) {
     poll += 1;
-    const { QueryExecution } = await athena.send(
+    const { QueryExecution } = await getAthenaClient(region).send(
       new GetQueryExecutionCommand({ QueryExecutionId: queryExecutionId })
     );
 
@@ -144,6 +156,7 @@ export interface IQueryResult {
 // a capped read never drags the whole result set over the wire.
 const fetchQueryResults = async (
   queryExecutionId: string,
+  region: string,
   maxRows = Infinity
 ): Promise<IQueryResult> => {
   const columns: string[] = [];
@@ -154,7 +167,7 @@ const fetchQueryResults = async (
 
   do {
     page += 1;
-    const { ResultSet, NextToken, $metadata } = await athena.send(
+    const { ResultSet, NextToken, $metadata } = await getAthenaClient(region).send(
       new GetQueryResultsCommand({
         QueryExecutionId: queryExecutionId,
         NextToken: nextToken,
@@ -207,9 +220,10 @@ const fetchQueryResults = async (
  */
 export const fetchStoredResults = async (
   queryExecutionId: string,
+  region: string,
   maxRows?: number
 ): Promise<IQueryResult> => {
-  const result = await fetchQueryResults(queryExecutionId, maxRows);
+  const result = await fetchQueryResults(queryExecutionId, region, maxRows);
   logger.info(
     `[athena] result replay | queryExecutionId:${queryExecutionId} rows:${result.rows.length}`
   );
@@ -218,26 +232,30 @@ export const fetchStoredResults = async (
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
 // database must be a Glue Catalog database name (e.g. the backupConfigId).
+// `region` is the client's own S3 bucket region — Athena is regional, and a
+// query must run in the same region as the Glue table's underlying S3 data,
+// never the platform's own default region.
 // `outputLocation` is where Athena writes the result file (see startQuery).
 // `maxRows` caps how many rows are pulled back; the returned queryExecutionId
 // lets a later request replay the same rows via fetchStoredResults.
 export const runAthenaQuery = async (
   sql: string,
   database: string,
+  region: string,
   outputLocation?: string,
   maxRows?: number
 ): Promise<IQueryResult> => {
   logger.info(
-    `[athena] executing query | database:${database} outputLocation:${outputLocation ?? 'workgroup-default'} sql:${sql}`
+    `[athena] executing query | database:${database} region:${region} outputLocation:${outputLocation ?? 'workgroup-default'} sql:${sql}`
   );
 
-  const queryExecutionId = await startQuery(sql, database, outputLocation);
+  const queryExecutionId = await startQuery(sql, database, region, outputLocation);
 
   logger.info(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
 
-  await waitForQuery(queryExecutionId);
+  await waitForQuery(queryExecutionId, region);
 
-  const result = await fetchQueryResults(queryExecutionId, maxRows);
+  const result = await fetchQueryResults(queryExecutionId, region, maxRows);
 
   logger.info(
     `[athena] query complete | queryExecutionId:${queryExecutionId} rows:${result.rows.length}`
