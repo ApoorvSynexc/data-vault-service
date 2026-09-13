@@ -161,7 +161,12 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     // an object into one shared raw_data/<object>/ folder.
     const folder = operationToFolder(operation);
     const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.json`;
-    const csvBuffer = Buffer.from(JSON.stringify(filteredRecords), 'utf8');
+    // Newline-delimited JSON (one object per line), NOT a JSON array: Glue's
+    // JSON SerDe (org.openx.data.jsonserde.JsonSerDe, used by
+    // ensureRawJsonSnapshotTable/ensureRawJsonDeltaTable) parses each LINE of
+    // the file as one row's JSON object — a file starting with `[` fails to
+    // parse as a row at all, even with exactly one record inside.
+    const csvBuffer = Buffer.from(filteredRecords.map((r) => JSON.stringify(r)).join('\n'), 'utf8');
     const sizeInBytes = csvBuffer.length;
     const s3Path = await uploadToS3(destConfig, s3Key, csvBuffer);
 
