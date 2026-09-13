@@ -853,6 +853,24 @@ export const buildRawSnapshotCountSql = (
     'WHERE'
   );
 
+// ponytail: temporary diagnostic for the "count 0 despite scanned bytes"
+// investigation — samples the raw timestamp text with no window filter, so a
+// format Trino's asInstant chain can't parse (e.g. a non-ISO offset) shows up
+// directly instead of silently reading as "outside the window". Remove once
+// the raw pending timestamp format is confirmed compatible.
+export const buildRawTimestampSampleSql = (
+  rawTable: string,
+  jobIds: string[],
+  fileOperations: string[] | null,
+  column: string
+): string =>
+  `SELECT ${quoteCol(column)} AS raw_ts FROM "${rawTable}"` +
+  whereClause(
+    [backupJobIdWhere(jobIds), fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null],
+    'WHERE'
+  ) +
+  ' LIMIT 3';
+
 export const buildRawJsonDeltaCountSql = (
   rawJsonDeltaTable: string,
   jobIds: string[],
