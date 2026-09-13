@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { computeJobStats, getBackupConfigById, getBackupConfigCount, getBackupJobsByUser, getBackupOverview, getRestoreOverview } from '../../../services';
+import { computeJobStats, getBackupConfigById, getBackupConfigCount, getBackupJobsByUser, getBackupOverview, getRestoreJobsByUserId, getRestoreOverview } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 import { BACKUP_STATUS, STATUS } from '../../../constant';
 
@@ -90,8 +90,8 @@ const overviewHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   }
 };
 
-const getLastNBackupJobs = async (userId: string, limit: number) => {
-  const { items } = await getBackupJobsByUser(userId, { limit });
+const getLastNBackupJobs = async (userId: string, limit: number, type?: 'NORMAL' | 'ARCHIVAL') => {
+  const { items } = await getBackupJobsByUser(userId, { limit, type });
 
   const backupConfigMapping: Record<string, object> = {};
   for (let index = 0; index < items.length; index++) {
@@ -116,20 +116,26 @@ const getLastNBackupJobs = async (userId: string, limit: number) => {
   return items;
 };
 
+const getLastNRestoreJobs = async (userId: string, limit: number) => {
+  return getRestoreJobsByUserId(userId, { limit });
+};
+
 const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
   const module = req.params.module as 'backup' | 'archival' | 'restore';
 
   switch (module) {
     case 'backup': {
-      const jobs = await getLastNBackupJobs(userId, 10);
+      const jobs = await getLastNBackupJobs(userId, 10, 'NORMAL');
       return makeResponse(req, res, 200, true, 'fetch', jobs);
     }
     case 'archival': {
-      return makeResponse(req, res, 200, true, 'fetch',);
+      const jobs = await getLastNBackupJobs(userId, 10, 'ARCHIVAL');
+      return makeResponse(req, res, 200, true, 'fetch', jobs);
     }
     case 'restore': {
-      return makeResponse(req, res, 200, true, 'fetch');
+      const jobs = await getLastNRestoreJobs(userId, 10);
+      return makeResponse(req, res, 200, true, 'fetch', jobs);
     }
     default:
       return makeResponse(req, res, 400, false, 'params_required');

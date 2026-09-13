@@ -445,13 +445,20 @@ const getRestoreJobById = async (restoreJobId: string): Promise<IRestoreJob | nu
   return (result.Item as IRestoreJob) ?? null;
 };
 
-const getRestoreJobsByUserId = async (userId: string): Promise<IRestoreJob[]> => {
+const getRestoreJobsByUserId = async (
+  userId: string,
+  options?: { limit?: number }
+): Promise<IRestoreJob[]> => {
   const result = await docClient.send(
     new QueryCommand({
       TableName: RESTORE_JOB_TABLE,
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
       ExpressionAttributeValues: { ':uid': userId },
+      // userId-index's sort key is createdAt (see config/database) — newest first,
+      // capped to `limit` when the caller only wants recent jobs (e.g. a dashboard
+      // "last N" list) instead of the full history.
+      ...(options?.limit && { Limit: options.limit, ScanIndexForward: false }),
     })
   );
   return (result.Items as IRestoreJob[] | undefined) ?? [];
