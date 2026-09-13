@@ -115,6 +115,8 @@ const RESTORE_JOB_STATUS = {
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
+  rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
+  rollbackCompleted: 'ROLLBACK_COMPLETED',
   completed: 'COMPLETED',
   success: 'SUCCESS',
   failed: 'FAILED',
