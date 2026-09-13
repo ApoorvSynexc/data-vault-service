@@ -70,11 +70,23 @@ const startQuery = async (
 
   logger.info(`[athena] StartQueryExecution request | ${JSON.stringify(input)}`);
 
+  // Wall-clock around just the send() call, plus the SDK's own retry
+  // accounting ($metadata.attempts/totalRetryDelay) — together these tell
+  // apart "AWS was slow to respond" (elapsedMs high, attempts:1) from
+  // "the SDK silently retried/backed off" (totalRetryDelay accounts for most
+  // of elapsedMs) from "the request took long to leave this host" (elapsedMs
+  // high but AWS's own requestId/CloudTrail timing is short). requestId is
+  // already logged below — cross-reference it in CloudTrail for the
+  // server-side view.
+  const sendStartedAt = Date.now();
   const response = await getAthenaClient(region).send(new StartQueryExecutionCommand(input));
+  const sendElapsedMs = Date.now() - sendStartedAt;
 
   logger.info(
     `[athena] StartQueryExecution response | queryExecutionId:${response.QueryExecutionId} ` +
-    `requestId:${response.$metadata.requestId} httpStatusCode:${response.$metadata.httpStatusCode}`
+    `requestId:${response.$metadata.requestId} httpStatusCode:${response.$metadata.httpStatusCode} ` +
+    `sendElapsedMs:${sendElapsedMs} attempts:${response.$metadata.attempts ?? 'n/a'} ` +
+    `totalRetryDelayMs:${response.$metadata.totalRetryDelay ?? 'n/a'}`
   );
 
   if (!response.QueryExecutionId) {
