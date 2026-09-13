@@ -115,6 +115,14 @@ const waitForQuery = async (queryExecutionId: string, region: string): Promise<v
     if (TERMINAL_STATES.has(state)) {
       if (state !== QueryExecutionState.SUCCEEDED) {
         const reason = QueryExecution?.Status?.StateChangeReason ?? 'unknown';
+        // Logged here, not just embedded in the thrown error: a caller
+        // upstream (e.g. makeRunner's `run`) may match this message against
+        // /does not exist/i and swallow it as "table not compressed yet",
+        // which would otherwise hide a genuinely different failure (wrong
+        // region, permissions, a malformed query) behind a silent empty result.
+        logger.error(
+          `[athena] query ${state} | queryExecutionId:${queryExecutionId} region:${region} reason:${reason}`
+        );
         throw new Error(`[athena] query ${state} | reason: ${reason}`);
       }
       // Athena's own timing breakdown — the only way to tell "small data, slow
