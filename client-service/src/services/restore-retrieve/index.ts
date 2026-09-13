@@ -45,7 +45,8 @@ import {
   buildRawSnapshotCountSql,
   buildRawJsonDeltaCountSql,
   buildRawIdsSql,
-  buildRawTimestampSampleSql,
+  buildHudiByIdsSql,
+  buildRawCsvBaseByIdsSql,
 } from './athena-fetch';
 import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records-by-ids';
 import { getPendingCompressionJobIds } from './pending-jobs';
@@ -808,6 +809,14 @@ const synthesizeFromJsonDelta = (
   // back to it when the caller didn't already ask for (and get) it above.
   if (!record['LastModifiedDate']) record['LastModifiedDate'] = newest['change_time'] ?? '';
   record[OPERATION_FIELD] = 'UPDATE';
+  // ponytail: temporary — this path only runs for a record with NO base row
+  // found anywhere (Hudi lookup, raw_csv lookup, or the window-scoped
+  // result), which should now be rare. Logs exactly what was available to
+  // build from, so a still-missing requested field is diagnosable instead of
+  // silently blank. Remove once confirmed there's no remaining defect here.
+  logger.info(
+    `[synthesize] no base row for id:${record['Id']} | requestedColumns:${columns.join(',')} newFieldsKeys:${Object.keys(newFields).join(',')}`
+  );
   return { record, key: { lmd: record['LastModifiedDate'], id: record['Id'] } };
 };
 
@@ -824,6 +833,67 @@ const groupByRecordId = (rows: Record<string, string>[]): Map<string, Record<str
     else byRecord.set(id, [row]);
   }
   return byRecord;
+};
+
+/**
+ * Resolves a pending realtime UPDATE's orphan ids (no base row anywhere in
+ * the already-fetched, window-scoped block) to a real full row, instead of
+ * leaving it to synthesizeFromJsonDelta's diff-only, mostly-blank stand-in.
+ *
+ * Two sources, tried in order, each only for ids the previous one didn't
+ * resolve:
+ *   1. Hudi, by Id, no window — the object HAS been compressed, but this Id's
+ *      only evidence of change is the not-yet-compressed realtime diff, so it
+ *      never showed up in the window-scoped Hudi query. A direct lookup finds
+ *      its current full row regardless.
+ *   2. The most recent full-row raw_csv snapshot (inserts or updates) out of
+ *      this object's still-pending BULK jobs — used when Hudi doesn't exist
+ *      yet, so there is no compressed base at all.
+ *
+ * Whatever's still unresolved after both is returned so the caller can fall
+ * back to the existing diff-only synthesis for it — not a regression, just
+ * the same floor as today for a record with truly no full-row history.
+ *
+ * Found rows come back tagged OPERATION: 'UPDATE', the same shape a
+ * Hudi-sourced row already has — merging them into `block` before the
+ * existing deltaRows/undoWindowDeltas step is enough; no new merge logic is
+ * needed; that step already applies this record's json_delta rows on top of
+ * whatever's in `block`.
+ */
+const resolveOrphanBaseRows = async (
+  databaseName: string,
+  region: string,
+  outputLocation: string | undefined,
+  hudiTable: string,
+  hudiExists: boolean,
+  rawCsvTable: string,
+  csvJobIds: string[],
+  orphanIds: string[],
+  columns: string[]
+): Promise<{ found: IRankedRecord[]; unresolved: string[] }> => {
+  const remaining = new Set(orphanIds);
+  const found: IRankedRecord[] = [];
+  const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
+
+  const resolveFrom = async (sql: string): Promise<void> => {
+    const result = await runAthenaQuery(sql, databaseName, region, outputLocation);
+    for (const ranked of toRankedRows(result, columns, derived)) {
+      const id = ranked.record['Id'];
+      if (id && remaining.has(id)) {
+        found.push(ranked);
+        remaining.delete(id);
+      }
+    }
+  };
+
+  if (hudiExists && remaining.size) {
+    await resolveFrom(buildHudiByIdsSql(hudiTable, [...remaining], columns));
+  }
+  if (remaining.size && csvJobIds.length) {
+    await resolveFrom(buildRawCsvBaseByIdsSql(rawCsvTable, csvJobIds, [...remaining], columns));
+  }
+
+  return { found, unresolved: [...remaining] };
 };
 
 /**
@@ -1036,11 +1106,28 @@ const retrieveRecords = async (
       .map(({ record }) => record['Id'])
       .filter(Boolean)
   );
-  const synthesizedRanked = changed
-    ? [...groupByRecordId(rawJsonDelta.rows).entries()]
-        .filter(([recordId]) => !knownIds.has(recordId))
-        .map(([, rows]) => synthesizeFromJsonDelta(rows, columns))
+  const orphanEntries = changed
+    ? [...groupByRecordId(rawJsonDelta.rows).entries()].filter(([recordId]) => !knownIds.has(recordId))
     : [];
+  let synthesizedRanked: IRankedRecord[] = [];
+  if (orphanEntries.length) {
+    const { found, unresolved } = await resolveOrphanBaseRows(
+      databaseName,
+      region,
+      outputLocation,
+      hudiTable,
+      hudiExists,
+      rawCsvTable,
+      pending.csvJobIds,
+      orphanEntries.map(([id]) => id),
+      columns
+    );
+    const rowsById = new Map(orphanEntries);
+    synthesizedRanked = [
+      ...found,
+      ...unresolved.map((id) => synthesizeFromJsonDelta(rowsById.get(id) ?? [], columns)),
+    ];
+  }
 
   // Pending snapshot rows go FIRST — they are strictly newer than anything
   // already compressed, so they must win any same-Id collision dedupeById
@@ -1074,11 +1161,18 @@ const retrieveRecords = async (
     // undoWindowDeltas already expects. Rows that don't match anything in
     // this block are simply ignored by undoWindowDeltas's own record-id map.
     for (const row of rawJsonDelta.rows) {
+      const changeData = diffFields(row['prev_json'] ?? '{}', row['new_json'] ?? '{}');
+      // ponytail: temporary — confirms every field the raw prev/new maps
+      // actually carried survives diffFields intact before it's handed to
+      // undoWindowDeltas. Remove once confirmed there's no remaining defect.
+      logger.info(
+        `[json-delta] id:${row['record_id']} changedFields:${Object.keys(JSON.parse(changeData)).join(',')}`
+      );
       deltaRows.push({
         record_id: row['record_id'] ?? '',
         change_time: row['change_time'] ?? '',
         change_type: 'UPDATE',
-        change_data: diffFields(row['prev_json'] ?? '{}', row['new_json'] ?? '{}'),
+        change_data: changeData,
       });
     }
     if (deltaRows.length) {
@@ -1291,29 +1385,6 @@ const runDeltaCount = async (
 };
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : 'unknown_error');
-
-// ponytail: temporary diagnostic — see buildRawTimestampSampleSql. Only fires
-// when there ARE pending job ids but the windowed count came back 0, so it
-// costs nothing on the common "nothing pending" path.
-const sampleRawTimestampsIfZero = async (
-  databaseName: string,
-  region: string,
-  outputLocation: string | undefined,
-  tableName: string,
-  jobIds: string[],
-  fileOperations: string[] | null,
-  column: string,
-  count: number
-): Promise<string[]> => {
-  if (count > 0 || !jobIds.length || !(await tableExists(databaseName, tableName, region))) return [];
-  const result = await runAthenaQuery(
-    buildRawTimestampSampleSql(tableName, jobIds, fileOperations, column),
-    databaseName,
-    region,
-    outputLocation
-  );
-  return result.rows.map((r) => r['raw_ts'] ?? '(null)');
-};
 
 // ---------------------------------------------------------------------------
 // Pending raw-data tail counts — folded into dry-run so its numbers agree
@@ -1649,23 +1720,6 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
           `pendingCounts:{csvUpdate:${pendingCsvUpdate},csvDelete:${pendingCsvDelete},jsonDelete:${pendingJsonDelete},jsonUpdate:${pendingJsonUpdate}} ` +
           `final:{update:${update},delete:${del},total:${total}}`
         );
-
-        // ponytail: temporary — only fires for a zero count that still has
-        // pending job ids, so it's silent on every object except the one
-        // actually under investigation.
-        const [csvUpdateSample, csvDeleteSample, jsonDeleteSample, jsonUpdateSample] = await Promise.all([
-          sampleRawTimestampsIfZero(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['updates'], 'SystemModstamp', pendingCsvUpdate),
-          sampleRawTimestampsIfZero(databaseName, region, outputLocation, rawCsvTable, pending.csvJobIds, ['deletes'], 'SystemModstamp', pendingCsvDelete),
-          sampleRawTimestampsIfZero(databaseName, region, outputLocation, rawJsonSnapshotTable, pending.jsonSnapshotJobIds, null, 'SystemModstamp', pendingJsonDelete),
-          sampleRawTimestampsIfZero(databaseName, region, outputLocation, rawJsonDeltaTable, pending.jsonDeltaJobIds, null, 'lastmodifieddate', pendingJsonUpdate),
-        ]);
-        if (csvUpdateSample.length || csvDeleteSample.length || jsonDeleteSample.length || jsonUpdateSample.length) {
-          logger.info(
-            `[dry-run] ${t.objectApiName} | zero-count raw samples (window was ${countWindow.startDate}..${countWindow.endDate}) ` +
-            `csvUpdate:${JSON.stringify(csvUpdateSample)} csvDelete:${JSON.stringify(csvDeleteSample)} ` +
-            `jsonDelete:${JSON.stringify(jsonDeleteSample)} jsonUpdate:${JSON.stringify(jsonUpdateSample)}`
-          );
-        }
 
         return {
           objectApiName: t.objectApiName,
@@ -2008,9 +2062,28 @@ const fetchDiffBlock = async (
       .map(({ record }) => record['Id'])
       .filter(Boolean)
   );
-  const synthesizedRanked = [...groupByRecordId(rawJsonDelta.rows).entries()]
-    .filter(([recordId]) => !knownIds.has(recordId))
-    .map(([, rows]) => synthesizeFromJsonDelta(rows, columns));
+  const orphanEntries = [...groupByRecordId(rawJsonDelta.rows).entries()].filter(
+    ([recordId]) => !knownIds.has(recordId)
+  );
+  let synthesizedRanked: IRankedRecord[] = [];
+  if (orphanEntries.length) {
+    const { found, unresolved } = await resolveOrphanBaseRows(
+      databaseName,
+      region,
+      outputLocation,
+      hudiTable,
+      hudiExists,
+      rawCsvTable,
+      pending.csvJobIds,
+      orphanEntries.map(([id]) => id),
+      columns
+    );
+    const rowsById = new Map(orphanEntries);
+    synthesizedRanked = [
+      ...found,
+      ...unresolved.map((id) => synthesizeFromJsonDelta(rowsById.get(id) ?? [], columns)),
+    ];
+  }
 
   const block = dedupeById([
     ...[...rawSnapshotRanked].sort(byKeyDesc),
@@ -2036,11 +2109,16 @@ const fetchDiffBlock = async (
   }
   // Pending realtime UPDATE events, reshaped the same way retrieveRecords does.
   for (const row of rawJsonDelta.rows) {
+    const changeData = diffFields(row['prev_json'] ?? '{}', row['new_json'] ?? '{}');
+    // ponytail: temporary — see the matching log in retrieveRecords.
+    logger.info(
+      `[json-delta] id:${row['record_id']} changedFields:${Object.keys(JSON.parse(changeData)).join(',')}`
+    );
     deltaRows.push({
       record_id: row['record_id'] ?? '',
       change_time: row['change_time'] ?? '',
       change_type: 'UPDATE',
-      change_data: diffFields(row['prev_json'] ?? '{}', row['new_json'] ?? '{}'),
+      change_data: changeData,
     });
   }
   if (deltaRows.length) undoWindowDeltas(block, deltaRows, columns);
