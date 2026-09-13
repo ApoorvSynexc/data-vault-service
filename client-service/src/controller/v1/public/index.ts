@@ -22,7 +22,7 @@ import {
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
-import { getUser, triggerBackupJob } from '../../../services';
+import { createPaymentAccount, getUser, triggerBackupJob } from '../../../services';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -233,8 +233,14 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   return makeResponse(req, res, 200, true, 'create');
 };
 
+const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const test = await createPaymentAccount('00Df600000T9DlJEAV', '005f6000008QmlyAAC');
+  makeResponse(req, res, 200, true, 'create', test);
+}
+
 export const publicController = wrapController({
   payloadHandler,
   eventBridgeHandler,
   salesForceRealTimeHandler,
+  testHandler
 });

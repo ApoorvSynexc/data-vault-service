@@ -760,12 +760,78 @@ const getBackupConfigCount = async (
   return count;
 };
 
+interface IBackupOverview {
+  totalRecords: number;
+  totalSize: number;
+  activeBackupConfigs: number;
+  failedBackupStatus: number;
+  successBackupStatus: number;
+  pendingBackupStatus: number;
+}
+
+// Dashboard overview for one config type (NORMAL/backup or ARCHIVAL). A single
+// paginated query (userId-index, filtered by type) aggregates every figure in one
+// pass, instead of the 4-5 separate full-table-count queries (see
+// getBackupConfigCount) that computing each one independently would need.
+const getBackupOverview = async (
+  userId: string,
+  type: 'NORMAL' | 'ARCHIVAL'
+): Promise<IBackupOverview> => {
+  const overview: IBackupOverview = {
+    totalRecords: 0,
+    totalSize: 0,
+    activeBackupConfigs: 0,
+    failedBackupStatus: 0,
+    successBackupStatus: 0,
+    pendingBackupStatus: 0,
+  };
+
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :uid',
+        FilterExpression: '#type = :type',
+        ProjectionExpression: '#status, backupStatus, sizeInBytes, completedRecordCount',
+        ExpressionAttributeNames: { '#type': 'type', '#status': 'status' },
+        ExpressionAttributeValues: { ':uid': userId, ':type': type },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const items = (result.Items as IBackupConfig[] | undefined) ?? [];
+    for (const item of items) {
+      overview.totalRecords += item.completedRecordCount ?? 0;
+      overview.totalSize += item.sizeInBytes ?? 0;
+
+      if (item.status === STATUS.active) {
+        overview.activeBackupConfigs += 1;
+      }
+      if (item.backupStatus === BACKUP_STATUS.failed) {
+        overview.failedBackupStatus += 1;
+      } else if (item.backupStatus === BACKUP_STATUS.success) {
+        overview.successBackupStatus += 1;
+      } else if (item.backupStatus === BACKUP_STATUS.pending) {
+        overview.pendingBackupStatus += 1;
+      }
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return overview;
+};
+
 export {
   createBackupConfig,
   getBackupConfigById,
   getBackupConfigBySlug,
   getBackupConfigsByUser,
   getBackupConfigCount,
+  getBackupOverview,
   getBackupConfigsByUserAndCrm,
   getBackupConfigsByCrm,
   getBackupConfigsInBatches,
