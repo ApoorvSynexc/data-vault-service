@@ -6,7 +6,6 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { IAwsCredentials, IS3Config } from '../../../models';
-import { NODE_ENV } from '../../../constant';
 
 // ---------------------------------------------------------------------------
 // One S3Client per unique destination (region + credentials + bucket).
@@ -22,12 +21,10 @@ const getS3Client = (config: IS3Config): S3Client => {
             region: config.region
         }
 
-        //if (NODE_ENV === 'dev' && config.accessKeyId && config.secretAccessKey) {
-            awsConfig.credentials = {
-                accessKeyId: config.accessKeyId,
-                secretAccessKey: config.secretAccessKey,
-            }
-        //}
+        awsConfig.credentials = {
+            accessKeyId: config.accessKeyId,
+            secretAccessKey: config.secretAccessKey,
+        }
 
         client = new S3Client(awsConfig);
         clientCache.set(cacheKey, client);

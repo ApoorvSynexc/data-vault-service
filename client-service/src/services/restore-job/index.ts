@@ -1000,11 +1000,11 @@ const sendRestoreToBackupService = async (
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    console.log("Restore Job has been failed, ", { error });
+    logger.error(`Restore Job has failed: ${error}`);
     throw error;
   }
 
-  console.log("Restore Job has been trigger to backup service");
+  logger.info("Restore Job triggered to backup service");
   return result;
 };
 

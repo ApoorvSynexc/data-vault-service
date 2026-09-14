@@ -74,12 +74,10 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
         }
       } catch (error) {
         logger.error(`[ARCH-CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
-        console.error(`Scheduled backup failed for ${config.backupConfigId}`, error);
       }
     }
   } catch (error) {
     logger.error(`[ARCH-CRON] tick threw error: ${(error as Error)?.message ?? String(error)}`);
-    console.error('Error fetching scheduled incremental backup configs', error);
   } finally {
     logger.info(`[ARCH-CRON] tick END | durationMs=${Date.now() - tickStartMs} fired=${fired} skipped=${skipped}`);
   }
