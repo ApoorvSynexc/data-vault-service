@@ -1347,7 +1347,7 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
     csvFilePath: restoreJob.source.csvFilePath,
   }
   const keys = await listS3Objects(s3Config, path);
-
+  console.log(JSON.stringify({keys}));
   if (keys.length === 0) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }

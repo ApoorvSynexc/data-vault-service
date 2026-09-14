@@ -101,6 +101,12 @@ const extractVendorErrorMessage = (err: any): string | undefined => {
 const createPaymentAccount = async (orgId: string, userId: string): Promise<Create360AccountResult> => {
   let response: Create360AccountApiResponse;
   try {
+    console.log({
+      PAYMENT_API_AUTH_TOKEN,
+      PAYMENT_API_BASE_URL,
+      orgId,
+      userId,
+    })
     response = await httpRequest<Create360AccountApiResponse>({
       url: `${PAYMENT_API_BASE_URL}/Create360Account`,
       method: 'POST',

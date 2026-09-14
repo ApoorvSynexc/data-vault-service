@@ -110,7 +110,7 @@ const listS3Objects = async (
             })
         );
         for (const obj of result.Contents ?? []) {
-            if (obj.Key) {
+            if (obj.Key && !obj.Key.endsWith('/')) {
                 keys.push(obj.Key);
             }
         }
