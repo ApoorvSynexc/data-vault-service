@@ -14,7 +14,7 @@ import {
   getTableCounter,
   buildBackupConfigCounterKey,
   triggerBackupJob,
-  postBackupJobToService,
+  submitBackupJobRequest,
   runBackupNow,
   getCrmById,
   getDestinationById,
@@ -622,7 +622,7 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
     };
 
     try {
-      await postBackupJobToService({ backupConfigId: config.backupConfigId, endpoint: '', body: JSON.stringify(payload) });
+      await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint: '', body: JSON.stringify(payload) });
     } catch (error) {
       logger.error(`Backup job failed for backupConfigId: ${config.backupConfigId}, objectApiName: ${objectApiName}`, error);
     }
