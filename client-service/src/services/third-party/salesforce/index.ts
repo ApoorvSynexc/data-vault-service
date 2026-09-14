@@ -7,8 +7,9 @@ import {
   SALESFORCE_METADATA_API_VERSION,
 } from '../../../constant';
 import { encrypt } from '../../../utils/encryption';
-import { updateUser } from '../../user';
+import { getDecryptedCrmCredential, getUser, updateUser } from '../../user';
 import { logger } from '../../../middlewares';
+import { getCrmById } from '../../crm';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -260,10 +261,33 @@ interface ISalesforceApiLimitUsage {
 }
 
 const checkSalesforceApiLimitUsage = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
+  userId: string,
+  crmId: string,
   thresholdPercentage: number
 ): Promise<ISalesforceApiLimitUsage> => {
+  const user = await getUser({ userId });
+  if (!user || !user.crmId) {
+    throw new Error('User not found');
+  }
+
+  const crm = await getCrmById(crmId);
+  if (!crm) {
+    throw new Error('CRM not found');
+  }
+  const instanceUrl = crm?.instanceUrl;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+  const tokens = {
+    accessToken: access_token,
+    refreshToken: refresh_token,
+    userId: user.userId,
+    environment: crm?.environment,
+    customUrl: user.customUrl,
+  }
+
   const limits = await getSalesforceOrgLimits(instanceUrl, tokens);
   const dailyApiRequests = limits.DailyApiRequests;
   if (!dailyApiRequests) {
