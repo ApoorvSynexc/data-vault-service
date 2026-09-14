@@ -617,7 +617,8 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
       destination: {
         type: destination.type,
         config: getDecryptedDestinationConfig(destination),
-      }
+      },
+      lastUpdatedAt: config.createdAt
     };
 
     try {
