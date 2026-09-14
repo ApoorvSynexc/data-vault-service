@@ -74,7 +74,7 @@ const SALESFORCE_METADATA_API_VERSION = String(process.env.SALESFORCE_METADATA_A
 // Comma-separated so ops can extend it without a code change.
 const SALESFORCE_PERMISSION_SET_APEX_CLASSES = String(
   process.env.SALESFORCE_PERMISSION_SET_APEX_CLASSES ||
-    'DataVaultRecordSyncTriggerHandler,DataVaultRecordSyncQueueable,DataVaultRecordSyncPayloadDto,DataVaultCalloutService,DataVaultCustomPackageException'
+  'DataVaultRecordSyncTriggerHandler,DataVaultRecordSyncQueueable,DataVaultRecordSyncPayloadDto,DataVaultCalloutService,DataVaultCustomPackageException'
 )
   .split(',')
   .map((name) => name.trim())
@@ -320,6 +320,8 @@ const SALESFORCE_SYSTEM_FIELDS = [
   'LastReferencedDate',
 ];
 
+const EXCLUDE_OBJECT_SUFFIX = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent'];
+
 export {
   NODE_ENV,
   NODE_ENV_URL,
@@ -430,5 +432,6 @@ export {
   BACKUP_TYPE,
   ENVIRONMENT_TYPE,
   STANDARD_OBJECT_LIST,
-  SALESFORCE_SYSTEM_FIELDS
+  SALESFORCE_SYSTEM_FIELDS,
+  EXCLUDE_OBJECT_SUFFIX
 };
