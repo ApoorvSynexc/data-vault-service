@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig, ITriggerResult, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
-import { appendObjectsToBackupConfig, getBackupConfigsByCrm } from '../../backup-config';
+import { getBackupConfigsByCrm } from '../../backup-config';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
 import { METADATA_API_VERSION as API_VERSION } from './metadata-api';
@@ -1001,7 +1001,7 @@ const createTriggers = async (
       results.push({ objectApiName, triggerName, testClassName, status: 'CREATED' });
       await timer(500);
     } catch (err) {
-      console.log(`Error creating trigger for ${objectApiName}:`, err);
+      logger.error(`Error creating trigger for ${objectApiName}: ${err}`);
       results.push({
         objectApiName,
         triggerName,
@@ -1016,7 +1016,7 @@ const createTriggers = async (
   try {
     await setupPermissionSet(instanceUrl, tokens, results);
   } catch (error) {
-    console.error('Error setting up permission set:', error);
+    logger.error(`Error setting up permission set: ${error}`);
   }
   return results;
 };
@@ -1334,11 +1334,6 @@ const realTimeTriggerManagement = async (
     const objectApiNames = config.objectNames;
 
     if (operation === 'create') {
-      // const expandedNames = await expandWithMasterChildren(user, objectApiNames);
-      // // Children get a trigger, so they get backed up — record them on the config
-      // // too, otherwise every config-driven reader (Glue, restore listing, UI) stays
-      // // blind to data that is already landing in S3 under the child's own name.
-      // await appendObjectsToBackupConfig(config.backupConfigId, expandedNames);
       return createTriggers(instanceUrl, tokens, objectApiNames);
     }
     if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
@@ -1346,7 +1341,7 @@ const realTimeTriggerManagement = async (
     if (operation === 'delete') { return deleteTriggers(instanceUrl, tokens, config); }
     throw new Error(`invalid_operation:${operation}`);
   } catch (error) {
-    console.log(`Error during trigger ${operation}:`, error);
+    logger.error(`Error during trigger ${operation}: ${error}`);
     return [{
       objectApiName: 'N/A',
       status: 'FAILED',

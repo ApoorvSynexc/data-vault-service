@@ -13,6 +13,7 @@ import {
 import { decrypt, encrypt, generateOrgEncryptionKey, readEnvelope } from '../../../utils/encryption';
 import { encryptSalesforceResponse, resolveOrgKey } from '../../../utils/salesforce-crypto';
 import { STATUS, SALESFORCE_LOGIN_REDIRECT_URI } from '../../../constant';
+import { logger } from '../../../middlewares';
 
 interface IAuthorizeOrganizationPayload {
   orgId: string;
@@ -40,7 +41,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
     try {
       plaintext = decrypt(readEnvelope(req.body));
     } catch (error: any) {
-      console.log('[configure-org] 401: decrypt/envelope failed:', error?.message ?? error);
+      logger.warn(`[configure-org] 401: decrypt/envelope failed: ${error?.message ?? error}`);
       makeResponse(req, res, 401, false, 'unauthorized');
       return;
     }
@@ -53,7 +54,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
     if (payload.user_details) {
       const crm = await getCrmByOrgId(payload.user_details.org_id);
       if (!crm) {
-        console.log('[configure-org] 401: org not registered for user authorization:', payload.user_details.org_id);
+        logger.warn(`[configure-org] 401: org not registered for user authorization: ${payload.user_details.org_id}`);
         throw new Error('Org not registered for user authorization');
       }
       finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
@@ -61,7 +62,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
 
     makeResponse(req, res, 200, true, 'fetch', encrypt(JSON.stringify(finalResponse)));
   } catch (error) {
-    console.error('Error in authorizeOrganizationHandler:', error);
+    logger.error(`Error in authorizeOrganizationHandler: ${error}`);
     makeResponse(req, res, 500, false, 'unknown_error');
   }
 };
@@ -81,10 +82,7 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
   // utils/salesforce-crypto.ts) once an org key exists.
   const { orgId, instanceUrl } = payload;
   if (!orgId || !instanceUrl) {
-    console.log('[configure-org] 401: missing required field(s):', {
-      hasOrgId: !!orgId,
-      hasInstanceUrl: !!instanceUrl,
-    });
+    logger.warn(`[configure-org] 401: missing required field(s): hasOrgId=${!!orgId} hasInstanceUrl=${!!instanceUrl}`);
     throw new Error('Missing required field(s) in authorizeOrgHandler payload');
   }
 

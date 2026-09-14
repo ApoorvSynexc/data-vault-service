@@ -52,6 +52,7 @@ import {
   updateRestoreJob,
   listS3Objects,
   getPresignedDownloadUrl,
+  checkSalesforceApiLimitUsage,
 } from '../../../services';
 import { BACKUP_JOB_TABLE, RESTORE_JOB_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -198,12 +199,6 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
     makeResponse(req, res, 400, false, 'invalid_config_type');
     return;
   }
-
-  // const { objects, objectTree, found } = await getRestoreObjectListByConfigId(
-  //   backupConfigId,
-  //   configType as ConfigType,
-  //   userId
-  // );
 
   let config = await getBackupConfigById(backupConfigId);
   if (!config) {
@@ -455,13 +450,11 @@ const parseRetrieveParams = (
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
 const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  console.log('[fetch-records] request', req.body);
   const parsed = parseRetrieveParams(req.body as Record<string, unknown>, req.user!.userId);
   if (!parsed.ok) {
     makeResponse(req, res, 400, false, parsed.error);
     return;
   }
-  console.log('[fetch-records] query', parsed.value);
 
   let result;
   try {
@@ -1166,6 +1159,20 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
+  const changedObjectNames: string[] = [];
+  if (backupConfig.type === 'NORMAL') {
+    const result = await runMetadataComparisonForConfig(backupConfig);
+    for (const { objectName, result: metadataResult } of result) {
+      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+        changedObjectNames.push(objectName);
+      }
+    }
+
+    if (changedObjectNames.length > 0) {
+      await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId, 80);
+    }
+  }
+
   const isDraft = body.status === 'DRAFT';
   const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? 'DRAFT' : 'IN_PROGRESS' };
   const created = await createRestore(payload);
@@ -1182,15 +1189,15 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   // Step 1: compare metadata comparison
-  const changedObjectNames: string[] = [];
+  // const changedObjectNames: string[] = [];
   try {
     if (backupConfig.type === 'NORMAL') {
-      const result = await runMetadataComparisonForConfig(backupConfig);
-      for (const { objectName, result: metadataResult } of result) {
-        if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-          changedObjectNames.push(objectName);
-        }
-      }
+      // const result = await runMetadataComparisonForConfig(backupConfig);
+      // for (const { objectName, result: metadataResult } of result) {
+      //   if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+      //     changedObjectNames.push(objectName);
+      //   }
+      // }
 
       if (changedObjectNames.length) {
         await triggerBackupJob({
@@ -1340,7 +1347,6 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
     csvFilePath: restoreJob.source.csvFilePath,
   }
   const keys = await listS3Objects(s3Config, path);
-
   if (keys.length === 0) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }

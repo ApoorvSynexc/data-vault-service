@@ -86,13 +86,6 @@ const readSchemaFile = async (
     return null;
   }
 
-  // if (params.kind === 'fields') {
-  //   const legacyBaseKey = buildSchemaS3Key(params);
-  //   const keys = await listS3Objects(s3Config, legacyBaseKey.replace('/fields.json', '/'));
-  //   const legacy = await downloadFromS3(s3Config, pickLegacyFieldsKey(keys, legacyBaseKey));
-  //   return legacy ? JSON.parse(legacy.toString()) : null;
-  // }
-
   const legacy = await downloadFromS3(s3Config, legacyKeyFor(params));
   return legacy ? JSON.parse(legacy.toString()) : null;
 };

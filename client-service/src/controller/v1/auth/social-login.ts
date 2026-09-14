@@ -7,6 +7,7 @@ import {
   STATUS,
 } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
+import { logger } from '../../../middlewares';
 import {
   createOAuthState,
   createSession,
@@ -145,7 +146,7 @@ const socialLoginCallbackHandler = async (
   // user id; reject the callback if a different user's credentials completed the
   // login. Plain social-login states carry userId '' and skip this check.
   if (oauthState.userId && oauthState.userId !== sfProfile.user_id) {
-    console.log('[social-login-callback] 401: state pinned to different user:', { expected: oauthState.userId, actual: sfProfile.user_id });
+    logger.warn(`[social-login-callback] 401: state pinned to different user: expected=${oauthState.userId} actual=${sfProfile.user_id}`);
     makeResponse(req, res, 401, false, 'unauthorized');
     return;
   }
@@ -166,7 +167,6 @@ const socialLoginCallbackHandler = async (
   let userJustCreated = false;
   const isAdminProvisioningFlow = Boolean(oauthState.isAdminUser && oauthState.adminUserSfProfile);
 
-  console.log(JSON.stringify({ sfProfile, isAdminProvisioningFlow }))
   if (isAdminProvisioningFlow) {
     const adminProfile = oauthState.adminUserSfProfile!;
     
@@ -202,7 +202,7 @@ const socialLoginCallbackHandler = async (
     try {
       await provisionEcaPermissionSet(instanceUrl, salesforceTokens, crmIdentity, adminProfile.permissionSetName);
     } catch (error: any) {
-      console.log('[social-login-callback] admin provisioning aborted — ECA permission-set failed, no data was written:', error?.message ?? error);
+      logger.error(`[social-login-callback] admin provisioning aborted — ECA permission-set failed, no data was written: ${error?.message ?? error}`);
       makeResponse(req, res, 500, false, 'admin_provisioning_failed');
       return;
     }
@@ -287,7 +287,7 @@ const socialLoginCallbackHandler = async (
         ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
         ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
       });
-    console.log('[social-login-callback] persisted crmProfile.instanceUrl:', token.instance_url ?? '(none returned by Salesforce — kept prior value)', 'prior value was:', user.crmProfile?.instanceUrl);
+    logger.info(`[social-login-callback] persisted crmProfile.instanceUrl: ${token.instance_url ?? '(none returned by Salesforce — kept prior value)'} (prior value: ${user.crmProfile?.instanceUrl})`);
   }
 
   if (user.contactEmail) {
@@ -327,7 +327,6 @@ const socialLoginCallbackHandler = async (
   const session = await createSession(user.userId, ttlSeconds, deviceInfo);
   const tokens = generateTokens(user.userId, session.sessionId);
 
-  console.log(JSON.stringify({ user }))
   // Set cookies
   res.cookie('accessToken', tokens.accessToken, {
     ...baseCookieOptions,

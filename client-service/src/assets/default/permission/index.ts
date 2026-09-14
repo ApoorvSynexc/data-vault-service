@@ -150,43 +150,6 @@ export const defaultPermissions = [
             }
         ]
     },
-    // {
-    //     label: "Activity Logs",
-    //     value: "activitylogs",
-    //     description: "System and user activity history",
-    //     permissions: [
-    //         {
-    //             label: "View",
-    //             value: "read",
-    //             description: "See activity logs"
-    //         }
-    //     ]
-    // },
-    // {
-    //     label: "Report",
-    //     value: "report",
-    //     description: "Usage and compliance reporting",
-    //     permissions: [
-    //         {
-    //             label: "View",
-    //             value: "read",
-    //             description: "See reports"
-    //         }
-    //     ]
-    // },
-    // {
-    //     label: "Security",
-    //     value: "security",
-    //     description: "Encryption and access security settings",
-    //     permissions: [
-    //         {
-    //             label: "View",
-    //             value: "read",
-    //             description: "See security settings"
-    //         }
-    //     ]
-    // },
-
     {
         label: "Settings",
         value: "settings",

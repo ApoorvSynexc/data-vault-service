@@ -16,8 +16,6 @@ const sendRestoreToBackupService = async (
     ...(restorejob.objectHierarchy && { objectHierarchy: restorejob.objectHierarchy }),
   }
 
-  console.log(JSON.stringify({ payload }));
-
   try {
     result = await httpRequest({
       url: `${BACKUP_SERVICE}/v1/restore`,
@@ -26,7 +24,7 @@ const sendRestoreToBackupService = async (
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    console.log("Restore Job has been failed, ", { error });
+    logger.error(`Restore Job has failed: ${error}`);
     throw error;
   }
 
@@ -47,7 +45,6 @@ const createRollbackService = async (
     ...(restoreJob.objectHierarchy && { objectHierarchy: restoreJob.objectHierarchy }),
   }
 
-  console.log(JSON.stringify({ payload }));
   try {
     result = await httpRequest({
       url: `${BACKUP_SERVICE}/v1/restore/rollback`,

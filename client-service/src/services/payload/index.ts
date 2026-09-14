@@ -126,7 +126,7 @@ function archivalSchemaChangeDetection(backupConfig: IBackupConfig, objectOperat
 
     for (const obj of objects) {
         if (obj.schemaChange && objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
-            console.log("Schema chnage detect: ", { name: obj.name });
+            logger.info(`Schema change detected: ${obj.name}`);
             objectOperations[obj.name].push("schema-change");
         }
     }
@@ -141,7 +141,7 @@ function schemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Re
 
     for (const obj of objects) {
         if (obj.schemaChange && objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
-            console.log("Schema chnage detect: ", { name: obj.name });
+            logger.info(`Schema change detected: ${obj.name}`);
             objectOperations[obj.name].push("schema-change");
         }
     }
@@ -345,7 +345,6 @@ async function buildPayload(backupConfigId: string) {
             },
         },
     };
-    console.log("PAYLOAD ==> " + JSON.stringify(payload));
     return payload;
 }
 
@@ -505,17 +504,8 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             JSON.stringify(encrypt(JSON.stringify(payload), ENCRYPTION_KEY))
         ).toString('base64');
 
-        logger.info('Initializing EMR job...');
-        console.log('──────────────────────────────────────────');
-        console.log('  DataVault — EMR Serverless Job Submitter');
-        console.log('──────────────────────────────────────────');
-        console.log('executionRoleArn:', AWS_EMR_EXECUTION_ROLE_ARN);
-        if ('restoreConfigId' in payload) {
-            console.log('Restore Config ID:', payload.restoreConfigId);
-        } else {
-            console.log('Backup Config ID:', payload.backupConfigId);
-        }
-        console.log('──────────────────────────────────────────');
+        const configId = 'restoreConfigId' in payload ? payload.restoreConfigId : payload.backupConfigId;
+        logger.info(`Initializing EMR job... executionRoleArn=${AWS_EMR_EXECUTION_ROLE_ARN} configId=${configId}`);
 
         // Spark submit parameters — tuned for 100 GB / 200 objects in 5 minutes.
         // Kept as an array + .join(' ') so each setting is reviewable in isolation;
@@ -587,7 +577,6 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.speculation=false',
         ].join(' ');
 
-        console.log('NODE ENV:', NODE_ENV_URL);
         const command = new StartJobRunCommand({
             applicationId: AWS_EMR_APPLICATION_ID,
             executionRoleArn: AWS_EMR_EXECUTION_ROLE_ARN,
@@ -623,9 +612,7 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             },
         });
 
-        console.log('COMMAND ==> ' + JSON.stringify(command));
         const response = await client.send(command);
-        console.log('RESPONSE ==> ' + JSON.stringify(response));
         logger.info('EMR job initialized.');
         return response;
     } catch (error) {

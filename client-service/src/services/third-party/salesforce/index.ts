@@ -7,7 +7,9 @@ import {
   SALESFORCE_METADATA_API_VERSION,
 } from '../../../constant';
 import { encrypt } from '../../../utils/encryption';
-import { updateUser } from '../../user';
+import { getDecryptedCrmCredential, getUser, updateUser } from '../../user';
+import { logger } from '../../../middlewares';
+import { getCrmById } from '../../crm';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -102,21 +104,19 @@ const salesforceRequest = async <T = any>(
     const data = await makeCall(tokens.accessToken);
     return { data, accessToken: tokens.accessToken };
   } catch (error: any) {
-    console.log('Salesforce request failed, checking for 401 to refresh token...', error?.message);
     if (!error?.message?.startsWith('HTTP Error 401')) {
       throw error;
     }
+    logger.info(`Salesforce request got 401, refreshing token: ${error?.message}`);
 
     // Access token expired — refresh and retry once.
     // Use deduplicatedRefresh when crmId is available so that N concurrent
     // callers on the same CRM share a single refresh call instead of racing.
     let refreshed: any;
     try {
-      console.log('Refreshing Token');
       refreshed = await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
-      console.log('Refreshing Token success');
     } catch (e: any) {
-      console.log('Refreshing Token failed', e?.message);
+      logger.error(`Salesforce token refresh failed: ${e?.message}`);
       // Refresh token also expired — user must reconnect
       throw new SalesforceAuthExpiredError();
     }
@@ -261,10 +261,33 @@ interface ISalesforceApiLimitUsage {
 }
 
 const checkSalesforceApiLimitUsage = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
+  userId: string,
+  crmId: string,
   thresholdPercentage: number
 ): Promise<ISalesforceApiLimitUsage> => {
+  const user = await getUser({ userId });
+  if (!user || !user.crmId) {
+    throw new Error('User not found');
+  }
+
+  const crm = await getCrmById(crmId);
+  if (!crm) {
+    throw new Error('CRM not found');
+  }
+  const instanceUrl = crm?.instanceUrl;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+  const tokens = {
+    accessToken: access_token,
+    refreshToken: refresh_token,
+    userId: user.userId,
+    environment: crm?.environment,
+    customUrl: user.customUrl,
+  }
+
   const limits = await getSalesforceOrgLimits(instanceUrl, tokens);
   const dailyApiRequests = limits.DailyApiRequests;
   if (!dailyApiRequests) {
