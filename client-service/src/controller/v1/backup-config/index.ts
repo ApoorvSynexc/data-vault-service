@@ -30,6 +30,7 @@ import {
   runMetadataComparisonForConfig,
   hasMetadataChanged,
   getDecryptedDestinationConfig,
+  checkSalesforceApiLimitUsage,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
@@ -72,6 +73,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
+      await checkSalesforceApiLimitUsage(userId, config.crmId, 80);
       await triggerBackupJob({ user, config, type: 'backup', lastSchemaSyncAt: true });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
@@ -79,6 +81,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
+        await checkSalesforceApiLimitUsage(userId, config.crmId, 80);
         await triggerBackupJob({ user, config, type: 'backup' });
       } else {
         await createAwsEventScheduler(buildEventScheduleInput(config));
@@ -387,6 +390,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return;
   }
 
+  await checkSalesforceApiLimitUsage(backupConfig.userId, backupConfig.crmId, 80);
   const result = await runBackupNow({ user: req.user, config: backupConfig });
   if (!result.ok) {
     // realtime_not_supported keeps the route's original error code
