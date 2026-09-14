@@ -81,6 +81,24 @@ const isDateLiteral = (value: string): boolean =>
     value
   );
 
+// LIMIT/OFFSET/ORDER BY apply to a whole query, not to a boolean condition —
+// a raw SOQL condition body gets wrapped inside `AND (...)`, so any of these
+// would land inside that parenthesized expression and produce invalid SOQL.
+// Caught here with a message naming the actual keyword, instead of letting it
+// through to fail later with a parser error that points at an unrelated token.
+const TOP_LEVEL_CLAUSE_RE = /\b(LIMIT|OFFSET|ORDER\s+BY)\b/i;
+const assertNoTopLevelClauses = (body: string): void => {
+  // Drop quoted string literals first so a legitimate value like
+  // "Notes__c LIKE '%offset%'" isn't mistaken for the clause keyword.
+  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
+  const match = withoutStringLiterals.match(TOP_LEVEL_CLAUSE_RE);
+  if (match) {
+    throw new Error(
+      `SOQL condition cannot contain ${match[1].toUpperCase()} — LIMIT/OFFSET/ORDER BY apply to the whole query, not a filter condition. Remove it from your query.`
+    );
+  }
+};
+
 const buildFilterCondition = (
   f: IBackupField & { filter: NonNullable<IBackupField['filter']> },
   preformattedValue: string
@@ -141,6 +159,9 @@ const buildWhereClause = (object: IBackupObject): string => {
   if ((condition as any).type === 'SOQL') {
     const soqlQuery: string = (condition as any).soqlQuery ?? '';
     const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
+    if (body) {
+      assertNoTopLevelClauses(body);
+    }
     return body ? `WHERE ${body}` : '';
   }
 
