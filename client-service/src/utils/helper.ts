@@ -166,7 +166,7 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
     case 'currency':
     case 'percent':
     case 'number':
-      return value;
+      return sanitizeNumericValue(strValue);
 
     case 'boolean':
       return isTruthy(strValue) ? 'true' : 'false';

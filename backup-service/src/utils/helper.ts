@@ -347,7 +347,7 @@ const formatValueByDataType = (value: string, dataType: string): string => {
     case 'currency':
     case 'percent':
     case 'number':
-      return value;
+      return sanitizeNumericValue(strValue);
 
     case 'boolean':
       return isTruthy(strValue) ? 'true' : 'false';
