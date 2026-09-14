@@ -1,6 +1,7 @@
 import { NextFunction } from "express";
 import { IRequest, IResponse, makeResponse } from "../../lib";
 import { getRole } from "../../services";
+import { logger } from "../logger";
 import { aclGatewayPermissions } from "./permissions";
 
 type IAclGatewayPermissions = keyof typeof aclGatewayPermissions;
@@ -41,7 +42,7 @@ const aclGateway = async (req: IRequest, res: IResponse, next: NextFunction): Pr
 
         next();
     } catch (error) {
-        console.log('Permission Gateway Error', error);
+        logger.error(`Permission Gateway Error: ${error}`);
         return makeResponse(req, res, 401, false, 'unauthorized');
     }
 };

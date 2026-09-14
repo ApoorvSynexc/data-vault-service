@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { SETTINGS_TABLE, STATUS } from '../../constant';
@@ -43,16 +43,6 @@ const getSettingsByUser = async (userId: string): Promise<ISettings | null> => {
   return (result.Items?.[0] as ISettings) ?? null;
 };
 
-const getSettingsById = async (settingId: string): Promise<ISettings | null> => {
-  const result = await docClient.send(
-    new GetCommand({
-      TableName: SETTINGS_TABLE,
-      Key: { settingId },
-    })
-  );
-  return (result.Item as ISettings) ?? null;
-};
-
 const upsertSettings = async (params: UpsertSettingsParams): Promise<ISettings> => {
   const { userId, crmId, standardObjects, status } = params;
 
@@ -93,4 +83,4 @@ const deleteStandardObject = async (userId: string, name: string): Promise<ISett
   return upsertSettings({ userId, standardObjects });
 };
 
-export { upsertSettings, getSettingsByUserAndCrm, getSettingsByUser, getSettingsById, deleteStandardObject };
+export { upsertSettings, getSettingsByUserAndCrm, getSettingsByUser, deleteStandardObject };

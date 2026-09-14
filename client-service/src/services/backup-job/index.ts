@@ -56,6 +56,25 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
   return active;
 };
 
+const submitBackupJobRequest = async (params: {
+  backupConfigId: string;
+  endpoint: string;
+  body: string;
+}): Promise<any> => {
+  const { backupConfigId, endpoint, body } = params;
+  try {
+    return await httpRequest({
+      url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
+      method: 'POST',
+      headers: { 'x-internal-secret': INTERNAL_SECRET },
+      body,
+    });
+  } catch (error) {
+    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed });
+    throw error;
+  }
+};
+
 const triggerArchivalBackupJob = async (params: {
   user?: IUser;
   config: IBackupConfig;
@@ -117,24 +136,16 @@ const triggerArchivalBackupJob = async (params: {
   };
 
   const endpoint = '/archival';
-  const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}`;
   const bodyStr = JSON.stringify(payload);
-  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ${url} | payloadBytes=${bodyStr.length} objects=[${objectNames}]`);
+  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ${BACKUP_SERVICE}/v1/backup-job${endpoint} | payloadBytes=${bodyStr.length} objects=[${objectNames}]`);
 
   let result;
   const postStart = Date.now();
   try {
-    result = await httpRequest({
-      url,
-      method: 'POST',
-      headers: { 'x-internal-secret': INTERNAL_SECRET },
-      body: bodyStr,
-    });
+    result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: bodyStr });
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ok | durationMs=${Date.now() - postStart}`);
   } catch (error) {
     logger.error(`[ARCH-TRIG] configId=${config.backupConfigId} POST FAILED | durationMs=${Date.now() - postStart} error=${(error as Error)?.message ?? String(error)}`);
-    logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=FAILED`);
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
     throw error;
   }
 
@@ -200,18 +211,7 @@ const triggerBackupJob = async (params: {
     };
 
     const endpoint = type === 'archival' ? '/archival' : '';
-    let result;
-    try {
-      result = await httpRequest({
-        url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
-        method: 'POST',
-        headers: { 'x-internal-secret': INTERNAL_SECRET },
-        body: JSON.stringify(payload),
-      });
-    } catch (error) {
-      await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
-      throw error;
-    }
+    const result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: JSON.stringify(payload) });
 
     await updateBackupConfig(config.backupConfigId, { lastBackupAt: currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
     return result;
@@ -785,6 +785,7 @@ const getMonthlyStatsByCrmCurrentYear = async (crmId: string): Promise<Array<{ m
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
+  submitBackupJobRequest,
   runBackupNow,
   hasActiveBackupJob,
   resumeBackupJob,

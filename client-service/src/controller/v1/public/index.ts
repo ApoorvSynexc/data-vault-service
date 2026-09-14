@@ -22,7 +22,7 @@ import {
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
-import { createPaymentAccount, getUser, triggerBackupJob } from '../../../services';
+import { checkSalesforceApiLimitUsage, createPaymentAccount, getUser, triggerBackupJob } from '../../../services';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -194,7 +194,13 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
       return;
     }
 
-    await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
+    try {
+      await checkSalesforceApiLimitUsage(user.userId, config.crmId, 80);
+      await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
+    } catch (error) {
+      logger.error('Salesforce API limit check failed: ', error);
+    }
+    
     makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
     logger.error('Event bridge trigger error: ', error);
@@ -234,7 +240,7 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const test = await createPaymentAccount('00Df600000T9DlJEAV', '005f6000008QmlyAAC');
+  const test = await createPaymentAccount('00DcY000005yJuXUAU', '005cY00000HTofbQAD');
   makeResponse(req, res, 200, true, 'create', test);
 }
 

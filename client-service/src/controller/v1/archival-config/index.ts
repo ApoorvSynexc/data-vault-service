@@ -20,6 +20,7 @@ import {
     createAwsEventScheduler,
     updateAwsEventSchedule,
     deleteAwsEventScheduler,
+    checkSalesforceApiLimitUsage,
 } from "../../../services";
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { buildArchivalObjectScheduleName, buildScheduleInput, computeNextScheduledRun } from "../../../utils/event-bridge";
@@ -148,6 +149,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
         const { immediateObjects, scheduledObjects } = filtereObjects(req.body?.objects || []);
         if (immediateObjects.length > 0) {
+            await checkSalesforceApiLimitUsage(config.userId, config.crmId, 80);
             await triggerArchivalBackupJob({ user, config, objects: immediateObjects });
         }
 
@@ -410,6 +412,7 @@ const runNowArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         return;
     }
 
+    await checkSalesforceApiLimitUsage(existing.userId, existing.crmId, 80);
     await triggerArchivalBackupJob({ user, config: existing, objects: objectsToRun });
 
     // A fired ONE_TIME object won't fire again — its AWS schedule is now dead weight.

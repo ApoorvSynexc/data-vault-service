@@ -14,6 +14,7 @@ import {
   getTableCounter,
   buildBackupConfigCounterKey,
   triggerBackupJob,
+  submitBackupJobRequest,
   runBackupNow,
   getCrmById,
   getDestinationById,
@@ -29,9 +30,10 @@ import {
   runMetadataComparisonForConfig,
   hasMetadataChanged,
   getDecryptedDestinationConfig,
+  checkSalesforceApiLimitUsage,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE, BACKUP_SERVICE, INTERNAL_SECRET } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
 import { salesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/index';
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
@@ -45,7 +47,6 @@ import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 import { syncObjects } from '../../../jobs/sync-objects';
-import { httpRequest } from '../../../utils/http-request';
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -72,6 +73,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
+      await checkSalesforceApiLimitUsage(userId, config.crmId, 80);
       await triggerBackupJob({ user, config, type: 'backup', lastSchemaSyncAt: true });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
@@ -79,6 +81,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
+        await checkSalesforceApiLimitUsage(userId, config.crmId, 80);
         await triggerBackupJob({ user, config, type: 'backup' });
       } else {
         await createAwsEventScheduler(buildEventScheduleInput(config));
@@ -387,6 +390,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return;
   }
 
+  await checkSalesforceApiLimitUsage(backupConfig.userId, backupConfig.crmId, 80);
   const result = await runBackupNow({ user: req.user, config: backupConfig });
   if (!result.ok) {
     // realtime_not_supported keeps the route's original error code
@@ -622,14 +626,8 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
     };
 
     try {
-      await httpRequest({
-        url: `${BACKUP_SERVICE}/v1/backup-job`,
-        method: 'POST',
-        headers: { 'x-internal-secret': INTERNAL_SECRET },
-        body: JSON.stringify(payload),
-      });
+      await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint: '', body: JSON.stringify(payload) });
     } catch (error) {
-      await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
       logger.error(`Backup job failed for backupConfigId: ${config.backupConfigId}, objectApiName: ${objectApiName}`, error);
     }
   } catch (error) {

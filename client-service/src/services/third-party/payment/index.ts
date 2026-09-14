@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { httpRequest } from '../../../utils/http-request';
 import { logger } from '../../../middlewares';
-import { PAYMENT_API_BASE_URL, PAYMENT_API_AUTH_TOKEN, PAYMENT_PRODUCT_NAME } from '../../../constant';
+import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME } from '../../../constant';
 
 interface Create360AccountApiResponse {
   status: string;
@@ -96,6 +96,14 @@ const extractVendorErrorMessage = (err: any): string | undefined => {
   }
 };
 
+// Create360Account's bearer token isn't a static secret — it's derived per org+user:
+// base64("x360dcraft" + orgId + userId), where userId is the Salesforce User Id of the
+// user provisioning the account (Apex source: EncodingUtil.base64Encode(Blob.valueOf(
+// 'x360dcraft' + orgId + currentUserId))). Confirmed against the vendor's own sample
+// token, which decodes to exactly this string for their sample orgId/userId.
+const buildCreateAccountBearerToken = (orgId: string, userId: string): string =>
+  Buffer.from(`x360dcraft${orgId}${userId}`, 'utf8').toString('base64');
+
 // Provisions a 360 Data Craft account for a Salesforce org and returns the token +
 // sf_secret used to authenticate/encrypt subsequent calls to the vendor's PHP API.
 const createPaymentAccount = async (orgId: string, userId: string): Promise<Create360AccountResult> => {
@@ -104,14 +112,13 @@ const createPaymentAccount = async (orgId: string, userId: string): Promise<Crea
     response = await httpRequest<Create360AccountApiResponse>({
       url: `${PAYMENT_API_BASE_URL}/Create360Account`,
       method: 'POST',
-      headers: { Authorization: `Bearer ${PAYMENT_API_AUTH_TOKEN}` },
+      headers: { Authorization: `Bearer ${buildCreateAccountBearerToken(orgId, userId)}` },
       body: JSON.stringify({
         orgid: orgId,
         product_name: PAYMENT_PRODUCT_NAME,
         user_id: userId,
       }),
     });
-    console.log({response})
   } catch (err: any) {
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'Create360Account request failed');
   }
@@ -157,7 +164,6 @@ const setupPayment = async ({
         message: encryptedMessage,
       }),
     });
-    console.log({response})
   } catch (err: any) {
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }

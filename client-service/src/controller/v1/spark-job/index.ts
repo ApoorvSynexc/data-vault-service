@@ -246,7 +246,6 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
   } else if (decrypted.type === "ARCHIVAL") {
     return applyCompressionStatus(req, res, decrypted.archival);
   } else if (decrypted.type === "RESTORE") {
-    console.log('RESTORE SPARK_JOB STATUS');
     const { restoreConfigId, objects, success, errorMessage } = decrypted.restore;
     if (!restoreConfigId) {
       return makeResponse(req, res, 400, false, 'id_required');
@@ -306,7 +305,6 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       }
     }
 
-    console.log(JSON.stringify({ restoreJob, restore, decrypted }));
     await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
     return makeResponse(req, res, 200, true, 'update');
   }
