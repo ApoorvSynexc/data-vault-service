@@ -383,7 +383,7 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
   const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
 
   const fieldApiNames = described.fields
-    .filter((field) => field.updateable && field.createable && !SALESFORCE_SYSTEM_FIELDS.includes(field.name))
+    .filter((field) => (field.updateable || field.createable) && !SALESFORCE_SYSTEM_FIELDS.includes(field.name))
     .map((field) => field.name);
 
   const fieldNames = Array.from(new Set(['Id', ...fieldApiNames]));
