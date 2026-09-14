@@ -147,6 +147,7 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
   // than let every case label carry its own defensive check.
   const lowerDataType = dataType.trim().toLowerCase();
 
+  console.log(`[formatSalesforceValueByDataType] dataType=${JSON.stringify(dataType)} value=${JSON.stringify(value)} strValue=${JSON.stringify(strValue)} lowerDataType=${JSON.stringify(lowerDataType)}`);
   switch (lowerDataType) {
     case 'string':
     case 'text':
