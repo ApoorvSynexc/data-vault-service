@@ -7,7 +7,7 @@ import { logger } from '../middlewares';
 import { NODE_ENV } from '../constant';
 
 export const startCron = () => {
-    startBackupConfigCron();
+    // startBackupConfigCron();
 
     if(['qa'].includes(NODE_ENV.toLowerCase())) return;
     logger.info(`[CRON] cron registered | for 3AM, 11AM, 7PM`);
