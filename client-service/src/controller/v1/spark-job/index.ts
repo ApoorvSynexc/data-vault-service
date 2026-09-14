@@ -384,7 +384,7 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
     .filter((field) => field.updateable && !SALESFORCE_SYSTEM_FIELDS.includes(field.name))
     .map((field) => field.name);
 
-  const fieldNames = Array.from(new Set(['Id', ...fieldApiNames]));
+  const fieldNames = Array.from(new Set(['Id', ...updateableFieldNames]));
 
   return makeResponse(req, res, 200, true, 'fetch', fieldNames);
 };
