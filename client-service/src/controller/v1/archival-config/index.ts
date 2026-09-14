@@ -149,6 +149,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
         const { immediateObjects, scheduledObjects } = filtereObjects(req.body?.objects || []);
         if (immediateObjects.length > 0) {
+            await checkSalesforceApiLimitUsage(config.userId, config.crmId, 80);
             await triggerArchivalBackupJob({ user, config, objects: immediateObjects });
         }
 
