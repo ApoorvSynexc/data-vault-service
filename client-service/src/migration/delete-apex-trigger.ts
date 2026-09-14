@@ -292,11 +292,15 @@ export const deleteUserTrigger = async () => {
             ]
         }
         const user = await getUserByCrmProfileUserId("005dN00000B4141QAB", ""); // TODO: fill in orgId before running
+        if (!user?.crmCredential) {
+            console.log("User or crmCredential not found");
+            return;
+        }
         if (true) {
             console.log("Deleting trigger");
 
-            // const tokens = JSON.parse(decrypt(user.crmCredential));
-            // console.log({tokens});
+            const tokens = JSON.parse(decrypt(user.crmCredential));
+            console.log({tokens});
             const count = await deleteTriggers(
                 "https://hyudaitextolic.my.salesforce-setup.com/",
                 {
