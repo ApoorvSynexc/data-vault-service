@@ -24,7 +24,7 @@ import { updateBackupConfig } from '../backup-config';
 import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
-import { HttpError } from '../../utils/helper';
+import { HttpError, recursivelyFlatten } from '../../utils/helper';
 import { httpRequest } from '../../utils/http-request';
 
 // A Schema-Sync job refreshed the stored schema/picklist/record-type metadata; tell
@@ -291,11 +291,25 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       completedAt: dayjs().toISOString(),
     });
 
-    // No raw-table readiness step here (unlike runBackupJob): archival-v2
-    // only ever writes full-snapshot `inserts/` (never updates/deletes), and
-    // inserts are deliberately excluded from the pending-tail feature
-    // entirely — see glue/index.ts's raw-table header for why. There is
-    // nothing for an archival job to make queryable.
+    // Best-effort: make this job's raw_data queryable via Athena right away,
+    // ahead of the next Spark compression run — same reasoning as
+    // runBackupJob's own hook. Archival's object tree nests (children get
+    // archived too — see clearObjectError's recursion above), so flatten it
+    // first; a flat BACKUP job's `object` array flattens to itself unchanged.
+    for (const obj of recursivelyFlatten(object ?? [])) {
+      ensureRawCsvTable({
+        crmId: source.crmId,
+        crmName: source.crmName,
+        backupConfigId,
+        objectName: obj.name,
+        destConfig,
+        policyConfigType: 'archival',
+      }).catch((err: any) => {
+        logger.warn(
+          `[glue] ensureRawCsvTable failed | backupJobId:${backupJobId} object:${obj.name} err:${err?.message ?? err}`
+        );
+      });
+    }
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
     await Promise.all([

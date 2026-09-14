@@ -481,16 +481,25 @@ export const ensureDeltaTable = async (params: IEnsureCompressionTableParams): P
 // Raw-data tables — read directly over raw_data (CSV/JSON), for the pending
 // tail not yet folded into the Hudi/Delta compression output by Spark.
 //
-// Deliberately UPDATES AND DELETES ONLY — never inserts. An "inserts" folder
-// can hold an object's entire first-time full sync (potentially millions of
-// rows for a brand-new backup or a realtime object's initial Bulk-API load),
-// which is the opposite of the small, bounded tail this feature assumes; a
-// newly created record simply isn't visible here until the next Spark
-// compression run picks it up. Updates/deletes to an already-known record are
-// always small, incremental, and the more urgent staleness to close. This is
-// also why archival gets NO raw table at all: archival-v2 only ever writes
-// full-snapshot `inserts/` (confirmed — it never writes updates/deletes), so
-// there is nothing left for it under this rule.
+// A BACKUP config's "changed" listing (buildRawCsvChangedSql, client-service)
+// is deliberately UPDATES AND DELETES ONLY — never inserts. An "inserts"
+// folder can hold an object's entire first-time full sync (potentially
+// millions of rows for a brand-new backup or a realtime object's initial
+// Bulk-API load), which is the opposite of the small, bounded tail that query
+// assumes; a newly created record simply isn't visible there until the next
+// Spark compression run picks it up. Updates/deletes to an already-known
+// record are always small, incremental, and the more urgent staleness to
+// close.
+//
+// `inserts` IS still part of the raw_csv Glue table's operation partition
+// (see CSV_OPERATIONS below) for two other, narrower reads that don't share
+// that "could be millions of rows" problem: a targeted point-lookup by Id
+// (base-row reconstruction for a realtime diff with no other base), and an
+// ARCHIVAL config's own ENTIRE listing — archival-v2 only ever writes
+// full-snapshot `inserts/` (confirmed, never updates/deletes), and an
+// archival run is a bounded, policy-scoped batch, not an open-ended full
+// sync, so listing it wholesale is the intended behavior there, not the
+// "millions of rows" case this rule guards against for BACKUP.
 //
 // backupJobId is an `injected` partition-projection column: no partition is
 // ever registered or deleted in Glue for it (no BatchCreatePartitionCommand,
@@ -681,15 +690,19 @@ const ensureRawFormatTable = async (params: {
   return true;
 };
 
-// Full-row CSV table (schedule/bulk backups only — never archival, which has
-// its own inserts-only table). Partitioned over 'updates'/'deletes'/'inserts':
-// a schedule backup's "update" row is already a complete row (classified by
-// timestamp, not a diff), same as an insert — both are full-field snapshots.
-// 'inserts' is included so a record's very first full sync (exportFirstTime
-// writes ENTIRELY here — see schedule/backup/index.ts) stays reachable as a
-// base-row lookup for reconstructing a realtime diff when nothing has been
-// compressed yet (client-service's fetch-records/dry-run-diff), even though
-// the "changed" listing itself still hard-filters to updates/deletes only.
+// Full-row CSV table — schedule/bulk BACKUP jobs and ARCHIVAL jobs both use
+// this same table (identity.policyConfigType picks which S3 prefix it points
+// at; the two never collide since each config type has its own backupConfigId
+// and therefore its own Glue database). Partitioned over
+// 'updates'/'deletes'/'inserts': a schedule backup's "update" row is already
+// a complete row (classified by timestamp, not a diff), same as an insert —
+// both are full-field snapshots. 'inserts' covers three readers: a record's
+// very first full sync (exportFirstTime writes ENTIRELY here — see
+// schedule/backup/index.ts), used as a base-row lookup for reconstructing a
+// realtime diff when nothing has been compressed yet; and an ARCHIVAL
+// config's ENTIRE listing, which archival-v2 writes ENTIRELY as inserts too
+// (see runArchivalJob). A BACKUP config's "changed" listing itself still
+// hard-filters to updates/deletes only — see the file header above.
 const CSV_OPERATIONS: RawTableOperations = { kind: 'enum', values: ['updates', 'deletes', 'inserts'] };
 
 export const ensureRawCsvTable = async (params: IEnsureRawTableParams): Promise<boolean> => {

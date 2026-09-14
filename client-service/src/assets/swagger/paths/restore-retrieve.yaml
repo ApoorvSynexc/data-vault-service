@@ -264,7 +264,8 @@
     summary: Same as dry-run, but returns the records themselves paired with the destination org's current version
     description: >
       Each result pairs {changeRecord, salesforceRecord}, capped per object.
-      BACKUP configs only — ARCHIVAL 400s with dry_run_diff_backup_only.
+      ARCHIVAL configs only support source.type ENTIRE, same as /dry-run —
+      CHANGED_BETWEEN 400s with archival_dry_run_diff_entire_only.
       Read-only, no restore is performed.
     security: [{ cookieAuth: [] }]
     requestBody:
