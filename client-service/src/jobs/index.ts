@@ -7,19 +7,25 @@ import { logger } from '../middlewares';
 import { NODE_ENV } from '../constant';
 
 export const startCron = () => {
-    startBackupConfigCron();
+    // startBackupConfigCron();
 
-    if(['qa'].includes(NODE_ENV.toLowerCase())) return;
-    logger.info(`[CRON] cron registered | for 3AM, 11AM, 7PM`);
+
 
     // Staggered 8h apart so they never overlap: 3AM, 11AM, 7PM.
     cron.schedule('0 3 * * *', async () => {
         logger.info(`[CRON] cron triggered | 3AM | started`);
-        await runEmrJob();
-        await timer(1000 * 60 * 15);
         await runLogsArchive();
+        await timer(1000 * 60 * 15);
+
+        if (!['qa'].includes(NODE_ENV.toLowerCase())) {
+            await runEmrJob();
+        }
         logger.info(`[CRON] cron triggered | 3AM | ended`);
     });
+
+    if (['qa'].includes(NODE_ENV.toLowerCase())) return;
+    logger.info(`[CRON] cron registered | for 11AM, 7PM`);
+
     cron.schedule('0 11 * * *', async () => {
         logger.info(`[CRON] cron triggered | 11AM | started`);
         await runEmrJob();
