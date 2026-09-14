@@ -28,11 +28,31 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
       const [hour, minute] = (s.startTime ?? '00:00').split(':');
       return `cron(${minute} ${hour} ${s.monthDate ?? 1} * ? *)`;
     }
-    case 'CUSTOM':
-      if (s.startDate && s.startTime) {
-        return `cron(${s.startTime.split(':')[1]} ${s.startTime.split(':')[0]} ${new Date(s.startDate).getDate()} ${new Date(s.startDate).getMonth() + 1} ? ${new Date(s.startDate).getFullYear()})`;
+    case 'CUSTOM': {
+      if (!s.startDate || !s.startTime) {
+        throw new Error('CUSTOM schedule requires startDate and startTime');
       }
-      throw new Error('CUSTOM schedule requires startDate and startTime');
+      // CUSTOM repeats every `interval` <customFrequency> unit — same underlying
+      // rate()/cron() shape as the matching native frequency above, just keyed off
+      // customFrequency instead of `frequency` itself. startDate/endDate anchor and
+      // bound the recurrence via AWS's own StartDate/EndDate window (see
+      // RECURRING_FREQUENCIES/computeAwsScheduleWindow below), not the expression.
+      switch (s.customFrequency) {
+        case 'DAILY':
+          return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
+        case 'WEEKLY':
+          return `rate(${s.interval * 7} days)`;
+        case 'MONTHLY': {
+          // Same limitation as native MONTHLY above: AWS cron() has no "every N
+          // months" step syntax, so interval > 1 isn't honored here — it fires
+          // every month, on startDate's day-of-month, at startTime.
+          const [hour, minute] = s.startTime.split(':');
+          return `cron(${minute} ${hour} ${new Date(s.startDate).getDate()} * ? *)`;
+        }
+        default:
+          throw new Error(`Unsupported customFrequency: ${s.customFrequency}`);
+      }
+    }
     default:
       throw new Error(`Unsupported schedule frequency: ${s.frequency}`);
   }
@@ -104,23 +124,45 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
       }
       return next.toDate();
     }
-    case 'CUSTOM':
-      if (s.startDate) {
-        return combineDateAndTime(s.startDate, s.startTime, tz);
+    case 'CUSTOM': {
+      if (!s.startDate) {
+        throw new Error('CUSTOM schedule requires startDate and startTime');
       }
-      throw new Error('CUSTOM schedule requires startDate and startTime');
+      // Mirrors the native DAILY/WEEKLY/MONTHLY branches above, keyed off
+      // customFrequency instead of frequency — same anchor/reference logic.
+      switch (s.customFrequency) {
+        case 'DAILY':
+          return nextRateOccurrence(anchor, now, s.interval || 1, 'day');
+        case 'WEEKLY':
+          return nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
+        case 'MONTHLY': {
+          const day = anchor?.date() ?? dayjs.tz(s.startDate, tz).date();
+          const [hour, minute] = (s.startTime ?? '00:00').split(':').map(Number);
+          const reference = anchor && anchor.isAfter(now) ? anchor : now;
+          let next = reference.date(day).hour(hour).minute(minute).second(0).millisecond(0);
+          if (!next.isAfter(reference)) {
+            next = next.add(1, 'month');
+          }
+          return next.toDate();
+        }
+        default:
+          throw new Error(`Unsupported customFrequency: ${s.customFrequency}`);
+      }
+    }
     default:
       throw new Error(`Unsupported schedule frequency: ${s.frequency}`);
   }
 };
 
-// HOURLY/DAILY/WEEKLY/MONTHLY compile to rate()/cron() expressions that carry no
-// start instant of their own — AWS would otherwise start firing them immediately
-// on creation instead of at the user's chosen startDate/startTime. AWS's own
-// StartDate/EndDate fields on the schedule (ignored for one-time schedules, so
-// ONCE/CUSTOM — which already encode a fixed fire instant in the cron itself —
-// are left alone) anchor the window instead of reinventing it in the expression.
-const RECURRING_FREQUENCIES = new Set(['HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY']);
+// HOURLY/DAILY/WEEKLY/MONTHLY/CUSTOM compile to rate()/cron() expressions that carry
+// no start (or end) instant of their own — AWS would otherwise start firing them
+// immediately on creation instead of at the user's chosen startDate/startTime, and
+// never stop. AWS's own StartDate/EndDate fields on the schedule (ignored for
+// one-time schedules, so ONCE — which already encodes a fixed fire instant in the
+// cron itself — is left alone) anchor and bound the window instead of reinventing
+// it in the expression; for CUSTOM specifically, endDate is what actually stops
+// the recurrence, since the rate()/cron() itself has no notion of an end.
+const RECURRING_FREQUENCIES = new Set(['HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY', 'CUSTOM']);
 const computeAwsScheduleWindow = (scheduleConfig: IScheduleConfig): { startDate?: Date; endDate?: Date } => {
   const s = scheduleConfig.scheduling;
   if (!s || !RECURRING_FREQUENCIES.has(s.frequency)) {
