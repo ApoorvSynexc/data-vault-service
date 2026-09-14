@@ -51,7 +51,9 @@ const ensureGlueDatabase = async (databaseName: string, region: string): Promise
   logger.info(`[glue] ensureGlueDatabase start | db:${databaseName}`);
   const create = (async () => {
     try {
-      await getGlueClient(region).send(new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } }));
+      await getGlueClient(region).send(
+        new CreateDatabaseCommand({ DatabaseInput: { Name: databaseName } })
+      );
       logger.info(`[glue] created database | db:${databaseName}`);
     } catch (err: any) {
       if (err.name !== 'AlreadyExistsException') {
@@ -73,9 +75,15 @@ const ensureGlueDatabase = async (databaseName: string, region: string): Promise
   }
 };
 
-const glueTableExists = async (databaseName: string, tableName: string, region: string): Promise<boolean> => {
+const glueTableExists = async (
+  databaseName: string,
+  tableName: string,
+  region: string
+): Promise<boolean> => {
   try {
-    await getGlueClient(region).send(new GetTableCommand({ DatabaseName: databaseName, Name: tableName }));
+    await getGlueClient(region).send(
+      new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
+    );
     return true;
   } catch (err: any) {
     if (err instanceof EntityNotFoundException || err.name === 'EntityNotFoundException') {
@@ -574,9 +582,7 @@ interface IEnsureRawTableParams {
 // which still multiplexes updates+deletes under one table) or a single fixed
 // operation baked into the location as a literal path segment, no partition
 // column at all (the JSON tables, each dedicated to exactly one operation).
-type RawTableOperations =
-  | { kind: 'enum'; values: string[] }
-  | { kind: 'fixed'; value: string };
+type RawTableOperations = { kind: 'enum'; values: string[] } | { kind: 'fixed'; value: string };
 
 // Shared create-if-absent + schema-drift-sync body for all raw table shapes.
 // No partition sync step exists here (unlike ensureHudiFormatTable) —
@@ -596,7 +602,9 @@ const ensureRawFormatTable = async (params: {
   const { crmId, crmName, backupConfigId, objectName, destConfig, policyConfigType } = identity;
   const databaseName = buildGlueDatabaseName(backupConfigId);
 
-  logger.info(`[glue] ensure raw ${classification} table start | db:${databaseName} table:${tableName}`);
+  logger.info(
+    `[glue] ensure raw ${classification} table start | db:${databaseName} table:${tableName}`
+  );
   await ensureGlueDatabase(databaseName, destConfig.region);
   const glue = getGlueClient(destConfig.region);
 
@@ -657,7 +665,8 @@ const ensureRawFormatTable = async (params: {
       // not StorageDescriptor.Columns, so it must be compared explicitly or a
       // code-level enum change would silently never reach an already-created
       // table.
-      Table?.Parameters?.['projection.operation.values'] === projectionParams['projection.operation.values']
+      Table?.Parameters?.['projection.operation.values'] ===
+        projectionParams['projection.operation.values']
     ) {
       logger.info(`[glue] raw ${classification} table already up to date | table:${tableName}`);
       return false;
@@ -703,7 +712,10 @@ const ensureRawFormatTable = async (params: {
 // config's ENTIRE listing, which archival-v2 writes ENTIRELY as inserts too
 // (see runArchivalJob). A BACKUP config's "changed" listing itself still
 // hard-filters to updates/deletes only — see the file header above.
-const CSV_OPERATIONS: RawTableOperations = { kind: 'enum', values: ['updates', 'deletes', 'inserts'] };
+const CSV_OPERATIONS: RawTableOperations = {
+  kind: 'enum',
+  values: ['updates', 'deletes', 'inserts'],
+};
 
 export const ensureRawCsvTable = async (params: IEnsureRawTableParams): Promise<boolean> => {
   const columns = await resolveMainTableColumns(params.destConfig, params);
@@ -738,9 +750,7 @@ export const ensureRawJsonSnapshotTable = async (
 
 // {Id, LastModifiedDate, prev, new} sparse field-diff table — realtime UPDATE
 // events only. Fixed schema, no operation partition (always "updates").
-export const ensureRawJsonDeltaTable = async (
-  params: IEnsureRawTableParams
-): Promise<boolean> =>
+export const ensureRawJsonDeltaTable = async (params: IEnsureRawTableParams): Promise<boolean> =>
   ensureRawFormatTable({
     tableName: buildRawJsonDeltaTableName(params.backupConfigId, params.objectName),
     storageBase: JSON_STORAGE_DESCRIPTOR_BASE,

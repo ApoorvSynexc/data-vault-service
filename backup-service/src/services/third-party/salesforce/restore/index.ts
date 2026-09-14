@@ -111,7 +111,9 @@ const extractSuccessfulIdsCsv = (successfulCsv: string): string => {
   }
   const ids = lines
     .slice(1)
-    .filter((line) => createdColIndex === -1 || parseCsvRow(line)[createdColIndex]?.trim() === 'true')
+    .filter(
+      (line) => createdColIndex === -1 || parseCsvRow(line)[createdColIndex]?.trim() === 'true'
+    )
     .map((line) => parseCsvRow(line)[idColIndex]?.trim() ?? '');
   return ['Id', ...ids].join('\n');
 };
@@ -156,7 +158,11 @@ const submitIngestChunk = async (
   if (type === 'RESTORE' && processed - failed > 0) {
     const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, job.id);
     const idsOnlyCsv = extractSuccessfulIdsCsv(successfulCsv);
-    await uploadToS3(s3Config, `${successfulResultsPath}/${job.id}.csv`, Buffer.from(idsOnlyCsv, 'utf8'));
+    await uploadToS3(
+      s3Config,
+      `${successfulResultsPath}/${job.id}.csv`,
+      Buffer.from(idsOnlyCsv, 'utf8')
+    );
   }
 
   return {

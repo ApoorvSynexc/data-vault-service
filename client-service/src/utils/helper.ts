@@ -141,7 +141,11 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
   // number, and sanitizeNumericValue's .trim()/.replace() throw on anything
   // that isn't already a string.
   const strValue = String(value);
-  const lowerDataType = dataType.toLowerCase();
+  // trim(): a dataType string with stray whitespace (copy-paste, upstream
+  // metadata quirk) would silently fall through to the default: quoted-string
+  // branch below instead of matching a numeric case — trim it out here rather
+  // than let every case label carry its own defensive check.
+  const lowerDataType = dataType.trim().toLowerCase();
 
   switch (lowerDataType) {
     case 'string':
@@ -172,6 +176,11 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
       return isTruthy(strValue) ? 'true' : 'false';
 
     default:
+      // DIAGNOSTIC — remove once the DEF_267/currency-quoting mismatch is
+      // root-caused: an unrecognized dataType silently falls back to a
+      // quoted string, which is exactly wrong for a numeric field. Logging
+      // it here surfaces the actual value reaching this function.
+      console.log(`[formatSalesforceValueByDataType] unrecognized dataType=${JSON.stringify(dataType)} value=${JSON.stringify(value)}`);
       return `'${escapeSOQLString(strValue)}'`;
   }
 };
