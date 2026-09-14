@@ -52,6 +52,7 @@ import {
   updateRestoreJob,
   listS3Objects,
   getPresignedDownloadUrl,
+  checkSalesforceApiLimitUsage,
 } from '../../../services';
 import { BACKUP_JOB_TABLE, RESTORE_JOB_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -1158,6 +1159,20 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
+  const changedObjectNames: string[] = [];
+  if (backupConfig.type === 'NORMAL') {
+    const result = await runMetadataComparisonForConfig(backupConfig);
+    for (const { objectName, result: metadataResult } of result) {
+      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+        changedObjectNames.push(objectName);
+      }
+    }
+
+    if (changedObjectNames.length > 0) {
+      await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId, 80);
+    }
+  }
+
   const isDraft = body.status === 'DRAFT';
   const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? 'DRAFT' : 'IN_PROGRESS' };
   const created = await createRestore(payload);
@@ -1174,15 +1189,15 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   // Step 1: compare metadata comparison
-  const changedObjectNames: string[] = [];
+  // const changedObjectNames: string[] = [];
   try {
     if (backupConfig.type === 'NORMAL') {
-      const result = await runMetadataComparisonForConfig(backupConfig);
-      for (const { objectName, result: metadataResult } of result) {
-        if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-          changedObjectNames.push(objectName);
-        }
-      }
+      // const result = await runMetadataComparisonForConfig(backupConfig);
+      // for (const { objectName, result: metadataResult } of result) {
+      //   if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+      //     changedObjectNames.push(objectName);
+      //   }
+      // }
 
       if (changedObjectNames.length) {
         await triggerBackupJob({
