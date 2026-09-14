@@ -56,7 +56,7 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
   return active;
 };
 
-const postBackupJobToService = async (params: {
+const submitBackupJobRequest = async (params: {
   backupConfigId: string;
   endpoint: string;
   body: string;
@@ -142,7 +142,7 @@ const triggerArchivalBackupJob = async (params: {
   let result;
   const postStart = Date.now();
   try {
-    result = await postBackupJobToService({ backupConfigId: config.backupConfigId, endpoint, body: bodyStr });
+    result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: bodyStr });
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ok | durationMs=${Date.now() - postStart}`);
   } catch (error) {
     logger.error(`[ARCH-TRIG] configId=${config.backupConfigId} POST FAILED | durationMs=${Date.now() - postStart} error=${(error as Error)?.message ?? String(error)}`);
@@ -211,7 +211,7 @@ const triggerBackupJob = async (params: {
     };
 
     const endpoint = type === 'archival' ? '/archival' : '';
-    const result = await postBackupJobToService({ backupConfigId: config.backupConfigId, endpoint, body: JSON.stringify(payload) });
+    const result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: JSON.stringify(payload) });
 
     await updateBackupConfig(config.backupConfigId, { lastBackupAt: currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
     return result;
@@ -785,7 +785,7 @@ const getMonthlyStatsByCrmCurrentYear = async (crmId: string): Promise<Array<{ m
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
-  postBackupJobToService,
+  submitBackupJobRequest,
   runBackupNow,
   hasActiveBackupJob,
   resumeBackupJob,
