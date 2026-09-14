@@ -6,6 +6,9 @@ export interface IScheduleConfig {
 
 export interface IScheduling {
   frequency: 'ONCE' | 'HOURLY' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'CUSTOM';
+  // Required when frequency === 'CUSTOM' — selects which recurrence unit `interval`
+  // repeats on (e.g. every `interval` weeks), bounded by startDate/endDate below.
+  customFrequency?: 'DAILY' | 'WEEKLY' | 'MONTHLY';
   interval: number;
   weekDays?: string[];
   monthDate?: number;
