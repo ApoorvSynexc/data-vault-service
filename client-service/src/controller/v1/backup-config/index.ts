@@ -24,14 +24,14 @@ import {
   getSalesforceProfile,
   initalizePayloadTransform,
   hasActiveBackupJob,
-  syncMetadataAndTriggers,
   getUser,
   getDecryptedCrmCredential,
   runMetadataComparisonForConfig,
   hasMetadataChanged,
+  getDecryptedDestinationConfig,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE, BACKUP_SERVICE, INTERNAL_SECRET } from '../../../constant';
 import { salesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/index';
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
@@ -45,6 +45,7 @@ import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 import { syncObjects } from '../../../jobs/sync-objects';
+import { httpRequest } from '../../../utils/http-request';
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -446,13 +447,13 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
 
   const changedObjectNames: any = [];
   const result = await runMetadataComparisonForConfig(config);
- for (const { objectName, result: metadataResult } of result) {
-      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-        changedObjectNames.push(objectName);
-      }
+  for (const { objectName, result: metadataResult } of result) {
+    if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+      changedObjectNames.push(objectName);
     }
+  }
   makeResponse(req, res, 201, true, 'create', result);
-  await syncObjects({backupConfig: config, user: backupCreatedUser});
+  await syncObjects({ backupConfig: config, user: backupCreatedUser });
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -588,6 +589,48 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
     });
     await updateBackupConfig(config.backupConfigId, { triggerResults });
     makeResponse(req, res, 200, true, 'update', { triggerName: recovered.triggerName, status: 'CREATED' });
+
+    // Backup All data for this particular object
+    const destination = await getDestinationById(config.destinationId);
+    if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
+
+    const currentObject = config.objects?.find((object) => object.name === objectApiName);
+    if (!currentObject) throw new Error(`object_not_found:${objectApiName}`);
+
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    const payload = {
+      userId: config.userId,
+      backupConfigId: config.backupConfigId,
+      source: {
+        access_token,
+        refresh_token,
+        crmId: crm.crmId,
+        crmName: crm.crmName,
+        instanceUrl,
+        object: [
+          {
+            name: currentObject?.name,
+            ...(currentObject.id ? { id: currentObject.id } : {})
+          }
+        ],
+      },
+      destination: {
+        type: destination.type,
+        config: getDecryptedDestinationConfig(destination),
+      }
+    };
+
+    try {
+      await httpRequest({
+        url: `${BACKUP_SERVICE}/v1/backup-job`,
+        method: 'POST',
+        headers: { 'x-internal-secret': INTERNAL_SECRET },
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
+      throw error;
+    }
   } catch (error) {
     logger.error(`Trigger recovery failed for backupConfigId ${backupConfigId}, recordId ${recordId}: `, error);
     const reason = error instanceof Error ? error.message : String(error);

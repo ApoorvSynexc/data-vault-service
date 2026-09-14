@@ -58,9 +58,8 @@ const syncObjects = async (params: ISyncObject) => {
                 },
             }));
             const updateObjects = [...(backupConfig.objects || []), ...formatObject];
-            await updateBackupConfig(backupConfig.backupConfigId, { objects: updateObjects });
 
-            await updateBackupConfig(backupConfig.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+            await updateBackupConfig(backupConfig.backupConfigId, { objects: updateObjects, backupStatus: BACKUP_STATUS.pending });
             const payload = {
                 userId: backupConfig.userId,
                 backupConfigId: backupConfig.backupConfigId,
