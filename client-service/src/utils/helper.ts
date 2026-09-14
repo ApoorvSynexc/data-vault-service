@@ -112,6 +112,10 @@ const formatFieldValuesForSOQL = (fields: any[]): any[] => {
       return field;
     }
 
+    if(field.name == 'Currency__c') {
+      console.log('FIELD DATA ', JSON.stringify(field));
+    }
+
     const formattedValue = formatSalesforceValueByDataType(field.filter.value, field.dataType);
 
     return {
