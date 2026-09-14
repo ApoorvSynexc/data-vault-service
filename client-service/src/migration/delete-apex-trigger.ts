@@ -1,5 +1,4 @@
-import { deleteTriggers, getUserByCrmProfileUserId } from "../services"
-import { decrypt } from "../utils/encryption";
+import { deleteTriggers, getDecryptedCrmCredential, getUserByCrmProfileUserId } from "../services"
 
 export const deleteUserTrigger = async () => {
     try {
@@ -292,22 +291,20 @@ export const deleteUserTrigger = async () => {
             ]
         }
         const user = await getUserByCrmProfileUserId("005dN00000B4141QAB", ""); // TODO: fill in orgId before running
-        if (true) {
+        if (user) {
             console.log("Deleting trigger");
 
-            // const tokens = JSON.parse(decrypt(user.crmCredential));
-            // console.log({tokens});
+            const tokens = getDecryptedCrmCredential(user);
             const count = await deleteTriggers(
                 "https://hyudaitextolic.my.salesforce-setup.com/",
                 {
-                    accessToken: "00DdN00000wY1pt!AQEAQCkRxVV1ajMnqGE0SjmpOjMfUE9nW4PLVvOE3yI7SHDUZhkCg8_t4hcLzUP3Gv5jBFTnlD9MaceKjDdoE6e.5yBvmwAu",
-                    refreshToken: "",
+                    accessToken: tokens.access_token,
+                    refreshToken: tokens.refresh_token,
                 },
                 backupConfig
             );
             console.log(`Trigger deleted length: ${count.length}`);
             console.log(JSON.stringify({count}));
-            
         }
     } catch (error) {
         console.log("Error in migration: ", error);
