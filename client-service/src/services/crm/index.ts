@@ -80,32 +80,6 @@ const getCrmById = async (crmId: string): Promise<ICrm | null> => {
   return (result.Item as ICrm) ?? null;
 };
 
-const disconnectCrm = async (crmId: string): Promise<ICrm | null> => {
-  const existing = await getCrmById(crmId);
-
-  if (!existing) {
-    return null;
-  }
-
-  const updatedAt = new Date().toISOString();
-
-  await docClient.send(
-    new UpdateCommand({
-      TableName: CRM_TABLE,
-      Key: { crmId },
-      UpdateExpression: 'SET updatedAt = :updatedAt',
-      ExpressionAttributeValues: {
-        ':updatedAt': updatedAt,
-      },
-    })
-  );
-
-  return {
-    ...existing,
-    updatedAt,
-  };
-};
-
 const deleteCrm = async (crmId: string): Promise<boolean> => {
   const existing = await getCrmById(crmId);
   if (!existing) {
@@ -120,64 +94,6 @@ const deleteCrm = async (crmId: string): Promise<boolean> => {
   );
 
   return true;
-};
-
-const reconnectCrm = async (params: UpsertCrmParams): Promise<ICrm | null> => {
-  const { crmId, organizationId, environment, name } = params;
-
-  if (!crmId) {
-    throw new Error('crmId is required');
-  }
-
-  const existing = await getCrmById(crmId);
-
-  if (!existing) {
-    return null;
-  }
-
-  if (existing?.organizationId !== organizationId) {
-    throw new Error(`Organization ID mismatch. Reconnection failed. Please try with this ${existing.organizationId} organization or contact support.`);
-  }
-
-  const updatedAt = new Date().toISOString();
-  const resolvedEnvironment = environment ?? 'production';
-
-  const updateExpressionParts = [
-    'SET organizationId = :organizationId, #status = :status, environment = :environment, updatedAt = :updatedAt',
-  ];
-  const expressionAttributeValues: Record<string, any> = {
-    ':organizationId': organizationId,
-    ':status': STATUS.active,
-    ':environment': resolvedEnvironment,
-    ':updatedAt': updatedAt,
-  };
-
-  if (name) {
-    updateExpressionParts[0] += ', #name = :name';
-    expressionAttributeValues[':name'] = name;
-  }
-
-  await docClient.send(
-    new UpdateCommand({
-      TableName: CRM_TABLE,
-      Key: { crmId },
-      UpdateExpression: updateExpressionParts.join(' '),
-      ExpressionAttributeNames: {
-        '#status': 'status',
-        ...(name && { '#name': 'name' }),
-      },
-      ExpressionAttributeValues: expressionAttributeValues,
-    })
-  );
-
-  return {
-    ...existing,
-    organizationId,
-    environment: resolvedEnvironment,
-    name,
-    status: STATUS.active,
-    updatedAt,
-  };
 };
 
 const getCrmByOrgId = async (orgId: string): Promise<ICrm | null> => {
@@ -244,10 +160,8 @@ const updateCrm = async (crmId: string, updates: Record<string, any>): Promise<I
 
 export {
   upsertCrm,
-  reconnectCrm,
   getCrmById,
   getCrmByOrgId,
-  disconnectCrm,
   deleteCrm,
   updateCrm,
 };
