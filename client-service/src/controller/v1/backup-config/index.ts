@@ -629,7 +629,7 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
       });
     } catch (error) {
       await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
-      throw error;
+      logger.error(`Backup job failed for backupConfigId: ${config.backupConfigId}, objectApiName: ${objectApiName}`, error);
     }
   } catch (error) {
     logger.error(`Trigger recovery failed for backupConfigId ${backupConfigId}, recordId ${recordId}: `, error);
