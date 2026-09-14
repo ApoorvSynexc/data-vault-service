@@ -240,7 +240,7 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const test = await createPaymentAccount('00Df600000T9DlJEAV', '005f6000008QmlyAAC');
+  const test = await createPaymentAccount('00DcY000005yJuXUAU', '005cY00000HTofbQAD');
   makeResponse(req, res, 200, true, 'create', test);
 }
 
