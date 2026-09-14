@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig, ITriggerResult, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
-import { appendObjectsToBackupConfig, getBackupConfigsByCrm } from '../../backup-config';
+import { getBackupConfigsByCrm } from '../../backup-config';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
 import { METADATA_API_VERSION as API_VERSION } from './metadata-api';
@@ -1334,11 +1334,6 @@ const realTimeTriggerManagement = async (
     const objectApiNames = config.objectNames;
 
     if (operation === 'create') {
-      // const expandedNames = await expandWithMasterChildren(user, objectApiNames);
-      // // Children get a trigger, so they get backed up — record them on the config
-      // // too, otherwise every config-driven reader (Glue, restore listing, UI) stays
-      // // blind to data that is already landing in S3 under the child's own name.
-      // await appendObjectsToBackupConfig(config.backupConfigId, expandedNames);
       return createTriggers(instanceUrl, tokens, objectApiNames);
     }
     if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
