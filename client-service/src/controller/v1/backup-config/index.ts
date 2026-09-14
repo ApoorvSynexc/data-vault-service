@@ -14,6 +14,7 @@ import {
   getTableCounter,
   buildBackupConfigCounterKey,
   triggerBackupJob,
+  postBackupJobToService,
   runBackupNow,
   getCrmById,
   getDestinationById,
@@ -31,7 +32,7 @@ import {
   getDecryptedDestinationConfig,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE, BACKUP_SERVICE, INTERNAL_SECRET } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
 import { salesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/index';
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
@@ -45,7 +46,6 @@ import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
 import { syncObjects } from '../../../jobs/sync-objects';
-import { httpRequest } from '../../../utils/http-request';
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -622,14 +622,8 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
     };
 
     try {
-      await httpRequest({
-        url: `${BACKUP_SERVICE}/v1/backup-job`,
-        method: 'POST',
-        headers: { 'x-internal-secret': INTERNAL_SECRET },
-        body: JSON.stringify(payload),
-      });
+      await postBackupJobToService({ backupConfigId: config.backupConfigId, endpoint: '', body: JSON.stringify(payload) });
     } catch (error) {
-      await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
       logger.error(`Backup job failed for backupConfigId: ${config.backupConfigId}, objectApiName: ${objectApiName}`, error);
     }
   } catch (error) {

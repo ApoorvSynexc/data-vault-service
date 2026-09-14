@@ -8,6 +8,16 @@ export interface ISoqlCountQuery {
   soql: string;
 }
 
+// One object's filter condition failed to turn into SOQL (e.g. an invalid
+// value for its data type) — kept separate from the Composite API's own
+// per-object errors so a bad filter on one object can't take the whole
+// batch down before any Salesforce call is even made.
+export interface ISoqlBuildError {
+  id: string;
+  name: string;
+  error: string;
+}
+
 // Ported from backup-service/src/services/third-party/salesforce/schedule/archival-v2
 // — same WHERE-building rules, adapted to client-service's ISalesforceObject/
 // IFieldFilter shape.
@@ -31,6 +41,24 @@ const DATE_LITERALS = new Set([
 const isDateLiteral = (value: string): boolean =>
   DATE_LITERALS.has(value.toUpperCase()) ||
   /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(value);
+
+// LIMIT/OFFSET/ORDER BY apply to a whole query, not to a boolean condition —
+// a raw SOQL condition body gets wrapped inside `AND (...)`, so any of these
+// would land inside that parenthesized expression and produce invalid SOQL.
+// Caught here with a message naming the actual keyword, instead of letting it
+// through to fail later with a parser error that points at an unrelated token.
+const TOP_LEVEL_CLAUSE_RE = /\b(LIMIT|OFFSET|ORDER\s+BY)\b/i;
+export const assertNoTopLevelClauses = (body: string): void => {
+  // Drop quoted string literals first so a legitimate value like
+  // "Notes__c LIKE '%offset%'" isn't mistaken for the clause keyword.
+  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
+  const match = withoutStringLiterals.match(TOP_LEVEL_CLAUSE_RE);
+  if (match) {
+    throw new Error(
+      `SOQL condition cannot contain ${match[1].toUpperCase()} — LIMIT/OFFSET/ORDER BY apply to the whole query, not a filter condition. Remove it from your query.`
+    );
+  }
+};
 
 const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number], preformattedValue: string): string => {
   const { name, dataType } = f;
@@ -90,6 +118,9 @@ const buildWhereClause = (object: ISalesforceObject): string => {
   if (condition.type === 'SOQL') {
     const soqlQuery: string = condition.soqlQuery ?? '';
     const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
+    if (body) {
+      assertNoTopLevelClauses(body);
+    }
     return body ? `WHERE ${body}` : '';
   }
 
@@ -157,22 +188,43 @@ const transformWhereBodyForChild = (whereBody: string, fkFieldName: string): str
   );
 };
 
+// Every id/name pair in a subtree — used to fail a whole branch at once when
+// its parent's WHERE clause can't be built (children propagate off it, so
+// they can't be resolved independently either).
+const collectSubtreeIds = (object: ISalesforceObject): Array<{ id: string; name: string }> => {
+  const ids = [{ id: object.id, name: object.name }];
+  object.children?.forEach((child) => ids.push(...collectSubtreeIds(child)));
+  return ids;
+};
+
 const generateObjectSoql = (
   object: ISalesforceObject,
   ancestorWhereBody: string,
-  queries: ISoqlCountQuery[]
+  queries: ISoqlCountQuery[],
+  buildErrors: ISoqlBuildError[]
 ): void => {
-  const ownWhereClause = buildWhereClause(object);
-  const ownWhereBody = ownWhereClause.replace(/^WHERE\s+/i, '').trim();
-
   let effectiveWhereBody: string;
-  if (object.fieldApiName) {
-    const propagated = ancestorWhereBody
-      ? transformWhereBodyForChild(ancestorWhereBody, object.fieldApiName)
-      : `${object.fieldApiName} != null`;
-    effectiveWhereBody = ownWhereBody ? `(${propagated}) AND (${ownWhereBody})` : propagated;
-  } else {
-    effectiveWhereBody = ownWhereBody;
+  try {
+    const ownWhereClause = buildWhereClause(object);
+    const ownWhereBody = ownWhereClause.replace(/^WHERE\s+/i, '').trim();
+
+    if (object.fieldApiName) {
+      const propagated = ancestorWhereBody
+        ? transformWhereBodyForChild(ancestorWhereBody, object.fieldApiName)
+        : `${object.fieldApiName} != null`;
+      effectiveWhereBody = ownWhereBody ? `(${propagated}) AND (${ownWhereBody})` : propagated;
+    } else {
+      effectiveWhereBody = ownWhereBody;
+    }
+  } catch (error: any) {
+    const message = error?.message ?? 'Failed to build filter condition';
+    buildErrors.push({ id: object.id, name: object.name, error: message });
+    object.children?.forEach((child) => {
+      collectSubtreeIds(child).forEach(({ id, name }) =>
+        buildErrors.push({ id, name, error: `parent ${object.name} failed: ${message}` })
+      );
+    });
+    return;
   }
 
   const soqlWhere = effectiveWhereBody
@@ -188,18 +240,23 @@ const generateObjectSoql = (
 
   if (object.children?.length) {
     for (const child of object.children) {
-      generateObjectSoql(child, effectiveWhereBody, queries);
+      generateObjectSoql(child, effectiveWhereBody, queries, buildErrors);
     }
   }
 };
 
 // Entry point — flattens the whole object tree (root objects + every
 // descendant) into one array of COUNT() queries, ready to hand to the
-// Composite API in as few calls as possible.
-export const generateSoqlQueries = (objects: ISalesforceObject[]): ISoqlCountQuery[] => {
+// Composite API in as few calls as possible. An object whose own filter
+// fails to build is reported in buildErrors instead of aborting every other
+// object's query — one bad filter shouldn't fail the whole dry run.
+export const generateSoqlQueries = (
+  objects: ISalesforceObject[]
+): { queries: ISoqlCountQuery[]; buildErrors: ISoqlBuildError[] } => {
   const queries: ISoqlCountQuery[] = [];
+  const buildErrors: ISoqlBuildError[] = [];
   for (const object of objects) {
-    generateObjectSoql(object, '', queries);
+    generateObjectSoql(object, '', queries, buildErrors);
   }
-  return queries;
+  return { queries, buildErrors };
 };
