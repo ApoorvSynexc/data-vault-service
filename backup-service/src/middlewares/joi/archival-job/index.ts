@@ -42,6 +42,7 @@ const objectSchema = Joi.object({
   sizeInBytes: Joi.number().optional(),
   field: Joi.array().items(objectFieldSchema).required(),
   children: Joi.array().items(Joi.link('#object')).optional(),
+  includeChild: Joi.boolean().optional(),
 }).id('object');
 
 const sourceSchema = Joi.object({
