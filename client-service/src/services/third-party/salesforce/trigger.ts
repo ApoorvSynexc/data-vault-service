@@ -1001,7 +1001,7 @@ const createTriggers = async (
       results.push({ objectApiName, triggerName, testClassName, status: 'CREATED' });
       await timer(500);
     } catch (err) {
-      console.log(`Error creating trigger for ${objectApiName}:`, err);
+      logger.error(`Error creating trigger for ${objectApiName}: ${err}`);
       results.push({
         objectApiName,
         triggerName,
@@ -1016,7 +1016,7 @@ const createTriggers = async (
   try {
     await setupPermissionSet(instanceUrl, tokens, results);
   } catch (error) {
-    console.error('Error setting up permission set:', error);
+    logger.error(`Error setting up permission set: ${error}`);
   }
   return results;
 };
@@ -1341,7 +1341,7 @@ const realTimeTriggerManagement = async (
     if (operation === 'delete') { return deleteTriggers(instanceUrl, tokens, config); }
     throw new Error(`invalid_operation:${operation}`);
   } catch (error) {
-    console.log(`Error during trigger ${operation}:`, error);
+    logger.error(`Error during trigger ${operation}: ${error}`);
     return [{
       objectApiName: 'N/A',
       status: 'FAILED',

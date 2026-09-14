@@ -8,6 +8,7 @@ import {
 } from '../../../constant';
 import { encrypt } from '../../../utils/encryption';
 import { updateUser } from '../../user';
+import { logger } from '../../../middlewares';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -102,21 +103,19 @@ const salesforceRequest = async <T = any>(
     const data = await makeCall(tokens.accessToken);
     return { data, accessToken: tokens.accessToken };
   } catch (error: any) {
-    console.log('Salesforce request failed, checking for 401 to refresh token...', error?.message);
     if (!error?.message?.startsWith('HTTP Error 401')) {
       throw error;
     }
+    logger.info(`Salesforce request got 401, refreshing token: ${error?.message}`);
 
     // Access token expired — refresh and retry once.
     // Use deduplicatedRefresh when crmId is available so that N concurrent
     // callers on the same CRM share a single refresh call instead of racing.
     let refreshed: any;
     try {
-      console.log('Refreshing Token');
       refreshed = await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
-      console.log('Refreshing Token success');
     } catch (e: any) {
-      console.log('Refreshing Token failed', e?.message);
+      logger.error(`Salesforce token refresh failed: ${e?.message}`);
       // Refresh token also expired — user must reconnect
       throw new SalesforceAuthExpiredError();
     }

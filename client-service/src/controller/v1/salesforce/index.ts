@@ -85,9 +85,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   const { crm }: { crm: ICrm } = req.salesforcePayload;
   const { crmId } = crm;
 
-  console.log('CRM ==> ' + JSON.stringify(crm));
   const usersByCrmId = await getUsersByCrmId(crmId);
-  console.log('GETTING USERS ==> ' + JSON.stringify(usersByCrmId));
   const users = [];
   for await (const element of usersByCrmId) {
     const role = await getRole({ roleId: element.role.roleId });
@@ -108,8 +106,6 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
     }
   }
 
-  console.log('USERS ==> ' + JSON.stringify(users));
-  console.log('CRM ==> ' + JSON.stringify(crm));
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
   res.status(200).json(encryptSalesforceResponse(crm, { users }));
@@ -124,8 +120,6 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
     return;
   }
-
-  console.log(JSON.stringify({decryptedBody}));
 
   const result = [];
   for await (const user of users) {
@@ -289,13 +283,6 @@ const confirmAdminUserCreatedHandler = async (req: IRequest, res: IResponse): Pr
     res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'USER_NOT_FOUND' }));
     return;
   }
-
-  // If need update the CRM Table
-  // const crm = await getCrmByOrgId(existingUser.crmProfile?.organizationId ?? '');
-  // if (!crm) {
-  //   res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'CRM_NOT_FOUND' }));
-  //   return;
-  // }
 
   res.status(200).json(encryptSalesforceResponse(crm, { success: true }));
 };

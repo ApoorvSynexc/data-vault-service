@@ -2,6 +2,7 @@ import Joi from 'joi';
 import { NextFunction, Response } from 'express';
 import { IRequest } from '../../../lib/interface/shared';
 import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
+import { logger } from '../../logger';
 
 const profileSchema = Joi.object({
   organizationId: Joi.string().required(),
@@ -48,7 +49,7 @@ export const upsertUsersValidation = (req: IRequest, res: Response, next: NextFu
     // Log the exact Joi error so 400 VALIDATION_FAILED responses can be
     // diagnosed on the Node side — matches the log the other two validators
     // in this file already emit.
-    console.log({ upsertUsersValidationError: error.details.map((d) => ({ path: d.path.join('.'), message: d.message })) });
+    logger.error(`upsertUsersValidation failed: ${JSON.stringify(error.details.map((d) => ({ path: d.path.join('.'), message: d.message })))}`);
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
     return;
   }
@@ -79,7 +80,7 @@ export const createRoleValidation = (req: IRequest, res: Response, next: NextFun
 
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
-    console.log({ Error: error });
+    logger.error(`createRoleValidation failed: ${error.message}`);
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
     return;
   }
@@ -100,7 +101,7 @@ export const updateRoleValidation = (req: IRequest, res: Response, next: NextFun
 
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
-    console.log({ error });
+    logger.error(`updateRoleValidation failed: ${error.message}`);
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
     return;
   }

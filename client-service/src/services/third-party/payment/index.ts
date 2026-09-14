@@ -111,7 +111,6 @@ const createPaymentAccount = async (orgId: string, userId: string): Promise<Crea
         user_id: userId,
       }),
     });
-    console.log({response})
   } catch (err: any) {
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'Create360Account request failed');
   }
@@ -157,7 +156,6 @@ const setupPayment = async ({
         message: encryptedMessage,
       }),
     });
-    console.log({response})
   } catch (err: any) {
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }
