@@ -6,11 +6,7 @@ export const deleteUserTrigger = async () => {
         const backupConfig: any = {
             triggerResults: [
                 {
-                    triggerName: "DataVault_Lead_Trigger",
-                    status: 'CREATED'
-                },
-                {
-                    triggerName: "DataVault_UserPrioritizedRecord_Trigger",
+                    objectApiName: "Account",
                     status: 'CREATED'
                 },
                 // {
@@ -304,9 +300,8 @@ export const deleteUserTrigger = async () => {
             const count = await deleteTriggers(
                 "https://hyudaitextolic.my.salesforce-setup.com/",
                 {
-                    //accessToken: "00DdN00000wY1pt!AQEAQD61pSHSEx8QrApedKVh.jsP2.kN2dolJbecF3XGBxqNnkhLS5gRV.xHbYuuTR9LPFhzFI.GPC5anKTLiCIS6XGV8VvC",
-                    accessToken: "",
-                    refreshToken: "",
+                    accessToken: "00DdN00000wY1pt!AQEAQCkRxVV1ajMnqGE0SjmpOjMfUE9nW4PLVvOE3yI7SHDUZhkCg8_t4hcLzUP3Gv5jBFTnlD9MaceKjDdoE6e.5yBvmwAu",
+                    refreshToken: tokens.refresh_token,
                 },
                 backupConfig
             );

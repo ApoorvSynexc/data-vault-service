@@ -136,6 +136,11 @@ const sanitizeNumericValue = (value: string): string => value.trim().replace(/[^
 const formatSalesforceValueByDataType = (value: string, dataType: string): string => {
   if (!value && value !== '0' && value !== 'false') return value;
 
+  // Field-Level filter values reach here typed as `string` only at compile
+  // time — a numeric input (Currency, Percent, ...) can arrive as a real JS
+  // number, and sanitizeNumericValue's .trim()/.replace() throw on anything
+  // that isn't already a string.
+  const strValue = String(value);
   const lowerDataType = dataType.toLowerCase();
 
   switch (lowerDataType) {
@@ -147,13 +152,13 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
     case 'url':
     case 'picklist':
     case 'multipicklist':
-      return `'${escapeSOQLString(value)}'`;
+      return `'${escapeSOQLString(strValue)}'`;
 
     case 'date':
-      return `'${formatDate(value)}'`;
+      return `'${formatDate(strValue)}'`;
 
     case 'datetime':
-      return `'${formatDateTime(value)}'`;
+      return `'${formatDateTime(strValue)}'`;
 
     case 'integer':
     case 'double':
@@ -161,13 +166,13 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
     case 'currency':
     case 'percent':
     case 'number':
-      return sanitizeNumericValue(value);
+      return value;
 
     case 'boolean':
-      return isTruthy(value) ? 'true' : 'false';
+      return isTruthy(strValue) ? 'true' : 'false';
 
     default:
-      return `'${escapeSOQLString(value)}'`;
+      return `'${escapeSOQLString(strValue)}'`;
   }
 };
 
