@@ -1,10 +1,9 @@
-import { BACKUP_SERVICE, BACKUP_STATUS, INTERNAL_SECRET } from "../constant";
+import { BACKUP_STATUS } from "../constant";
 import { logger } from "../middlewares";
 import { IBackupConfig, IObject, IUser } from "../models";
 import { v4 as uuidv4 } from 'uuid';
-import { createTriggers, deleteTriggers, getCrmById, getDecryptedCrmCredential, getDecryptedDestinationConfig, getDestinationById, getSourceObjects, SalesforceAuthExpiredError, SalesforceTokens, updateBackupConfig } from "../services";
+import { createTriggers, deleteTriggers, getCrmById, getDecryptedCrmCredential, getDecryptedDestinationConfig, getDestinationById, getSourceObjects, postBackupJobToService, SalesforceAuthExpiredError, SalesforceTokens, updateBackupConfig } from "../services";
 import { salesforceObjectFilteredList } from "../services/third-party/salesforce/metadata/index";
-import { httpRequest } from "../utils/http-request";
 
 interface ISyncObject {
     backupConfig: IBackupConfig
@@ -76,12 +75,7 @@ const syncObjects = async (params: ISyncObject) => {
                 }
             };
 
-            await httpRequest({
-                url: `${BACKUP_SERVICE}/v1/backup-job/`,
-                method: 'POST',
-                headers: { 'x-internal-secret': INTERNAL_SECRET },
-                body: JSON.stringify(payload),
-            });
+            await postBackupJobToService({ backupConfigId: backupConfig.backupConfigId, endpoint: '/', body: JSON.stringify(payload) });
 
             if (backupConfig.schedule === 'REALTIME') {
                 const objectApiNames = formatObject.map((obj: IObject) => obj.name);

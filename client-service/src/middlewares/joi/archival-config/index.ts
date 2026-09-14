@@ -19,10 +19,26 @@ const fieldFilterSchema = Joi.object({
     value: Joi.any().required(),
 });
 
+// Same 15/18-char Salesforce key format already enforced for record ids
+// elsewhere (see services/third-party/salesforce/records-by-ids.ts).
+const RECORD_ID_RE = /^[A-Za-z0-9]{15,18}$/;
+const recordIdFieldFilterSchema = fieldFilterSchema.keys({
+    value: Joi.string().pattern(RECORD_ID_RE).required().messages({
+        'string.pattern.base': 'Record ID must be a valid 15 or 18 character Salesforce ID',
+    }),
+});
+
 const objectFieldSchema = Joi.object({
     name: Joi.string().required(),
     dataType: Joi.string().required(),
-    filter: fieldFilterSchema.required(),
+    // SOQL mode gets this for free from Salesforce's own query validation —
+    // Field-Level filter never calls that API, so a bad Record ID length
+    // has to be caught here instead.
+    filter: Joi.when(Joi.ref('dataType', { adjust: (value: string) => String(value).toLowerCase() }), {
+        is: Joi.string().valid('id', 'reference'),
+        then: recordIdFieldFilterSchema.required(),
+        otherwise: fieldFilterSchema.required(),
+    }),
 });
 
 const conditionSchema = Joi.object({

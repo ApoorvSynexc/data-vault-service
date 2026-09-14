@@ -59,11 +59,19 @@ const attachCounts = (
 export const dryRunV2 = async (payload: IDryRunV2Payload): Promise<IDryRunV2Result> => {
   const { user, objects } = payload;
 
-  const queries = generateSoqlQueries(objects);
+  const { queries, buildErrors } = generateSoqlQueries(objects);
+  console.log(JSON.stringify({ queries, buildErrors }));
   logger.info(`[dry-run-v2] generated ${queries.length} SOQL count quer${queries.length === 1 ? 'y' : 'ies'}`);
 
   const { results, apiCallCount } = await fetchCountsFromSalesforce(user, queries);
-  const countsById = new Map(results.map((result) => [result.id, result]));
+
+  // Objects that failed to even build a query (e.g. an invalid filter value)
+  // are reported the same way as a Salesforce-side failure — one bad object
+  // shouldn't hide the counts the rest of the tree successfully got back.
+  const countsById = new Map<string, ICountResult>(results.map((result) => [result.id, result]));
+  buildErrors.forEach(({ id, name, error }) => {
+    countsById.set(id, { id, name, count: null, success: false, error });
+  });
   const soqlById = new Map(queries.map((query) => [query.id, query.soql]));
 
   return { objects: attachCounts(objects, countsById, soqlById), apiCallCount };
