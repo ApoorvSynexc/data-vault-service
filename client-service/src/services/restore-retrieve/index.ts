@@ -12,7 +12,7 @@ import { getUser } from '../user';
 import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third-party/salesforce/metadata/index';
 import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
-import { tableExists } from '../third-party/athena/glue';
+import { tableExists, getTableColumns } from '../third-party/athena/glue';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
@@ -973,8 +973,20 @@ const retrieveRecords = async (
   const { region, outputLocation } = await buildRetrieveOutputLocation(config);
   const { run, executions } = makeRunner(databaseName, region, page.replay, outputLocation);
 
+  // Not every object's compressed table has a Name column (some objects have
+  // no Name field at all) — SELECT "Name" against it would fail the whole
+  // query. Drop it from what's actually requested rather than erroring the
+  // fetch. Reuses the same cached Glue GetTable call tableExists would make,
+  // so this doubles as the hudi-existence check below at no extra cost.
+  const hudiColumns = await getTableColumns(databaseName, hudiTable, region);
+  const hudiExists = hudiColumns !== null;
+  const columnNames =
+    hudiColumns && !hudiColumns.some((c) => c.toLowerCase() === 'name')
+      ? params.columnNames.filter((c) => c.toLowerCase() !== 'name')
+      : params.columnNames;
+
   const sql = {
-    columnNames: params.columnNames,
+    columnNames,
     searchText: params.searchText ?? null,
     startDate,
     endDate,
@@ -1001,10 +1013,10 @@ const retrieveRecords = async (
   // full StartQueryExecution+poll round trip (700ms-1s+) just to learn what
   // this single metadata call already answers in a fraction of the time, and
   // avoids competing for Athena's per-account query concurrency with queries
-  // that actually have data to return.
-  const [pending, hudiExists, deltaExists] = await Promise.all([
+  // that actually have data to return. hudiExists was already resolved above
+  // (getTableColumns), so only delta needs checking here.
+  const [pending, deltaExists] = await Promise.all([
     getPendingCompressionJobIds(params.backupConfigId, params.objectApiName),
-    tableExists(databaseName, hudiTable, region),
     tableExists(databaseName, deltaTable, region),
   ]);
 
@@ -1061,7 +1073,7 @@ const retrieveRecords = async (
       ),
     ]);
 
-  const columns = pairedColumns(params.columnNames);
+  const columns = pairedColumns(columnNames);
   const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
 
   // Single merged query returns both tags together — split back into the
@@ -1194,7 +1206,7 @@ const retrieveRecords = async (
     }
   }
 
-  return toPage(block, params.columnNames, page.offset, page.fingerprint, executions);
+  return toPage(block, columnNames, page.offset, page.fingerprint, executions);
 };
 
 /**
