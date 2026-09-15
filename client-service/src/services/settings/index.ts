@@ -49,7 +49,7 @@ const getSettingsByUser = async (userId: string): Promise<ISettings | null> => {
 const upsertSettings = async (params: UpsertSettingsParams): Promise<ISettings> => {
   const { userId, crmId, standardObjects, salesforceApiThreshold, rollbackWindow, notification, status } = params;
 
-  const existing = await getSettingsByUserAndCrm(userId, crmId);
+  const existing = await getSettingsByUser(userId);
   const now = new Date().toISOString();
 
   const settings: ISettings = {

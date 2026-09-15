@@ -10,6 +10,7 @@ import { encrypt } from '../../../utils/encryption';
 import { getDecryptedCrmCredential, getUser, updateUser } from '../../user';
 import { logger } from '../../../middlewares';
 import { getCrmById } from '../../crm';
+import { getSettingsByUser } from '../../settings';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -263,8 +264,9 @@ interface ISalesforceApiLimitUsage {
 const checkSalesforceApiLimitUsage = async (
   userId: string,
   crmId: string,
-  thresholdPercentage: number
+  thresholdPercentage?: number
 ): Promise<ISalesforceApiLimitUsage> => {
+
   const user = await getUser({ userId });
   if (!user || !user.crmId) {
     throw new Error('User not found');
@@ -277,6 +279,15 @@ const checkSalesforceApiLimitUsage = async (
   const instanceUrl = crm?.instanceUrl;
   if (!instanceUrl) {
     throw new Error('Instance URL not found');
+  }
+
+  const setting = await getSettingsByUser(user.userId);
+  if (thresholdPercentage) {
+    thresholdPercentage = Number(thresholdPercentage);
+  } else if (setting && setting.salesforceApiThreshold) {
+    thresholdPercentage = setting.salesforceApiThreshold;
+  } else {
+    thresholdPercentage = 80;
   }
 
   const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
