@@ -17,12 +17,13 @@ import {
   BACKUP_SERVICE,
   BACKUP_STATUS,
   INTERNAL_SECRET,
+  PAYMENT_PRODUCT_NAME,
   SCHEDULE_MODE,
   STATUS,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
-import { checkSalesforceApiLimitUsage, createPaymentAccount, getUser, triggerBackupJob } from '../../../services';
+import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, triggerBackupJob } from '../../../services';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -152,7 +153,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     const event = req.body;
     const xAPiKey = req.headers?.['x-api-key'] as string | undefined;
 
-    if(xAPiKey !== AWS_EVENT_DESTINATION_API_KEY){
+    if (xAPiKey !== AWS_EVENT_DESTINATION_API_KEY) {
       return makeResponse(req, res, 401, false, 'unauthorized');
     }
 
@@ -200,7 +201,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     } catch (error) {
       logger.error('Salesforce API limit check failed: ', error);
     }
-    
+
     makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
     logger.error('Event bridge trigger error: ', error);
@@ -240,8 +241,53 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const test = await createPaymentAccount('00DcY000005yJuXUAU', '005cY00000HTofbQAD');
-  makeResponse(req, res, 200, true, 'create', test);
+  const orgId = '00Df600000T9DlJEAV';
+  const userId = '005f6000008QmlyAAC';
+  const account = {
+    "token": "pMeNnwPdoVXbBFZVxRiAQCKDiZNtvyJT8wMUXyLbZLxlXAp51bsJIUZBhX5b1weG==",
+    "sf_secret": "360SMS-Secret-IV:360SMS-Secrt-key"
+  }
+  // const account = await createPaymentAccount(orgId, userId);
+  const setup = await setupPayment({
+    orgId,
+    productName: PAYMENT_PRODUCT_NAME,
+    token: account.token,
+    sfSecret: account.sf_secret,
+    // Staging Salesforce org REST endpoint from the vendor's docs — swap for the
+    // real connected org's instanceUrl-based endpoint outside this test handler.
+    salesforceEndpoint: 'https://360degree--hrorg.sandbox.my.salesforce.com/services/apexrest/DataCraftRest',
+    // Sample org/usage info shape from the vendor's docs — real callers should
+    // build this from the connected org's actual limits/profile instead.
+    orgInfo: {
+      'FileStorageMB Used': 5,
+      'FileStorageMB Maximum': 50,
+      namespace: '',
+      platformuser: '',
+      sfuser: '',
+      address: {
+        city: null,
+        country: 'US',
+        geocodeAccuracy: null,
+        latitude: null,
+        longitude: null,
+        postalCode: null,
+        state: null,
+        street: null,
+      },
+      edition: 'Developer Edition',
+      OrgType: 'Sandbox',
+      orgName: '360 Data Craft Dev',
+      phone: '',
+      mobilephone: '',
+      country: 'US',
+      email: 'abhay.test@360smsapp.com',
+      userName: 'User test',
+      Secretkey: 'Secretkey',
+      orgId,
+    },
+  });
+
+  makeResponse(req, res, 200, true, 'create', { account });
 }
 
 export const publicController = wrapController({
