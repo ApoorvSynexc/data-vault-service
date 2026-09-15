@@ -62,39 +62,16 @@ const aesCbc128Decrypt = (key: string, iv: string, encryptedBase64: string): str
 };
 
 // The org-derived key/IV scheme the 360 Data Craft API uses to encrypt Create360Account's
-// response: one 16-char half is the Salesforce orgId's own prefix, the other is the
-// reversed orgId's prefix. The vendor's doc only says "key:iv" — it never states which
-// half is actually the AES key vs the IV in practice — so try both orderings and keep
-// whichever produces valid JSON. A wrong key/IV either fails OpenSSL's padding check
-// (bad decrypt) or produces garbage bytes that won't parse, so "parses as JSON" is a
-// reliable correctness signal, not a guess.
-const decryptPayload = (orgId: string, encryptedBase64: string): string => {
+// response: key = first 16 chars of the REVERSED Salesforce orgId, iv = first 16 chars of
+// the orgId itself. Confirmed against a live response — the vendor's doc described the
+// key/IV roles the other way around from what the API actually implements.
+export const decryptPayload = (orgId: string, encryptedBase64: string): string => {
   if (orgId.length < 16) {
     throw new Error(`Create360Account: orgId "${orgId}" is shorter than 16 characters`);
   }
-  const forward = orgId.substring(0, 16);
-  const reversed = orgId.split('').reverse().join('').substring(0, 16);
-
-  const candidates: Array<{ key: string; iv: string; label: string }> = [
-    { key: forward, iv: reversed, label: 'key=orgId iv=reversed(orgId)' },
-    { key: reversed, iv: forward, label: 'key=reversed(orgId) iv=orgId' },
-  ];
-
-  const errors: string[] = [];
-  for (const { key, iv, label } of candidates) {
-    try {
-      const plaintext = aesCbc128Decrypt(key, iv, encryptedBase64);
-      JSON.parse(plaintext); // throws if the "decrypted" bytes aren't actually valid JSON
-      logger.info(`[payment] Create360Account decrypted successfully using ${label}`);
-      return plaintext;
-    } catch (err: any) {
-      errors.push(`${label}: ${err?.message ?? err}`);
-    }
-  }
-
-  throw new Error(
-    `Create360Account: failed to decrypt response for org ${orgId} — tried ${candidates.length} key/IV orderings: ${errors.join(' | ')}`
-  );
+  const key = orgId.split('').reverse().join('').substring(0, 16);
+  const iv = orgId.substring(0, 16);
+  return aesCbc128Decrypt(key, iv, encryptedBase64);
 };
 
 // sf_secret (returned by createPaymentAccount) is "<16-char iv>:<16-char key>" — the
@@ -150,7 +127,6 @@ const createPaymentAccount = async (orgId: string, userId: string): Promise<Crea
     throw new Error(response?.message || `Create360Account failed for org ${orgId}`);
   }
 
-  console.log(JSON.stringify({data: response.data}));
   const decrypted = decryptPayload(orgId, response.data);
   const result = JSON.parse(decrypted) as Create360AccountResult;
 
@@ -189,11 +165,13 @@ const setupPayment = async ({
       }),
     });
   } catch (err: any) {
+    console.log(`[payment] getSetupResponse failed for org ${orgId}`, err);
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }
 
+  console.log(JSON.stringify({response}));
   if (response?.status !== 'Success' || !response.message || !response.token) {
-    throw new Error(`getSetupResponse failed for org ${orgId}`);
+    throw new Error(response?.message || `getSetupResponse failed for org ${orgId}`);
   }
 
   const decrypted = aesCbc128Decrypt(key, iv, response.message);
