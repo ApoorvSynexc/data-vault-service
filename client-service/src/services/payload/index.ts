@@ -594,8 +594,8 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                         properties: {
                             "spark.executorEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
                             "spark.emr-serverless.driverEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
-                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL}`,
-                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL}`,
+                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
+                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
                             "spark.executorEnv.NODE_SERVER_URL": NODE_ENV_URL,
                             "spark.emr-serverless.driverEnv.NODE_SERVER_URL": NODE_ENV_URL,
                         },
