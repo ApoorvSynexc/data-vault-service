@@ -151,7 +151,6 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
   // than let every case label carry its own defensive check.
   const lowerDataType = dataType.trim().toLowerCase();
 
-  console.log(`[formatSalesforceValueByDataType] dataType=${JSON.stringify(dataType)} value=${JSON.stringify(value)} strValue=${JSON.stringify(strValue)} lowerDataType=${JSON.stringify(lowerDataType)}`);
   switch (lowerDataType) {
     case 'string':
     case 'text':
@@ -163,11 +162,15 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
     case 'multipicklist':
       return `'${escapeSOQLString(strValue)}'`;
 
+    // SOQL date/datetime literals are unquoted (WHERE CreatedDate = 2026-09-02,
+    // not '2026-09-02') — quoting them makes Salesforce treat the literal as a
+    // string against a Date/DateTime field, which it rejects with "must be of
+    // type date/datetime and should not be enclosed in quotes".
     case 'date':
-      return `'${formatDate(strValue)}'`;
+      return formatDate(strValue);
 
     case 'datetime':
-      return `'${formatDateTime(strValue)}'`;
+      return formatDateTime(strValue);
 
     case 'integer':
     case 'double':
@@ -181,11 +184,6 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
       return isTruthy(strValue) ? 'true' : 'false';
 
     default:
-      // DIAGNOSTIC — remove once the DEF_267/currency-quoting mismatch is
-      // root-caused: an unrecognized dataType silently falls back to a
-      // quoted string, which is exactly wrong for a numeric field. Logging
-      // it here surfaces the actual value reaching this function.
-      console.log(`[formatSalesforceValueByDataType] unrecognized dataType=${JSON.stringify(dataType)} value=${JSON.stringify(value)}`);
       return `'${escapeSOQLString(strValue)}'`;
   }
 };
