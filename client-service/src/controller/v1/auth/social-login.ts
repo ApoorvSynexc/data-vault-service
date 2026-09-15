@@ -169,7 +169,7 @@ const socialLoginCallbackHandler = async (
 
   if (isAdminProvisioningFlow) {
     const adminProfile = oauthState.adminUserSfProfile!;
-    
+
     const instanceUrl = token.instance_url;
     const organizationId = sfProfile.organization_id;
     const crm = await getCrmByOrgId(organizationId);
@@ -188,7 +188,7 @@ const socialLoginCallbackHandler = async (
     };
     const crmIdentity: ICrm = {
       crmId,
-      organizationId : organizationId,
+      organizationId: organizationId,
       crmName: 'salesforce',
       status: STATUS.active,
       updatedAt: new Date().toISOString(),
@@ -218,17 +218,17 @@ const socialLoginCallbackHandler = async (
         email: sfProfile.email,
         userId: sfProfile.user_id,
         instanceUrl,
-        organizationId : sfProfile.organization_id,
-        firstName : sfProfile.given_name,
-        lastName : sfProfile.family_name
+        organizationId: sfProfile.organization_id,
+        firstName: sfProfile.given_name,
+        lastName: sfProfile.family_name
       };
       await createUser({
         crmProfile,
         role: { name: roleName, roleId },
         userId,
         crmId,
-        firstName : crmProfile.firstName,
-        lastName : crmProfile.lastName,
+        firstName: crmProfile.firstName,
+        lastName: crmProfile.lastName,
         status: STATUS.active,
         crmCredential: encrptedCrm,
         isCrmConnected: true,
@@ -248,13 +248,13 @@ const socialLoginCallbackHandler = async (
       userJustCreated = true;
     } else {
       await updateUser(
-      { userId: user.userId },
-      {
-        crmCredential: encrptedCrm,
-        isCrmConnected: true,
-        ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
-        ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
-      });
+        { userId: user.userId },
+        {
+          crmCredential: encrptedCrm,
+          isCrmConnected: true,
+          ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
+          ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
+        });
     }
 
     const settingsExist = await getSettingsByUserAndCrm(user.userId);
@@ -262,6 +262,11 @@ const socialLoginCallbackHandler = async (
       await upsertSettings({
         userId: user.userId,
         crmId: user.crmId,
+        salesforceApiThreshold: 80,
+        rollbackWindow: 24,
+        notification: {
+          email: true
+        },
         standardObjects: STANDARD_OBJECT_LIST.map((name) => ({ name, isDefault: true }))
       });
     }
