@@ -22,7 +22,49 @@ const getGlueClient = (region: string): GlueClient => {
 // first runs for an object, existence flips false→true, and a fetch-records
 // call landing right after that must see it, not a stale miss.
 const NOT_FOUND_TTL_MS = 30_000;
-const existsCache = new Map<string, { exists: boolean; checkedAt: number }>();
+interface ITableCacheEntry {
+  exists: boolean;
+  checkedAt: number;
+  // Column API names from the table's StorageDescriptor — null when exists is
+  // false (nothing to describe).
+  columns: string[] | null;
+}
+const existsCache = new Map<string, ITableCacheEntry>();
+
+// Shared lookup behind tableExists/getTableColumns — one Glue GetTable call,
+// one cache entry, so a caller that needs both never pays for it twice.
+const fetchTable = async (
+  databaseName: string,
+  tableName: string,
+  region: string
+): Promise<ITableCacheEntry> => {
+  const cacheKey = `${region}:${databaseName}:${tableName}`;
+  const cached = existsCache.get(cacheKey);
+  if (cached && (cached.exists || Date.now() - cached.checkedAt < NOT_FOUND_TTL_MS)) {
+    return cached;
+  }
+
+  try {
+    const result = await getGlueClient(region).send(
+      new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
+    );
+    const columns =
+      result.Table?.StorageDescriptor?.Columns?.map((c) => c.Name).filter(
+        (name): name is string => Boolean(name)
+      ) ?? null;
+    const entry: ITableCacheEntry = { exists: true, checkedAt: Date.now(), columns };
+    existsCache.set(cacheKey, entry);
+    return entry;
+  } catch (err: any) {
+    if (err instanceof EntityNotFoundException || err?.name === 'EntityNotFoundException') {
+      const entry: ITableCacheEntry = { exists: false, checkedAt: Date.now(), columns: null };
+      existsCache.set(cacheKey, entry);
+      return entry;
+    }
+    logger.error(`[glue] tableExists failed | db:${databaseName} table:${tableName} err:${err?.name}: ${err?.message}`);
+    throw err;
+  }
+};
 
 // Whether a Glue table exists — checked before counting records so an object
 // that simply hasn't been compressed yet (no backup job has run for it) reads
@@ -34,23 +76,14 @@ export const tableExists = async (
   databaseName: string,
   tableName: string,
   region: string
-): Promise<boolean> => {
-  const cacheKey = `${region}:${databaseName}:${tableName}`;
-  const cached = existsCache.get(cacheKey);
-  if (cached && (cached.exists || Date.now() - cached.checkedAt < NOT_FOUND_TTL_MS)) {
-    return cached.exists;
-  }
+): Promise<boolean> => (await fetchTable(databaseName, tableName, region)).exists;
 
-  try {
-    await getGlueClient(region).send(new GetTableCommand({ DatabaseName: databaseName, Name: tableName }));
-    existsCache.set(cacheKey, { exists: true, checkedAt: Date.now() });
-    return true;
-  } catch (err: any) {
-    if (err instanceof EntityNotFoundException || err?.name === 'EntityNotFoundException') {
-      existsCache.set(cacheKey, { exists: false, checkedAt: Date.now() });
-      return false;
-    }
-    logger.error(`[glue] tableExists failed | db:${databaseName} table:${tableName} err:${err?.name}: ${err?.message}`);
-    throw err;
-  }
-};
+// The table's actual column API names, straight off its Glue StorageDescriptor
+// — null when the table doesn't exist. Lets a caller tell "this object's
+// compressed table never captured this field" apart from "the value is blank
+// on this row", before a SELECT of a nonexistent column fails the query.
+export const getTableColumns = async (
+  databaseName: string,
+  tableName: string,
+  region: string
+): Promise<string[] | null> => (await fetchTable(databaseName, tableName, region)).columns;
