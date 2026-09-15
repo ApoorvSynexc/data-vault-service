@@ -62,15 +62,15 @@ const aesCbc128Decrypt = (key: string, iv: string, encryptedBase64: string): str
 };
 
 // The org-derived key/IV scheme the 360 Data Craft API uses to encrypt Create360Account's
-// response: key = first 16 chars of the Salesforce orgId, iv = first 16 chars of the
-// reversed orgId. Both halves come out to exactly 16 bytes for a standard 15/18-char
-// orgId — specific to this one handshake call, unrelated to sf_secret below.
-const decryptPayload = (orgId: string, encryptedBase64: string): string => {
+// response: key = first 16 chars of the REVERSED Salesforce orgId, iv = first 16 chars of
+// the orgId itself. Confirmed against a live response — the vendor's doc described the
+// key/IV roles the other way around from what the API actually implements.
+export const decryptPayload = (orgId: string, encryptedBase64: string): string => {
   if (orgId.length < 16) {
     throw new Error(`Create360Account: orgId "${orgId}" is shorter than 16 characters`);
   }
-  const key = orgId.substring(0, 16);
-  const iv = orgId.split('').reverse().join('').substring(0, 16);
+  const key = orgId.split('').reverse().join('').substring(0, 16);
+  const iv = orgId.substring(0, 16);
   return aesCbc128Decrypt(key, iv, encryptedBase64);
 };
 
@@ -165,11 +165,13 @@ const setupPayment = async ({
       }),
     });
   } catch (err: any) {
+    console.log(`[payment] getSetupResponse failed for org ${orgId}`, err);
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }
 
+  console.log(JSON.stringify({response}));
   if (response?.status !== 'Success' || !response.message || !response.token) {
-    throw new Error(`getSetupResponse failed for org ${orgId}`);
+    throw new Error(response?.message || `getSetupResponse failed for org ${orgId}`);
   }
 
   const decrypted = aesCbc128Decrypt(key, iv, response.message);
