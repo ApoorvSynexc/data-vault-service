@@ -164,8 +164,9 @@ const setupPayment = async ({
         message: encryptedMessage,
       }),
     });
+    console.log(JSON.stringify({response}));
   } catch (err: any) {
-    console.log(`[payment] getSetupResponse failed for org ${orgId}`, err);
+    console.log(`[payment] getSetupResponse failed for org ${orgId} `, err);
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }
 
