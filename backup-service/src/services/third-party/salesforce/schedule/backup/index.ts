@@ -166,7 +166,7 @@ export const exportFirstTime = async (
     }
 
     const fieldNames: string[] = [];
-    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'fromid'];
     fieldsMetadata.fields.forEach((f) => {
       if (
         f.referenceTo.length > 1 &&
@@ -382,7 +382,7 @@ export const exportIncremental = async (
     }
 
     const fieldNames: string[] = [];
-    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'fromid'];
     fieldsMetadata.fields.forEach((f) => {
       if (
         f.referenceTo.length > 1 &&

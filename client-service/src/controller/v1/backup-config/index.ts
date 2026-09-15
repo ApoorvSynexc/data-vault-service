@@ -73,7 +73,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      await checkSalesforceApiLimitUsage(userId, config.crmId, 80);
+      await checkSalesforceApiLimitUsage(userId, config.crmId);
       await triggerBackupJob({ user, config, type: 'backup', lastSchemaSyncAt: true });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
@@ -81,7 +81,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
-        await checkSalesforceApiLimitUsage(userId, config.crmId, 80);
+        await checkSalesforceApiLimitUsage(userId, config.crmId);
         await triggerBackupJob({ user, config, type: 'backup' });
       } else {
         await createAwsEventScheduler(buildEventScheduleInput(config));
@@ -112,7 +112,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   } catch (error) {
     await deleteBackupConfig(config.backupConfigId);
     logger.error('Error creating backup config, Deleting backup config: ', error);
-    //throw error;
+    throw error;
   }
 };
 
@@ -390,7 +390,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return;
   }
 
-  await checkSalesforceApiLimitUsage(backupConfig.userId, backupConfig.crmId, 80);
+  await checkSalesforceApiLimitUsage(backupConfig.userId, backupConfig.crmId);
   const result = await runBackupNow({ user: req.user, config: backupConfig });
   if (!result.ok) {
     // realtime_not_supported keeps the route's original error code

@@ -40,7 +40,7 @@ const runEmrJob = async () => {
               }
 
               try {
-                await checkSalesforceApiLimitUsage(user.userId, config.crmId, 80);
+                await checkSalesforceApiLimitUsage(user.userId, config.crmId);
                 await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
               } catch (error) {
                 logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);

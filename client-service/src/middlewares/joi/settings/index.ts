@@ -17,6 +17,11 @@ export const upsertSettingsValidation = async (
         })
       )
       .optional(),
+    salesforceApiThreshold: Joi.number().min(1).max(100).optional(),
+    rollbackWindow: Joi.number().integer().min(1).optional(),
+    notification: Joi.object({
+      email: Joi.boolean().required(),
+    }).optional(),
     status: Joi.string()
       .valid(...Object.values(STATUS))
       .optional(),

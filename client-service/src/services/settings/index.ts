@@ -2,12 +2,15 @@ import { PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { SETTINGS_TABLE, STATUS } from '../../constant';
-import { ISettings, IStandardObject } from '../../models';
+import { ISettings, ISettingsNotification, IStandardObject } from '../../models';
 
 interface UpsertSettingsParams {
   userId: string;
   crmId?: string;
   standardObjects?: IStandardObject[];
+  salesforceApiThreshold?: number;
+  rollbackWindow?: number;
+  notification?: ISettingsNotification;
   status?: string;
 }
 
@@ -44,9 +47,9 @@ const getSettingsByUser = async (userId: string): Promise<ISettings | null> => {
 };
 
 const upsertSettings = async (params: UpsertSettingsParams): Promise<ISettings> => {
-  const { userId, crmId, standardObjects, status } = params;
+  const { userId, crmId, standardObjects, salesforceApiThreshold, rollbackWindow, notification, status } = params;
 
-  const existing = await getSettingsByUserAndCrm(userId, crmId);
+  const existing = await getSettingsByUser(userId);
   const now = new Date().toISOString();
 
   const settings: ISettings = {
@@ -58,6 +61,15 @@ const upsertSettings = async (params: UpsertSettingsParams): Promise<ISettings> 
     status: status ?? existing?.status ?? STATUS.active,
 
     ...((crmId ?? existing?.crmId) !== undefined && { crmId: crmId ?? existing?.crmId }),
+    ...((salesforceApiThreshold ?? existing?.salesforceApiThreshold) !== undefined && {
+      salesforceApiThreshold: salesforceApiThreshold ?? existing?.salesforceApiThreshold,
+    }),
+    ...((rollbackWindow ?? existing?.rollbackWindow) !== undefined && {
+      rollbackWindow: rollbackWindow ?? existing?.rollbackWindow,
+    }),
+    ...((notification ?? existing?.notification) !== undefined && {
+      notification: notification ?? existing?.notification,
+    }),
 
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
