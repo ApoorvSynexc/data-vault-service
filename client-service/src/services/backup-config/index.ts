@@ -352,7 +352,7 @@ const getBackupConfigsWithPagination = async (
   const isSearch = !!search && search.length > 0;
 
   const projectionExpression =
-    'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #objects, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, createdAt, updatedAt';
+    'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #objects, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, upcomingJob, createdAt, updatedAt';
 
   const expressionAttributeNames: Record<string, string> = {
     '#name': 'name',
