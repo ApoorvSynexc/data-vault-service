@@ -90,12 +90,12 @@ export const defaultPermissions = [
                 description: "Run a retrieval job",
                 risky: true,
             },
-            {
-                label: "Delete",
-                value: "delete",
-                description: "Delete a retrieval job or its log",
-                risky: true,
-            }
+            // {
+            //     label: "Delete",
+            //     value: "delete",
+            //     description: "Delete a retrieval job or its log",
+            //     risky: true,
+            // }
         ]
     },
     {
