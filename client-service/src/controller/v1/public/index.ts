@@ -196,7 +196,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     }
 
     try {
-      await checkSalesforceApiLimitUsage(user.userId, config.crmId, 80);
+      await checkSalesforceApiLimitUsage(user.userId, config.crmId);
       await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
     } catch (error) {
       logger.error('Salesforce API limit check failed: ', error);

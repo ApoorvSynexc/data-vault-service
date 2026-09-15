@@ -35,7 +35,7 @@ import {
   parseExpiryToSeconds,
   wrapController,
 } from '../../../utils/helper';
-import { getSettingsByUserAndCrm, upsertSettings } from '../../../services/settings';
+import { getSettingsByUser, getSettingsByUserAndCrm, upsertSettings } from '../../../services/settings';
 
 const parseSalesforceError = (error: any): string | null => {
   try {
@@ -257,7 +257,7 @@ const socialLoginCallbackHandler = async (
         });
     }
 
-    const settingsExist = await getSettingsByUserAndCrm(user.userId);
+    const settingsExist = await getSettingsByUser(user.userId);
     if (!settingsExist) {
       await upsertSettings({
         userId: user.userId,

@@ -1169,7 +1169,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     }
 
     if (changedObjectNames.length > 0) {
-      await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId, 80);
+      await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId);
     }
   }
 
