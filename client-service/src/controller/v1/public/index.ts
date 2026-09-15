@@ -23,7 +23,7 @@ import {
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
-import { checkSalesforceApiLimitUsage, createPaymentAccount, getUser, setupPayment, triggerBackupJob } from '../../../services';
+import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, triggerBackupJob } from '../../../services';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -153,7 +153,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     const event = req.body;
     const xAPiKey = req.headers?.['x-api-key'] as string | undefined;
 
-    if(xAPiKey !== AWS_EVENT_DESTINATION_API_KEY){
+    if (xAPiKey !== AWS_EVENT_DESTINATION_API_KEY) {
       return makeResponse(req, res, 401, false, 'unauthorized');
     }
 
@@ -201,7 +201,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     } catch (error) {
       logger.error('Salesforce API limit check failed: ', error);
     }
-    
+
     makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
     logger.error('Event bridge trigger error: ', error);
@@ -241,11 +241,12 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const orgId = '00Df600000T9DlJEAV';
-  const userId = '005f6000008QmlyAAC';
-
-  const account = await createPaymentAccount(orgId, userId);
-
+  const orgId = '00Df600000TzsvmEAB';
+  const userId = '005f60000097kbMAAQ';
+  const kk = 'x4qtJ2qHVkh6sgMwUXB7UOizrCibJHpWNCSPQAimt2kDmBuTySP7k7qzLcCRBuuWPLv39GdWRvxZQGwx2YLoDvpkAmtJXjhkKkFytv44dJGtwg25daO0vTD6OtscaUg1lZkcTwVPkDiLpJlGXDWZt9oI4v5LOGG5LEtImpurAN4='
+  const decrypted = decryptPayload(orgId, kk);
+  const account = JSON.parse(decrypted);
+  // const account = await createPaymentAccount(orgId, userId);
   const setup = await setupPayment({
     orgId,
     productName: PAYMENT_PRODUCT_NAME,
@@ -278,14 +279,14 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
       phone: '',
       mobilephone: '',
       country: 'US',
-      email: 'abhay.singh@360smsapp.com',
-      userName: 'User User',
-      Secretkey: '360DegreeCloud',
+      email: 'abhay.test@360smsapp.com',
+      userName: 'User test',
+      Secretkey: 'Secretkey',
       orgId,
     },
   });
 
-  makeResponse(req, res, 200, true, 'create', { account, setup });
+  makeResponse(req, res, 200, true, 'create', { setup });
 }
 
 export const publicController = wrapController({
