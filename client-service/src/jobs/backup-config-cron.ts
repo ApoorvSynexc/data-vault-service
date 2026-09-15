@@ -33,7 +33,7 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
         const user = await getUser({ userId: config.userId });
         if (!user) continue;
 
-        await checkSalesforceApiLimitUsage(config.userId, config.crmId, 80);
+        await checkSalesforceApiLimitUsage(config.userId, config.crmId);
         if (config.type === "ARCHIVAL" && config.scheduleConfig?.type === 'ONE_TIME') {
           const { scheduledObjects } = filtereObjects(config.objects || []);
           if (scheduledObjects.length) {
