@@ -241,11 +241,12 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const orgId = '00Df600000TzsvmEAB';
-  const userId = '005f60000097kbMAAQ';
-  const kk = 'x4qtJ2qHVkh6sgMwUXB7UOizrCibJHpWNCSPQAimt2kDmBuTySP7k7qzLcCRBuuWPLv39GdWRvxZQGwx2YLoDvpkAmtJXjhkKkFytv44dJGtwg25daO0vTD6OtscaUg1lZkcTwVPkDiLpJlGXDWZt9oI4v5LOGG5LEtImpurAN4='
-  const decrypted = decryptPayload(orgId, kk);
-  const account = JSON.parse(decrypted);
+  const orgId = '00Df600000T9DlJEAV';
+  const userId = '005f6000008QmlyAAC';
+  const account = {
+    "token": "pMeNnwPdoVXbBFZVxRiAQCKDiZNtvyJT8wMUXyLbZLxlXAp51bsJIUZBhX5b1weG==",
+    "sf_secret": "360SMS-Secret-IV:360SMS-Secrt-key"
+  }
   // const account = await createPaymentAccount(orgId, userId);
   const setup = await setupPayment({
     orgId,
@@ -286,7 +287,7 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     },
   });
 
-  makeResponse(req, res, 200, true, 'create', { setup });
+  makeResponse(req, res, 200, true, 'create', { account });
 }
 
 export const publicController = wrapController({
