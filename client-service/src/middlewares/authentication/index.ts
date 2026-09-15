@@ -42,9 +42,9 @@ const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): 
     const xCrmUserId = req.headers?.["x-crm-userid"];
     const xCrmOrgId = req.headers?.["x-crm-orgid"];
     if(xCrmUserId && xCrmOrgId){
-      const userDetail = await getUserByCrmProfileUserId(xCrmUserId as string, xCrmOrgId as string);
-      if(userDetail){
-        req.user = userDetail;
+      const selectUser = await getUserByCrmProfileUserId(xCrmUserId as string, xCrmOrgId as string);
+      if(selectUser && selectUser.crmProfile?.email === user.crmProfile?.email){
+        req.user = selectUser;
       }
     }
     next();
