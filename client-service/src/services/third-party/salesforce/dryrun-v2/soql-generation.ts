@@ -60,95 +60,6 @@ export const assertNoTopLevelClauses = (body: string): void => {
   }
 };
 
-// Salesforce SOQL has no correlated scalar subquery — the only place a
-// subquery is legal is as the right-hand side of a semi-join, `field IN
-// (SELECT relatedField FROM Child)` / `NOT IN (...)`. A subquery used as a
-// bare value or comparison (e.g. "(SELECT COUNT() FROM X) > 0") isn't valid
-// SOQL at all (Salesforce itself rejects it, not just this parser), but the
-// parser's own error for it ("Expected identifier but found L_PAREN") reads
-// like a bug in the query rather than an unsupported SOQL construct — this
-// catches it earlier with a message that says what to do instead.
-const SUBQUERY_OPEN_RE = /\(\s*SELECT\b/gi;
-const SEMI_JOIN_PRECEDING_RE = /\b(?:NOT\s+)?IN\s*$/i;
-export const assertSubqueriesAreSemiJoins = (body: string): void => {
-  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
-  let match: RegExpExecArray | null;
-  SUBQUERY_OPEN_RE.lastIndex = 0;
-  while ((match = SUBQUERY_OPEN_RE.exec(withoutStringLiterals))) {
-    const before = withoutStringLiterals.slice(0, match.index);
-    if (!SEMI_JOIN_PRECEDING_RE.test(before)) {
-      throw new Error(
-        `Subqueries are only supported as "field IN (SELECT ...)" or "field NOT IN (SELECT ...)" — Salesforce SOQL doesn't support a subquery used directly as a value or comparison (e.g. "(SELECT COUNT() FROM X) > 0"). Rewrite it as an IN condition instead.`
-      );
-    }
-  }
-};
-
-// Splits a WHERE body into alternating outside-subquery / subquery segments
-// at the TOP level only (balanced-paren matched from each "(SELECT" that
-// isn't itself inside another subquery) — a subquery segment's own inner
-// text is left as one opaque block, not recursed into. Used both to keep
-// the parent/child field-rewrite below from corrupting a subquery's own
-// fields, and to check same-object violations only between a query and its
-// DIRECT subqueries (matching Salesforce's restriction, which is pairwise
-// between immediately nested selects, not transitive across every level).
-const splitOutSubqueries = (whereBody: string): Array<{ text: string; isSubquery: boolean }> => {
-  const segments: Array<{ text: string; isSubquery: boolean }> = [];
-  const subqueryStartRe = /\(\s*SELECT\b/gi;
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-  while ((match = subqueryStartRe.exec(whereBody))) {
-    if (match.index < cursor) {
-      continue;
-    }
-    segments.push({ text: whereBody.slice(cursor, match.index), isSubquery: false });
-
-    let depth = 0;
-    let end = match.index;
-    for (; end < whereBody.length; end++) {
-      if (whereBody[end] === '(') depth++;
-      else if (whereBody[end] === ')') {
-        depth--;
-        if (depth === 0) {
-          end++;
-          break;
-        }
-      }
-    }
-    segments.push({ text: whereBody.slice(match.index, end), isSubquery: true });
-    cursor = end;
-    subqueryStartRe.lastIndex = end;
-  }
-  segments.push({ text: whereBody.slice(cursor), isSubquery: false });
-  return segments;
-};
-
-const containsSubquery = (body: string): boolean =>
-  splitOutSubqueries(body).some((segment) => segment.isSubquery);
-
-// Salesforce rejects a semi-join whose subquery FROMs the same object as the
-// query that directly contains it ("The inner and outer selects should not
-// be on the same object type") — but only at actual query EXECUTION, not at
-// `query?explain=` (the API "Validate Query" calls), so a query with this
-// mistake passes validation and only fails later, in the Dry Run or the real
-// archive run. Checked statically here so both paths catch it up front.
-// Only checks DIRECT (top-level) subqueries against `outerObjectName` — a
-// subquery nested inside another subquery is paired with ITS OWN immediate
-// container, not this one, so it isn't examined here.
-const SUBQUERY_FROM_RE = /\(\s*SELECT\b[\s\S]*?\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)/i;
-export const assertSubqueryObjectDiffers = (body: string, outerObjectName: string): void => {
-  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
-  for (const segment of splitOutSubqueries(withoutStringLiterals)) {
-    if (!segment.isSubquery) continue;
-    const match = segment.text.match(SUBQUERY_FROM_RE);
-    if (match && match[1].toLowerCase() === outerObjectName.toLowerCase()) {
-      throw new Error(
-        `Subquery cannot select FROM the same object ("${outerObjectName}") you're filtering — Salesforce doesn't allow a semi-join subquery on the same object type as the outer query. Use the relationship's lookup field directly instead, e.g. "LookupField__c IN (SELECT Id FROM RelatedObject WHERE ...)".`
-      );
-    }
-  }
-};
-
 const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number], preformattedValue: string): string => {
   const { name, dataType } = f;
   const { value: rawValue, operator } = f.filter;
@@ -209,8 +120,6 @@ const buildWhereClause = (object: ISalesforceObject): string => {
     const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
     if (body) {
       assertNoTopLevelClauses(body);
-      assertSubqueriesAreSemiJoins(body);
-      assertSubqueryObjectDiffers(body, object.name);
     }
     return body ? `WHERE ${body}` : '';
   }
@@ -266,30 +175,10 @@ const fkToRelationshipName = (fieldApiName: string): string => {
 
 const FIELD_REF_RE = /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)(\s*(?:!=|>=|<=|=|>|<)|\s+(?:NOT\s+IN|IN|LIKE)\s)/gi;
 
-// Propagates a parent's WHERE body onto a child object. A plain condition
-// (no subquery) is field-rewritten in place — cheaper, and lets Salesforce
-// use a relationship-traversal filter instead of a semi-join. A condition
-// containing a subquery can't be safely field-rewritten piecemeal (its
-// subquery has its own independent FROM/field context — see
-// assertSubqueryObjectDiffers's doc comment), so it's nested whole instead:
-// the child's FK must point to a parent record that itself satisfies the
-// original condition, unchanged. This also sidesteps a same-object
-// violation that piecemeal rewriting could otherwise reintroduce — the
-// nested subquery's own inner subquery (if any) is now paired against
-// `parentObjectName`, not the child, since that's what directly contains it.
-const transformWhereBodyForChild = (
-  whereBody: string,
-  fkFieldName: string,
-  parentObjectName: string
-): string => {
+const transformWhereBodyForChild = (whereBody: string, fkFieldName: string): string => {
   if (!whereBody.trim()) {
     return `${fkFieldName} != null`;
   }
-
-  if (containsSubquery(whereBody)) {
-    return `${fkFieldName} IN (SELECT Id FROM ${parentObjectName} WHERE ${whereBody})`;
-  }
-
   const relName = fkToRelationshipName(fkFieldName);
   return whereBody.replace(FIELD_REF_RE, (_match, field, op) => {
     if (field === 'Id') {
@@ -311,7 +200,6 @@ const collectSubtreeIds = (object: ISalesforceObject): Array<{ id: string; name:
 const generateObjectSoql = (
   object: ISalesforceObject,
   ancestorWhereBody: string,
-  ancestorObjectName: string,
   queries: ISoqlCountQuery[],
   buildErrors: ISoqlBuildError[]
 ): void => {
@@ -322,21 +210,11 @@ const generateObjectSoql = (
 
     if (object.fieldApiName) {
       const propagated = ancestorWhereBody
-        ? transformWhereBodyForChild(ancestorWhereBody, object.fieldApiName, ancestorObjectName)
+        ? transformWhereBodyForChild(ancestorWhereBody, object.fieldApiName)
         : `${object.fieldApiName} != null`;
       effectiveWhereBody = ownWhereBody ? `(${propagated}) AND (${ownWhereBody})` : propagated;
     } else {
       effectiveWhereBody = ownWhereBody;
-    }
-
-    // A same-object subquery violation can be introduced by propagation even
-    // when the ancestor's own condition was fine on its own object — e.g. an
-    // ancestor's subquery FROMs one of its own children, and that child then
-    // inherits the condition and ends up querying itself. Re-checked here
-    // against the object the query is actually being built for, not just
-    // once against whichever object originally owned the condition.
-    if (effectiveWhereBody) {
-      assertSubqueryObjectDiffers(effectiveWhereBody, object.name);
     }
   } catch (error: any) {
     const message = error?.message ?? 'Failed to build filter condition';
@@ -362,7 +240,7 @@ const generateObjectSoql = (
 
   if (object.children?.length) {
     for (const child of object.children) {
-      generateObjectSoql(child, effectiveWhereBody, object.name, queries, buildErrors);
+      generateObjectSoql(child, effectiveWhereBody, queries, buildErrors);
     }
   }
 };
@@ -378,7 +256,7 @@ export const generateSoqlQueries = (
   const queries: ISoqlCountQuery[] = [];
   const buildErrors: ISoqlBuildError[] = [];
   for (const object of objects) {
-    generateObjectSoql(object, '', '', queries, buildErrors);
+    generateObjectSoql(object, '', queries, buildErrors);
   }
   return { queries, buildErrors };
 };
