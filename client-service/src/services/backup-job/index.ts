@@ -782,6 +782,59 @@ const getMonthlyStatsByCrmCurrentYear = async (crmId: string): Promise<Array<{ m
   }));
 };
 
+interface IBackupJobOverview {
+  pendingStatus: number;
+  successStatus: number;
+  failedStatus: number;
+}
+
+// Dashboard overview for a user's backup jobs of one type (NORMAL/backup or
+// ARCHIVAL) — same shape as backup-config's getBackupOverview: one paginated
+// query (userId-index, filtered by type) tallying every status bucket in a
+// single pass instead of one COUNT query per status.
+const getBackupJobOverview = async (
+  userId: string,
+  type: 'NORMAL' | 'ARCHIVAL'
+): Promise<IBackupJobOverview> => {
+  const overview: IBackupJobOverview = {
+    pendingStatus: 0,
+    successStatus: 0,
+    failedStatus: 0,
+  };
+
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_JOB_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :uid',
+        FilterExpression: '#type = :type',
+        ProjectionExpression: '#status, #type',
+        ExpressionAttributeNames: { '#status': 'status', '#type': 'type' },
+        ExpressionAttributeValues: { ':uid': userId, ':type': type },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const items = (result.Items ?? []) as IBackupJob[];
+    for (const item of items) {
+      if (item.status === JOB_STATUS.pending) {
+        overview.pendingStatus += 1;
+      } else if (item.status === JOB_STATUS.success) {
+        overview.successStatus += 1;
+      } else if (item.status === JOB_STATUS.failed) {
+        overview.failedStatus += 1;
+      }
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastEvaluatedKey !== undefined);
+
+  return overview;
+};
+
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
@@ -801,4 +854,5 @@ export {
   computeJobStats,
   computeArchivalJobStats,
   getMonthlyStatsByCrmCurrentYear,
+  getBackupJobOverview,
 };

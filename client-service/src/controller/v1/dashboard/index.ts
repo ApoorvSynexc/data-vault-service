@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getBackupConfigById, getBackupJobsByUser, getBackupOverview, getRestoreJobsByUserId, getRestoreOverview } from '../../../services';
+import { getBackupConfigById, getBackupJobOverview, getBackupJobsByUser, getBackupOverview, getRestoreJobsByUserId, getRestoreOverview } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 
 const getLastNBackupJobs = async (userId: string, limit: number, type?: 'NORMAL' | 'ARCHIVAL') => {
@@ -62,11 +62,13 @@ const overviewV2Handler = async (req: IRequest, res: IResponse): Promise<void> =
   switch (module) {
     case 'backup': {
       const overview = await getBackupOverview(userId, 'NORMAL');
-      return makeResponse(req, res, 200, true, 'fetch', overview);
+      const jobOverview = await getBackupJobOverview(userId, 'NORMAL');
+      return makeResponse(req, res, 200, true, 'fetch', {...overview, jobOverview});
     }
     case 'archival': {
       const overview = await getBackupOverview(userId, 'ARCHIVAL');
-      return makeResponse(req, res, 200, true, 'fetch', overview);
+      const jobOverview = await getBackupJobOverview(userId, 'ARCHIVAL');
+      return makeResponse(req, res, 200, true, 'fetch', {...overview, jobOverview});
     }
     case 'restore': {
       const overview = await getRestoreOverview(userId);
