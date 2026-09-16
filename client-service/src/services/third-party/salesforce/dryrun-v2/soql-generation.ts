@@ -60,6 +60,25 @@ export const assertNoTopLevelClauses = (body: string): void => {
   }
 };
 
+// Subqueries aren't supported in a filter condition here. Salesforce places
+// several interacting restrictions on them — a semi-join can't FROM the same
+// object as the outer query, can't be nested inside another semi-join, and
+// its left operand can't traverse more than one relationship level — any of
+// which a parent condition can innocently violate once it's propagated
+// (relationship-prefixed) down to a child object in the archive hierarchy.
+// Rejected outright, up front, with a clear message instead of letting a
+// propagated query fail deep in a Dry Run or a real archive run with a
+// confusing Salesforce error that doesn't even point at the real cause.
+const SUBQUERY_RE = /\(\s*SELECT\b/i;
+export const assertNoSubqueries = (body: string): void => {
+  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
+  if (SUBQUERY_RE.test(withoutStringLiterals)) {
+    throw new Error(
+      `Subqueries are not supported in filter conditions — Salesforce's own restrictions on subquery nesting, object types, and relationship depth make them unreliable once this condition is applied across an archive hierarchy's parent/child objects. Use a direct field or relationship comparison instead (e.g. "Account.Name = 'X'").`
+    );
+  }
+};
+
 const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number], preformattedValue: string): string => {
   const { name, dataType } = f;
   const { value: rawValue, operator } = f.filter;
@@ -120,6 +139,7 @@ const buildWhereClause = (object: ISalesforceObject): string => {
     const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
     if (body) {
       assertNoTopLevelClauses(body);
+      assertNoSubqueries(body);
     }
     return body ? `WHERE ${body}` : '';
   }
