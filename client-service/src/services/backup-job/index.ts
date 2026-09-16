@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, INTERNAL_SECRET, JOB_STATUS, SCHEDULE_MODE } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, INTERNAL_SECRET, JOB_STATUS, SCHEDULE_MODE, STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
@@ -116,7 +116,7 @@ const triggerArchivalBackupJob = async (params: {
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} CRM=${crm.crmName} destinationType=${destination.type}`);
 
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=PENDING`);
-  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
   const credentials = getDecryptedCrmCredential(user);
   const payload = {
     userId: config.userId,
@@ -184,7 +184,7 @@ const triggerBackupJob = async (params: {
     if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
     if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
     const credentials = getDecryptedCrmCredential(user);
     if (!credentials) throw new SalesforceAuthExpiredError();
 
