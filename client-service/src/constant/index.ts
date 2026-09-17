@@ -182,6 +182,7 @@ const FILTER_OPERATOR = {
   eq: '=',
   neq: '!=',
   in: 'IN',
+  notIn: 'NOT IN',
   like: 'LIKE',
   // Multi-Select Picklist's own membership operators — no other operator can
   // test against that field type.
