@@ -173,6 +173,12 @@ export interface IPageCursor {
   off: number;
   // Last row of the current block — where the NEXT block seeks from.
   key: { lmd: string; id: string } | null;
+  // 0-based index of the block this cursor continues (same value) or starts
+  // (incremented) — lets a caller tell "still inside the very first Hudi
+  // block" apart from "already past it" across a replayed page. Optional so a
+  // cursor issued before this field existed still decodes (resolvePage
+  // defaults a missing value to 0, i.e. "assume first block").
+  blk?: number;
 }
 
 export interface IFetchRecordsResult {
@@ -203,7 +209,14 @@ export const toPage = (
   // Athena block instead of replaying it 40 times. The cursor maths is the
   // same either way — `off` is a row offset, not a page number — but a caller
   // must keep it constant for the whole run, since it is not fingerprinted.
-  pageSize: number = PAGE_SIZE
+  pageSize: number = PAGE_SIZE,
+  // 0-based index of the block just served — carried into the next cursor
+  // unchanged (same block replays) or +1 (seeking a fresh next block). See
+  // IPageCursor.blk. Appended last, after pageSize, so a positional call
+  // written against the old 6-arg signature (...executions, BLOCK_SIZE)
+  // still binds BLOCK_SIZE to pageSize rather than silently landing on this
+  // instead.
+  blockIndex: number = 0
 ): IFetchRecordsResult => {
   const requested = [...new Set(columnNames)];
   const keep = new Set(requested.map((c) => c.toLowerCase()));
@@ -223,9 +236,9 @@ export const toPage = (
   // may be another one, so seek past its last row. Short block → the end.
   const nextCursor: IPageCursor | null =
     nextOffset < block.length
-      ? { fp: fingerprint, ex: executions, off: nextOffset, key: last.key }
+      ? { fp: fingerprint, ex: executions, off: nextOffset, key: last.key, blk: blockIndex }
       : block.length >= BLOCK_SIZE
-        ? { fp: fingerprint, ex: {}, off: 0, key: last.key }
+        ? { fp: fingerprint, ex: {}, off: 0, key: last.key, blk: blockIndex + 1 }
         : null;
 
   return {
@@ -552,6 +565,7 @@ if (require.main === module) {
   assert.deepStrictEqual(c1.ex, ex, 'same block → replay, no new Athena scan');
   assert.strictEqual(c1.off, 50);
   assert.strictEqual(c1.fp, 'fp1');
+  assert.strictEqual(c1.blk, 0, 'same block → block index carried over unchanged');
 
   // Last page of a SHORT block → no cursor, the stream is finished.
   const tail = toPage(mk(120), ['Name'], 100, 'fp1', ex);
@@ -562,12 +576,13 @@ if (require.main === module) {
   // Last page of a FULL block → cursor with no execution ids: the next request
   // runs a fresh query seeking past the block's last row.
   const full = mk(BLOCK_SIZE);
-  const lastOfFull = toPage(full, ['Name'], BLOCK_SIZE - PAGE_SIZE, 'fp1', ex);
+  const lastOfFull = toPage(full, ['Name'], BLOCK_SIZE - PAGE_SIZE, 'fp1', ex, PAGE_SIZE, 0);
   const c2 = decodeCursor(lastOfFull.nextCursor!) as IPageCursor;
   assert.strictEqual(lastOfFull.hasMore, true);
   assert.deepStrictEqual(c2.ex, {}, 'block exhausted → new scan, not a replay');
   assert.strictEqual(c2.off, 0);
   assert.deepStrictEqual(c2.key, full[full.length - 1].key, 'seek from the block’s last row');
+  assert.strictEqual(c2.blk, 1, 'block exhausted → next block’s index is one higher');
 
   // Empty result → no cursor, nothing to page.
   const none = toPage([], ['Name'], 0, 'fp1', ex);
