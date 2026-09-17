@@ -9,7 +9,12 @@ export type SalesforceObjectType = 'CUSTOM' | 'STANDARD';
 
 // INCLUDES/EXCLUDES are Multi-Select Picklist's own operators — Salesforce
 // has no other way to test membership against that field type.
-export type FilterOperator = '=' | '!=' | 'LIKE' | 'IN' | 'INCLUDES' | 'EXCLUDES';
+// Kept in sync with archival-v2's ALLOWED_OPERATORS (backup-service) — the
+// Joi schema (constant/index.ts's FILTER_OPERATOR) already allowed
+// >/</>=/<= at save time while this type (and soql-generation.ts's own
+// ALLOWED_OPERATORS) didn't, so a saved filter using one could pass
+// validation and then fail Dry Run with "Disallowed SOQL operator".
+export type FilterOperator = '=' | '!=' | '>' | '<' | '>=' | '<=' | 'LIKE' | 'IN' | 'NOT IN' | 'INCLUDES' | 'EXCLUDES';
 
 export interface IFieldFilter {
   name: string;
