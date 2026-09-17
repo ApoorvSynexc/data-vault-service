@@ -24,7 +24,7 @@ export const defaultPermissions = [
             {
                 label: "Config",
                 value: "write",
-                description: "Edit backup policies & jobs",
+                description: "Create and edit backup policies",
             },
             {
                 label: "Execute",
@@ -53,7 +53,7 @@ export const defaultPermissions = [
             {
                 label: "Config",
                 value: "write",
-                description: "Edit archival policies & jobs",
+                description: "Create and edit archival policies",
             },
             {
                 label: "Execute",
@@ -77,25 +77,25 @@ export const defaultPermissions = [
             {
                 label: "View",
                 value: "read",
-                description: "See retrievals & history",
+                description: "See restore & history",
             },
             {
                 label: "Config",
                 value: "write",
-                description: "Edit retrieval policies & jobs",
+                description: "Create restore policies",
             },
             {
                 label: "Execute",
                 value: "execute",
-                description: "Run a retrieval job",
+                description: "Run a restore job",
                 risky: true,
             },
-            {
-                label: "Delete",
-                value: "delete",
-                description: "Delete a retrieval job or its log",
-                risky: true,
-            }
+            // {
+            //     label: "Delete",
+            //     value: "delete",
+            //     description: "Delete a retrieval job or its log",
+            //     risky: true,
+            // }
         ]
     },
     {
@@ -150,43 +150,6 @@ export const defaultPermissions = [
             }
         ]
     },
-    // {
-    //     label: "Activity Logs",
-    //     value: "activitylogs",
-    //     description: "System and user activity history",
-    //     permissions: [
-    //         {
-    //             label: "View",
-    //             value: "read",
-    //             description: "See activity logs"
-    //         }
-    //     ]
-    // },
-    // {
-    //     label: "Report",
-    //     value: "report",
-    //     description: "Usage and compliance reporting",
-    //     permissions: [
-    //         {
-    //             label: "View",
-    //             value: "read",
-    //             description: "See reports"
-    //         }
-    //     ]
-    // },
-    // {
-    //     label: "Security",
-    //     value: "security",
-    //     description: "Encryption and access security settings",
-    //     permissions: [
-    //         {
-    //             label: "View",
-    //             value: "read",
-    //             description: "See security settings"
-    //         }
-    //     ]
-    // },
-
     {
         label: "Settings",
         value: "settings",

@@ -20,6 +20,7 @@ import {
     createAwsEventScheduler,
     updateAwsEventSchedule,
     deleteAwsEventScheduler,
+    checkSalesforceApiLimitUsage,
 } from "../../../services";
 import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { buildArchivalObjectScheduleName, buildScheduleInput, computeNextScheduledRun } from "../../../utils/event-bridge";
@@ -148,6 +149,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
         const { immediateObjects, scheduledObjects } = filtereObjects(req.body?.objects || []);
         if (immediateObjects.length > 0) {
+            await checkSalesforceApiLimitUsage(config.userId, config.crmId);
             await triggerArchivalBackupJob({ user, config, objects: immediateObjects });
         }
 
@@ -216,11 +218,15 @@ const validateSoqlArchivalHandler = async (req: IRequest, res: IResponse): Promi
         return makeResponse(req, res, 200, true, 'fetch', { isValid: true });
     }
 
-    const [{ soql }] = generateSoqlQueries([
+    const { queries, buildErrors } = generateSoqlQueries([
         { id: object.name, name: object.name, type: 'STANDARD', condition: object.condition, field: object.field },
     ]);
 
-    const result = await validateSoql({ user, soql });
+    if (buildErrors.length > 0) {
+        return makeResponse(req, res, 200, true, 'fetch', { isValid: false, error: buildErrors[0].error });
+    }
+
+    const result = await validateSoql({ user, soql: queries[0].soql });
     makeResponse(req, res, 200, true, 'fetch', result);
 };
 
@@ -280,9 +286,16 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         return;
     }
 
+    const previousStatus = existing?.status;
     const updated = await updateBackupConfig(String(backupConfigId), req.body);
     if (updated && !updated.lastBackupAt) {
-        const { immediateObjects, scheduledObjects } = filtereObjects(req.body?.objects || []);
+        // Activating a Draft (e.g. the "Activate" action, which only PATCHes
+        // { status: 'ACTIVE' } and doesn't resend the object tree) must still
+        // trigger/schedule off the persisted config, not the request body —
+        // and a schedule that has never existed in AWS needs to be created,
+        // not updated. Mirrors backup-config's draft->active handling.
+        const isActivatingDraft = previousStatus === STATUS.draft && updated.status === STATUS.active;
+        const { immediateObjects, scheduledObjects } = filtereObjects(updated.objects || []);
         if (immediateObjects.length > 0) {
             await triggerArchivalBackupJob({ user, config: updated, objects: immediateObjects });
         }
@@ -296,13 +309,17 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     continue;
                 }
 
-                await updateAwsEventSchedule(
-                    buildScheduleInput(
-                        buildArchivalObjectScheduleName(scheduledObject.id),
-                        scheduledObject.scheduleConfig!,
-                        { backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id }
-                    )
+                const scheduleInput = buildScheduleInput(
+                    buildArchivalObjectScheduleName(scheduledObject.id),
+                    scheduledObject.scheduleConfig!,
+                    { backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id }
                 );
+
+                if (isActivatingDraft) {
+                    await createAwsEventScheduler(scheduleInput);
+                } else {
+                    await updateAwsEventSchedule(scheduleInput);
+                }
             }
         }
     }
@@ -395,6 +412,7 @@ const runNowArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         return;
     }
 
+    await checkSalesforceApiLimitUsage(existing.userId, existing.crmId);
     await triggerArchivalBackupJob({ user, config: existing, objects: objectsToRun });
 
     // A fired ONE_TIME object won't fire again — its AWS schedule is now dead weight.

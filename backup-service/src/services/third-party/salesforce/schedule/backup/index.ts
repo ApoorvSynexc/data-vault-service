@@ -11,14 +11,31 @@ import { salesforceMetadataHandler } from '../../metadata';
 // SOQL injection guards.
 // Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")
 // Operators:    must be one of the Joi-validated enum values
-// Values:       allow the character set needed for SOQL literals
-//               (quoted strings, numbers, dates, booleans, IN lists)
-//               while blocking SQL/SOQL meta-characters like ; ` -- /* */
+// Values:       allow the character set needed for SOQL literals (quoted
+//               strings, numbers, dates, booleans, IN lists, the
+//               semicolon-joined value INCLUDES/EXCLUDES need for a
+//               Multi-Select Picklist, and a leading currency symbol —
+//               stripped by buildFilterCondition's numeric sanitization
+//               below, not left in the emitted SOQL) while blocking SQL/SOQL
+//               meta-characters like ` -- /* */ that have no legitimate use
+//               in a filter value
 // Expression:   CUSTOM expressions must only contain index numbers,
 //               whitespace, parentheses, and the keywords AND / OR / NOT
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
-const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+-]+$/;
-const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
+const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+;$-]+$/;
+const ALLOWED_OPERATORS = new Set([
+  '=',
+  '!=',
+  '>',
+  '<',
+  '>=',
+  '<=',
+  'LIKE',
+  'IN',
+  'NOT IN',
+  'INCLUDES',
+  'EXCLUDES',
+]);
 
 const buildFilterCondition = (name: string, operator: string, value: string): string => {
   if (!SAFE_FIELD_NAME_RE.test(name)) {
@@ -31,16 +48,35 @@ const buildFilterCondition = (name: string, operator: string, value: string): st
     throw new Error(`Invalid SOQL filter value: "${value}"`);
   }
 
-  // If value is not already quoted and not a number/boolean, wrap it in single quotes
+  // Multi-Select Picklist membership test: Salesforce's own syntax is a
+  // SINGLE quoted string with the candidate values semicolon-joined inside
+  // it — Field INCLUDES ('A;B') — not a parenthesized list the way IN's
+  // values are. The raw value arrives comma-separated, same convention every
+  // other multi-value filter here uses; only the wire format changes.
+  if (operator === 'INCLUDES' || operator === 'EXCLUDES') {
+    const parts = value
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const joined = parts.map((v) => v.replace(/'/g, "''")).join(';');
+    return `${name} ${operator} ('${joined}')`;
+  }
+
+  // If value is not already quoted and not a number/boolean, wrap it in single quotes.
+  // A Currency field's UI input is the one numeric type likely to arrive
+  // formatted (e.g. "$1,234.56") — Number() rejects that outright, which used
+  // to fall through to being quoted as a STRING against a numeric field
+  // ("Field = '1,234.56'"), a type mismatch Salesforce rejects. Strip
+  // currency-symbol/thousands-separator cruft and re-test before giving up on
+  // it being numeric.
   let formattedValue = value;
-  if (
-    !value.startsWith("'") &&
-    !value.startsWith('(') &&
-    isNaN(Number(value)) &&
-    value !== 'true' &&
-    value !== 'false'
-  ) {
-    formattedValue = `'${value}'`;
+  if (!value.startsWith("'") && !value.startsWith('(') && value !== 'true' && value !== 'false') {
+    if (!isNaN(Number(value))) {
+      // already a clean numeric literal — unchanged
+    } else {
+      const sanitized = value.trim().replace(/[^0-9.-]/g, '');
+      formattedValue = sanitized && !isNaN(Number(sanitized)) ? sanitized : `'${value}'`;
+    }
   }
 
   return `${name} ${operator} ${formattedValue}`;
@@ -130,7 +166,7 @@ export const exportFirstTime = async (
     }
 
     const fieldNames: string[] = [];
-    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'fromid'];
     fieldsMetadata.fields.forEach((f) => {
       if (
         f.referenceTo.length > 1 &&
@@ -200,7 +236,7 @@ export const exportFirstTime = async (
       const whereClause = buildWhereClause(object);
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
 
-      console.log(JSON.stringify({soql}))
+      console.log(JSON.stringify({ soql }));
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
         salesforceApiCount += 2;
@@ -346,7 +382,7 @@ export const exportIncremental = async (
     }
 
     const fieldNames: string[] = [];
-    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'fromid'];
     fieldsMetadata.fields.forEach((f) => {
       if (
         f.referenceTo.length > 1 &&

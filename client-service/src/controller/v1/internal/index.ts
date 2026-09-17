@@ -17,6 +17,7 @@ import {
 import { wrapController } from '../../../utils/helper';
 import { encrypt } from '../../../utils/encryption';
 import { salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
+import { logger } from '../../../middlewares';
 
 const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupConfigId } = req.query;
@@ -63,7 +64,7 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
 
 const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { eventType, eventId, backupConfigId } = req.body;
-  console.log(`Received an hit from backup service for event ${eventType}`);
+  logger.info(`Received a hit from backup service for event ${eventType}`);
   makeResponse(req, res, 200, true, 'update');
 
   try {
@@ -148,10 +149,10 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
   } catch (error: any) {
     // ConditionalCheckFailedException means this eventId was already applied — safe to ignore
     if (error?.name === 'ConditionalCheckFailedException') {
-      console.log(`Duplicate event ignored: ${eventType} eventId=${eventId}`);
+      logger.info(`Duplicate event ignored: ${eventType} eventId=${eventId}`);
       return;
     }
-    console.log(`Error in event ${eventType} `, error);
+    logger.error(`Error in event ${eventType}: ${error}`);
   }
 };
 

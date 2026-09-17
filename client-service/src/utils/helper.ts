@@ -112,6 +112,10 @@ const formatFieldValuesForSOQL = (fields: any[]): any[] => {
       return field;
     }
 
+    if(field.name == 'Currency__c') {
+      console.log('FIELD DATA ', JSON.stringify(field));
+    }
+
     const formattedValue = formatSalesforceValueByDataType(field.filter.value, field.dataType);
 
     return {
@@ -124,10 +128,28 @@ const formatFieldValuesForSOQL = (fields: any[]): any[] => {
   });
 };
 
+// Strips currency symbols, thousands-separator commas, and surrounding
+// whitespace before a numeric-type value is embedded as a bare (unquoted)
+// SOQL literal. A Currency field's UI input is the one numeric type likely to
+// arrive formatted (e.g. "$1,234.56") — unlike Integer/Decimal/Percent, which
+// typically don't get symbol/grouping treatment — and an unstripped comma or
+// symbol there produces invalid SOQL ("Field = $1,234.56" / "Field = 1,234.56",
+// a bare comma outside any list context), which Salesforce rejects outright.
+const sanitizeNumericValue = (value: string): string => value.trim().replace(/[^0-9.-]/g, '');
+
 const formatSalesforceValueByDataType = (value: string, dataType: string): string => {
   if (!value && value !== '0' && value !== 'false') return value;
 
-  const lowerDataType = dataType.toLowerCase();
+  // Field-Level filter values reach here typed as `string` only at compile
+  // time — a numeric input (Currency, Percent, ...) can arrive as a real JS
+  // number, and sanitizeNumericValue's .trim()/.replace() throw on anything
+  // that isn't already a string.
+  const strValue = String(value);
+  // trim(): a dataType string with stray whitespace (copy-paste, upstream
+  // metadata quirk) would silently fall through to the default: quoted-string
+  // branch below instead of matching a numeric case — trim it out here rather
+  // than let every case label carry its own defensive check.
+  const lowerDataType = dataType.trim().toLowerCase();
 
   switch (lowerDataType) {
     case 'string':
@@ -138,13 +160,17 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
     case 'url':
     case 'picklist':
     case 'multipicklist':
-      return `'${escapeSOQLString(value)}'`;
+      return `'${escapeSOQLString(strValue)}'`;
 
+    // SOQL date/datetime literals are unquoted (WHERE CreatedDate = 2026-09-02,
+    // not '2026-09-02') — quoting them makes Salesforce treat the literal as a
+    // string against a Date/DateTime field, which it rejects with "must be of
+    // type date/datetime and should not be enclosed in quotes".
     case 'date':
-      return `'${formatDate(value)}'`;
+      return formatDate(strValue);
 
     case 'datetime':
-      return `'${formatDateTime(value)}'`;
+      return formatDateTime(strValue);
 
     case 'integer':
     case 'double':
@@ -152,13 +178,13 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
     case 'currency':
     case 'percent':
     case 'number':
-      return value;
+      return sanitizeNumericValue(strValue);
 
     case 'boolean':
-      return isTruthy(value) ? 'true' : 'false';
+      return isTruthy(strValue) ? 'true' : 'false';
 
     default:
-      return `'${escapeSOQLString(value)}'`;
+      return `'${escapeSOQLString(strValue)}'`;
   }
 };
 

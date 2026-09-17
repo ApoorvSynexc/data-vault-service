@@ -126,18 +126,6 @@ const getRestoreById = async (restoreId: string): Promise<IRestore | null> => {
   return (result.Item as IRestore) ?? null;
 };
 
-const getRestoresByUserId = async (userId: string): Promise<IRestore[]> => {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: RESTORE_TABLE,
-      IndexName: 'userId-index',
-      KeyConditionExpression: 'userId = :uid',
-      ExpressionAttributeValues: { ':uid': userId },
-    })
-  );
-  return (result.Items as IRestore[] | undefined) ?? [];
-};
-
 const getRestoresWithPagination = async (
   filter: {
     userId?: string;
@@ -293,4 +281,4 @@ const getRestoresWithPagination = async (
   );
 };
 
-export { createRestore, updateRestore, getRestoreById, getRestoresByUserId, getRestoresWithPagination };
+export { createRestore, updateRestore, getRestoreById, getRestoresWithPagination };

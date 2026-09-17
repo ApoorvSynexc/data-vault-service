@@ -1,16 +1,11 @@
-import { deleteTriggers, getUserByCrmProfileUserId } from "../services"
-import { decrypt } from "../utils/encryption";
+import { deleteTriggers, getDecryptedCrmCredential, getUserByCrmProfileUserId } from "../services"
 
 export const deleteUserTrigger = async () => {
     try {
         const backupConfig: any = {
             triggerResults: [
                 {
-                    triggerName: "DataVault_Lead_Trigger",
-                    status: 'CREATED'
-                },
-                {
-                    triggerName: "DataVault_UserPrioritizedRecord_Trigger",
+                    objectApiName: "Account",
                     status: 'CREATED'
                 },
                 // {
@@ -295,24 +290,21 @@ export const deleteUserTrigger = async () => {
                 // },
             ]
         }
-        const user = await getUserByCrmProfileUserId("005dN00000B4141QAB");
-        if (true) {
+        const user = await getUserByCrmProfileUserId("005dN00000B4141QAB", ""); // TODO: fill in orgId before running
+        if (user) {
             console.log("Deleting trigger");
 
-            // const tokens = JSON.parse(decrypt(user.crmCredential));
-            // console.log({tokens});
+            const tokens = getDecryptedCrmCredential(user);
             const count = await deleteTriggers(
                 "https://hyudaitextolic.my.salesforce-setup.com/",
                 {
-                    //accessToken: "00DdN00000wY1pt!AQEAQD61pSHSEx8QrApedKVh.jsP2.kN2dolJbecF3XGBxqNnkhLS5gRV.xHbYuuTR9LPFhzFI.GPC5anKTLiCIS6XGV8VvC",
-                    accessToken: "",
-                    refreshToken: "",
+                    accessToken: tokens.access_token,
+                    refreshToken: tokens.refresh_token,
                 },
                 backupConfig
             );
             console.log(`Trigger deleted length: ${count.length}`);
             console.log(JSON.stringify({count}));
-            
         }
     } catch (error) {
         console.log("Error in migration: ", error);

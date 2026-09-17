@@ -54,14 +54,14 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 // pick a role and customize its modules from a single screen.
 const updatePermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  const { userId, modules, roleId } = JSON.parse(plaintext);
+  const { userId, modules, roleId, organizationId } = JSON.parse(plaintext);
 
   if (!userId || !roleId) {
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
     return;
   }
 
-  const existingUser = await getUserByCrmProfileUserId(userId);
+  const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
   if (!existingUser) {
     res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'USER_NOT_FOUND' }));
     return;
@@ -100,10 +100,12 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
         modules: role.permissions,
         roleId: role.roleId,
         roleName: role.name,
+        roleDescription: role.description ?? '',
         lastSyncDate: element.updatedAt ?? null,
       });
     }
   }
+
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
   res.status(200).json(encryptSalesforceResponse(crm, { users }));
@@ -124,11 +126,11 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     try {
       const { profile, role, ...rest } = user;
       const crmProfileUserId = profile.userId;
-      const orgId = profile.organizationId;
-      const existingUser = await getUserByCrmProfileUserId(crmProfileUserId);
+      const orgId = organizationId;
+      const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, orgId);
 
-      //If permission not exist, then clean up user and role
-      if (!hasAnyGrant(role.permissions)) {
+      const hasGrant = hasAnyGrant(role.permissions);
+      if (!hasGrant) {
         if (existingUser?.userId) {
           // check if user created any restore
           const backups = await getBackupConfigsByUser(existingUser?.userId);
@@ -138,6 +140,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           } else {
             result.push({ ...user, status: "failed", message: "user has backups, archival or restores" });
           }
+        } else {
         }
 
         result.push({ ...user, staus: 'success', action: 'deleted' });
@@ -163,7 +166,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           let crmId = uuidv4();
           const crmExist = await getCrmByOrgId(orgId);
           if (crmExist) {
-            crmId = crmExist.crmId
+            crmId = crmExist.crmId;
           }
           await createRole({ roleId, name: roleName, permissions: role.permissions });
           await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, userId, crmId, isCrmConnected: false });
@@ -182,42 +185,53 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     }
   }
 
-  // // If all user and role delete from db then delete crm
-  // if (organizationId) {
-  //   const crm = await getCrmByOrgId(organizationId);
-  //   if (crm) {
-  //     const usersByCrmId = await getUsersByCrmId(crm.crmId);
-  //     if (!usersByCrmId.length) {
-  //       await deleteCrm(crm.crmId);
-  //     }
-  //   }
-  // }
-
   res.status(201).json(encryptSalesforceResponse(crm, result));
 };
 
 const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
   const { crmId } = crm;
-  // DataVaultPermissionService.createRole() (Apex) sends { orgId, name, modules, createdBy }
-  // — `modules` on the wire maps to IRole.permissions in storage. `createdBy` is
-  // derived server-side in Apex from UserInfo.getName(), not user-entered.
-  const { name, modules, createdBy } = JSON.parse(plaintext);
+  // DataVaultPermissionService.createRole() (Apex) sends
+  // { orgId, name, description, modules, createdBy } — `modules` on the wire
+  // maps to IRole.permissions in storage. `createdBy` is derived server-side
+  // in Apex from UserInfo.getName(), not user-entered.
+  const { name, description, modules, createdBy } = JSON.parse(plaintext);
+
+  // Role names must be unique within an org — case/whitespace-insensitive so
+  // "Sales" and " sales " aren't treated as different roles.
+  const existingRoles = await getRolesByCrmId(crmId);
+  const nameTaken = existingRoles.some(
+    (role) => role.name.trim().toLowerCase() === String(name).trim().toLowerCase()
+  );
+  if (nameTaken) {
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ROLE_NAME_EXISTS' }));
+    return;
+  }
+
+  // A role with no module granted anything is not a usable role — every other
+  // path that creates one (upsertUsersHandler) already treats "no grants" as
+  // "delete/never-create the role", so reject it explicitly here too rather
+  // than storing one nothing can ever pass hasAnyGrant() for.
+  if (!hasAnyGrant(modules)) {
+    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'PERMISSIONS_REQUIRED' }));
+    return;
+  }
 
   // req.salesforcePayload already required a registered CRM (with its own
   // encryption key) to decrypt this request at all, so crmId above is always
   // valid here — no need to look up or auto-create the CRM record separately.
   const roleId = uuidv4();
-  await createRole({ roleId, crmId, name, permissions: modules ?? {}, createdBy });
+  await createRole({ roleId, crmId, name, description, permissions: modules ?? {}, createdBy });
 
   res.status(201).json(encryptSalesforceResponse(crm, { roleId }));
 };
 
 const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  // DataVaultPermissionService.updateRole() (Apex) sends { orgId, roleId, name, modules }
-  // — `modules` on the wire maps to IRole.permissions in storage.
-  const { roleId, name, modules } = JSON.parse(plaintext);
+  // DataVaultPermissionService.updateRole() (Apex) sends
+  // { orgId, roleId, name, description, modules } — `modules` on the wire
+  // maps to IRole.permissions in storage.
+  const { roleId, name, description, modules } = JSON.parse(plaintext);
 
   const existingRole = await getRole({ roleId: String(roleId) });
   if (!existingRole) {
@@ -229,6 +243,7 @@ const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
     { roleId: String(roleId) },
     {
       ...(name !== undefined && { name }),
+      ...(description !== undefined && { description }),
       ...(modules !== undefined && { permissions: modules }),
     }
   );
@@ -256,25 +271,18 @@ const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
 
 const confirmAdminUserCreatedHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  const { userId } = JSON.parse(plaintext);
+  const { userId, organizationId } = JSON.parse(plaintext);
 
   if (!userId) {
     res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
     return;
   }
 
-  const existingUser = await getUserByCrmProfileUserId(userId);
+  const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
   if (!existingUser) {
     res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'USER_NOT_FOUND' }));
     return;
   }
-
-  // If need update the CRM Table
-  // const crm = await getCrmByOrgId(existingUser.crmProfile?.organizationId ?? '');
-  // if (!crm) {
-  //   res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'CRM_NOT_FOUND' }));
-  //   return;
-  // }
 
   res.status(200).json(encryptSalesforceResponse(crm, { success: true }));
 };

@@ -59,6 +59,7 @@ export type RestoreJobStatus =
   | 'BULK_QUERY_COMPLETED'
   | 'RESTORE_IN_PROGRESS'
   | 'COMPLETED'
+  | 'SUCCESS'
   | 'FAILED';
 
 export interface IRestoreJob {

@@ -70,6 +70,15 @@ const schedulingSchema = Joi.object({
   frequency: Joi.string()
     .valid(...Object.values(DURATION_TYPE))
     .required(),
+  // Sub-selects the recurrence unit CUSTOM repeats `interval` on (e.g. "every
+  // `interval` weeks") — required only under CUSTOM, meaningless otherwise.
+  customFrequency: Joi.when('frequency', {
+    is: DURATION_TYPE.custom,
+    then: Joi.string()
+      .valid(DURATION_TYPE.daily, DURATION_TYPE.weekly, DURATION_TYPE.monthly)
+      .required(),
+    otherwise: Joi.forbidden(),
+  }),
   interval: Joi.number().integer().min(1).required(),
   weekDays: Joi.when('frequency', {
     is: Joi.alternatives().try(DURATION_TYPE.weekly),

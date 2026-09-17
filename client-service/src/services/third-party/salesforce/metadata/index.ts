@@ -1,5 +1,5 @@
 import { salesforceRequest } from "..";
-import { STANDARD_OBJECT_LIST } from "../../../../constant";
+import { EXCLUDE_OBJECT_SUFFIX, STANDARD_OBJECT_LIST } from "../../../../constant";
 import { logger } from "../../../../middlewares";
 import { IUser } from "../../../../models";
 import { getBackupConfigById } from "../../../backup-config";
@@ -174,7 +174,6 @@ export const salesforceObjectFilteredList = async (params: ISalesforceObjectList
             standardObjects.push(...STANDARD_OBJECT_LIST);
         }
 
-        const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
         const objectsList = await salesforceObjectList({ user });
         let filteredObjects = objectsList.filter((obj) =>
             obj.deprecatedAndHidden === false &&
@@ -184,7 +183,7 @@ export const salesforceObjectFilteredList = async (params: ISalesforceObjectList
             obj.keyPrefix !== null &&
             obj.queryable === true &&
             (obj.custom === false && standardObjects.includes(obj.name) || obj.custom === true) &&
-            !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+            !EXCLUDE_OBJECT_SUFFIX.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
         );
 
         if (apexMode === 'backup' && apexType === 'realtime') {

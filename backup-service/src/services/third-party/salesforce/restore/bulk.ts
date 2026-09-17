@@ -157,6 +157,21 @@ const getFailedResults = async (
   return response.text();
 };
 
+const getSuccessfulResults = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  jobId: string
+): Promise<string> => {
+  const fetchPage = makePageFetcher(tokens);
+  const url = `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/successfulResults/`;
+  const response = await fetchPage(url);
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`HTTP Error ${response.status}: ${errorText}`);
+  }
+  return response.text();
+};
+
 export {
   createBulkJob,
   uploadDataToJob,
@@ -164,4 +179,5 @@ export {
   getBulkJobStatus,
   pollBulkJobUntilDone,
   getFailedResults,
+  getSuccessfulResults,
 };
