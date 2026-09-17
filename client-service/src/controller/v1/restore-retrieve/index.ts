@@ -417,13 +417,18 @@ const parseRetrieveParams = (
  *   type:           'ENTIRE' | 'CHANGED_BETWEEN'
  *   startDate:      ISO 8601   (required for CHANGED_BETWEEN, ignored otherwise)
  *   endDate:        ISO 8601   (required for CHANGED_BETWEEN, ignored otherwise)
- *   columnNames:    string[]   (field API names, non-empty)
+ *   columnNames:    string[]   (field API names, non-empty — accepted for backward
+ *                              compatibility but no longer honored: every row
+ *                              projects Id and LastModifiedDate only)
  *   searchText?:    string     (case-insensitive substring, any of columnNames)
  *   cursor?:        string     (opaque nextCursor echo)
  * }
  *
- * Reads compressed state only — main_backup_files (`_hudi`) and the CDC history
- * (`_delta`). No CSV is queried.
+ * Reads compressed state (main_backup_files `_hudi` and the CDC history
+ * `_delta`) first. Only once Hudi has no more rows for the current block does
+ * it fall through to the not-yet-compressed tail — csv for a BULK job
+ * (schedule/bulk backup, archival, or a realtime object's initial Bulk-API
+ * sync), json for a REALTIME job.
  *
  * Every row carries an `OPERATION` naming what a RESTORE would have to do to put
  * that version back — the inverse of what the backup recorded:
