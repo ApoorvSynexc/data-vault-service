@@ -12,7 +12,7 @@ import { getUser } from '../user';
 import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third-party/salesforce/metadata/index';
 import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
-import { tableExists, getTableColumns } from '../third-party/athena/glue';
+import { tableExists } from '../third-party/athena/glue';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
@@ -389,6 +389,7 @@ import {
   undoWindowDeltas,
   OPERATION_FIELD,
   BLOCK_SIZE,
+  PAGE_SIZE,
   IRankedRecord,
   IPageCursor,
   IFetchRecordsResult,
@@ -480,7 +481,7 @@ const byKeyDesc = (a: IRankedRecord, b: IRankedRecord): number =>
 // than silently restarting: a UI that thinks it is on page 7 should be told its
 // cursor is stale, not handed page 1's rows.
 const resolvePage = (fingerprint: string, cursor?: string): IPageState => {
-  if (!cursor) return { fingerprint, replay: null, offset: 0, cursor: null };
+  if (!cursor) return { fingerprint, replay: null, offset: 0, cursor: null, blockIndex: 0 };
 
   const decoded = decodeCursor(cursor) as IPageCursor | undefined;
   if (!decoded || decoded.fp !== fingerprint) throw new CursorError('cursor_mismatch');
@@ -492,6 +493,9 @@ const resolvePage = (fingerprint: string, cursor?: string): IPageState => {
     replay: Object.keys(decoded.ex ?? {}).length ? decoded.ex : null,
     offset: Object.keys(decoded.ex ?? {}).length ? decoded.off : 0,
     cursor: Object.keys(decoded.ex ?? {}).length ? null : decoded.key,
+    // Missing on a cursor issued before this field existed — treat that the
+    // same as a fresh request: assume block 0.
+    blockIndex: decoded.blk ?? 0,
   };
 };
 
@@ -530,6 +534,8 @@ interface IPageState {
   replay: Record<string, string> | null;
   offset: number;
   cursor: IPageKey | null;
+  // 0-based index of the Hudi block this page continues. See IPageCursor.blk.
+  blockIndex: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -937,12 +943,23 @@ const resolveOrphanBaseRows = async (
  * it is cheap (small, explicit job-id lists against injected-partition
  * tables), and re-running it is what makes a job completing mid-pagination,
  * or a pending backlog spanning more than one 1000-id chunk, reachable on
- * later pages instead of stuck behind whichever page first saw it.
+ * later pages instead of stuck behind whichever page first saw it. The one
+ * exception: while still inside Hudi's very first (full) block — an object
+ * with more than BLOCK_SIZE compressed rows — the pending tail can't be
+ * reached yet anyway (more compressed data sits ahead of it), so it's
+ * skipped for that block's pages and queried again from the next block on.
+ * See hudiBlockExhausted/queryPending below.
  *
  * Ownership is checked once, on the config: it owns the tables the query names.
  *
  * Returns null when the config does not exist or is not owned by the caller.
  */
+// A fresh "nothing here" result for any source a request doesn't need to
+// query (table missing, no job ids, wrong request type, block not exhausted).
+// A function, not a shared constant, so the four parallel slots below never
+// alias the same columns/rows arrays.
+const emptyQueryResult = (): IQueryResult => ({ columns: [], rows: [] });
+
 const retrieveRecords = async (
   params: IRetrieveRecordsParams
 ): Promise<IFetchRecordsResult | null> => {
@@ -973,17 +990,11 @@ const retrieveRecords = async (
   const { region, outputLocation } = await buildRetrieveOutputLocation(config);
   const { run, executions } = makeRunner(databaseName, region, page.replay, outputLocation);
 
-  // Not every object's compressed table has a Name column (some objects have
-  // no Name field at all) — SELECT "Name" against it would fail the whole
-  // query. Drop it from what's actually requested rather than erroring the
-  // fetch. Reuses the same cached Glue GetTable call tableExists would make,
-  // so this doubles as the hudi-existence check below at no extra cost.
-  const hudiColumns = await getTableColumns(databaseName, hudiTable, region);
-  const hudiExists = hudiColumns !== null;
-  const columnNames =
-    hudiColumns && !hudiColumns.some((c) => c.toLowerCase() === 'name')
-      ? params.columnNames.filter((c) => c.toLowerCase() !== 'name')
-      : params.columnNames;
+  // fetch-records projects Id and LastModifiedDate only now — never Name or
+  // any other field the caller's columnNames asks for. dry-run/dry-run-diff
+  // are unaffected: they run their own record-fetching (dryRunDiff /
+  // fetchDryRunDiffRecordsForTarget below), not this function.
+  const columnNames = ['Id', 'LastModifiedDate'];
 
   const sql = {
     columnNames,
@@ -1003,20 +1014,16 @@ const retrieveRecords = async (
   // changes the SQL itself, and any later page must scan for real to seek.
   const deletedCacheable = !changed && !sql.searchText && page.cursor === null && page.replay === null;
 
-  // Pending (not-yet-compressed) raw_data tail — resolved and re-queried on
-  // EVERY call, including replay pages (see the block comment above
-  // runRawQuery/runChunkedRaw for why that is the right tradeoff here).
-  //
   // hudi/delta existence is checked up front via a cheap Glue GetTable call
   // rather than firing the full Athena SELECT and catching TABLE_NOT_FOUND —
   // a brand-new config with no compression run yet would otherwise pay a
   // full StartQueryExecution+poll round trip (700ms-1s+) just to learn what
   // this single metadata call already answers in a fraction of the time, and
   // avoids competing for Athena's per-account query concurrency with queries
-  // that actually have data to return. hudiExists was already resolved above
-  // (getTableColumns), so only delta needs checking here.
-  const [pending, deltaExists] = await Promise.all([
+  // that actually have data to return.
+  const [pending, hudiExists, deltaExists] = await Promise.all([
     getPendingCompressionJobIds(params.backupConfigId, params.objectApiName),
+    tableExists(databaseName, hudiTable, region),
     tableExists(databaseName, deltaTable, region),
   ]);
 
@@ -1028,50 +1035,71 @@ const retrieveRecords = async (
   // that away for no benefit.
   const canMergeChangedDeleted = changed && hudiExists && deltaExists;
 
+  // Compressed state (Hudi + Delta) queried FIRST, for both BACKUP and
+  // ARCHIVAL configs alike — nothing isArchival-specific here.
+  const [main, deleted] = await Promise.all([
+    canMergeChangedDeleted
+      ? run('main', () => buildHudiChangedWithDeletedSql(hudiTable, deltaTable, windowSql))
+      : !hudiExists
+        ? Promise.resolve(emptyQueryResult())
+        : run('main', () =>
+            changed
+              ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
+              : buildHudiEntireSql(hudiTable, sql)
+          ),
+    canMergeChangedDeleted
+      ? Promise.resolve(emptyQueryResult()) // already folded into `main` above
+      : !deltaExists
+        ? Promise.resolve(emptyQueryResult())
+        : runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable, region),
+  ]);
+
+  // Pending (not-yet-compressed) raw_data tail — csv for BULK jobs (a
+  // schedule/bulk backup, an archival job, or a realtime object's initial
+  // Bulk-API sync), json for REALTIME jobs; see getPendingCompressionJobIds
+  // for that classification. Normally re-queried on every page (see the
+  // block comment above runRawQuery — a job finishing mid-pagination must be
+  // visible on the very next page, not stuck behind whichever page first
+  // queried it). The one case that's skipped: still inside Hudi's very FIRST
+  // block (blockIndex 0) while that block came back full — a full block
+  // means there's more compressed data ahead of the pending tail already, so
+  // querying it now would just be thrown away. Bounded to one block (~20
+  // pages) rather than the object's whole history: from block 1 onward
+  // (blockIndex > 0) pending is queried every page again, same as always.
+  const hudiBlockExhausted = !hudiExists || main.rows.length < BLOCK_SIZE;
+  const queryPending = hudiBlockExhausted || page.blockIndex > 0;
+
   // pending.csvJobIds is always empty for an archival config (archival jobs
   // classify into archivalJobIds instead — see getPendingCompressionJobIds),
   // and pending.archivalJobIds is always empty for a backup config, so each
   // query below naturally no-ops for the config type it doesn't apply to —
   // no isArchival special-case needed.
-  const [main, deleted, rawCsvChanged, rawJsonDeleted, rawJsonDelta, rawArchivalInserts] =
-    await Promise.all([
-      canMergeChangedDeleted
-        ? run('main', () => buildHudiChangedWithDeletedSql(hudiTable, deltaTable, windowSql))
-        : !hudiExists
-          ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
-          : run('main', () =>
-              changed
-                ? buildHudiChangedSql(hudiTable, deltaTable, windowSql)
-                : buildHudiEntireSql(hudiTable, sql)
-            ),
-      canMergeChangedDeleted
-        ? Promise.resolve<IQueryResult>({ columns: [], rows: [] }) // already folded into `main` above
-        : !deltaExists
-          ? Promise.resolve<IQueryResult>({ columns: [], rows: [] })
-          : runDeletedForEntire(config, params.objectApiName, deltaTable, sql, run, executions, deletedCacheable, region),
-      // Updates+deletes as one query — see buildRawCsvChangedSql. Never
-      // inserts — see the raw-table header on the backup-service side for
-      // why (an inserts folder can be an entire first-time full sync, not
-      // the small bounded tail this assumes).
-      runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
-        buildRawCsvChangedSql(rawCsvTable, chunk, sql)
-      ),
-      // raw_json_snapshot is dedicated to DELETE events only — no operation
-      // filter needed (or possible; the table has no such column).
-      runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
-        buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
-      ),
-      changed
-        ? runChunkedRaw(databaseName, region, outputLocation, pending.jsonDeltaJobIds, (chunk) =>
-            buildRawJsonDeltaSql(rawJsonDeltaTable, chunk, { startDate, endDate })
-          )
-        : Promise.resolve<IQueryResult>({ columns: [], rows: [] }),
-      // ARCHIVAL's ENTIRE listing — the only operation it ever writes.
-      // pending.archivalJobIds is always empty for a BACKUP config.
-      runChunkedRaw(databaseName, region, outputLocation, pending.archivalJobIds, (chunk) =>
-        buildRawSnapshotSql(rawCsvTable, chunk, ['inserts'], sql)
-      ),
-    ]);
+  const [rawCsvChanged, rawJsonDeleted, rawJsonDelta, rawArchivalInserts] = queryPending
+    ? await Promise.all([
+        // Updates+deletes as one query — see buildRawCsvChangedSql. Never
+        // inserts — see the raw-table header on the backup-service side for
+        // why (an inserts folder can be an entire first-time full sync, not
+        // the small bounded tail this assumes).
+        runChunkedRaw(databaseName, region, outputLocation, pending.csvJobIds, (chunk) =>
+          buildRawCsvChangedSql(rawCsvTable, chunk, sql)
+        ),
+        // raw_json_snapshot is dedicated to DELETE events only — no operation
+        // filter needed (or possible; the table has no such column).
+        runChunkedRaw(databaseName, region, outputLocation, pending.jsonSnapshotJobIds, (chunk) =>
+          buildRawJsonDeletedSql(rawJsonSnapshotTable, chunk, sql)
+        ),
+        changed
+          ? runChunkedRaw(databaseName, region, outputLocation, pending.jsonDeltaJobIds, (chunk) =>
+              buildRawJsonDeltaSql(rawJsonDeltaTable, chunk, { startDate, endDate })
+            )
+          : Promise.resolve(emptyQueryResult()),
+        // ARCHIVAL's ENTIRE listing — the only operation it ever writes.
+        // pending.archivalJobIds is always empty for a BACKUP config.
+        runChunkedRaw(databaseName, region, outputLocation, pending.archivalJobIds, (chunk) =>
+          buildRawSnapshotSql(rawCsvTable, chunk, ['inserts'], sql)
+        ),
+      ])
+    : [emptyQueryResult(), emptyQueryResult(), emptyQueryResult(), emptyQueryResult()];
 
   const columns = pairedColumns(columnNames);
   const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
@@ -1206,7 +1234,7 @@ const retrieveRecords = async (
     }
   }
 
-  return toPage(block, columnNames, page.offset, page.fingerprint, executions);
+  return toPage(block, columnNames, page.offset, page.fingerprint, executions, PAGE_SIZE, page.blockIndex);
 };
 
 /**
