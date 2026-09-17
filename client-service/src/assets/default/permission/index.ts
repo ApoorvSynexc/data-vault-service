@@ -24,7 +24,7 @@ export const defaultPermissions = [
             {
                 label: "Config",
                 value: "write",
-                description: "Edit backup policies & jobs",
+                description: "Create and edit backup policies",
             },
             {
                 label: "Execute",
@@ -53,7 +53,7 @@ export const defaultPermissions = [
             {
                 label: "Config",
                 value: "write",
-                description: "Edit archival policies & jobs",
+                description: "Create and edit archival policies",
             },
             {
                 label: "Execute",
@@ -77,17 +77,17 @@ export const defaultPermissions = [
             {
                 label: "View",
                 value: "read",
-                description: "See retrievals & history",
+                description: "See restore & history",
             },
             {
                 label: "Config",
                 value: "write",
-                description: "Edit retrieval policies & jobs",
+                description: "Create restore policies",
             },
             {
                 label: "Execute",
                 value: "execute",
-                description: "Run a retrieval job",
+                description: "Run a restore job",
                 risky: true,
             },
             // {

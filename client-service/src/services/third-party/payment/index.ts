@@ -148,7 +148,14 @@ const setupPayment = async ({
 }: SetupPaymentInput): Promise<SetupPaymentResult> => {
   const { key, iv } = parseSfSecret(sfSecret);
   const encryptedMessage = aesCbc128Encrypt(key, iv, JSON.stringify(orgInfo));
+  const body = JSON.stringify({
+    endpoint: salesforceEndpoint,
+    message: encryptedMessage,
+  });
 
+  console.log({
+      
+  })
   let response: GetSetupResponseApiResponse;
   try {
     response = await httpRequest<GetSetupResponseApiResponse>({
@@ -159,18 +166,15 @@ const setupPayment = async ({
         'product-name': productName,
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        endpoint: salesforceEndpoint,
-        message: encryptedMessage,
-      }),
+      body,
     });
-    console.log(JSON.stringify({response}));
+    console.log(JSON.stringify({ response }));
   } catch (err: any) {
     console.log(`[payment] getSetupResponse failed for org ${orgId} `, err);
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }
 
-  console.log(JSON.stringify({response}));
+  console.log(JSON.stringify({ response }));
   if (response?.status !== 'Success' || !response.message || !response.token) {
     throw new Error(response?.message || `getSetupResponse failed for org ${orgId}`);
   }
