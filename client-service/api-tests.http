@@ -1,0 +1,60 @@
+@baseUrl = http://localhost:3000/api/v1
+
+### =========================================================
+### STEP 1 — Start Salesforce login (no password needed, gets you a URL)
+### =========================================================
+GET {{baseUrl}}/auth/social-login?authProvider=salesforce&environment=sandbox
+
+
+### =========================================================
+### STEP 2 — Callback (paste fresh code + state here after authorizing
+### the URL from Step 1 in your browser, then Send immediately)
+### =========================================================
+GET {{baseUrl}}/auth/social-login/callback?authProvider=salesforce&code=aPrxJCWttG81hkKJZJ0wDLEkmwso8.kfDpGvbs8OPIoCTwS2pE3FU1Sbmxyg34kne2tg8m5CBRXjD2QXTLXSIvDh3gmnDV4%3D&state=89c5321d6f9fc58a8307d4040ec5fd31
+//GET http://localhost:5173/login-callback/salesforce?code=&state=5ffc87f594ee5c78c9e3349bda04e252
+
+### =========================================================
+### STEP 3 — Verify you're logged in + connected
+### =========================================================
+GET {{baseUrl}}/user/my-profile
+
+###
+GET {{baseUrl}}/crm/list
+
+
+### =========================================================
+### DATA ENDPOINTS (use only after Step 3 shows a connected CRM)
+### =========================================================
+
+### Backup configs
+GET {{baseUrl}}/backup-config/list
+
+### Backup jobs
+GET {{baseUrl}}/backup-job/list
+
+### Archival configs
+GET {{baseUrl}}/archival-config/list
+
+### Restore configs
+GET {{baseUrl}}/restore/config/list
+
+### Destinations
+GET {{baseUrl}}/destination/list
+
+### Dashboard overview
+GET {{baseUrl}}/dashboard/overview
+
+### Storage overview
+GET {{baseUrl}}/storage/overview
+
+### Settings (standard objects)
+GET {{baseUrl}}/settings
+
+### CRM metadata — all Salesforce objects
+GET {{baseUrl}}/crm-metadata/all-objects/list
+
+
+### =========================================================
+### LOGOUT
+### =========================================================
+POST {{baseUrl}}/auth/logout
