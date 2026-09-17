@@ -36,6 +36,7 @@
   "invalid_or_expired_state": "OAuth state is invalid or has expired",
   "salesforce_reauth_required": "Your Salesforce session has expired. Please reconnect your account",
   "salesforce_code_expired": "The authorization code has expired or is invalid. Please try connecting again",
+  "salesforce_admin_approval_required": "Your Salesforce admin needs to authorize this app for your user profile before you can connect",
   "not_found": "Record not found",
   "backup_config_not_found": "Backup configuration not found",
   "crm_not_found": "CRM not found",
