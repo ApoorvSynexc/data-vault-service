@@ -1,6 +1,6 @@
 import { logger } from '../../../../middlewares/logger';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
-import { listS3Objects, streamCsvLinesFromS3 } from '../../../destination/s3';
+import { listS3Objects, streamCsvLinesFromS3, uploadToS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
 import { SalesforceTokens } from '../api-request';
 import {
@@ -9,6 +9,7 @@ import {
   closeBulkJob,
   pollBulkJobUntilDone,
   getFailedResults,
+  getSuccessfulResults,
 } from './bulk';
 
 interface RunSalesforceRestorePayload {
@@ -90,6 +91,33 @@ const parseFirstNErrors = (failedCsv: string, limit: number): string[] => {
     .filter(Boolean) as string[];
 };
 
+// Reduces a successfulResults CSV (which carries every original column plus
+// Salesforce's sf__Id/sf__Created columns) down to just the ids of newly
+// created records (sf__Created === "true"), under a plain "Id" header —
+// upsert-ed rows that matched an existing record are excluded.
+const extractSuccessfulIdsCsv = (successfulCsv: string): string => {
+  const lines = successfulCsv
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line.trim());
+  if (!lines.length) {
+    return 'Id';
+  }
+  const headers = parseCsvRow(lines[0]);
+  const idColIndex = headers.findIndex((h) => h.trim() === 'sf__Id');
+  const createdColIndex = headers.findIndex((h) => h.trim() === 'sf__Created');
+  if (idColIndex === -1) {
+    return 'Id';
+  }
+  const ids = lines
+    .slice(1)
+    .filter(
+      (line) => createdColIndex === -1 || parseCsvRow(line)[createdColIndex]?.trim() === 'true'
+    )
+    .map((line) => parseCsvRow(line)[idColIndex]?.trim() ?? '');
+  return ['Id', ...ids].join('\n');
+};
+
 // Submits one closed Bulk API 2.0 ingest job for a single ≤MAX_CHUNK_BYTES CSV chunk.
 const submitIngestChunk = async (
   instanceUrl: string,
@@ -97,7 +125,10 @@ const submitIngestChunk = async (
   objectName: string,
   operation: 'insert' | 'update' | 'upsert' | 'delete',
   externalIdFieldName: string | undefined,
-  chunk: CsvChunk
+  chunk: CsvChunk,
+  s3Config: IDestinationConfig,
+  successfulResultsPath: string,
+  type: 'RESTORE' | 'ROLLBACK'
 ): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({
@@ -114,17 +145,30 @@ const submitIngestChunk = async (
   logger.info(
     `[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({ status: status })}`
   );
+  const processed = status.numberRecordsProcessed ?? 0;
+  const failed = status.numberRecordsFailed ?? 0;
+
   let errors: string[] = [];
-  if ((status.numberRecordsFailed ?? 0) > 0 || status.state === 'Failed') {
+  if (failed > 0 || status.state === 'Failed') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
     errors = parseFirstNErrors(failedCsv, 25);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
 
+  if (type === 'RESTORE' && processed - failed > 0) {
+    const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, job.id);
+    const idsOnlyCsv = extractSuccessfulIdsCsv(successfulCsv);
+    await uploadToS3(
+      s3Config,
+      `${successfulResultsPath}/${job.id}.csv`,
+      Buffer.from(idsOnlyCsv, 'utf8')
+    );
+  }
+
   return {
     jobId: job.id,
-    processed: status.numberRecordsProcessed ?? 0,
-    failed: status.numberRecordsFailed ?? 0,
+    processed,
+    failed,
     errors,
   };
 };
@@ -137,13 +181,18 @@ const submitIngestChunk = async (
 const restoreObjectData = async (
   restoreJobId: string,
   s3Config: IDestinationConfig,
-  csvFilePath: string,
+  baseCsvFilePath: string,
   objectName: string,
   instanceUrl: string,
   tokens: SalesforceTokens,
   operation: 'insert' | 'update' | 'upsert' | 'delete',
-  externalIdFieldName: string
+  externalIdFieldName: string,
+  type: 'RESTORE' | 'ROLLBACK'
 ): Promise<string[]> => {
+  let csvFilePath = baseCsvFilePath;
+  if (type === 'RESTORE') {
+    csvFilePath = `${baseCsvFilePath}/${objectName}/csv`;
+  }
   const keys = await listS3Objects(s3Config, `${csvFilePath}`);
 
   if (!keys.length) {
@@ -162,6 +211,8 @@ const restoreObjectData = async (
   logger.info(
     `[Restore] Found ${keys.length} backed-up data files for object ${objectName}, restoreJobId=${restoreJobId}`
   );
+
+  const successfulResultsPath = `${baseCsvFilePath}/rollback/${objectName}/delete`;
   const submittedJobIds: string[] = [];
   let header: string | null = null;
   let chunk: CsvChunk | null = null;
@@ -182,7 +233,10 @@ const restoreObjectData = async (
       objectName,
       operation,
       externalIdFieldName,
-      chunk
+      chunk,
+      s3Config,
+      successfulResultsPath,
+      type
     );
     submittedJobIds.push(job.jobId);
     // Accumulate this chunk's processed/failed counts onto the object's running
@@ -231,7 +285,7 @@ const restoreObjectData = async (
         continue; // skip blank lines
       }
 
-      const row = operation === 'delete' ? parseCsvRow(line)[idColumnIndex] ?? '' : line;
+      const row = operation === 'delete' ? (parseCsvRow(line)[idColumnIndex] ?? '') : line;
       if (operation === 'delete' && !row) {
         continue; // no id to delete on this row
       }
@@ -306,18 +360,19 @@ export const runSalesforceRestore = async (
     backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
   };
 
-  const path = `${sourceS3Credentials.csvFilePath}/${object.name}/csv`;
-  console.log(JSON.stringify({ path }));
+  // const path = `${sourceS3Credentials.csvFilePath}/${object.name}/csv`;
+  // console.log(JSON.stringify({ path }));
 
   await restoreObjectData(
     restoreJobId,
     s3Config,
-    path,
+    sourceS3Credentials.csvFilePath,
     object.name,
     destinationSalesforceCredentials.instanceUrl,
     tokens,
     'upsert',
-    externalIdFieldName
+    externalIdFieldName,
+    'RESTORE'
   );
 
   logger.info(
@@ -329,7 +384,7 @@ export const runSalesforceRestore = async (
 export const runSalesforceRollback = async (
   payload: RunSalesforceRestorePayload
 ): Promise<'SUCCESS' | 'FAILED'> => {
-  let externalIdFieldName = 'Id';
+  const externalIdFieldName = 'Id';
   const { restoreId, restoreJobId, object, sourceS3Credentials, destinationSalesforceCredentials } =
     payload;
 
@@ -360,15 +415,11 @@ export const runSalesforceRollback = async (
       const splitKeys = key.split('/');
       let operation = splitKeys[splitKeys.length - 1] as 'update' | 'delete';
 
-      if(!['update', 'delete'].includes(operation)) {
+      if (!['update', 'delete'].includes(operation)) {
         operation = splitKeys[splitKeys.length - 2] as 'update' | 'delete';
       }
 
       console.log(JSON.stringify({ operation, splitKeys, key }));
-
-      if (operation === 'delete') {
-        externalIdFieldName = 'DC_External_Id__c';
-      }
 
       await restoreObjectData(
         restoreJobId,
@@ -378,7 +429,8 @@ export const runSalesforceRollback = async (
         destinationSalesforceCredentials.instanceUrl,
         tokens,
         operation,
-        externalIdFieldName
+        externalIdFieldName,
+        'ROLLBACK'
       );
     }
   }

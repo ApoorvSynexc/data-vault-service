@@ -4,9 +4,13 @@ import {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
+  SALESFORCE_METADATA_API_VERSION,
 } from '../../../constant';
 import { encrypt } from '../../../utils/encryption';
-import { updateUser } from '../../user';
+import { getDecryptedCrmCredential, getUser, updateUser } from '../../user';
+import { logger } from '../../../middlewares';
+import { getCrmById } from '../../crm';
+import { getSettingsByUser } from '../../settings';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -101,21 +105,19 @@ const salesforceRequest = async <T = any>(
     const data = await makeCall(tokens.accessToken);
     return { data, accessToken: tokens.accessToken };
   } catch (error: any) {
-    console.log('Salesforce request failed, checking for 401 to refresh token...', error?.message);
     if (!error?.message?.startsWith('HTTP Error 401')) {
       throw error;
     }
+    logger.info(`Salesforce request got 401, refreshing token: ${error?.message}`);
 
     // Access token expired — refresh and retry once.
     // Use deduplicatedRefresh when crmId is available so that N concurrent
     // callers on the same CRM share a single refresh call instead of racing.
     let refreshed: any;
     try {
-      console.log('Refreshing Token');
       refreshed = await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
-      console.log('Refreshing Token success');
     } catch (e: any) {
-      console.log('Refreshing Token failed', e?.message);
+      logger.error(`Salesforce token refresh failed: ${e?.message}`);
       // Refresh token also expired — user must reconnect
       throw new SalesforceAuthExpiredError();
     }
@@ -234,12 +236,94 @@ const getSalesforceProfile = async (
   return salesforceRequest({ url, method: 'GET' }, tokens);
 };
 
+interface ISalesforceLimit {
+  Max: number;
+  Remaining: number;
+}
+
+type SalesforceOrgLimits = Record<string, ISalesforceLimit>;
+
+const getSalesforceOrgLimits = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens
+): Promise<SalesforceOrgLimits> => {
+  const { data } = await salesforceRequest<SalesforceOrgLimits>(
+    { url: `${instanceUrl}/services/data/v${SALESFORCE_METADATA_API_VERSION}/limits`, method: 'GET' },
+    tokens
+  );
+  return data;
+};
+
+interface ISalesforceApiLimitUsage {
+  max: number;
+  remaining: number;
+  used: number;
+  percentageUsed: number;
+}
+
+const checkSalesforceApiLimitUsage = async (
+  userId: string,
+  crmId: string,
+  thresholdPercentage?: number
+): Promise<ISalesforceApiLimitUsage> => {
+
+  const user = await getUser({ userId });
+  if (!user || !user.crmId) {
+    throw new Error('User not found');
+  }
+
+  const crm = await getCrmById(crmId);
+  if (!crm) {
+    throw new Error('CRM not found');
+  }
+  const instanceUrl = crm?.instanceUrl;
+  if (!instanceUrl) {
+    throw new Error('Instance URL not found');
+  }
+
+  const setting = await getSettingsByUser(user.userId);
+  if (thresholdPercentage) {
+    thresholdPercentage = Number(thresholdPercentage);
+  } else if (setting && setting.salesforceApiThreshold) {
+    thresholdPercentage = setting.salesforceApiThreshold;
+  } else {
+    thresholdPercentage = 80;
+  }
+
+  const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
+  const tokens = {
+    accessToken: access_token,
+    refreshToken: refresh_token,
+    userId: user.userId,
+    environment: crm?.environment,
+    customUrl: user.customUrl,
+  }
+
+  const limits = await getSalesforceOrgLimits(instanceUrl, tokens);
+  const dailyApiRequests = limits.DailyApiRequests;
+  if (!dailyApiRequests) {
+    throw new Error('DailyApiRequests limit not returned by Salesforce');
+  }
+
+  const { Max: max, Remaining: remaining } = dailyApiRequests;
+  const used = max - remaining;
+  const percentageUsed = max > 0 ? Number(((used / max) * 100).toFixed(2)) : 0;
+
+  if (percentageUsed > thresholdPercentage) {
+    throw new Error(`Salesforce API limit exceeded (${percentageUsed}%)`);
+  }
+
+  return { max, remaining, used, percentageUsed };
+};
+
 export {
   getSalesforceLoginUrl,
   getSalesforceToken,
   getSalesforceProfile,
   refreashSalesforceToken,
   salesforceRequest,
+  getSalesforceOrgLimits,
+  checkSalesforceApiLimitUsage,
 };
 export type { SalesforceEnvironment };
 export type { SalesforceTokens, SalesforceRequestResult };

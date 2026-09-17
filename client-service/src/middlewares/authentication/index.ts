@@ -3,6 +3,7 @@ import { NextFunction } from 'express';
 import { JWT_ACCESS_SECRET, SESSION_STATUS, STATUS } from '../../constant';
 import { IRequest, IResponse, makeResponse } from '../../lib';
 import { getSession, getUser, getUserByCrmProfileUserId } from '../../services';
+import { x } from 'joi';
 
 const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): Promise<void> => {
   const token = req.cookies?.accessToken ?? null;
@@ -39,10 +40,11 @@ const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): 
     req.sessionId = payload.sessionId;
 
     const xCrmUserId = req.headers?.["x-crm-userid"];
-    if(xCrmUserId){
-      const userDetail = await getUserByCrmProfileUserId(xCrmUserId as string);
-      if(userDetail){
-        req.user = userDetail;
+    const xCrmOrgId = req.headers?.["x-crm-orgid"];
+    if(xCrmUserId && xCrmOrgId){
+      const selectUser = await getUserByCrmProfileUserId(xCrmUserId as string, xCrmOrgId as string);
+      if(selectUser && selectUser.crmProfile?.email === user.crmProfile?.email){
+        req.user = selectUser;
       }
     }
     next();

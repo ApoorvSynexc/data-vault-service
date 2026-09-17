@@ -11,18 +11,20 @@ const getSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> 
 
 const upsertSettingsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
-  const { status } = req.body;
+  const { status, salesforceApiThreshold, rollbackWindow, notification } = req.body;
   let { standardObjects } = req.body;
 
   const settings = await getSettingsByUser(userId);
-  const alreadyExistNames = settings?.standardObjects.map((s: any) => s.name);
 
-  const filterObjects = standardObjects
-    .filter((s: any) => !alreadyExistNames?.includes(s.name))
-    .map((s: any) => ({ ...s, isDefault: false }));
-  standardObjects = [...(settings?.standardObjects || []), ...filterObjects];
+  if (standardObjects) {
+    const alreadyExistNames = settings?.standardObjects.map((s: any) => s.name);
+    const filterObjects = standardObjects
+      .filter((s: any) => !alreadyExistNames?.includes(s.name))
+      .map((s: any) => ({ ...s, isDefault: false }));
+    standardObjects = [...(settings?.standardObjects || []), ...filterObjects];
+  }
 
-  await upsertSettings({ userId, standardObjects, status });
+  await upsertSettings({ userId, standardObjects, salesforceApiThreshold, rollbackWindow, notification, status });
   makeResponse(req, res, 200, true, 'update', settings);
 };
 

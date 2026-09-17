@@ -74,7 +74,7 @@ const SALESFORCE_METADATA_API_VERSION = String(process.env.SALESFORCE_METADATA_A
 // Comma-separated so ops can extend it without a code change.
 const SALESFORCE_PERMISSION_SET_APEX_CLASSES = String(
   process.env.SALESFORCE_PERMISSION_SET_APEX_CLASSES ||
-    'DataVaultRecordSyncTriggerHandler,DataVaultRecordSyncQueueable,DataVaultRecordSyncPayloadDto,DataVaultCalloutService,DataVaultCustomPackageException'
+  'DataVaultRecordSyncTriggerHandler,DataVaultRecordSyncQueueable,DataVaultRecordSyncPayloadDto,DataVaultCalloutService,DataVaultCustomPackageException'
 )
   .split(',')
   .map((name) => name.trim())
@@ -120,6 +120,15 @@ const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE 
 // S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
 const AWS_S3_LOGS_BUCKET = String(process.env.AWS_S3_LOGS_BUCKET);
+
+// 360 Data Craft (360degreeapps) payment/provisioning API — see services/third-party/payment.
+// No static bearer token: Create360Account's token is derived per-call from orgId+userId
+// (see buildCreateAccountBearerToken there), and getSetupResponse's token is the rotating
+// value that call itself returns.
+const PAYMENT_API_BASE_URL = String(
+  process.env.PAYMENT_API_BASE_URL || 'https://testingv2.360degreeapps.com/v2/api/v3'
+).trim();
+const PAYMENT_PRODUCT_NAME = String(process.env.PAYMENT_PRODUCT_NAME || '360 Data Craft');
 
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
@@ -174,6 +183,10 @@ const FILTER_OPERATOR = {
   neq: '!=',
   in: 'IN',
   like: 'LIKE',
+  // Multi-Select Picklist's own membership operators — no other operator can
+  // test against that field type.
+  includes: 'INCLUDES',
+  excludes: 'EXCLUDES',
 };
 
 const STATUS = {
@@ -215,6 +228,7 @@ const RESTORE_JOB_STATUS = {
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
   completed: 'COMPLETED',
+  success: 'SUCCESS',
   failed: 'FAILED',
 };
 // Compression lifecycle. Written to the same `status` field as JOB_STATUS, so a
@@ -307,6 +321,8 @@ const SALESFORCE_SYSTEM_FIELDS = [
   'LastReferencedDate',
 ];
 
+const EXCLUDE_OBJECT_SUFFIX = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent'];
+
 export {
   NODE_ENV,
   NODE_ENV_URL,
@@ -388,6 +404,10 @@ export {
   NOTIFICATION_TABLE,
   AWS_S3_LOGS_BUCKET,
 
+  // 360 Data Craft payment/provisioning API
+  PAYMENT_API_BASE_URL,
+  PAYMENT_PRODUCT_NAME,
+
   // Enums
   STATUS,
   NOTIFICATION_STATUS,
@@ -412,5 +432,6 @@ export {
   BACKUP_TYPE,
   ENVIRONMENT_TYPE,
   STANDARD_OBJECT_LIST,
-  SALESFORCE_SYSTEM_FIELDS
+  SALESFORCE_SYSTEM_FIELDS,
+  EXCLUDE_OBJECT_SUFFIX
 };

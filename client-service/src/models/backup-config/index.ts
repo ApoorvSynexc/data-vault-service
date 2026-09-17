@@ -6,6 +6,9 @@ export interface IScheduleConfig {
 
 export interface IScheduling {
   frequency: 'ONCE' | 'HOURLY' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'CUSTOM';
+  // Required when frequency === 'CUSTOM' — selects which recurrence unit `interval`
+  // repeats on (e.g. every `interval` weeks), bounded by startDate/endDate below.
+  customFrequency?: 'DAILY' | 'WEEKLY' | 'MONTHLY';
   interval: number;
   weekDays?: string[];
   monthDate?: number;
@@ -56,7 +59,7 @@ export interface IObject {
   type: string; // STANDARD | CUSTOM
   isUserSelected?: boolean;
   sizeInBytes?: number;
-  field: IObjectField[];
+  field?: IObjectField[];
   condition?: IObjectCondition;
   scheduleConfig?: IScheduleConfig;
   children?: IObjectRelationshipNode[];
@@ -77,7 +80,8 @@ export interface IObjectRelationshipNode {
 export interface ITriggerResult {
   // The object this real-time trigger belongs to.
   objectApiName: string;
-  // The deployed Apex trigger's name (DataVault_<Object>_Trigger).
+  // The deployed Apex trigger's name (DataCraft_<Object>_Trigger; older
+  // records may carry the pre-rename DataVault_<Object>_Trigger instead).
   triggerName?: string;
   // The deployed Apex Test Class name that covers it (<triggerName>Test, or a
   // truncated+hashed form past the 40-char Apex identifier cap). Needed on

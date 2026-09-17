@@ -17,12 +17,13 @@ import {
   BACKUP_SERVICE,
   BACKUP_STATUS,
   INTERNAL_SECRET,
+  PAYMENT_PRODUCT_NAME,
   SCHEDULE_MODE,
   STATUS,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
-import { getUser, triggerBackupJob } from '../../../services';
+import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, triggerBackupJob } from '../../../services';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -81,7 +82,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
 
   for (const config of realtimeConfigs) {
     const ojectNames = config.objects?.map(o => o.name) || [];
-    if (!ojectNames.includes(objectApiName)) continue;
+    if (!ojectNames.includes(objectApiName) || config.backupStatus === STATUS.paused) continue;
 
     const destination = await getDestinationById(config.destinationId);
     if (!destination) {
@@ -152,10 +153,9 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     const event = req.body;
     const xAPiKey = req.headers?.['x-api-key'] as string | undefined;
 
-    console.log({xAPiKey, AWS_EVENT_DESTINATION_API_KEY});
-    // if(xAPiKey !== AWS_EVENT_DESTINATION_API_KEY){
-    //   return makeResponse(req, res, 401, false, 'unauthorized');
-    // }
+    if (xAPiKey !== AWS_EVENT_DESTINATION_API_KEY) {
+      return makeResponse(req, res, 401, false, 'unauthorized');
+    }
 
     const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
     const config = await getBackupConfigById(backupConfigId);
@@ -195,7 +195,13 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
       return;
     }
 
-    await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
+    try {
+      await checkSalesforceApiLimitUsage(user.userId, config.crmId);
+      await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
+    } catch (error) {
+      logger.error('Salesforce API limit check failed: ', error);
+    }
+
     makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
     logger.error('Event bridge trigger error: ', error);
@@ -234,8 +240,58 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   return makeResponse(req, res, 200, true, 'create');
 };
 
+const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const orgId = '00Df600000T9DlJEAV';
+  const userId = '005f6000008QmlyAAC';
+  const instanceUrl = 'https://saas-ruby-1808.my.salesforce.com'
+  // const account = await createPaymentAccount(orgId, userId);
+  // console.log(JSON.stringify({account}));
+  const account = {"token":"KTqLLhA5cOPmiS9WETTtJ4jShT36YFXsGHppaZctkclB7Ya2rcFgQUDrIU7xAec2==","sf_secret":"360SMS-Secret-IV:360SMS-Secrt-key"}
+  const setup = await setupPayment({
+    orgId,
+    productName: PAYMENT_PRODUCT_NAME,
+    token: account.token,
+    sfSecret: account.sf_secret,
+    // Staging Salesforce org REST endpoint from the vendor's docs — swap for the
+    // real connected org's instanceUrl-based endpoint outside this test handler.
+    salesforceEndpoint: `${instanceUrl}/services/apexrest/DataCraftRest`,
+    // Sample org/usage info shape from the vendor's docs — real callers should
+    // build this from the connected org's actual limits/profile instead.
+    orgInfo: {
+      'FileStorageMB Used': 5,
+      'FileStorageMB Maximum': 50,
+      namespace: '',
+      platformuser: '',
+      sfuser: '',
+      address: {
+        city: null,
+        country: 'US',
+        geocodeAccuracy: null,
+        latitude: null,
+        longitude: null,
+        postalCode: null,
+        state: null,
+        street: null,
+      },
+      edition: 'Developer Edition',
+      OrgType: 'Sandbox',
+      orgName: '360 Data Craft Dev',
+      phone: '',
+      mobilephone: '',
+      country: 'US',
+      email: 'abhay.test@360smsapp.com',
+      userName: 'User test',
+      Secretkey: 'Secretkey',
+      orgId,
+    },
+  });
+
+  makeResponse(req, res, 200, true, 'create', { setup });
+}
+
 export const publicController = wrapController({
   payloadHandler,
   eventBridgeHandler,
   salesForceRealTimeHandler,
+  testHandler
 });

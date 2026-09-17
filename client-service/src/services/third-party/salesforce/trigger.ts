@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig, ITriggerResult, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
-import { appendObjectsToBackupConfig, getBackupConfigsByCrm } from '../../backup-config';
+import { getBackupConfigsByCrm } from '../../backup-config';
 import { getUser, getDecryptedCrmCredential } from '../../user';
 import { timer } from '../../../utils/helper';
 import { METADATA_API_VERSION as API_VERSION } from './metadata-api';
@@ -28,17 +28,23 @@ const HANDLER_CLASS_NAME = SALESFORCE_HANDLER_CLASS_NAME;
 // package's own tests do not count towards subscriber-org coverage, so every
 // trigger ships with a generated Test Class (see createSingleTrigger below).
 // ---------------------------------------------------------------------------
+// Namespaced custom objects (e.g. `tdc_tsw__SMS_Logs__c`) still have their
+// namespace separator `__` left in the middle after the `__c` suffix is
+// stripped — collapse any remaining double (or longer) underscore runs to one,
+// since Apex identifiers reject consecutive underscores.
 const triggerNameFor = (objectApiName: string): string =>
-  `DataVault_${objectApiName.replace('__c', '')}_Trigger`;
+  `DataCraft_${objectApiName.replace(/__c$/, '').replace(/_{2,}/g, '_')}_Trigger`;
 
 // Older configs (written before this file briefly moved real-time sync onto
 // Flows) may only have `triggerName` stored, not `objectApiName`. Recover the
 // exact SObject API name from the config's own objectNames, falling back to
-// undoing the string surgery.
+// undoing the string surgery. The fallback strips EITHER prefix — triggers
+// deployed before the Data Vault -> Data Craft rename still carry the old
+// `DataVault_` name in storage, and only newly (re)created ones get the new one.
 const objectApiNameOf = (config: IBackupConfig, result: ITriggerResult): string =>
   result.objectApiName ??
   (config.objectNames ?? []).find((name) => triggerNameFor(name) === result.triggerName) ??
-  String(result.triggerName).replace('DataVault_', '').replace('_Trigger', '');
+  String(result.triggerName).replace(/^(DataCraft|DataVault)_/, '').replace('_Trigger', '');
 
 // testClassNameFor is deterministic today, but the stored value is what's
 // actually deployed in the org — preferring it (falling back to recompute for
@@ -773,7 +779,7 @@ const setupPermissionSet = async (
       instanceUrl,
       tokens,
       PERMISSION_SET_NAME,
-      'DataVault Real-Time Trigger Access',
+      'Data Craft Real-Time Trigger Access',
       withNamespace(SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL)
     );
 
@@ -840,7 +846,7 @@ const fetchApexClassId = async (
 // ---------------------------------------------------------------------------
 // Permission Set helpers
 // ---------------------------------------------------------------------------
-const PERMISSION_SET_NAME = 'DataVaultRealTimeTriggerAccess';
+const PERMISSION_SET_NAME = 'DataCraftRealTimeTriggerAccess';
 
 const fetchPermissionSetId = async (
   instanceUrl: string,
@@ -868,9 +874,9 @@ const upsertPermissionSet = async (
       method: 'POST',
       body: JSON.stringify({
         Name: PERMISSION_SET_NAME,
-        Label: 'DataVault Real-Time Trigger Access',
+        Label: 'Data Craft Real-Time Trigger Access',
         Description:
-          'Grants access to the DataVault handler class and all real-time backup triggers created by DataVault.',
+          'Grants access to the Data Craft handler class and all real-time backup triggers created by Data Craft.',
       }),
     },
     tokens
@@ -995,7 +1001,7 @@ const createTriggers = async (
       results.push({ objectApiName, triggerName, testClassName, status: 'CREATED' });
       await timer(500);
     } catch (err) {
-      console.log(`Error creating trigger for ${objectApiName}:`, err);
+      logger.error(`Error creating trigger for ${objectApiName}: ${err}`);
       results.push({
         objectApiName,
         triggerName,
@@ -1010,7 +1016,7 @@ const createTriggers = async (
   try {
     await setupPermissionSet(instanceUrl, tokens, results);
   } catch (error) {
-    console.error('Error setting up permission set:', error);
+    logger.error(`Error setting up permission set: ${error}`);
   }
   return results;
 };
@@ -1123,7 +1129,7 @@ const deletePermissionSetAssignments = async (
 };
 
 // ---------------------------------------------------------------------------
-// Delete the DataVaultRealTimeTriggerAccess permission set via Metadata API
+// Delete the DataCraftRealTimeTriggerAccess permission set via Metadata API
 // deploy — assignments first (see deletePermissionSetAssignments), since the
 // set can't be meaningfully in use once its own triggers are gone. Called
 // after all triggers are deleted so the permission set is cleaned up too.
@@ -1328,11 +1334,6 @@ const realTimeTriggerManagement = async (
     const objectApiNames = config.objectNames;
 
     if (operation === 'create') {
-      // const expandedNames = await expandWithMasterChildren(user, objectApiNames);
-      // // Children get a trigger, so they get backed up — record them on the config
-      // // too, otherwise every config-driven reader (Glue, restore listing, UI) stays
-      // // blind to data that is already landing in S3 under the child's own name.
-      // await appendObjectsToBackupConfig(config.backupConfigId, expandedNames);
       return createTriggers(instanceUrl, tokens, objectApiNames);
     }
     if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
@@ -1340,7 +1341,7 @@ const realTimeTriggerManagement = async (
     if (operation === 'delete') { return deleteTriggers(instanceUrl, tokens, config); }
     throw new Error(`invalid_operation:${operation}`);
   } catch (error) {
-    console.log(`Error during trigger ${operation}:`, error);
+    logger.error(`Error during trigger ${operation}: ${error}`);
     return [{
       objectApiName: 'N/A',
       status: 'FAILED',

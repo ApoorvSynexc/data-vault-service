@@ -3,7 +3,7 @@ import { dashboardController } from '../../controller';
 
 const router = Router();
 
-router.get('/overview', dashboardController.overviewHandler);
+router.get('/overview', dashboardController.overviewV2Handler);
 router.get('/last-jobs', dashboardController.getLastBackupJob);
 
 export const dashboardRouter = router;

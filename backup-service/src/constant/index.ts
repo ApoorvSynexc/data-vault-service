@@ -115,7 +115,10 @@ const RESTORE_JOB_STATUS = {
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
+  rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
+  rollbackCompleted: 'ROLLBACK_COMPLETED',
   completed: 'COMPLETED',
+  success: 'SUCCESS',
   failed: 'FAILED',
 };
 
@@ -156,6 +159,10 @@ const FILTER_OPERATOR = {
   neq: '!=',
   in: 'IN',
   like: 'LIKE',
+  // Multi-Select Picklist's own membership operators — no other operator can
+  // test against that field type.
+  includes: 'INCLUDES',
+  excludes: 'EXCLUDES',
 };
 
 // Mirrors client-service/src/constant/index.ts's NOTIFICATION_STATUS — only

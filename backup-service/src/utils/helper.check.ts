@@ -7,7 +7,13 @@
  *   2. pickLegacyFieldsKey — the fallback that keeps pre-migration configs readable.
  */
 import assert from 'assert';
-import { buildSchemaKey, pickLegacyFieldsKey, buildSchemaS3Key, isBackupChild } from './helper';
+import {
+  buildSchemaKey,
+  pickLegacyFieldsKey,
+  buildSchemaS3Key,
+  isBackupChild,
+  formatValueByDataType,
+} from './helper';
 
 const base = {
   crmId: 'crm-1',
@@ -100,5 +106,20 @@ assert.strictEqual(isBackupChild({ relationshipType: 'LOOKUP', isRequired: false
 // A reply missing the fields must not silently pull the whole org into the job.
 assert.strictEqual(isBackupChild({}), false);
 assert.strictEqual(isBackupChild({ isRequired: undefined }), false);
+
+// ─── 5. formatValueByDataType — numeric values are sanitized, not just passed through ─
+// A clean value is unchanged (no regression from the fix).
+assert.strictEqual(formatValueByDataType('33.00', 'currency'), '33.00');
+assert.strictEqual(formatValueByDataType('33', 'integer'), '33');
+// Currency-symbol / thousands-separator formatting a UI currency input is
+// likely to produce must be stripped, or the emitted SOQL is invalid
+// ("Field = $1,234.56" / "Field = 1,234.56", a bare comma outside a list).
+assert.strictEqual(formatValueByDataType('$1,234.56', 'currency'), '1234.56');
+assert.strictEqual(formatValueByDataType('1,234.56', 'currency'), '1234.56');
+assert.strictEqual(formatValueByDataType(' $33.00 ', 'currency'), '33.00');
+// A negative amount keeps its sign.
+assert.strictEqual(formatValueByDataType('-$50.00', 'currency'), '-50.00');
+// Non-numeric types are untouched by the sanitizer — still quoted as before.
+assert.strictEqual(formatValueByDataType('Acme, Inc.', 'string'), `'Acme, Inc.'`);
 
 console.log('helper.check: OK');

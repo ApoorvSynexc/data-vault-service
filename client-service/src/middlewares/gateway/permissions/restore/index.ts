@@ -98,6 +98,11 @@ const restorePermissions = [
         path: '/restore/job/rollback',
         method: 'PUT',
         permissions: ['restore.write']
+    },
+    {
+        path: '/restore/download-csv',
+        method: 'GET',
+        permissions: ['restore.read']
     }
 ];
 

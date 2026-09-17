@@ -8,6 +8,16 @@ export interface ISoqlCountQuery {
   soql: string;
 }
 
+// One object's filter condition failed to turn into SOQL (e.g. an invalid
+// value for its data type) — kept separate from the Composite API's own
+// per-object errors so a bad filter on one object can't take the whole
+// batch down before any Salesforce call is even made.
+export interface ISoqlBuildError {
+  id: string;
+  name: string;
+  error: string;
+}
+
 // Ported from backup-service/src/services/third-party/salesforce/schedule/archival-v2
 // — same WHERE-building rules, adapted to client-service's ISalesforceObject/
 // IFieldFilter shape.
@@ -16,7 +26,7 @@ export interface ISoqlCountQuery {
 // this side, so this list (and the branches below) only cover what the type
 // actually allows.
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
-const ALLOWED_OPERATORS = new Set(['=', '!=', 'LIKE', 'IN']);
+const ALLOWED_OPERATORS = new Set(['=', '!=', 'LIKE', 'IN', 'INCLUDES', 'EXCLUDES']);
 const DATE_LITERALS = new Set([
   'TODAY', 'YESTERDAY', 'TOMORROW',
   'LAST_WEEK', 'THIS_WEEK', 'NEXT_WEEK',
@@ -32,6 +42,43 @@ const isDateLiteral = (value: string): boolean =>
   DATE_LITERALS.has(value.toUpperCase()) ||
   /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(value);
 
+// LIMIT/OFFSET/ORDER BY apply to a whole query, not to a boolean condition —
+// a raw SOQL condition body gets wrapped inside `AND (...)`, so any of these
+// would land inside that parenthesized expression and produce invalid SOQL.
+// Caught here with a message naming the actual keyword, instead of letting it
+// through to fail later with a parser error that points at an unrelated token.
+const TOP_LEVEL_CLAUSE_RE = /\b(LIMIT|OFFSET|ORDER\s+BY)\b/i;
+export const assertNoTopLevelClauses = (body: string): void => {
+  // Drop quoted string literals first so a legitimate value like
+  // "Notes__c LIKE '%offset%'" isn't mistaken for the clause keyword.
+  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
+  const match = withoutStringLiterals.match(TOP_LEVEL_CLAUSE_RE);
+  if (match) {
+    throw new Error(
+      `SOQL condition cannot contain ${match[1].toUpperCase()} — LIMIT/OFFSET/ORDER BY apply to the whole query, not a filter condition. Remove it from your query.`
+    );
+  }
+};
+
+// Subqueries aren't supported in a filter condition here. Salesforce places
+// several interacting restrictions on them — a semi-join can't FROM the same
+// object as the outer query, can't be nested inside another semi-join, and
+// its left operand can't traverse more than one relationship level — any of
+// which a parent condition can innocently violate once it's propagated
+// (relationship-prefixed) down to a child object in the archive hierarchy.
+// Rejected outright, up front, with a clear message instead of letting a
+// propagated query fail deep in a Dry Run or a real archive run with a
+// confusing Salesforce error that doesn't even point at the real cause.
+const SUBQUERY_RE = /\(\s*SELECT\b/i;
+export const assertNoSubqueries = (body: string): void => {
+  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
+  if (SUBQUERY_RE.test(withoutStringLiterals)) {
+    throw new Error(
+      `Subqueries are not supported in filter conditions — Salesforce's own restrictions on subquery nesting, object types, and relationship depth make them unreliable once this condition is applied across an archive hierarchy's parent/child objects. Use a direct field or relationship comparison instead (e.g. "Account.Name = 'X'").`
+    );
+  }
+};
+
 const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number], preformattedValue: string): string => {
   const { name, dataType } = f;
   const { value: rawValue, operator } = f.filter;
@@ -43,6 +90,13 @@ const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number]
     throw new Error(`Disallowed SOQL operator: "${operator}"`);
   }
 
+  if (rawValue === null || rawValue === undefined) {
+    if (operator === '=' || operator === '!=') {
+      return `${name} ${operator} null`;
+    }
+    throw new Error(`Operator "${operator}" does not support a null value for field "${name}"`);
+  }
+
   if (operator === 'LIKE') {
     const escaped = rawValue.replace(/'/g, "''");
     const wrapped = escaped.includes('%') ? escaped : `%${escaped}%`;
@@ -52,6 +106,18 @@ const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number]
   if (operator === 'IN') {
     const parts = rawValue.split(',').map((v) => v.trim()).filter(Boolean);
     return `${name} IN (${parts.map((v) => formatSalesforceValueByDataType(v, dataType)).join(', ')})`;
+  }
+
+  // Multi-Select Picklist membership test: Salesforce's own syntax is a
+  // SINGLE quoted string with the candidate values semicolon-joined inside
+  // it — Field INCLUDES ('A;B') — not a parenthesized list of separately
+  // quoted literals the way IN's values are. The UI still submits the raw
+  // value comma-separated like every other multi-value filter here; only the
+  // wire format changes to match what Salesforce expects.
+  if (operator === 'INCLUDES' || operator === 'EXCLUDES') {
+    const parts = rawValue.split(',').map((v) => v.trim()).filter(Boolean);
+    const joined = parts.map((v) => v.replace(/'/g, "''")).join(';');
+    return `${name} ${operator} ('${joined}')`;
   }
 
   const ldt = dataType.toLowerCase();
@@ -71,6 +137,10 @@ const buildWhereClause = (object: ISalesforceObject): string => {
   if (condition.type === 'SOQL') {
     const soqlQuery: string = condition.soqlQuery ?? '';
     const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
+    if (body) {
+      assertNoTopLevelClauses(body);
+      assertNoSubqueries(body);
+    }
     return body ? `WHERE ${body}` : '';
   }
 
@@ -83,6 +153,7 @@ const buildWhereClause = (object: ISalesforceObject): string => {
   const filterMap = new Map<number, string>();
   field.forEach((f, idx) => {
     if (f.filter) {
+      console.log('FIELDS DETAILS ', JSON.stringify(f));
       const preformattedValue =
         formattedFields[idx]?.filter?.value ??
         formatSalesforceValueByDataType(f.filter.value, f.dataType);
@@ -122,38 +193,58 @@ const fkToRelationshipName = (fieldApiName: string): string => {
   return fieldApiName;
 };
 
+const FIELD_REF_RE = /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)(\s*(?:!=|>=|<=|=|>|<)|\s+(?:NOT\s+IN|IN|LIKE)\s)/gi;
+
 const transformWhereBodyForChild = (whereBody: string, fkFieldName: string): string => {
   if (!whereBody.trim()) {
     return `${fkFieldName} != null`;
   }
   const relName = fkToRelationshipName(fkFieldName);
-  return whereBody.replace(
-    /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)(\s*(?:!=|>=|<=|=|>|<)|\s+(?:NOT\s+IN|IN|LIKE)\s)/gi,
-    (_match, field, op) => {
-      if (field === 'Id') {
-        return `${fkFieldName}${op}`;
-      }
-      return `${relName}.${field}${op}`;
+  return whereBody.replace(FIELD_REF_RE, (_match, field, op) => {
+    if (field === 'Id') {
+      return `${fkFieldName}${op}`;
     }
-  );
+    return `${relName}.${field}${op}`;
+  });
+};
+
+// Every id/name pair in a subtree — used to fail a whole branch at once when
+// its parent's WHERE clause can't be built (children propagate off it, so
+// they can't be resolved independently either).
+const collectSubtreeIds = (object: ISalesforceObject): Array<{ id: string; name: string }> => {
+  const ids = [{ id: object.id, name: object.name }];
+  object.children?.forEach((child) => ids.push(...collectSubtreeIds(child)));
+  return ids;
 };
 
 const generateObjectSoql = (
   object: ISalesforceObject,
   ancestorWhereBody: string,
-  queries: ISoqlCountQuery[]
+  queries: ISoqlCountQuery[],
+  buildErrors: ISoqlBuildError[]
 ): void => {
-  const ownWhereClause = buildWhereClause(object);
-  const ownWhereBody = ownWhereClause.replace(/^WHERE\s+/i, '').trim();
-
   let effectiveWhereBody: string;
-  if (object.fieldApiName) {
-    const propagated = ancestorWhereBody
-      ? transformWhereBodyForChild(ancestorWhereBody, object.fieldApiName)
-      : `${object.fieldApiName} != null`;
-    effectiveWhereBody = ownWhereBody ? `(${propagated}) AND (${ownWhereBody})` : propagated;
-  } else {
-    effectiveWhereBody = ownWhereBody;
+  try {
+    const ownWhereClause = buildWhereClause(object);
+    const ownWhereBody = ownWhereClause.replace(/^WHERE\s+/i, '').trim();
+
+    if (object.fieldApiName) {
+      const propagated = ancestorWhereBody
+        ? transformWhereBodyForChild(ancestorWhereBody, object.fieldApiName)
+        : `${object.fieldApiName} != null`;
+      effectiveWhereBody = ownWhereBody ? `(${propagated}) AND (${ownWhereBody})` : propagated;
+    } else {
+      effectiveWhereBody = ownWhereBody;
+    }
+  } catch (error: any) {
+    const message = error?.message ?? 'Failed to build filter condition';
+    buildErrors.push({ id: object.id, name: object.name, error: message });
+    object.children?.forEach((child) => {
+      collectSubtreeIds(child).forEach(({ id, name }) =>
+        buildErrors.push({ id, name, error: `parent ${object.name} failed: ${message}` })
+      );
+    });
+    return;
   }
 
   const soqlWhere = effectiveWhereBody
@@ -169,18 +260,23 @@ const generateObjectSoql = (
 
   if (object.children?.length) {
     for (const child of object.children) {
-      generateObjectSoql(child, effectiveWhereBody, queries);
+      generateObjectSoql(child, effectiveWhereBody, queries, buildErrors);
     }
   }
 };
 
 // Entry point — flattens the whole object tree (root objects + every
 // descendant) into one array of COUNT() queries, ready to hand to the
-// Composite API in as few calls as possible.
-export const generateSoqlQueries = (objects: ISalesforceObject[]): ISoqlCountQuery[] => {
+// Composite API in as few calls as possible. An object whose own filter
+// fails to build is reported in buildErrors instead of aborting every other
+// object's query — one bad filter shouldn't fail the whole dry run.
+export const generateSoqlQueries = (
+  objects: ISalesforceObject[]
+): { queries: ISoqlCountQuery[]; buildErrors: ISoqlBuildError[] } => {
   const queries: ISoqlCountQuery[] = [];
+  const buildErrors: ISoqlBuildError[] = [];
   for (const object of objects) {
-    generateObjectSoql(object, '', queries);
+    generateObjectSoql(object, '', queries, buildErrors);
   }
-  return queries;
+  return { queries, buildErrors };
 };

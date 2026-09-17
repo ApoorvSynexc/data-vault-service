@@ -2,7 +2,7 @@ import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, readSchemaFile } from "../../../services";
 import { ISalesforceChildRelationship, ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
-import { SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
+import { EXCLUDE_OBJECT_SUFFIX, SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
 import { IUser } from "../../../models";
 
 // A child relationship is only in-scope for cascade traversal when its type
@@ -174,7 +174,6 @@ const getSalesforceObjectsHandler = async (req: IRequest, res: IResponse): Promi
     return;
   }
 
-  const excludeObjectSuffix = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent', 'e', 'et'];
   const objectsList = await salesforceObjectList({ user });
   let filteredObjects = objectsList.filter((obj) =>
     obj.deprecatedAndHidden === false &&
@@ -184,7 +183,7 @@ const getSalesforceObjectsHandler = async (req: IRequest, res: IResponse): Promi
     obj.keyPrefix !== null &&
     obj.queryable === true &&
     (obj.custom === false) &&
-    !excludeObjectSuffix.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+    !EXCLUDE_OBJECT_SUFFIX.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
   );
   makeResponse(req, res, 200, true, 'delete', filteredObjects);
 };
@@ -213,20 +212,19 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
 
 
 
-  if (relationshipDepth && relationshipDepth > 0) {
-    const uniqueChildObjectNames = Array.from(new Set(children.map((child) => child.name)));
-    const childDescriptions = await Promise.all(
-      uniqueChildObjectNames.map((childObjectName) => salesforceObjectDescribe({ user, objectName: childObjectName }))
-    );
-    const childFieldsByObject = new Map(
-      uniqueChildObjectNames.map((name, index) => [name, childDescriptions[index].fields])
-    );
+  const uniqueChildObjectNames = Array.from(new Set(children.map((child) => child.name)));
+  const childDescriptions = await Promise.all(
+    uniqueChildObjectNames.map((childObjectName) => salesforceObjectDescribe({ user, objectName: childObjectName }))
+  );
+  const childFieldsByObject = new Map(
+    uniqueChildObjectNames.map((name, index) => [name, childDescriptions[index].fields])
+  );
 
-    children = children.filter((child) => {
-      const linkingField = childFieldsByObject.get(child.name)?.find((field) => field.name === child.field);
-      return !linkingField?.polymorphicForeignKey;
-    });
-  }
+  children = children.filter((child) => {
+    const linkingField = childFieldsByObject.get(child.name)?.find((field) => field.name === child.field);
+    return !linkingField?.polymorphicForeignKey;
+  });
+  
 
   return makeResponse(req, res, 200, true, 'fetch', { children, fields, });
 }

@@ -14,6 +14,7 @@ import {
   getTableCounter,
   buildBackupConfigCounterKey,
   triggerBackupJob,
+  submitBackupJobRequest,
   runBackupNow,
   getCrmById,
   getDestinationById,
@@ -24,11 +25,12 @@ import {
   getSalesforceProfile,
   initalizePayloadTransform,
   hasActiveBackupJob,
-  syncMetadataAndTriggers,
   getUser,
   getDecryptedCrmCredential,
   runMetadataComparisonForConfig,
   hasMetadataChanged,
+  getDecryptedDestinationConfig,
+  checkSalesforceApiLimitUsage,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
@@ -44,6 +46,7 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils/event-bridge';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
+import { syncObjects } from '../../../jobs/sync-objects';
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -70,6 +73,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
+      await checkSalesforceApiLimitUsage(userId, config.crmId);
       await triggerBackupJob({ user, config, type: 'backup', lastSchemaSyncAt: true });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
@@ -77,6 +81,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
+        await checkSalesforceApiLimitUsage(userId, config.crmId);
         await triggerBackupJob({ user, config, type: 'backup' });
       } else {
         await createAwsEventScheduler(buildEventScheduleInput(config));
@@ -385,6 +390,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return;
   }
 
+  await checkSalesforceApiLimitUsage(backupConfig.userId, backupConfig.crmId);
   const result = await runBackupNow({ user: req.user, config: backupConfig });
   if (!result.ok) {
     // realtime_not_supported keeps the route's original error code
@@ -437,15 +443,21 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
     return;
   }
 
+  const backupCreatedUser = await getUser({ userId: config.userId });
+  if (!backupCreatedUser) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
   const changedObjectNames: any = [];
   const result = await runMetadataComparisonForConfig(config);
- for (const { objectName, result: metadataResult } of result) {
-      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-        changedObjectNames.push(objectName);
-      }
+  for (const { objectName, result: metadataResult } of result) {
+    if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+      changedObjectNames.push(objectName);
     }
+  }
   makeResponse(req, res, 201, true, 'create', result);
-  // await syncMetadataAndTriggers(config.backupConfigId);
+  await syncObjects({ backupConfig: config, user: backupCreatedUser });
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -581,6 +593,43 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
     });
     await updateBackupConfig(config.backupConfigId, { triggerResults });
     makeResponse(req, res, 200, true, 'update', { triggerName: recovered.triggerName, status: 'CREATED' });
+
+    // Backup All data for this particular object
+    const destination = await getDestinationById(config.destinationId);
+    if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
+
+    const currentObject = config.objects?.find((object) => object.name === objectApiName);
+    if (!currentObject) throw new Error(`object_not_found:${objectApiName}`);
+
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    const payload = {
+      userId: config.userId,
+      backupConfigId: config.backupConfigId,
+      source: {
+        access_token,
+        refresh_token,
+        crmId: crm.crmId,
+        crmName: crm.crmName,
+        instanceUrl,
+        object: [
+          {
+            name: currentObject?.name,
+            ...(currentObject.id ? { id: currentObject.id } : {})
+          }
+        ],
+      },
+      destination: {
+        type: destination.type,
+        config: getDecryptedDestinationConfig(destination),
+      },
+      lastUpdatedAt: config.createdAt
+    };
+
+    try {
+      await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint: '', body: JSON.stringify(payload) });
+    } catch (error) {
+      logger.error(`Backup job failed for backupConfigId: ${config.backupConfigId}, objectApiName: ${objectApiName}`, error);
+    }
   } catch (error) {
     logger.error(`Trigger recovery failed for backupConfigId ${backupConfigId}, recordId ${recordId}: `, error);
     const reason = error instanceof Error ? error.message : String(error);

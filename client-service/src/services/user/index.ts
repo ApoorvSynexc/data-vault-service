@@ -259,20 +259,6 @@ const getUsersByContactEmail = async (params: IGetUsersByContactEmailParams): Pr
   return (result.Items ?? []) as IUser[];
 };
 
-// Resolves the caller's user record for a specific CRM — a person (contactEmail)
-// can have one user record per connected CRM. Returns null when the caller has
-// no record on that CRM.
-const getUserForCrm = async (user: IUser, crmId: string): Promise<IUser | null> => {
-  if (user.crmId === crmId) {
-    return user;
-  }
-  if (!user.contactEmail) {
-    return null;
-  }
-  const crmUsers = await getUsersByContactEmail({ contactEmail: user.contactEmail });
-  return crmUsers.find((u) => u.crmId === crmId) ?? null;
-};
-
 // ---------------------------------------------------------------------------
 // Converts a MongoDB-style projection { firstName: 1, email: 1 } into
 // DynamoDB ProjectionExpression params.  Returns null when projection is empty.
@@ -357,16 +343,21 @@ const getUsersWithPagination = async (
   };
 };
 
-const getUserByCrmProfileUserId = async (crmProfileUserId: string): Promise<IUser | null> => {
+const getUserByCrmProfileUserId = async (crmProfileUserId: string, orgId: string): Promise<IUser | null> => {
   const result = await docClient.send(
     new QueryCommand({
       TableName: USER_TABLE,
       IndexName: 'crmProfileUserId-index',
       KeyConditionExpression: 'crmProfileUserId = :crmProfileUserId',
+      // The same Salesforce user id can show up under more than one org connection,
+      // so orgId disambiguates which row to return. No Limit here — DynamoDB applies
+      // Limit before FilterExpression, so capping items read could discard the
+      // matching org's row before the filter ever sees it.
+      FilterExpression: 'crmProfile.organizationId = :orgId',
       ExpressionAttributeValues: {
         ':crmProfileUserId': crmProfileUserId,
+        ':orgId': orgId,
       },
-      Limit: 1,
     })
   );
   return (result.Items?.[0] as IUser) ?? null;
@@ -405,4 +396,4 @@ const deleteUser = async (userId: string): Promise<boolean> => {
   return true;
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUserForCrm, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser, getDecryptedCrmCredential };
+export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser, getDecryptedCrmCredential };

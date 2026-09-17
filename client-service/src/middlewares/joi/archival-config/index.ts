@@ -19,10 +19,26 @@ const fieldFilterSchema = Joi.object({
     value: Joi.any().required(),
 });
 
+// Same 15/18-char Salesforce key format already enforced for record ids
+// elsewhere (see services/third-party/salesforce/records-by-ids.ts).
+const RECORD_ID_RE = /^[A-Za-z0-9]{15,18}$/;
+const recordIdFieldFilterSchema = fieldFilterSchema.keys({
+    value: Joi.string().pattern(RECORD_ID_RE).required().messages({
+        'string.pattern.base': 'Record ID must be a valid 15 or 18 character Salesforce ID',
+    }),
+});
+
 const objectFieldSchema = Joi.object({
     name: Joi.string().required(),
     dataType: Joi.string().required(),
-    filter: fieldFilterSchema.required(),
+    // SOQL mode gets this for free from Salesforce's own query validation —
+    // Field-Level filter never calls that API, so a bad Record ID length
+    // has to be caught here instead.
+    filter: Joi.when(Joi.ref('dataType', { adjust: (value: string) => String(value).toLowerCase() }), {
+        is: Joi.string().valid('id', 'reference'),
+        then: recordIdFieldFilterSchema.required(),
+        otherwise: fieldFilterSchema.required(),
+    }),
 });
 
 const conditionSchema = Joi.object({
@@ -46,6 +62,15 @@ const schedulingSchema = Joi.object({
     frequency: Joi.string()
         .valid(...Object.values(DURATION_TYPE))
         .required(),
+    // Sub-selects the recurrence unit CUSTOM repeats `interval` on (e.g. "every
+    // `interval` weeks") — required only under CUSTOM, meaningless otherwise.
+    customFrequency: Joi.when('frequency', {
+        is: DURATION_TYPE.custom,
+        then: Joi.string()
+            .valid(DURATION_TYPE.daily, DURATION_TYPE.weekly, DURATION_TYPE.monthly)
+            .required(),
+        otherwise: Joi.forbidden(),
+    }),
     interval: Joi.number().integer().min(1).required(),
     weekDays: Joi.when('frequency', {
         is: Joi.alternatives().try(DURATION_TYPE.weekly),
@@ -94,6 +119,7 @@ const objectChildrenSchema = Joi.object({
         .required(),
     condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).required(),
+    includeChild: Joi.boolean().optional(),
     children: Joi.array().items(Joi.link("#objectChildren")).optional(),
 })
 .id("objectChildren");
@@ -104,6 +130,7 @@ const objectSchema = Joi.object({
     type: Joi.string()
         .valid(...Object.values(OBJECT_TYPE))
         .required(),
+    includeChild: Joi.boolean().optional(),
     condition: conditionSchema.optional(),
     field: Joi.array().items(objectFieldSchema).required(),
     scheduleConfig: scheduleConfigSchema.optional(),
@@ -117,7 +144,6 @@ const crmObjectsSchema = Joi.object({
 
 const validateWithSchema = (schema: Joi.ObjectSchema) =>
     (req: Request, res: Response, next: NextFunction) => {
-        console.log(`Validating request body: ${JSON.stringify(req.body)}`);
         const { error } = schema.validate(req.body, { abortEarly: false });
         if (error) {
             makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);

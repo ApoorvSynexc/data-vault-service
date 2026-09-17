@@ -11,7 +11,6 @@ import { docClient } from '../../config';
 import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS } from '../../constant';
 import { IBackupConfig, IObject, IScheduleConfig, ITriggerResult, IUpcomingJob, IDeletedRecordsCacheEntry } from '../../models';
 import { toSlug, buildSlug } from '../../utils/helper';
-import { logger } from '../../middlewares';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
 
 // Keeps NORMAL and ARCHIVAL configs counted separately per user, since both types share BACKUP_CONFIG_TABLE
@@ -126,26 +125,6 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
       ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, createdAt, updatedAt',
       ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' },
       ExpressionAttributeValues: { ':uid': userId },
-    })
-  );
-  return (result.Items as IBackupConfig[] | undefined) ?? [];
-};
-
-const getBackupConfigsByUserAndCrm = async (
-  userId: string,
-  crmId: string,
-  limit?: number
-): Promise<IBackupConfig[]> => {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_CONFIG_TABLE,
-      IndexName: 'userId-index',
-      KeyConditionExpression: 'userId = :uid',
-      FilterExpression: 'crmId = :crmId',
-      ProjectionExpression: 'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, successRecordCount, createdAt, updatedAt',
-      ExpressionAttributeNames: { '#name': 'name', '#schedule': 'schedule', '#status': 'status', '#type': 'type' },
-      ExpressionAttributeValues: { ':uid': userId, ':crmId': crmId },
-      ...(limit && { Limit: limit }),
     })
   );
   return (result.Items as IBackupConfig[] | undefined) ?? [];
@@ -303,51 +282,6 @@ const updateBackupConfig = async (
   return { ...existing, ...updates };
 };
 
-// Appends objects discovered at runtime — Master-Detail children of the selected
-// objects — so the config lists everything that is actually being backed up.
-// Append-only: existing entries carry filters, counters and schedule settings the
-// caller doesn't have, and must never be overwritten. Names already on the config
-// are skipped, so this is safe to call on every run.
-// Never throws: config bookkeeping must not fail the caller's real work.
-const appendObjectsToBackupConfig = async (
-  backupConfigId: string,
-  objectNames: string[]
-): Promise<void> => {
-  if (!objectNames.length) {
-    return;
-  }
-
-  try {
-    const config = await getBackupConfigById(backupConfigId);
-    if (!config) {
-      return;
-    }
-
-    const existing = new Set((config.objects ?? []).map((obj) => obj.name?.toLowerCase()));
-    const additions = objectNames.filter((name) => !existing.has(name.toLowerCase()));
-    if (!additions.length) {
-      return;
-    }
-
-    await updateBackupConfig(backupConfigId, {
-      objects: [
-        ...(config.objects ?? []),
-        ...additions.map((name) => ({
-          id: name,
-          name,
-          type: name.endsWith('__c') ? 'CUSTOM' : 'STANDARD',
-          field: [],
-        })),
-      ],
-      objectNames: [...new Set([...(config.objectNames ?? []), ...additions])],
-    });
-  } catch (error) {
-    logger.error(
-      `[config-objects] append failed | backupConfigId=${backupConfigId} error=${(error as Error)?.message ?? String(error)}`
-    );
-  }
-};
-
 const deleteBackupConfig = async (backupConfigId: string): Promise<boolean> => {
   const existing = await getBackupConfigById(backupConfigId);
   if (!existing) {
@@ -418,24 +352,24 @@ const getBackupConfigsWithPagination = async (
   const isSearch = !!search && search.length > 0;
 
   const projectionExpression =
-    'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, createdAt, updatedAt';
+    'backupConfigId, userId, crmId, destinationId, slug, #name, description, #type, objectNames, #objects, #schedule, scheduleConfig, #status, backupStatus, lastBackupAt, lastEventId, schemaChange, sizeInBytes, upcomingJob, createdAt, updatedAt';
 
   const expressionAttributeNames: Record<string, string> = {
     '#name': 'name',
     '#schedule': 'schedule',
     '#status': 'status',
     '#type': 'type',
+    '#objects': 'objects',
     ...(backupStatus && { '#backupStatus': 'backupStatus' }),
   };
 
-  // Equality/contains filters shared by both the Query and Scan paths.
+  // Equality filters shared by both the Query and Scan paths. `search` is deliberately
+  // excluded here — DynamoDB's contains() is case-sensitive with no case-folding option,
+  // so name matching for search is done as a post-filter in JS instead (see isSearch branch).
   const buildFilters = (expressionAttributeValues: Record<string, any>): string[] => {
     const expressions: string[] = [];
 
-    if (isSearch) {
-      expressionAttributeValues[':search'] = search!;
-      expressions.push('contains(#name, :search)');
-    } else if (name) {
+    if (!isSearch && name) {
       expressionAttributeValues[':name'] = name;
       expressions.push('#name = :name');
     }
@@ -469,7 +403,8 @@ const getBackupConfigsWithPagination = async (
   // table is exhausted, capping each request's Limit to the remaining need so results
   // never overshoot the page boundary reported back via nextCursor.
   const collectPage = async (
-    sendPage: (pageLimit: number, startKey?: Record<string, any>) => Promise<{ Items?: any[]; LastEvaluatedKey?: Record<string, any> }>
+    sendPage: (pageLimit: number, startKey?: Record<string, any>) => Promise<{ Items?: any[]; LastEvaluatedKey?: Record<string, any> }>,
+    filterItems?: (items: IBackupConfig[]) => IBackupConfig[]
   ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
     const documents: IBackupConfig[] = [];
     let startKey = exclusiveStartKey;
@@ -477,7 +412,8 @@ const getBackupConfigsWithPagination = async (
 
     do {
       const pageResult = await sendPage(limit - documents.length, startKey);
-      documents.push(...((pageResult.Items as IBackupConfig[] | undefined) ?? []));
+      const items = (pageResult.Items as IBackupConfig[] | undefined) ?? [];
+      documents.push(...(filterItems ? filterItems(items) : items));
       lastEvaluatedKey = pageResult.LastEvaluatedKey;
       startKey = lastEvaluatedKey;
     } while (documents.length < limit && lastEvaluatedKey);
@@ -503,18 +439,22 @@ const getBackupConfigsWithPagination = async (
       filterExpressions.push('crmId = :crmId');
     }
 
-    return collectPage((pageLimit, startKey) =>
-      docClient.send(
-        new ScanCommand({
-          TableName: BACKUP_CONFIG_TABLE,
-          ProjectionExpression: projectionExpression,
-          ExpressionAttributeNames: expressionAttributeNames,
-          ExpressionAttributeValues: expressionAttributeValues,
-          FilterExpression: filterExpressions.join(' AND '),
-          Limit: pageLimit,
-          ...(startKey && { ExclusiveStartKey: startKey }),
-        })
-      )
+    const searchLower = search!.toLowerCase();
+
+    return collectPage(
+      (pageLimit, startKey) =>
+        docClient.send(
+          new ScanCommand({
+            TableName: BACKUP_CONFIG_TABLE,
+            ProjectionExpression: projectionExpression,
+            ExpressionAttributeNames: expressionAttributeNames,
+            ExpressionAttributeValues: expressionAttributeValues,
+            FilterExpression: filterExpressions.join(' AND '),
+            Limit: pageLimit,
+            ...(startKey && { ExclusiveStartKey: startKey }),
+          })
+        ),
+      (items) => items.filter((item) => (item.name ?? '').toLowerCase().includes(searchLower))
     );
   }
 
@@ -701,36 +641,32 @@ const getBackupConfigsInBatches = async (
   } while (lastEvaluatedKey);
 };
 
-// Count-only counterpart to getBackupConfigsByUser — Select: 'COUNT' skips
-// transferring the matched items themselves, just their tally, for callers
-// (e.g. dashboard overview) that only need a number per filter bucket rather
-// than the configs themselves.
-const getBackupConfigCount = async (
+interface IBackupOverview {
+  totalRecords: number;
+  totalSize: number;
+  activeBackupConfigs: number;
+  failedBackupStatus: number;
+  successBackupStatus: number;
+  pendingBackupStatus: number;
+}
+
+// Dashboard overview for one config type (NORMAL/backup or ARCHIVAL). A single
+// paginated query (userId-index, filtered by type) aggregates every figure in one
+// pass, instead of a separate full-table-count query per figure.
+const getBackupOverview = async (
   userId: string,
-  filters?: { backupStatus?: string; type?: 'NORMAL' | 'ARCHIVAL'; status?: string }
-): Promise<number> => {
-  let count = 0;
+  type: 'NORMAL' | 'ARCHIVAL'
+): Promise<IBackupOverview> => {
+  const overview: IBackupOverview = {
+    totalRecords: 0,
+    totalSize: 0,
+    activeBackupConfigs: 0,
+    failedBackupStatus: 0,
+    successBackupStatus: 0,
+    pendingBackupStatus: 0,
+  };
+
   let lastEvaluatedKey: Record<string, any> | undefined;
-
-  const filterExpressions: string[] = [];
-  const expressionAttributeNames: Record<string, string> = {};
-  const expressionAttributeValues: Record<string, any> = { ':uid': userId };
-
-  if (filters?.backupStatus) {
-    filterExpressions.push('#backupStatus = :backupStatus');
-    expressionAttributeNames['#backupStatus'] = 'backupStatus';
-    expressionAttributeValues[':backupStatus'] = filters.backupStatus;
-  }
-  if (filters?.type) {
-    filterExpressions.push('#type = :type');
-    expressionAttributeNames['#type'] = 'type';
-    expressionAttributeValues[':type'] = filters.type;
-  }
-  if (filters?.status) {
-    filterExpressions.push('#status = :status');
-    expressionAttributeNames['#status'] = 'status';
-    expressionAttributeValues[':status'] = filters.status;
-  }
 
   do {
     const result = await docClient.send(
@@ -738,21 +674,35 @@ const getBackupConfigCount = async (
         TableName: BACKUP_CONFIG_TABLE,
         IndexName: 'userId-index',
         KeyConditionExpression: 'userId = :uid',
-        Select: 'COUNT',
-        ...(filterExpressions.length && {
-          FilterExpression: filterExpressions.join(' AND '),
-          ExpressionAttributeNames: expressionAttributeNames,
-        }),
-        ExpressionAttributeValues: expressionAttributeValues,
+        FilterExpression: '#type = :type',
+        ProjectionExpression: '#status, backupStatus, sizeInBytes, completedRecordCount',
+        ExpressionAttributeNames: { '#type': 'type', '#status': 'status' },
+        ExpressionAttributeValues: { ':uid': userId, ':type': type },
         ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
       })
     );
 
-    count += result.Count ?? 0;
+    const items = (result.Items as IBackupConfig[] | undefined) ?? [];
+    for (const item of items) {
+      overview.totalRecords += item.completedRecordCount ?? 0;
+      overview.totalSize += item.sizeInBytes ?? 0;
+
+      if (item.status === STATUS.active) {
+        overview.activeBackupConfigs += 1;
+      }
+      if (item.backupStatus === BACKUP_STATUS.failed) {
+        overview.failedBackupStatus += 1;
+      } else if (item.backupStatus === BACKUP_STATUS.success) {
+        overview.successBackupStatus += 1;
+      } else if (item.backupStatus === BACKUP_STATUS.pending) {
+        overview.pendingBackupStatus += 1;
+      }
+    }
+
     lastEvaluatedKey = result.LastEvaluatedKey;
   } while (lastEvaluatedKey);
 
-  return count;
+  return overview;
 };
 
 export {
@@ -760,8 +710,7 @@ export {
   getBackupConfigById,
   getBackupConfigBySlug,
   getBackupConfigsByUser,
-  getBackupConfigCount,
-  getBackupConfigsByUserAndCrm,
+  getBackupOverview,
   getBackupConfigsByCrm,
   getBackupConfigsInBatches,
   getLastNBackupConfigByCrm,
@@ -769,7 +718,6 @@ export {
   getScheduledIncrementalBackupConfigs,
   getBackupConfigsWithPagination,
   updateBackupConfig,
-  appendObjectsToBackupConfig,
   deleteBackupConfig,
   restoreBackupConfigAfterFailedTriggerDelete,
   buildBackupConfigCounterKey,

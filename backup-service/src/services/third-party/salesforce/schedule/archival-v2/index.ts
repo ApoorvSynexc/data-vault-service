@@ -36,7 +36,19 @@ interface IArchiveObject {
 
 const MAX_RETRIES = 3;
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
-const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN']);
+const ALLOWED_OPERATORS = new Set([
+  '=',
+  '!=',
+  '>',
+  '<',
+  '>=',
+  '<=',
+  'LIKE',
+  'IN',
+  'NOT IN',
+  'INCLUDES',
+  'EXCLUDES',
+]);
 const DATE_LITERALS = new Set([
   'TODAY',
   'YESTERDAY',
@@ -69,6 +81,43 @@ const isDateLiteral = (value: string): boolean =>
     value
   );
 
+// LIMIT/OFFSET/ORDER BY apply to a whole query, not to a boolean condition —
+// a raw SOQL condition body gets wrapped inside `AND (...)`, so any of these
+// would land inside that parenthesized expression and produce invalid SOQL.
+// Caught here with a message naming the actual keyword, instead of letting it
+// through to fail later with a parser error that points at an unrelated token.
+const TOP_LEVEL_CLAUSE_RE = /\b(LIMIT|OFFSET|ORDER\s+BY)\b/i;
+const assertNoTopLevelClauses = (body: string): void => {
+  // Drop quoted string literals first so a legitimate value like
+  // "Notes__c LIKE '%offset%'" isn't mistaken for the clause keyword.
+  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
+  const match = withoutStringLiterals.match(TOP_LEVEL_CLAUSE_RE);
+  if (match) {
+    throw new Error(
+      `SOQL condition cannot contain ${match[1].toUpperCase()} — LIMIT/OFFSET/ORDER BY apply to the whole query, not a filter condition. Remove it from your query.`
+    );
+  }
+};
+
+// Subqueries aren't supported in a filter condition here. Salesforce places
+// several interacting restrictions on them — a semi-join can't FROM the same
+// object as the outer query, can't be nested inside another semi-join, and
+// its left operand can't traverse more than one relationship level — any of
+// which a parent condition can innocently violate once it's propagated
+// (relationship-prefixed) down to a child object in the archive hierarchy.
+// Rejected outright, up front, with a clear message instead of letting a
+// propagated query fail deep in a Dry Run or a real archive run with a
+// confusing Salesforce error that doesn't even point at the real cause.
+const SUBQUERY_RE = /\(\s*SELECT\b/i;
+const assertNoSubqueries = (body: string): void => {
+  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
+  if (SUBQUERY_RE.test(withoutStringLiterals)) {
+    throw new Error(
+      `Subqueries are not supported in filter conditions — Salesforce's own restrictions on subquery nesting, object types, and relationship depth make them unreliable once this condition is applied across an archive hierarchy's parent/child objects. Use a direct field or relationship comparison instead (e.g. "Account.Name = 'X'").`
+    );
+  }
+};
+
 const buildFilterCondition = (
   f: IBackupField & { filter: NonNullable<IBackupField['filter']> },
   preformattedValue: string
@@ -97,6 +146,21 @@ const buildFilterCondition = (
     return `${name} ${operator} (${parts.map((v) => formatValueByDataType(v, dataType)).join(', ')})`;
   }
 
+  // Multi-Select Picklist membership test: Salesforce's own syntax is a
+  // SINGLE quoted string with the candidate values semicolon-joined inside
+  // it — Field INCLUDES ('A;B') — not a parenthesized list of separately
+  // quoted literals the way IN's values are. The UI still submits the raw
+  // value comma-separated like every other multi-value filter here; only the
+  // wire format changes to match what Salesforce expects.
+  if (operator === 'INCLUDES' || operator === 'EXCLUDES') {
+    const parts = rawValue
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const joined = parts.map((v) => v.replace(/'/g, "''")).join(';');
+    return `${name} ${operator} ('${joined}')`;
+  }
+
   const ldt = dataType.toLowerCase();
   if ((ldt === 'date' || ldt === 'datetime') && isDateLiteral(rawValue)) {
     return `${name} ${operator} ${rawValue}`;
@@ -114,6 +178,10 @@ const buildWhereClause = (object: IBackupObject): string => {
   if ((condition as any).type === 'SOQL') {
     const soqlQuery: string = (condition as any).soqlQuery ?? '';
     const body = soqlQuery.trim().replace(/^WHERE\s+/i, '');
+    if (body) {
+      assertNoTopLevelClauses(body);
+      assertNoSubqueries(body);
+    }
     return body ? `WHERE ${body}` : '';
   }
 
@@ -171,6 +239,9 @@ function fkToRelationshipName(fieldApiName: string): string {
   return fieldApiName;
 }
 
+const FIELD_REF_RE =
+  /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)(\s*(?:!=|>=|<=|=|>|<)|\s+(?:NOT\s+IN|IN|LIKE)\s)/gi;
+
 function transformWhereBodyForChild(whereBody: string, fkFieldName: string): string {
   if (!whereBody.trim()) {
     return `${fkFieldName} != null`;
@@ -178,15 +249,12 @@ function transformWhereBodyForChild(whereBody: string, fkFieldName: string): str
   const relName = fkToRelationshipName(fkFieldName);
   // Capture field references (identifier chains) immediately followed by a SOQL
   // comparison operator. Ignores quoted string values and AND/OR/NOT keywords.
-  return whereBody.replace(
-    /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)(\s*(?:!=|>=|<=|=|>|<)|\s+(?:NOT\s+IN|IN|LIKE)\s)/gi,
-    (_match, field, op) => {
-      if (field === 'Id') {
-        return `${fkFieldName}${op}`;
-      }
-      return `${relName}.${field}${op}`;
+  return whereBody.replace(FIELD_REF_RE, (_match, field, op) => {
+    if (field === 'Id') {
+      return `${fkFieldName}${op}`;
     }
-  );
+    return `${relName}.${field}${op}`;
+  });
 }
 
 const archiveObject = async (payload: IArchiveObject) => {
@@ -221,13 +289,12 @@ const archiveObject = async (payload: IArchiveObject) => {
       { instanceUrl, tokens }
     );
 
-
     if (!fieldsMetadata?.fields) {
       return;
     }
 
     const fieldNames: string[] = [];
-    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid'];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'fromid'];
     fieldsMetadata.fields.forEach((f) => {
       if (
         f.referenceTo.length > 1 &&
@@ -444,14 +511,16 @@ const archiveObject = async (payload: IArchiveObject) => {
   }
 };
 
-const deleteObjectRecords = async (payload: IArchiveObject) => {
+const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => {
   const { backupConfig, backupJobId, source, destConfig, object, s3Keys } = payload;
+
+  let anyChildFailed = false;
 
   if (payload.object.children?.length) {
     for (let index = 0; index < payload.object.children.length; index++) {
       const childObject = payload.object.children[index];
       try {
-        await exportWithRetryArchivalV2({
+        const childStatus = await exportWithRetryArchivalV2({
           type: 'delete',
           backupConfig,
           backupJobId,
@@ -460,7 +529,19 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
           object: childObject,
           s3Keys,
         });
+
+        if (childStatus !== OBJECT_STATUS.completed) {
+          // Child didn't fully delete (some records rejected by Salesforce). Keep
+          // going on remaining siblings, but remember to block the parent below —
+          // deleting it now would let Salesforce cascade-delete this child's
+          // leftovers itself, which is what trips DELETE_OPERATION_TOO_LARGE.
+          anyChildFailed = true;
+          logger.error(
+            `Archival job ${payload.backupJobId}: child ${childObject.name} did not fully delete (status=${childStatus}) - will block delete of ${object.name}`
+          );
+        }
       } catch (error: any) {
+        anyChildFailed = true;
         logger.error(
           `Archival job ${payload.backupJobId}: failed to delete ${childObject.name} - ${error?.message}`
         );
@@ -474,6 +555,19 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
         });
       }
     }
+  }
+
+  if (anyChildFailed) {
+    const blockedMessage = `blocked: one or more children did not fully delete`;
+    await updateArchivalObject({
+      backupJobId,
+      object: {
+        id: object.id,
+        status: OBJECT_STATUS.deletionJobFailed,
+        errorMessage: blockedMessage,
+      },
+    });
+    return OBJECT_STATUS.deletionJobFailed;
   }
 
   const backupConfigId = backupConfig.backupConfigId;
@@ -493,7 +587,7 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
       },
     });
 
-    await bulkDeleteRecords({
+    const status = await bulkDeleteRecords({
       backupJobId: backupJobId,
       backupConfigId: backupConfigId,
       crmId: source.crmId,
@@ -512,6 +606,8 @@ const deleteObjectRecords = async (payload: IArchiveObject) => {
     //     status: OBJECT_STATUS.completed,
     //   },
     // });
+
+    return status;
   } catch (error: any) {
     logger.error(
       `Archival job ${backupJobId}: failed to delete ${object.name} - ${error?.message}`
@@ -538,7 +634,7 @@ const exportWithRetryArchivalV2 = async (data: {
   parentWhereClause?: string;
   s3Keys?: IS3ObjectKey[];
   objectNames?: string[];
-}): Promise<void> => {
+}): Promise<string | void> => {
   const { type, ...payload } = data;
   const objectName = payload.object.name;
   let lastError: any;
@@ -547,10 +643,9 @@ const exportWithRetryArchivalV2 = async (data: {
     try {
       if (type === 'backup') {
         await archiveObject(payload);
-      } else {
-        await deleteObjectRecords(payload);
+        return;
       }
-      return;
+      return await deleteObjectRecords(payload);
     } catch (err: any) {
       lastError = err;
       if (attempt < MAX_RETRIES) {

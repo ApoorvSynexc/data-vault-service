@@ -50,6 +50,9 @@ import {
   initalizeRestoreTransform,
   getRestoreJobById,
   updateRestoreJob,
+  listS3Objects,
+  getPresignedDownloadUrl,
+  checkSalesforceApiLimitUsage,
 } from '../../../services';
 import { BACKUP_JOB_TABLE, RESTORE_JOB_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -196,12 +199,6 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
     makeResponse(req, res, 400, false, 'invalid_config_type');
     return;
   }
-
-  // const { objects, objectTree, found } = await getRestoreObjectListByConfigId(
-  //   backupConfigId,
-  //   configType as ConfigType,
-  //   userId
-  // );
 
   let config = await getBackupConfigById(backupConfigId);
   if (!config) {
@@ -420,13 +417,18 @@ const parseRetrieveParams = (
  *   type:           'ENTIRE' | 'CHANGED_BETWEEN'
  *   startDate:      ISO 8601   (required for CHANGED_BETWEEN, ignored otherwise)
  *   endDate:        ISO 8601   (required for CHANGED_BETWEEN, ignored otherwise)
- *   columnNames:    string[]   (field API names, non-empty)
+ *   columnNames:    string[]   (field API names, non-empty — accepted for backward
+ *                              compatibility but no longer honored: every row
+ *                              projects Id and LastModifiedDate only)
  *   searchText?:    string     (case-insensitive substring, any of columnNames)
  *   cursor?:        string     (opaque nextCursor echo)
  * }
  *
- * Reads compressed state only — main_backup_files (`_hudi`) and the CDC history
- * (`_delta`). No CSV is queried.
+ * Reads compressed state (main_backup_files `_hudi` and the CDC history
+ * `_delta`) first. Only once Hudi has no more rows for the current block does
+ * it fall through to the not-yet-compressed tail — csv for a BULK job
+ * (schedule/bulk backup, archival, or a realtime object's initial Bulk-API
+ * sync), json for a REALTIME job.
  *
  * Every row carries an `OPERATION` naming what a RESTORE would have to do to put
  * that version back — the inverse of what the backup recorded:
@@ -453,13 +455,11 @@ const parseRetrieveParams = (
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
 const fetchRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  console.log('[fetch-records] request', req.body);
   const parsed = parseRetrieveParams(req.body as Record<string, unknown>, req.user!.userId);
   if (!parsed.ok) {
     makeResponse(req, res, 400, false, parsed.error);
     return;
   }
-  console.log('[fetch-records] query', parsed.value);
 
   let result;
   try {
@@ -636,10 +636,10 @@ const parseDryRunParams = (
   if (!VALID_RETRIEVE_TYPES.includes(type)) {
     return { ok: false, error: 'invalid_retrieve_type' };
   }
-  // The ARCHIVAL restriction differs by endpoint — /dry-run is ENTIRE-only,
-  // /dry-run-diff rejects ARCHIVAL outright — so each checks it itself
-  // (dryRunRestore / dryRunDiff) rather than this shared parser picking one
-  // error message for both.
+  // Both /dry-run and /dry-run-diff restrict ARCHIVAL to source.type ENTIRE
+  // (no delta table to diff/count CHANGED_BETWEEN against), but each returns
+  // its own error code — so each checks it itself (dryRunRestore / dryRunDiff)
+  // rather than this shared parser picking one error message for both.
 
   const restoreScope = selection?.restoreScope as IRestoreScope | undefined;
   if (!restoreScope || typeof restoreScope !== 'object') {
@@ -749,7 +749,9 @@ const dryRunHandler = async (req: IRequest, res: IResponse): Promise<void> => {
  * fieldNames), RECORD and BULK_CSV only their listed ids, and DELETED_ONLY only
  * the deleted records.
  *
- * BACKUP configs only — ARCHIVAL 400s with dry_run_diff_backup_only.
+ * ARCHIVAL configs only support source.type ENTIRE, same as /dry-run —
+ * archival has no delta table, so CHANGED_BETWEEN 400s with
+ * archival_dry_run_diff_entire_only.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
@@ -1162,6 +1164,20 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
+  const changedObjectNames: string[] = [];
+  if (backupConfig.type === 'NORMAL') {
+    const result = await runMetadataComparisonForConfig(backupConfig);
+    for (const { objectName, result: metadataResult } of result) {
+      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+        changedObjectNames.push(objectName);
+      }
+    }
+
+    if (changedObjectNames.length > 0) {
+      await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId);
+    }
+  }
+
   const isDraft = body.status === 'DRAFT';
   const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? 'DRAFT' : 'IN_PROGRESS' };
   const created = await createRestore(payload);
@@ -1178,15 +1194,15 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   // Step 1: compare metadata comparison
-  const changedObjectNames: string[] = [];
+  // const changedObjectNames: string[] = [];
   try {
     if (backupConfig.type === 'NORMAL') {
-      const result = await runMetadataComparisonForConfig(backupConfig);
-      for (const { objectName, result: metadataResult } of result) {
-        if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-          changedObjectNames.push(objectName);
-        }
-      }
+      // const result = await runMetadataComparisonForConfig(backupConfig);
+      // for (const { objectName, result: metadataResult } of result) {
+      //   if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+      //     changedObjectNames.push(objectName);
+      //   }
+      // }
 
       if (changedObjectNames.length) {
         await triggerBackupJob({
@@ -1201,7 +1217,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           },
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
-      }{
+      } {
         await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
         await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
         await initalizeRestoreTransform(restoreJob.restoreJobId);
@@ -1308,6 +1324,48 @@ const getRestoreJobStatsHandler = async (req: IRequest, res: IResponse): Promise
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
+const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => {
+  const { restoreJobId, objectName } = req.query as Record<string, string>;
+  if (!restoreJobId) {
+    return makeResponse(req, res, 400, false, 'id_required');
+  }
+
+  const restoreJob = await getRestoreJobById(restoreJobId);
+  if (!restoreJob) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  if (restoreJob.status !== 'COMPLETED') {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const path = `${restoreJob.source.csvFilePath}/${objectName}/csv`;
+  const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+    'ciphertext' in restoreJob.source.encryptedKeys
+      ? JSON.parse(decrypt(restoreJob.source.encryptedKeys))
+      : restoreJob.source.encryptedKeys;
+  const s3Config = {
+    ...sourceS3Credentials,
+    backupConfigId: restoreJob.source.backupConfigId,
+    bucketName: restoreJob.source.bucketName,
+    region: restoreJob.source.region,
+    csvFilePath: restoreJob.source.csvFilePath,
+  }
+  const keys = await listS3Objects(s3Config, path);
+  if (keys.length === 0) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const files = await Promise.all(
+    keys.map(async (key) => ({
+      fileName: key.split('/').pop()!,
+      url: await getPresignedDownloadUrl(s3Config, key),
+    }))
+  );
+
+  makeResponse(req, res, 200, true, 'fetch', { files });
+}
+
 export const restoreRetrieveJobController = wrapController({
   listRestoreRetrieveJobsHandler,
   getRestoreRetrieveJobHandler,
@@ -1328,5 +1386,6 @@ export const restoreRetrieveJobController = wrapController({
   getRestoreJobHandler,
   getRestoreJobStatsHandler,
   createRestoreHandler2,
-  createRollbackHandler
+  createRollbackHandler,
+  downloadCsvFile
 });

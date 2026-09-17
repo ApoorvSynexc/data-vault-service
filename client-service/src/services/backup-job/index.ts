@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, INTERNAL_SECRET, JOB_STATUS, SCHEDULE_MODE } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, INTERNAL_SECRET, JOB_STATUS, SCHEDULE_MODE, STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
@@ -19,7 +19,7 @@ import { buildBackupScheduleName, computeNextScheduledRun } from '../../utils/ev
 // includeChildren: archival's cascade pipeline needs each object's children
 // tree to build its per-level WHERE clauses, so archival keeps forwarding it;
 // plain backup has no use for it, so it's dropped there.
-const getSourceObjects = (objects?: IObject[], includeChildren = false) => {
+export const getSourceObjects = (objects?: IObject[], includeChildren = false) => {
   if (objects?.length) {
     return objects.map((object) => ({
       name: object.name,
@@ -54,6 +54,25 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
   const active = (result.Count ?? 0) > 0;
   logger.info(`[ARCH-DEDUP] hasActiveBackupJob | configId=${backupConfigId} active=${active} count=${result.Count ?? 0} durationMs=${Date.now() - startedAt}`);
   return active;
+};
+
+const submitBackupJobRequest = async (params: {
+  backupConfigId: string;
+  endpoint: string;
+  body: string;
+}): Promise<any> => {
+  const { backupConfigId, endpoint, body } = params;
+  try {
+    return await httpRequest({
+      url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
+      method: 'POST',
+      headers: { 'x-internal-secret': INTERNAL_SECRET },
+      body,
+    });
+  } catch (error) {
+    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed });
+    throw error;
+  }
 };
 
 const triggerArchivalBackupJob = async (params: {
@@ -97,7 +116,7 @@ const triggerArchivalBackupJob = async (params: {
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} CRM=${crm.crmName} destinationType=${destination.type}`);
 
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=PENDING`);
-  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
   const credentials = getDecryptedCrmCredential(user);
   const payload = {
     userId: config.userId,
@@ -117,24 +136,16 @@ const triggerArchivalBackupJob = async (params: {
   };
 
   const endpoint = '/archival';
-  const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}`;
   const bodyStr = JSON.stringify(payload);
-  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ${url} | payloadBytes=${bodyStr.length} objects=[${objectNames}]`);
+  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ${BACKUP_SERVICE}/v1/backup-job${endpoint} | payloadBytes=${bodyStr.length} objects=[${objectNames}]`);
 
   let result;
   const postStart = Date.now();
   try {
-    result = await httpRequest({
-      url,
-      method: 'POST',
-      headers: { 'x-internal-secret': INTERNAL_SECRET },
-      body: bodyStr,
-    });
+    result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: bodyStr });
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ok | durationMs=${Date.now() - postStart}`);
   } catch (error) {
     logger.error(`[ARCH-TRIG] configId=${config.backupConfigId} POST FAILED | durationMs=${Date.now() - postStart} error=${(error as Error)?.message ?? String(error)}`);
-    logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=FAILED`);
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
     throw error;
   }
 
@@ -173,7 +184,7 @@ const triggerBackupJob = async (params: {
     if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
     if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
     const credentials = getDecryptedCrmCredential(user);
     if (!credentials) throw new SalesforceAuthExpiredError();
 
@@ -200,18 +211,7 @@ const triggerBackupJob = async (params: {
     };
 
     const endpoint = type === 'archival' ? '/archival' : '';
-    let result;
-    try {
-      result = await httpRequest({
-        url: `${BACKUP_SERVICE}/v1/backup-job${endpoint}`,
-        method: 'POST',
-        headers: { 'x-internal-secret': INTERNAL_SECRET },
-        body: JSON.stringify(payload),
-      });
-    } catch (error) {
-      await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
-      throw error;
-    }
+    const result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: JSON.stringify(payload) });
 
     await updateBackupConfig(config.backupConfigId, { lastBackupAt: currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
     return result;
@@ -344,26 +344,40 @@ const getBackupJobById = async (backupJobId: string): Promise<IBackupJob | null>
 
 const getBackupJobsByUser = async (
   userId: string,
-  options?: { limit?: number; cursor?: string; status?: string }
+  options?: { limit?: number; cursor?: string; status?: string; type?: string }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
   const exclusiveStartKey = decodeCursor(options?.cursor);
+
+  const filterParts: string[] = [];
+  const expressionNames: Record<string, string> = {};
+  const expressionValues: Record<string, any> = { ':userId': userId };
+
+  if (options?.status) {
+    filterParts.push('#status = :status');
+    expressionNames['#status'] = 'status';
+    expressionValues[':status'] = options.status;
+  }
+
+  if (options?.type) {
+    filterParts.push('#type = :type');
+    expressionNames['#type'] = 'type';
+    expressionValues[':type'] = options.type;
+  }
 
   const queryParams: any = {
     TableName: BACKUP_JOB_TABLE,
     IndexName: 'userId-index',
     KeyConditionExpression: 'userId = :userId',
-    ExpressionAttributeValues: { ':userId': userId },
+    ExpressionAttributeValues: expressionValues,
     Limit: limit,
     ScanIndexForward: false,
+    ...(filterParts.length && {
+      FilterExpression: filterParts.join(' AND '),
+      ExpressionAttributeNames: expressionNames,
+    }),
     ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
   };
-
-  if (options?.status) {
-    queryParams.FilterExpression = '#status = :status';
-    queryParams.ExpressionAttributeNames = { '#status': 'status' };
-    queryParams.ExpressionAttributeValues[':status'] = options.status;
-  }
 
   const result = await docClient.send(new QueryCommand(queryParams));
 
@@ -611,7 +625,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
         }
       } else if (job.status === JOB_STATUS.running || job.status === JOB_STATUS.pending) {
         runningCount++;
-      } else if (job.status === JOB_STATUS.failed) {
+      } else if (job.status === JOB_STATUS.failed || job.status === COMPRESSION_STATUS.failed) {
         failedCount++;
       }
     }
@@ -768,9 +782,63 @@ const getMonthlyStatsByCrmCurrentYear = async (crmId: string): Promise<Array<{ m
   }));
 };
 
+interface IBackupJobOverview {
+  pendingStatus: number;
+  successStatus: number;
+  failedStatus: number;
+}
+
+// Dashboard overview for a user's backup jobs of one type (NORMAL/backup or
+// ARCHIVAL) — same shape as backup-config's getBackupOverview: one paginated
+// query (userId-index, filtered by type) tallying every status bucket in a
+// single pass instead of one COUNT query per status.
+const getBackupJobOverview = async (
+  userId: string,
+  type: 'NORMAL' | 'ARCHIVAL'
+): Promise<IBackupJobOverview> => {
+  const overview: IBackupJobOverview = {
+    pendingStatus: 0,
+    successStatus: 0,
+    failedStatus: 0,
+  };
+
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_JOB_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :uid',
+        FilterExpression: '#type = :type',
+        ProjectionExpression: '#status, #type',
+        ExpressionAttributeNames: { '#status': 'status', '#type': 'type' },
+        ExpressionAttributeValues: { ':uid': userId, ':type': type },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const items = (result.Items ?? []) as IBackupJob[];
+    for (const item of items) {
+      if (item.status === JOB_STATUS.pending) {
+        overview.pendingStatus += 1;
+      } else if (item.status === JOB_STATUS.success) {
+        overview.successStatus += 1;
+      } else if (item.status === JOB_STATUS.failed) {
+        overview.failedStatus += 1;
+      }
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastEvaluatedKey !== undefined);
+
+  return overview;
+};
+
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
+  submitBackupJobRequest,
   runBackupNow,
   hasActiveBackupJob,
   resumeBackupJob,
@@ -786,4 +854,5 @@ export {
   computeJobStats,
   computeArchivalJobStats,
   getMonthlyStatsByCrmCurrentYear,
+  getBackupJobOverview,
 };

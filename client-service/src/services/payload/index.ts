@@ -126,7 +126,7 @@ function archivalSchemaChangeDetection(backupConfig: IBackupConfig, objectOperat
 
     for (const obj of objects) {
         if (obj.schemaChange && objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
-            console.log("Schema chnage detect: ", { name: obj.name });
+            logger.info(`Schema change detected: ${obj.name}`);
             objectOperations[obj.name].push("schema-change");
         }
     }
@@ -141,7 +141,7 @@ function schemaChangeDetection(backupConfig: IBackupConfig, objectOperations: Re
 
     for (const obj of objects) {
         if (obj.schemaChange && objectOperationsKeys.includes(obj.name) && !objectOperations[obj.name].includes("schema-change")) {
-            console.log("Schema chnage detect: ", { name: obj.name });
+            logger.info(`Schema change detected: ${obj.name}`);
             objectOperations[obj.name].push("schema-change");
         }
     }
@@ -345,7 +345,6 @@ async function buildPayload(backupConfigId: string) {
             },
         },
     };
-    console.log("PAYLOAD ==> " + JSON.stringify(payload));
     return payload;
 }
 
@@ -505,17 +504,8 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             JSON.stringify(encrypt(JSON.stringify(payload), ENCRYPTION_KEY))
         ).toString('base64');
 
-        logger.info('Initializing EMR job...');
-        console.log('──────────────────────────────────────────');
-        console.log('  DataVault — EMR Serverless Job Submitter');
-        console.log('──────────────────────────────────────────');
-        console.log('executionRoleArn:', AWS_EMR_EXECUTION_ROLE_ARN);
-        if ('restoreConfigId' in payload) {
-            console.log('Restore Config ID:', payload.restoreConfigId);
-        } else {
-            console.log('Backup Config ID:', payload.backupConfigId);
-        }
-        console.log('──────────────────────────────────────────');
+        const configId = 'restoreConfigId' in payload ? payload.restoreConfigId : payload.backupConfigId;
+        logger.info(`Initializing EMR job... executionRoleArn=${AWS_EMR_EXECUTION_ROLE_ARN} configId=${configId}`);
 
         // Spark submit parameters — tuned for 100 GB / 200 objects in 5 minutes.
         // Kept as an array + .join(' ') so each setting is reviewable in isolation;
@@ -532,36 +522,18 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.driver.maxResultSize=2g',
             '--conf spark.emr-serverless.driver.disk=20g',
 
-            // Executors
+            // Executors — fixed at 4, dynamic allocation OFF. Every job requests the
+            // full 4 executors (4 cores / 16g / 20g disk each) up front and holds them
+            // for the run's duration; no ramp-up/ramp-down, no scaling between a min
+            // and a max. executor.instances is the sole executor-count control here —
+            // it's a no-op while dynamicAllocation.enabled=true (below), so it only
+            // takes effect once dynamic allocation is off.
             '--conf spark.executor.cores=4',
             '--conf spark.executor.memory=16g',
             '--conf spark.executor.memoryOverhead=3g',
             '--conf spark.emr-serverless.executor.disk=20g',
-
-            // Dynamic Allocation
-            // executor.instances must be set explicitly — EMR Serverless defaults it to 3,
-            // which fails validation once it exceeds maxExecutors.
-            // Starts at 1 executor and scales up to 6 only if the workload actually needs
-            // it — most runs (a handful of cascade/delta records) never will. Previously
-            // min=initial=executor.instances=6 held allocation static at the cap for no
-            // ramp-up delay on large bulk loads, but that meant EVERY run — regardless of
-            // size — requested the full 26vCPU (driver 2 + 6x4 executor) peak immediately,
-            // which trips the account's EMR Serverless concurrent-vCPU service quota even
-            // when nothing else is running. maxExecutors stays 6 so a genuinely large bulk
-            // load (e.g. a first-run 1M+ record insert) can still scale up to it; it just
-            // no longer starts there. NOTE: initial executor count is
-            // min(maxExecutors, max(initialExecutors, minExecutors, executor.instances)) —
-            // all three of the "floor" settings below must move together, or leaving any
-            // one at 6 pins the floor back to 6 regardless of the other two.
-            '--conf spark.executor.instances=1',
-            '--conf spark.dynamicAllocation.enabled=true',
-            '--conf spark.dynamicAllocation.minExecutors=1',
-            '--conf spark.dynamicAllocation.initialExecutors=1',
-            '--conf spark.dynamicAllocation.maxExecutors=6',
-            '--conf spark.dynamicAllocation.executorIdleTimeout=60s',
-            '--conf spark.dynamicAllocation.schedulerBacklogTimeout=1s',
-            '--conf spark.dynamicAllocation.sustainedSchedulerBacklogTimeout=1s',
-            '--conf spark.dynamicAllocation.shuffleTracking.enabled=true',
+            '--conf spark.executor.instances=4',
+            '--conf spark.dynamicAllocation.enabled=false',
 
             // Memory
             '--conf spark.memory.fraction=0.7',
@@ -605,7 +577,6 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.speculation=false',
         ].join(' ');
 
-        console.log('NODE ENV:', NODE_ENV_URL);
         const command = new StartJobRunCommand({
             applicationId: AWS_EMR_APPLICATION_ID,
             executionRoleArn: AWS_EMR_EXECUTION_ROLE_ARN,
@@ -623,8 +594,8 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                         properties: {
                             "spark.executorEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
                             "spark.emr-serverless.driverEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
-                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL}`,
-                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL}`,
+                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
+                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
                             "spark.executorEnv.NODE_SERVER_URL": NODE_ENV_URL,
                             "spark.emr-serverless.driverEnv.NODE_SERVER_URL": NODE_ENV_URL,
                         },
@@ -641,9 +612,7 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             },
         });
 
-        console.log('COMMAND ==> ' + JSON.stringify(command));
         const response = await client.send(command);
-        console.log('RESPONSE ==> ' + JSON.stringify(response));
         logger.info('EMR job initialized.');
         return response;
     } catch (error) {
@@ -684,6 +653,7 @@ export {
     initalizePayloadTransform,
     initalizeRestoreTransform,
     isCompressible,
+    COMPRESSIBLE_STATUSES,
     // exported for payload.check.ts — the per-job grouping contract with Spark
     processObjectOperations,
     processArchivalObjectOperations,

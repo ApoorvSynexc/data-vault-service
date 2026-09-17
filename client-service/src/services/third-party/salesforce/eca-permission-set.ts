@@ -2,6 +2,7 @@ import { ICrm } from '../../../models';
 import { salesforceRequest, SalesforceTokens, SalesforceAuthExpiredError } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
 import { listMetadataSoap, readMetadataSoap } from './metadata-listing';
+import { logger } from '../../../middlewares';
 
 // Packaged API/developer name of the ECA shipped with the managed package
 // (force-app/internal/360DV/externalClientApps/Data_Vault_Connected_App.eca-meta.xml).
@@ -51,29 +52,23 @@ const resolveEcaDeveloperName = async (
   instanceUrl: string,
   tokens: SalesforceTokens
 ): Promise<EcaLookupResult> => {
-  console.log('[eca-permission-set] Checking Metadata API support...');
   let entries;
   try {
     entries = await listMetadataSoap(instanceUrl, tokens, 'ExternalClientApplication', METADATA_API_VERSION);
   } catch (err: any) {
-    console.log('[eca-permission-set] Metadata API listMetadata unavailable:', err?.message ?? err);
+    logger.error(`[eca-permission-set] Metadata API listMetadata unavailable: ${err?.message ?? err}`);
     return { mode: 'subscriber', developerName: null };
   }
 
-  console.log(
-    '[eca-permission-set] Checking ECA availability... found',
-    entries.length,
-    'ExternalClientApplication component(s):',
-    entries.map((e) => e.fullName)
-  );
+  logger.info(`[eca-permission-set] found ${entries.length} ExternalClientApplication component(s): ${entries.map((e) => e.fullName).join(', ')}`);
 
   const namespaced = entries.find((e) => e.fullName.endsWith(`__${ECA_API_NAME}`));
   if (namespaced) {
-    console.log('[eca-permission-set] Found ECA:', namespaced.fullName);
+    logger.info(`[eca-permission-set] Found ECA: ${namespaced.fullName}`);
     return { mode: 'subscriber', developerName: namespaced.fullName };
   }
 
-  console.log(`[eca-permission-set] '${ECA_API_NAME}' not found under the namespaced name — package not installed in this org yet, skipping ECA step`);
+  logger.info(`[eca-permission-set] '${ECA_API_NAME}' not found under the namespaced name — package not installed in this org yet, skipping ECA step`);
   return { mode: 'subscriber', developerName: null };
 };
 
@@ -141,7 +136,7 @@ const fetchExistingPermittedPermissionSets = async (
       ? csv.split(',').map(s => s.trim()).filter(Boolean)
       : [];
   } catch (err: any) {
-    console.log('[eca-permission-set] Failed to fetch existing permittedPermissionSets:', err?.message ?? err);
+    logger.error(`[eca-permission-set] Failed to fetch existing permittedPermissionSets: ${err?.message ?? err}`);
     return [];
   }
 };
@@ -190,7 +185,7 @@ const resolveEcaOauthPolicyName = async (
   try {
     entries = await listMetadataSoap(instanceUrl, tokens, 'ExtlClntAppOauthConfigurablePolicies', METADATA_API_VERSION);
   } catch (err: any) {
-    console.log('[eca-permission-set] listMetadata for ExtlClntAppOauthConfigurablePolicies unavailable:', err?.message ?? err);
+    logger.error(`[eca-permission-set] listMetadata for ExtlClntAppOauthConfigurablePolicies unavailable: ${err?.message ?? err}`);
     return null;
   }
 
@@ -215,10 +210,10 @@ const resolveEcaOauthPolicyName = async (
     (e) => e.fullName.startsWith(ecaDeveloperName) || e.fullName.startsWith(unnamespacedEcaName(ecaDeveloperName))
   );
   if (match) {
-    console.log('[eca-permission-set] Found existing OAuth policy record:', match.fullName);
+    logger.info(`[eca-permission-set] Found existing OAuth policy record: ${match.fullName}`);
     return match.fullName;
   }
-  console.log('[eca-permission-set] No existing OAuth policy record found for', ecaDeveloperName, '— found:', entries.map((e) => e.fullName));
+  logger.info(`[eca-permission-set] No existing OAuth policy record found for ${ecaDeveloperName} — found: ${entries.map((e) => e.fullName).join(', ')}`);
   return null;
 };
 
@@ -295,25 +290,17 @@ export const provisionEcaPermissionSet = async (
   crm: ICrm,
   permissionSetName: string
 ): Promise<EcaProvisionResult> => {
-  // permissionSetName comes from oauthState (configure-org's permission_set_name)
-  // — an admin-supplied, already-existing Permission Set. It is never created
-  // here, only looked up and referenced by the ECA OAuth policy, so a missing
-  // name is a caller error rather than something to substitute a default for.
   if (!permissionSetName) {
     throw new Error('permission_set_name_required: no Permission Set name was supplied for this org');
   }
 
-  console.log('[eca-permission-set] Checking org capabilities...');
   const { mode, developerName } = await resolveEcaDeveloperName(instanceUrl, tokens);
 
-  console.log('[eca-permission-set] Checking permission set...');
   if (!(await permissionSetExists(instanceUrl, tokens, permissionSetName))) {
     throw new Error(`permission_set_not_found: Permission Set '${permissionSetName}' does not exist in this org`);
   }
-  console.log('[eca-permission-set] Permission set found:', permissionSetName);
 
   if (!developerName) {
-    console.log('[eca-permission-set] Skipping unsupported/missing ECA step — the permission set itself was verified.');
     return {
       mode,
       ecaFound: false,
@@ -324,23 +311,11 @@ export const provisionEcaPermissionSet = async (
     };
   }
 
-  console.log('[eca-permission-set] Checking ECA permission-set assignment...');
   const existingPermittedPermissionSets = await fetchExistingPermittedPermissionSets(instanceUrl, tokens, developerName);
   const alreadyAssigned = existingPermittedPermissionSets.includes(permissionSetName);
 
-  if (alreadyAssigned) {
-    console.log('[eca-permission-set] Permission set already assigned to ECA OAuth policy — skipping deploy.');
-  } else {
-    console.log('[eca-permission-set] Resolving OAuth policy record...');
-    // Salesforce auto-generates this record per-org when the ECA is created —
-    // its fullName is never the ECA's own name (see resolveEcaOauthPolicyName)
-    // and must be discovered, not assumed, or the deploy creates a colliding
-    // duplicate instead of updating the real one.
-    // Never namespaced when creating: ExtlClntAppOauthConfigurablePolicies
-    // isn't packageable, so a subscriber org can only create it under its own
-    // (unnamespaced) namespace — see unnamespacedEcaName's docblock above.
+  if (!alreadyAssigned) {
     const policyName = (await resolveEcaOauthPolicyName(instanceUrl, tokens, developerName)) ?? `${unnamespacedEcaName(developerName)}_oauthPlcy`;
-    console.log('[eca-permission-set] Deploying ECA OAuth policy:', policyName);
     const union = Array.from(new Set([...existingPermittedPermissionSets, permissionSetName]));
 
     try {
@@ -358,7 +333,7 @@ export const provisionEcaPermissionSet = async (
       // 401 at this exact point means the deploy was already submitted
       // before the session died, and is very likely already applied; we
       // just lost the ability to poll for confirmation.
-      console.log(
+      logger.warn(
         '[eca-permission-set] Session invalidated while confirming the OAuth policy deploy — expected when permittedUsersPolicyType changes to AdminApprovedPreAuthorized. The deploy was already submitted and is very likely applied; verify in Setup and have the admin re-authenticate.'
       );
       return {
@@ -373,7 +348,7 @@ export const provisionEcaPermissionSet = async (
     }
   }
 
-  console.log('[eca-permission-set] Provisioning complete.');
+  logger.info('[eca-permission-set] Provisioning complete.');
 
   return {
     mode,
