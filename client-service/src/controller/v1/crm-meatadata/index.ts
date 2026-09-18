@@ -16,7 +16,7 @@ const filterChildRelationships = (
   filteredObjectNames: string[]
 ) =>
   childRelationships
-    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && filteredObjectNames.includes(child.childSObject))))
+    .filter((child) => child.childSObject !== objectName && filteredObjectNames.includes(child.childSObject))
     .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
 
 type ISalesforceRelationshipChild = ReturnType<typeof filterChildRelationships>[number];
@@ -152,6 +152,7 @@ const buildArchivalChildRelationshipTree = async (params: {
   user: IUser;
   objectDescription: ISalesforceObjectDescribeResponse;
   objectName: string;
+  filteredObjectNames: string[];
   // Objects already expanded anywhere in this traversal — shared and mutated across
   // the whole call (not cloned per branch), so each distinct object is expanded at
   // most once for the whole tree instead of once per branch that reaches it.
@@ -160,12 +161,12 @@ const buildArchivalChildRelationshipTree = async (params: {
   depth: number;
   maxDepth?: number;
 }): Promise<ISalesforceChildTreeNode[]> => {
-  const { user, objectDescription, objectName, visitedObjectNames, describeQueue, depth } = params;
+  const { user, objectDescription, objectName, filteredObjectNames, visitedObjectNames, describeQueue, depth } = params;
   const maxDepth = Math.min(params.maxDepth ?? MAX_RELATIONSHIP_DEPTH, MAX_RELATIONSHIP_DEPTH);
 
   if (depth >= maxDepth) return [];
 
-  const rawChildren = filterChildRelationships(objectDescription.childRelationships, objectName, 'archival', []);
+  const rawChildren = filterChildRelationships(objectDescription.childRelationships, objectName, 'archival', filteredObjectNames);
   if (!rawChildren.length) return [];
 
   // Multiple relationships can point at the same child object type — describe
@@ -203,6 +204,7 @@ const buildArchivalChildRelationshipTree = async (params: {
         user,
         objectDescription: childDescription,
         objectName: child.name,
+        filteredObjectNames,
         visitedObjectNames,
         describeQueue,
         depth: depth + 1,
@@ -474,6 +476,7 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
       user,
       objectDescription,
       objectName: String(objectName),
+      filteredObjectNames,
       visitedObjectNames: new Set([String(objectName)]),
       describeQueue: createSalesforceDescribeQueue(user, MAX_CONCURRENT_ARCHIVAL_DESCRIBES, [[String(objectName), objectDescription]]),
       depth: 0,
