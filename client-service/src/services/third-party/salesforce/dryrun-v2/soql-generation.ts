@@ -20,13 +20,10 @@ export interface ISoqlBuildError {
 
 // Ported from backup-service/src/services/third-party/salesforce/schedule/archival-v2
 // — same WHERE-building rules, adapted to client-service's ISalesforceObject/
-// IFieldFilter shape.
-// Client-service's FilterOperator ('=' | '!=' | 'LIKE' | 'IN', see ./types.ts)
-// is narrower than archival-v2's — no comparison operators or NOT IN exist on
-// this side, so this list (and the branches below) only cover what the type
-// actually allows.
+// IFieldFilter shape. Kept in sync with archival-v2's own ALLOWED_OPERATORS —
+// see FilterOperator's doc comment in ./types.ts for why that matters.
 const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
-const ALLOWED_OPERATORS = new Set(['=', '!=', 'LIKE', 'IN', 'INCLUDES', 'EXCLUDES']);
+const ALLOWED_OPERATORS = new Set(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN', 'INCLUDES', 'EXCLUDES']);
 const DATE_LITERALS = new Set([
   'TODAY', 'YESTERDAY', 'TOMORROW',
   'LAST_WEEK', 'THIS_WEEK', 'NEXT_WEEK',
@@ -42,20 +39,22 @@ const isDateLiteral = (value: string): boolean =>
   DATE_LITERALS.has(value.toUpperCase()) ||
   /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(value);
 
-// LIMIT/OFFSET/ORDER BY apply to a whole query, not to a boolean condition —
-// a raw SOQL condition body gets wrapped inside `AND (...)`, so any of these
-// would land inside that parenthesized expression and produce invalid SOQL.
-// Caught here with a message naming the actual keyword, instead of letting it
-// through to fail later with a parser error that points at an unrelated token.
-const TOP_LEVEL_CLAUSE_RE = /\b(LIMIT|OFFSET|ORDER\s+BY)\b/i;
+// These all apply to a whole query, not to a boolean condition — a raw SOQL
+// condition body gets wrapped inside `AND (...)`, so any of them would land
+// inside that parenthesized expression and produce invalid SOQL. Caught here
+// with a message naming the actual keyword, instead of letting it through to
+// fail later with a parser error that points at an unrelated token.
+const TOP_LEVEL_CLAUSE_RE =
+  /\b(LIMIT|OFFSET|ORDER\s+BY|GROUP\s+BY|HAVING|USING\s+SCOPE|USER_MODE|SYSTEM_MODE|FOR\s+VIEW|FOR\s+REFERENCE)\b/i;
 export const assertNoTopLevelClauses = (body: string): void => {
   // Drop quoted string literals first so a legitimate value like
   // "Notes__c LIKE '%offset%'" isn't mistaken for the clause keyword.
   const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
   const match = withoutStringLiterals.match(TOP_LEVEL_CLAUSE_RE);
   if (match) {
+    const clause = match[1].toUpperCase().replace(/\s+/g, ' ');
     throw new Error(
-      `SOQL condition cannot contain ${match[1].toUpperCase()} — LIMIT/OFFSET/ORDER BY apply to the whole query, not a filter condition. Remove it from your query.`
+      `SOQL condition cannot contain ${clause} — it applies to the whole query, not a filter condition. Remove it from your query.`
     );
   }
 };
@@ -76,6 +75,36 @@ export const assertNoSubqueries = (body: string): void => {
     throw new Error(
       `Subqueries are not supported in filter conditions — Salesforce's own restrictions on subquery nesting, object types, and relationship depth make them unreliable once this condition is applied across an archive hierarchy's parent/child objects. Use a direct field or relationship comparison instead (e.g. "Account.Name = 'X'").`
     );
+  }
+};
+
+// Function calls (DISTANCE(), GEOLOCATION(), CALENDAR_YEAR(), ...) can take a
+// field as an argument rather than "field <operator> value" — the only shape
+// transformWhereBodyForChild's relationship-prefix rewrite understands when
+// this condition propagates to a child object. A field used as a function
+// argument passes through unrewritten and reaches the child as a bare column
+// name that only exists on the parent. Rejected outright, same as
+// subqueries and for the same reason: better a clear message here (at
+// Validate Query, before Dry Run/execution ever sees it) than a confusing
+// "no such column" once it's already propagated.
+// IN/LIKE/INCLUDES/EXCLUDES are excluded from this check — they're legitimate
+// operators followed by a parenthesized value list, not function calls. So
+// are AND/OR/NOT — "Field = 'x' AND (Field2 = 'y' OR Field3 = 'z')" and
+// "NOT (Field = 'x')" are ordinary boolean grouping/negation, not a function
+// call either. None of these words can ever be a real field name (they're
+// SOQL reserved words), so excluding them can't hide an actual bad field.
+const KNOWN_OPERATOR_WORDS = new Set(['IN', 'LIKE', 'INCLUDES', 'EXCLUDES', 'AND', 'OR', 'NOT']);
+const FUNCTION_CALL_RE = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+export const assertNoFunctionCalls = (body: string): void => {
+  const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
+  FUNCTION_CALL_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = FUNCTION_CALL_RE.exec(withoutStringLiterals))) {
+    if (!KNOWN_OPERATOR_WORDS.has(match[1].toUpperCase())) {
+      throw new Error(
+        `Function calls (e.g. ${match[1]}(...)) are not supported in filter conditions — a field passed as a function argument can't be reliably rewritten for a related child object. Use a direct field or relationship comparison instead (e.g. "Account.Name = 'X'").`
+      );
+    }
   }
 };
 
@@ -103,9 +132,9 @@ const buildFilterCondition = (f: NonNullable<ISalesforceObject['field']>[number]
     return `${name} LIKE '${wrapped}'`;
   }
 
-  if (operator === 'IN') {
+  if (operator === 'IN' || operator === 'NOT IN') {
     const parts = rawValue.split(',').map((v) => v.trim()).filter(Boolean);
-    return `${name} IN (${parts.map((v) => formatSalesforceValueByDataType(v, dataType)).join(', ')})`;
+    return `${name} ${operator} (${parts.map((v) => formatSalesforceValueByDataType(v, dataType)).join(', ')})`;
   }
 
   // Multi-Select Picklist membership test: Salesforce's own syntax is a
@@ -140,6 +169,7 @@ const buildWhereClause = (object: ISalesforceObject): string => {
     if (body) {
       assertNoTopLevelClauses(body);
       assertNoSubqueries(body);
+      assertNoFunctionCalls(body);
     }
     return body ? `WHERE ${body}` : '';
   }
@@ -193,7 +223,12 @@ const fkToRelationshipName = (fieldApiName: string): string => {
   return fieldApiName;
 };
 
-const FIELD_REF_RE = /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)(\s*(?:!=|>=|<=|=|>|<)|\s+(?:NOT\s+IN|IN|LIKE)\s)/gi;
+// The keyword-operator branch ends on \b (a zero-width word boundary), not a
+// literal \s — free-text SOQL commonly omits the space before the opening
+// paren ("not in('x')", "excludes('x')"), and requiring a consumed whitespace
+// character there made the whole match (and the relationship-prefix rewrite
+// it drives) silently fail whenever the user didn't type that space.
+const FIELD_REF_RE = /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)(\s*(?:!=|>=|<=|=|>|<)|\s+(?:NOT\s+IN|INCLUDES|EXCLUDES|IN|LIKE)\b)/gi;
 
 const transformWhereBodyForChild = (whereBody: string, fkFieldName: string): string => {
   if (!whereBody.trim()) {

@@ -36,9 +36,20 @@ function walkMaxDepth(node: WhereNode | null | undefined): number {
   return Math.max(walkMaxDepth(node.left), walkMaxDepth(node.right));
 }
 
+// soql-parser-js doesn't understand Salesforce's bare (unquoted) Time literal
+// syntax (HH:mm:ss[.SSS][Z|±hh:mm]) — it misparses the colons and throws an
+// unrelated, confusing error ("Mismatched parentheses..." / "Unexpected
+// token :"), even though this is valid SOQL that Salesforce's own
+// query?explain= accepts without issue. Swapped for a syntactically-neutral
+// placeholder for this LOCAL structural pre-check only (parse succeeds, no
+// value/field details from the result are used past parens/relationship
+// depth) — the real, unmodified soql is still what's sent to Salesforce.
+const BARE_TIME_LITERAL_RE = /\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
+const forLocalSyntaxCheck = (soql: string): string => soql.replace(BARE_TIME_LITERAL_RE, '0');
+
 function getMaxRelationshipDepth(whereBody: string): number {
   try {
-    const ast = parseQuery(`SELECT Id FROM X WHERE ${whereBody}`);
+    const ast = parseQuery(`SELECT Id FROM X WHERE ${forLocalSyntaxCheck(whereBody)}`);
     return walkMaxDepth(ast.where as unknown as WhereNode);
   } catch {
     return 0;
@@ -54,7 +65,7 @@ export interface IValidateSoqlResult {
 
 export const validateSoqlSyntax = (soql: string): IValidateSoqlResult => {
   try {
-    parseQuery(soql);
+    parseQuery(forLocalSyntaxCheck(soql));
   } catch (error: any) {
     return { isValid: false, error: `Invalid SOQL syntax: ${error?.message ?? 'parse error'}` };
   }

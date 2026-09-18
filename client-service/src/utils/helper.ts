@@ -162,15 +162,21 @@ const formatSalesforceValueByDataType = (value: string, dataType: string): strin
     case 'multipicklist':
       return `'${escapeSOQLString(strValue)}'`;
 
-    // SOQL date/datetime literals are unquoted (WHERE CreatedDate = 2026-09-02,
+    // SOQL date/datetime/time literals are unquoted (WHERE CreatedDate = 2026-09-02,
     // not '2026-09-02') — quoting them makes Salesforce treat the literal as a
-    // string against a Date/DateTime field, which it rejects with "must be of
-    // type date/datetime and should not be enclosed in quotes".
+    // string against a Date/DateTime/Time field, which it rejects with "must be
+    // of type date/datetime/time and should not be enclosed in quotes".
     case 'date':
       return formatDate(strValue);
 
     case 'datetime':
       return formatDateTime(strValue);
+
+    // Already arrives in Salesforce's own Time literal format (HH:mm:ss.SSSZ) —
+    // unlike date/datetime, there's no separate parse/reformat step needed,
+    // just strip the quoting the default branch would otherwise add.
+    case 'time':
+      return strValue;
 
     case 'integer':
     case 'double':

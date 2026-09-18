@@ -185,9 +185,23 @@ const renderSoqlWhere = (n: WhereNode | null | undefined, colExpr: ColExpr): str
   return `${left} ${n.operator} ${right}`;
 };
 
+// soql-parser-js can't tokenize Salesforce's bare (unquoted) Time literal
+// syntax (HH:mm:ss[.SSS][Z|±hh:mm]) at all — parseQuery throws a confusing,
+// unrelated error for it ("Mismatched parentheses...") instead of failing
+// cleanly. Unlike DATE/DATETIME (which the parser handles fine and this
+// module just declines to translate via UNSUPPORTED_LITERALS above), there's
+// no post-parse literalType to check here since parsing itself never
+// succeeds — caught before parsing instead, with the same clear rejection.
+const BARE_TIME_LITERAL_RE = /\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})?\b/;
+
 const buildSoqlWhere = (soqlQuery: string, colExpr: ColExpr): string | null => {
   const trimmed = soqlQuery.trim();
   if (!trimmed) return null;
+
+  const withoutStringLiterals = trimmed.replace(/'(?:[^']|'')*'/g, "''");
+  if (BARE_TIME_LITERAL_RE.test(withoutStringLiterals)) {
+    throw new FilterError('soql_time_filter_not_supported');
+  }
 
   // Accept either a full "SELECT ... FROM ... WHERE ..." or a bare WHERE body.
   const wrapped = /^SELECT\b/i.test(trimmed)
@@ -305,6 +319,15 @@ if (require.main === module) {
   // SOQL unsupported surfaces
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Owner.Name = 'x'" }), 'soql_relationship_not_supported');
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate = LAST_N_DAYS:7' }), 'soql_date_filter_not_supported');
+  // A bare Time literal can't even be parsed (soql-parser-js throws its own
+  // confusing error for the colons) — caught before parsing, same as the
+  // other unsupported literal kinds above.
+  expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Time_Test__c = 10:30:00.000Z' }), 'soql_time_filter_not_supported');
+  // A quoted string that merely looks time-like must not be mistaken for one.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Name = 'Meeting at 10:30:00'" }),
+    `"Name" = 'Meeting at 10:30:00'`
+  );
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'this is not soql !!' }), 'invalid_soql');
 
   // Delta-table FILTER (buildDeltaFilterWhere): fields resolve through a
