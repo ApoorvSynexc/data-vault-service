@@ -72,6 +72,7 @@ export const ensureCompressionGlueTables = async (
       destConfig,
       // ARCHIVAL configs get the Hudi table only — no Delta.
       isArchival: config.type === BACKUP_TYPE.archival,
+      userId: config.userId,
     }),
   });
 
