@@ -276,7 +276,7 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
       country: 'US',
       email: 'apoorv@gamil.com',
       userName: 'User test',
-      Secretkey: 'victus',
+      Secretkey: '360DegreeCloud',
       orgId,
     },
   });

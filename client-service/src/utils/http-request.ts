@@ -56,7 +56,6 @@ export async function httpRequest<TResponse = any, TBody = any>(
 
   try {
     const response = await fetch(finalUrl, fetchOptions);
-    console.log(JSON.stringify({response}))
     if (!response.ok) {
       const errorText = await response.text();
       const err = new Error(`HTTP Error ${response.status}: ${errorText}`);
