@@ -33,11 +33,23 @@ const buildChildRelationshipTree = async (params: {
   objectName: string;
   apexMode: string;
   filteredObjectNames: string[];
+  // Objects already expanded anywhere in this traversal — shared and mutated across
+  // the whole call (not cloned per branch). Archival mode keeps every child
+  // relationship (see filterChildRelationships below), and a handful of objects
+  // (Task, Event, ContentDocumentLink, …) are children of nearly everything, so
+  // cloning this set per branch let the same object be re-described and re-expanded
+  // under every branch that reached it — fanning out exponentially across up to
+  // MAX_RELATIONSHIP_DEPTH levels and hammering the Salesforce describe API. Sharing
+  // it caps each distinct object to being expanded at most once for the whole tree.
   visitedObjectNames: Set<string>;
+  // Memoizes salesforceObjectDescribe by object name across the whole traversal —
+  // describe has no caching of its own, so without this the same object is
+  // re-fetched from Salesforce every time it's reached, even as a leaf.
+  describeCache: Map<string, Promise<ISalesforceObjectDescribeResponse>>;
   depth: number;
   maxDepth?: number;
 }): Promise<ISalesforceChildTreeNode[]> => {
-  const { user, objectDescription, objectName, apexMode, filteredObjectNames, visitedObjectNames, depth } = params;
+  const { user, objectDescription, objectName, apexMode, filteredObjectNames, visitedObjectNames, describeCache, depth } = params;
   const maxDepth = Math.min(params.maxDepth ?? MAX_RELATIONSHIP_DEPTH, MAX_RELATIONSHIP_DEPTH);
 
   if (depth >= maxDepth) return [];
@@ -45,13 +57,20 @@ const buildChildRelationshipTree = async (params: {
   const rawChildren = filterChildRelationships(objectDescription.childRelationships, objectName, apexMode, filteredObjectNames);
   if (!rawChildren.length) return [];
 
+  const describeObject = (name: string): Promise<ISalesforceObjectDescribeResponse> => {
+    let promise = describeCache.get(name);
+    if (!promise) {
+      promise = salesforceObjectDescribe({ user, objectName: name });
+      describeCache.set(name, promise);
+    }
+    return promise;
+  };
+
   // Multiple relationships can point at the same child object type — describe
   // each distinct one once and reuse it both for the polymorphic check below
   // and as the next level's own objectDescription.
   const uniqueChildNames = Array.from(new Set(rawChildren.map((child) => child.name)));
-  const childDescriptions = await Promise.all(
-    uniqueChildNames.map((name) => salesforceObjectDescribe({ user, objectName: name }))
-  );
+  const childDescriptions = await Promise.all(uniqueChildNames.map(describeObject));
   const descriptionByName = new Map(uniqueChildNames.map((name, index) => [name, childDescriptions[index]]));
 
   // Archival mode keeps every child relationship (see filterChildRelationships above),
@@ -67,7 +86,7 @@ const buildChildRelationshipTree = async (params: {
   if (!cascadeChildren.length) return [];
 
   const childNodes = await Promise.all(
-    cascadeChildren.map(async (child): Promise<ISalesforceChildTreeNode | null> => {
+    cascadeChildren.map(async (child): Promise<ISalesforceChildTreeNode> => {
       const childDescription = descriptionByName.get(child.name)!;
       if (visitedObjectNames.has(child.name)) {
         return { ...child, children: [] };
@@ -80,13 +99,15 @@ const buildChildRelationshipTree = async (params: {
         return { ...child, children: [] };
       }
 
+      visitedObjectNames.add(child.name);
       const children = await buildChildRelationshipTree({
         user,
         objectDescription: childDescription,
         objectName: child.name,
         apexMode,
         filteredObjectNames,
-        visitedObjectNames: new Set(visitedObjectNames).add(child.name),
+        visitedObjectNames,
+        describeCache,
         depth: depth + 1,
         maxDepth,
       });
@@ -95,7 +116,7 @@ const buildChildRelationshipTree = async (params: {
     })
   );
 
-  return childNodes.filter((node): node is ISalesforceChildTreeNode => node !== null);
+  return childNodes;
 };
 
 
@@ -358,6 +379,7 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
     apexMode,
     filteredObjectNames,
     visitedObjectNames: new Set([String(objectName)]),
+    describeCache: new Map([[String(objectName), Promise.resolve(objectDescription)]]),
     depth: 0,
     maxDepth
   });
