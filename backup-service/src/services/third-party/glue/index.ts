@@ -12,7 +12,7 @@ import {
 import { logger } from '../../../middlewares/logger';
 import { IDestinationConfig } from '../../../models';
 import { SCHEMA_KIND_FILE } from '../../../utils/helper';
-import { listS3Prefixes } from '../../destination/s3';
+import { listS3Prefixes, listStaleS3Objects, deleteS3Objects } from '../../destination/s3';
 import { getStoredEntries } from '../salesforce/metadata/common';
 
 // One GlueClient per region, not one global client: the Glue Data Catalog is
@@ -201,6 +201,34 @@ const buildCompressionRootKey = (
   dataset: 'main_backup_files' | 'delta'
 ): string =>
   `${crmName}/${crmId}/backup/${backupConfigId}/${DATASET_S3_FOLDER[dataset]}/${objectName}/`;
+
+// Same key root client-service's restore-retrieve flow writes Athena query
+// results under (see buildRetrieveOutputLocation in
+// client-service/src/services/restore-retrieve/index.ts) — kept in sync by
+// convention since the two services don't share code.
+const buildRetrieveRootKey = (crmName: string, crmId: string): string =>
+  `${crmName}/${crmId}/retrieve/`;
+
+const RETRIEVE_RETENTION_MS = 24 * 60 * 60 * 1000; // 1 day
+
+// Deletes Athena "retrieve" output objects older than 1 day for a given
+// crm/config. Independent of table creation — callers should not let a
+// failure here affect Glue table creation, and vice versa.
+export const cleanupStaleRetrieveObjects = async (
+  destConfig: IDestinationConfig,
+  crmName: string,
+  crmId: string
+): Promise<{ deleted: number }> => {
+  const prefix = buildRetrieveRootKey(crmName, crmId);
+  const staleKeys = await listStaleS3Objects(destConfig, prefix, RETRIEVE_RETENTION_MS);
+  if (!staleKeys.length) {
+    logger.info(`[glue] no stale retrieve objects | prefix:${prefix}`);
+    return { deleted: 0 };
+  }
+  await deleteS3Objects(destConfig, staleKeys);
+  logger.info(`[glue] deleted stale retrieve objects | prefix:${prefix} count:${staleKeys.length}`);
+  return { deleted: staleKeys.length };
+};
 
 export interface IEnsureCompressionTableParams {
   crmId: string;
