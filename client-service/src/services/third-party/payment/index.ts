@@ -39,8 +39,20 @@ interface SetupPaymentInput {
   isTokenEncrypted: boolean;
 }
 
+// The decrypted subscription status returned inside getSetupResponse's `Success` key.
+interface SetupPaymentStatus {
+  orgId: string;
+  status: string;
+  ExpiryDate: string;
+  trial_period_limit: string;
+}
+
+interface SetupPaymentResponseData {
+  Success: SetupPaymentStatus;
+}
+
 interface SetupPaymentResult {
-  data: Record<string, unknown>;
+  data: SetupPaymentResponseData;
   // Rotated PHP token — persist this and use it for the *next* call, not the one
   // that was just passed in.
   token: string;
@@ -185,8 +197,7 @@ const setupPayment = async ({
   const decrypted = aesCbc128Decrypt(key, iv, response.message);
   logger.info(`[payment] setup response fetched for org ${orgId}`);
   return {
-    data: JSON.parse(decrypted) as Record<string, unknown>,
-    // data: decrypted as any,
+    data: JSON.parse(decrypted) as SetupPaymentResponseData,
     token: response.token,
   };
 };
@@ -205,4 +216,4 @@ const testDecrypt = (orgId: string, createAccountEncyption: string, encryption: 
 }
 
 export { createPaymentAccount, setupPayment, testDecrypt };
-export type { Create360AccountResult, SetupPaymentInput, SetupPaymentResult };
+export type { Create360AccountResult, SetupPaymentInput, SetupPaymentResult, SetupPaymentResponseData, SetupPaymentStatus };
