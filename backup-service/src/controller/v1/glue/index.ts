@@ -1,5 +1,10 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { ensureHudiCurrentStateTable, ensureDeltaTable } from '../../../services/third-party/glue';
+import {
+  ensureHudiCurrentStateTable,
+  ensureDeltaTable,
+  cleanupStaleRetrieveObjects,
+} from '../../../services/third-party/glue';
+import { createNotification } from '../../../services/notification';
 import { logger } from '../../../middlewares/logger';
 import { wrapController } from '../../../utils/helper';
 
@@ -14,6 +19,7 @@ import { wrapController } from '../../../utils/helper';
  *     objectNames:    string[]
  *     destConfig:     IDestinationConfig
  *     isArchival?: boolean — when true, only the Hudi table is created (no Delta)
+ *     userId?: string — when present, failures notify this user (see createNotification calls below)
  *   }
  *
  * Called after Spark reports a successful compression. For each object, ensures
@@ -25,6 +31,12 @@ import { wrapController } from '../../../utils/helper';
  * Per-object results are returned so the caller can see which tables were created
  * vs. which failed (e.g. `.hoodie` not written yet) without one failure blocking
  * the rest.
+ *
+ * Also runs a 1-day-retention cleanup of the client's Athena "retrieve" output
+ * folder (cleanupStaleRetrieveObjects) alongside the Glue work, fully
+ * independent of it: a cleanup failure never affects table creation and vice
+ * versa. Neither outcome changes the HTTP response, which reflects the Glue
+ * result only.
  */
 interface IEnsureCompressionTablesResult {
   ensured: string[];
@@ -46,8 +58,9 @@ const runEnsureCompressionTables = async (params: {
   objectNames: string[];
   destConfig: any;
   isArchival?: boolean;
+  userId?: string;
 }): Promise<IEnsureCompressionTablesResult> => {
-  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival } = params;
+  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival, userId } = params;
 
   const results = await Promise.allSettled(
     objectNames.map(async (objectName) => {
@@ -102,20 +115,75 @@ const runEnsureCompressionTables = async (params: {
     logger.error(
       `[glue] ensure-compression-tables failures | cfg:${backupConfigId} ${JSON.stringify(failed)}`
     );
+    if (userId) {
+      const objectNamesList = failed.map((f) => f.objectName).join(', ');
+      await createNotification({
+        userId,
+        crmId,
+        title:
+          failed.length === 1
+            ? '1 retrieval metadata table failed to get generated'
+            : `${failed.length} retrieval metadata tables failed to get generated`,
+        body: `We couldn't generate Glue tables for: ${objectNamesList}. Please check the logs for more details.`,
+        targetScreen: 'backup-config',
+        targetId: backupConfigId,
+      }).catch((notifyErr: any) =>
+        logger.error(
+          `[glue] failed to notify user about glue table failures | cfg:${backupConfigId} err:${notifyErr?.message ?? notifyErr}`
+        )
+      );
+    }
   }
 
   return { ensured, failed };
 };
 
+// Runs the 1-day-retention Athena "retrieve" folder cleanup for this config's
+// crm/destination. Deliberately standalone: never throws, never blocks or is
+// blocked by runEnsureCompressionTables, and on failure only notifies the
+// user (if known) — it must never affect Glue table creation.
+const runCleanupStaleRetrieveObjects = async (params: {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  destConfig: any;
+  userId?: string;
+}): Promise<void> => {
+  const { crmId, crmName, backupConfigId, destConfig, userId } = params;
+  try {
+    await cleanupStaleRetrieveObjects(destConfig, crmName, crmId);
+  } catch (err: any) {
+    logger.error(
+      `[glue] cleanup stale retrieve objects failed | cfg:${backupConfigId} err:${err?.name}: ${err?.message ?? err}`
+    );
+    if (userId) {
+      await createNotification({
+        userId,
+        crmId,
+        title: 'Retrieve records failed to get deleted',
+        body: `We couldn't clean up old retrieve files for backup "${backupConfigId}". Please check the logs for more details.`,
+        targetScreen: 'backup-config',
+        targetId: backupConfigId,
+      }).catch((notifyErr: any) =>
+        logger.error(
+          `[glue] failed to notify user about retrieve cleanup failure | cfg:${backupConfigId} err:${notifyErr?.message ?? notifyErr}`
+        )
+      );
+    }
+  }
+};
+
 const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival } = req.body as {
-    crmId: string;
-    crmName: string;
-    backupConfigId: string;
-    objectNames: string[];
-    destConfig: any;
-    isArchival?: boolean;
-  };
+  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival, userId } =
+    req.body as {
+      crmId: string;
+      crmName: string;
+      backupConfigId: string;
+      objectNames: string[];
+      destConfig: any;
+      isArchival?: boolean;
+      userId?: string;
+    };
 
   if (
     !crmId ||
@@ -133,6 +201,10 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
     `[glue] ensure-compression-tables received | cfg:${backupConfigId} objects:${objectNames.length}`
   );
 
+  // Standalone from the Glue flow below: runs concurrently, not coalesced by
+  // inFlightByConfig, and its outcome never affects `result`/the response.
+  const cleanup = runCleanupStaleRetrieveObjects({ crmId, crmName, backupConfigId, destConfig, userId });
+
   let result: IEnsureCompressionTablesResult;
   const inFlight = inFlightByConfig.get(backupConfigId);
   if (inFlight) {
@@ -149,11 +221,14 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
       objectNames,
       destConfig,
       isArchival,
+      userId,
     }).finally(() => inFlightByConfig.delete(backupConfigId));
     inFlightByConfig.set(backupConfigId, run);
     result = await run;
     logger.info(`[glue] ensure-compression-tables processing complete | cfg:${backupConfigId}`);
   }
+
+  await cleanup;
 
   makeResponse(req, res, 200, true, 'create', result);
 };
