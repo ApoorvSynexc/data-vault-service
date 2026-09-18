@@ -56,7 +56,7 @@ export async function httpRequest<TResponse = any, TBody = any>(
 
   try {
     const response = await fetch(finalUrl, fetchOptions);
-
+    console.log(JSON.stringify({response}))
     if (!response.ok) {
       const errorText = await response.text();
       const err = new Error(`HTTP Error ${response.status}: ${errorText}`);
@@ -69,6 +69,7 @@ export async function httpRequest<TResponse = any, TBody = any>(
     }
 
     const text = await response.text();
+    console.log(JSON.stringify({text}))
     return (text ? JSON.parse(text) : null) as TResponse;
   } catch (error: any) {
     if (error?.name === 'AbortError') {
