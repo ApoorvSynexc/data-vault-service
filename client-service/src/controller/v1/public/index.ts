@@ -243,20 +243,15 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const orgId = '00Df600000T9DlJEAV';
   const userId = '005f6000008QmlyAAC';
-  const instanceUrl = 'https://saas-ruby-1808.my.salesforce.com'
-  // const account = await createPaymentAccount(orgId, userId);
+  const instanceUrl = 'https://360degree--hrorg.sandbox.my.salesforce.com'
+  const account = await createPaymentAccount(orgId, userId);
   // console.log(JSON.stringify({account}));
-  const account = {"token":"KTqLLhA5cOPmiS9WETTtJ4jShT36YFXsGHppaZctkclB7Ya2rcFgQUDrIU7xAec2==","sf_secret":"360SMS-Secret-IV:360SMS-Secrt-key"}
   const setup = await setupPayment({
     orgId,
     productName: PAYMENT_PRODUCT_NAME,
     token: account.token,
     sfSecret: account.sf_secret,
-    // Staging Salesforce org REST endpoint from the vendor's docs — swap for the
-    // real connected org's instanceUrl-based endpoint outside this test handler.
     salesforceEndpoint: `${instanceUrl}/services/apexrest/DataCraftRest`,
-    // Sample org/usage info shape from the vendor's docs — real callers should
-    // build this from the connected org's actual limits/profile instead.
     orgInfo: {
       'FileStorageMB Used': 5,
       'FileStorageMB Maximum': 50,
@@ -279,9 +274,9 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
       phone: '',
       mobilephone: '',
       country: 'US',
-      email: 'abhay.test@360smsapp.com',
+      email: 'apoorv@gamil.com',
       userName: 'User test',
-      Secretkey: 'Secretkey',
+      Secretkey: '360DegreeCloud',
       orgId,
     },
   });
