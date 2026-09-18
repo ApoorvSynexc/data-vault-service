@@ -23,7 +23,7 @@ import {
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
-import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, triggerBackupJob } from '../../../services';
+import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, testDecrypt, triggerBackupJob } from '../../../services';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -244,8 +244,12 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const orgId = '00Df600000T9DlJEAV';
   const userId = '005f6000008QmlyAAC';
   const instanceUrl = 'https://360degree--hrorg.sandbox.my.salesforce.com'
-  const account = await createPaymentAccount(orgId, userId);
+  // const account = await createPaymentAccount(orgId, userId);
   // console.log(JSON.stringify({account}));
+  const account = {
+    token: 'BT3iqL56HfFzDRgetDjWhMwFM6Gd1xkDy7rfanua7rm+kc83HRc+xbI6sYKAnvJpXczYyau6A+OGG+FJOArMBATnQZstLjBGN6IxROfDiDI=',
+    sf_secret: '360SMS-Secret-IV:360SMS-Secrt-key',
+  }
   const setup = await setupPayment({
     orgId,
     productName: PAYMENT_PRODUCT_NAME,
@@ -279,9 +283,17 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
       Secretkey: '360DegreeCloud',
       orgId,
     },
+    isTokenEncrypted: true
   });
 
-  makeResponse(req, res, 200, true, 'create', { setup });
+  // testDecrypt(
+  //   orgId,
+  //   "83BhQHjbEXldMrDurJDieNe+pK4uXezCvE6tIIcT8rltS38v5DyNVESGlHFq+JsDxWX0P467BOEHh79emLEuQkdg24Wb0BVOSFH4gKPoowyy+p8Gt1MLuQSnZtO3JClfy+8d1vjUpsXdlFBy0KqTR/GUVH5AaqWbbTJgLxJ2bYQ=",
+  //   "lzFdQjdND35rPacvAq2JqeZoANvaeNe3oWn/wbsYszgAKQVPd9QmcmBaUzM8GzU8W9aVc7ir9J1gsGi/kda0Koy9ylU9EiUwGeZzSPBUEOYS8jezxmlcJ+jDDID2BBlhsco8oWJwDTzTUliBJ5tJB11i/B0AeW4HUNLhm3n+rR90HYLlJM1IZzWRJV55D1Box97UkenCJB5MEt22ZyIjbQ==",
+  //   "PS0ihMYRRfbhVuJLuol9RHrM7n22YmoAaadSU4p4bEVbR0crMcz8S8lbSu7e5ymg0hRsWUwgjoV8K551dYZO3kY0KdmiAk0iwHqUvcw/BvA="
+  // );
+
+  makeResponse(req, res, 200, true, 'create', setup);
 }
 
 export const publicController = wrapController({
