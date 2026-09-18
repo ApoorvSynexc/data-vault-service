@@ -152,10 +152,7 @@ const setupPayment = async ({
     endpoint: salesforceEndpoint,
     message: encryptedMessage,
   });
-
-  console.log({
-      
-  })
+  
   let response: GetSetupResponseApiResponse;
   try {
     response = await httpRequest<GetSetupResponseApiResponse>({
