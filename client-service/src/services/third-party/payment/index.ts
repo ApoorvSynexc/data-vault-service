@@ -154,7 +154,11 @@ const setupPayment = async ({
   });
 
   console.log({
-      
+    orgId,
+    productName,
+      token,
+  sfSecret,
+      body
   })
   let response: GetSetupResponseApiResponse;
   try {
