@@ -54,8 +54,20 @@ const buildChildRelationshipTree = async (params: {
   );
   const descriptionByName = new Map(uniqueChildNames.map((name, index) => [name, childDescriptions[index]]));
 
+  // Archival mode keeps every child relationship (see filterChildRelationships above),
+  // including ones linked through a polymorphic foreign key (e.g. WhoId/WhatId) — those
+  // aren't a cascade edge to a single object type, so drop them the same way
+  // getSalesforceDescribeObject does.
+  const cascadeChildren = apexMode === 'archival'
+    ? rawChildren.filter((child) => {
+        const linkingField = descriptionByName.get(child.name)?.fields.find((field) => field.name === child.field);
+        return !linkingField?.polymorphicForeignKey;
+      })
+    : rawChildren;
+  if (!cascadeChildren.length) return [];
+
   const childNodes = await Promise.all(
-    rawChildren.map(async (child): Promise<ISalesforceChildTreeNode | null> => {
+    cascadeChildren.map(async (child): Promise<ISalesforceChildTreeNode | null> => {
       const childDescription = descriptionByName.get(child.name)!;
       if (visitedObjectNames.has(child.name)) {
         return { ...child, children: [] };
