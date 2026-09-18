@@ -25,14 +25,23 @@ interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
   children: ISalesforceChildTreeNode[];
 }
 
+// A child object's own master-detail fields (cascadeDelete === true) — i.e. the
+// fields making it a cascade-delete child in some other relationship, not the one
+// it was just reached through.
+const getCascadeDeleteFields = (fields: ISalesforceObjectDescribeResponse['fields']) =>
+  fields
+    .filter((field) => field.cascadeDelete)
+
+type ISalesforceCascadeDeleteField = ReturnType<typeof getCascadeDeleteFields>[number];
+
 // Archival-only node shape — kept separate from ISalesforceChildTreeNode so this
 // doesn't change buildChildRelationshipTree/backup's response shape.
 interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild {
   children: ISalesforceArchivalChildTreeNode[];
-  // Of this node's own children, the ones that are themselves a cascade-delete child
-  // in another master-detail relationship (a field with cascadeDelete on their own
-  // object) — archiving/restoring them needs that other parent chain accounted for too.
-  parent: ISalesforceRelationshipChild[];
+  // Of this node's own children, the cascadeDelete fields on the ones that are
+  // themselves a cascade-delete child in another master-detail relationship —
+  // archiving/restoring them needs that other parent chain accounted for too.
+  parent: ISalesforceCascadeDeleteField[];
 }
 
 const MAX_RELATIONSHIP_DEPTH = 5;
@@ -170,7 +179,7 @@ const buildArchivalChildRelationshipTree = async (params: {
   describeQueue: ISalesforceDescribeQueue;
   depth: number;
   maxDepth?: number;
-}): Promise<{ children: ISalesforceArchivalChildTreeNode[]; parent: ISalesforceRelationshipChild[] }> => {
+}): Promise<{ children: ISalesforceArchivalChildTreeNode[]; parent: ISalesforceCascadeDeleteField[] }> => {
   const { user, objectDescription, objectName, filteredObjectNames, visitedObjectNames, describeQueue, depth } = params;
   const maxDepth = Math.min(params.maxDepth ?? MAX_RELATIONSHIP_DEPTH, MAX_RELATIONSHIP_DEPTH);
 
@@ -225,14 +234,13 @@ const buildArchivalChildRelationshipTree = async (params: {
     })
   );
 
-  // Of this level's own children, the ones that are themselves a cascade-delete
-  // child in another master-detail relationship (a field with cascadeDelete on
-  // their own object) — mirrors getSalesforceDescribeObject's parent-detection,
-  // reusing the description already fetched above instead of re-describing.
-  const parent = cascadeChildren.filter((child) => {
-    if (!child.cascadeDelete) return false;
-    return descriptionByName.get(child.name)!.fields.some((field) => field.cascadeDelete);
-  });
+  // Of this level's own children, the cascadeDelete fields on the ones that are
+  // themselves a cascade-delete child in another master-detail relationship —
+  // mirrors getSalesforceDescribeObject's parent-detection, reusing the
+  // description already fetched above instead of re-describing.
+  const parent = cascadeChildren
+    .filter((child) => child.cascadeDelete)
+    .flatMap((child) => getCascadeDeleteFields(descriptionByName.get(child.name)!.fields));
 
   return { children: childNodes, parent };
 };
