@@ -221,37 +221,3 @@ export const listS3Objects = async (
 
   return keys.sort();
 };
-
-// Same pagination as listS3Objects, but filters to keys whose LastModified is
-// older than `olderThanMs` — used for age-based retention cleanup (e.g. the
-// Athena "retrieve" output folder) instead of a full listing + separate filter
-// pass, which would need a HeadObject per key just to recover LastModified.
-export const listStaleS3Objects = async (
-  config: IDestinationConfig,
-  prefix: string,
-  olderThanMs: number
-): Promise<string[]> => {
-  const client = getS3Client(config);
-  const cutoff = Date.now() - olderThanMs;
-
-  const keys: string[] = [];
-  let continuationToken: string | undefined;
-
-  do {
-    const result = await client.send(
-      new ListObjectsV2Command({
-        Bucket: config.bucketName,
-        Prefix: prefix,
-        ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
-      })
-    );
-    for (const obj of result.Contents ?? []) {
-      if (obj.Key && obj.LastModified && obj.LastModified.getTime() < cutoff) {
-        keys.push(obj.Key);
-      }
-    }
-    continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
-  } while (continuationToken !== undefined);
-
-  return keys;
-};
