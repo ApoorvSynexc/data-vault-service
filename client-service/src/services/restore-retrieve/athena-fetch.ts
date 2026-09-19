@@ -680,6 +680,19 @@ export const chunkJobIds = (
 
 const backupJobIdWhere = (jobIds: string[]): string => `backupjobid IN (${idList(jobIds)})`;
 
+// A raw CSV/JSON file's trailing blank line (e.g. a Bulk API results page
+// written to S3 with a stray empty final line) reads back through
+// TextInputFormat as one more row, with every column empty — skip.header.line
+// count only strips the header, not that. Guards every raw-table read that
+// isn't already scoped to explicit ids (buildRawCsvBaseByIdsSql's own
+// recordIdsWhere already can't match a blank Id).
+const NON_BLANK_ID = `${quoteCol(ID)} <> ''`;
+
+// Same guard for raw_json_delta — its Id column is the fixed, lowercase,
+// unquoted `id` (RAW_JSON_DELTA_COLUMNS), not the schema-derived "Id" the
+// other raw tables use.
+const NON_BLANK_ID_LOWER = `id <> ''`;
+
 /**
  * Full-record rows out of a raw CSV or raw JSON-snapshot table. For a BACKUP
  * config, UPDATES AND DELETES ONLY, never inserts — an "inserts" folder can
@@ -733,6 +746,7 @@ const buildRawFullRowSql = (
     whereClause(
       [
         backupJobIdWhere(jobIds),
+        NON_BLANK_ID,
         fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
         windowed,
         p.scopeWhere,
@@ -794,6 +808,7 @@ export const buildRawCsvChangedSql = (
     whereClause(
       [
         backupJobIdWhere(jobIds),
+        NON_BLANK_ID,
         `operation IN ('updates', 'deletes')`,
         windowed,
         p.scopeWhere,
@@ -831,7 +846,7 @@ export const buildRawJsonDeltaSql = (
   return (
     `SELECT id AS record_id, lastmodifieddate AS change_time, 'UPDATE' AS change_type, ` +
     `CAST(prev AS JSON) AS prev_json, CAST(new AS JSON) AS new_json FROM "${rawJsonDeltaTable}"` +
-    whereClause([backupJobIdWhere(jobIds), windowed], 'WHERE')
+    whereClause([backupJobIdWhere(jobIds), NON_BLANK_ID_LOWER, windowed], 'WHERE')
   );
 };
 
@@ -910,6 +925,7 @@ export const buildRawSnapshotCountSql = (
   whereClause(
     [
       backupJobIdWhere(jobIds),
+      NON_BLANK_ID,
       fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
       window ? inWindow(quoteCol(SYSTEM_MODSTAMP), window.startDate, window.endDate) : null,
       whereBody,
@@ -927,6 +943,7 @@ export const buildRawJsonDeltaCountSql = (
   whereClause(
     [
       backupJobIdWhere(jobIds),
+      NON_BLANK_ID_LOWER,
       window ? inWindow('lastmodifieddate', window.startDate, window.endDate) : null,
       whereBody,
     ],
@@ -950,6 +967,7 @@ export const buildRawIdsSql = (
   whereClause(
     [
       backupJobIdWhere(jobIds),
+      NON_BLANK_ID,
       fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
       scopeWhere,
     ],
@@ -1262,11 +1280,11 @@ if (require.main === module) {
   assert.ok(buildRawCsvBaseByIdsSql('t', ["j'1"], ['i1'], ['Name']).includes(`'j''1'`));
 
   const rawSnapshotCount = buildRawSnapshotCountSql('t_raw_csv', jobIds, ['updates']);
-  assert.strictEqual(rawSnapshotCount, `SELECT COUNT(*) AS cnt FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND (operation IN ('updates'))`);
+  assert.strictEqual(rawSnapshotCount, `SELECT COUNT(*) AS cnt FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND ("Id" <> '') AND (operation IN ('updates'))`);
   const rawJsonDeletedCount = buildRawSnapshotCountSql('t_raw_json_snapshot', jobIds, null);
-  assert.strictEqual(rawJsonDeletedCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2'))`);
+  assert.strictEqual(rawJsonDeletedCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2')) AND ("Id" <> '')`);
   const rawJsonDeltaCount = buildRawJsonDeltaCountSql('t_raw_json_delta', jobIds);
-  assert.strictEqual(rawJsonDeltaCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_delta" WHERE (backupjobid IN ('job1', 'job2'))`);
+  assert.strictEqual(rawJsonDeltaCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_delta" WHERE (backupjobid IN ('job1', 'job2')) AND (id <> '')`);
 
   // Count windowing must agree with what fetch-records actually returns:
   // updates count by CreatedDate, deletes count (CSV or the deletes-only
@@ -1284,10 +1302,10 @@ if (require.main === module) {
   assert.ok(rawJsonDeltaCountWindowed.includes(`from_iso8601_timestamp('${START}')`));
 
   const rawIds = buildRawIdsSql('t_raw_csv', jobIds, ['deletes'], `"Name" = 'Acme'`);
-  assert.strictEqual(rawIds, `SELECT DISTINCT "Id" FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND (operation IN ('deletes')) AND ("Name" = 'Acme')`);
+  assert.strictEqual(rawIds, `SELECT DISTINCT "Id" FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND ("Id" <> '') AND (operation IN ('deletes')) AND ("Name" = 'Acme')`);
   assert.ok(!buildRawIdsSql('t', jobIds, ['deletes']).includes('LIMIT'), 'dry-run reconciliation must see every pending id, never a capped page');
   const rawJsonDeletedIds = buildRawIdsSql('t_raw_json_snapshot', jobIds, null);
-  assert.strictEqual(rawJsonDeletedIds, `SELECT DISTINCT "Id" FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2'))`);
+  assert.strictEqual(rawJsonDeletedIds, `SELECT DISTINCT "Id" FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2')) AND ("Id" <> '')`);
 
   // Injection defence carries over — job ids are quoted/escaped like every other literal.
   assert.ok(buildRawSnapshotSql('t', ["j'1"], ['inserts'], retrieve).includes(`'j''1'`));
