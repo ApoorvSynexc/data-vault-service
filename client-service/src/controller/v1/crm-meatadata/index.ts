@@ -16,13 +16,32 @@ const filterChildRelationships = (
   filteredObjectNames: string[]
 ) =>
   childRelationships
-    .filter((child) => child.childSObject !== objectName && (apexMode === 'archival' || (apexMode === 'backup' && filteredObjectNames.includes(child.childSObject))))
+    .filter((child) => child.childSObject !== objectName && filteredObjectNames.includes(child.childSObject))
     .map((child) => ({ name: child.childSObject, cascadeDelete: child.cascadeDelete, restrictedDelete: child.restrictedDelete, field: child.field }));
 
 type ISalesforceRelationshipChild = ReturnType<typeof filterChildRelationships>[number];
 
 interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
   children: ISalesforceChildTreeNode[];
+}
+
+// A child object's own master-detail fields (cascadeDelete === true) — i.e. the
+// fields making it a cascade-delete child in some other relationship, not the one
+// it was just reached through.
+const getCascadeDeleteFields = (fields: ISalesforceObjectDescribeResponse['fields']) =>
+  fields
+    .filter((field) => field.cascadeDelete)
+
+type ISalesforceCascadeDeleteField = ReturnType<typeof getCascadeDeleteFields>[number];
+
+// Archival-only node shape — kept separate from ISalesforceChildTreeNode so this
+// doesn't change buildChildRelationshipTree/backup's response shape.
+interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild {
+  children: ISalesforceArchivalChildTreeNode[];
+  // Of this node's own children, the cascadeDelete fields on the ones that are
+  // themselves a cascade-delete child in another master-detail relationship —
+  // archiving/restoring them needs that other parent chain accounted for too.
+  parent: ISalesforceCascadeDeleteField[];
 }
 
 const MAX_RELATIONSHIP_DEPTH = 5;
@@ -84,6 +103,146 @@ const buildChildRelationshipTree = async (params: {
   );
 
   return childNodes.filter((node): node is ISalesforceChildTreeNode => node !== null);
+};
+
+// --- Archival-only traversal ---
+// Archival mode keeps every child relationship (filterChildRelationships never
+// restricts it to filteredObjectNames the way backup mode is), so the object graph
+// it walks is far wider and denser than backup's. Reusing buildChildRelationshipTree
+// as-is for archival caused two production issues: cloning visitedObjectNames per
+// branch let the same near-universal child (Task, Event, ContentDocumentLink, …) be
+// re-described and re-expanded under every branch that reached it, fanning out
+// exponentially across depth; and firing every describe call unbounded blew past the
+// outbound connection pool ("fetch failed"). This traversal is kept as its own
+// function, separate from buildChildRelationshipTree, so those archival-specific
+// fixes can never change backup's behavior.
+
+// Recursion branches run concurrently (see the Promise.all below), so the number of
+// in-flight salesforceObjectDescribe calls isn't bounded by depth or by any single
+// level — it's bounded only by the total number of distinct objects being described
+// at once. This queue caches each object's describe by name (so it's only ever
+// fetched once across the whole traversal) and caps how many of those fetches run at
+// the same time.
+const MAX_CONCURRENT_ARCHIVAL_DESCRIBES = 6;
+
+const createSalesforceDescribeQueue = (
+  user: IUser,
+  concurrency: number,
+  seed?: Iterable<[string, ISalesforceObjectDescribeResponse]>
+) => {
+  const cache = new Map<string, Promise<ISalesforceObjectDescribeResponse>>();
+  if (seed) {
+    for (const [name, description] of seed) cache.set(name, Promise.resolve(description));
+  }
+
+  let active = 0;
+  const pending: Array<() => void> = [];
+
+  const runNext = () => {
+    active--;
+    pending.shift()?.();
+  };
+
+  const schedule = (task: () => Promise<ISalesforceObjectDescribeResponse>): Promise<ISalesforceObjectDescribeResponse> =>
+    new Promise((resolve, reject) => {
+      const run = () => {
+        active++;
+        task().then(resolve, reject).finally(runNext);
+      };
+      if (active < concurrency) run();
+      else pending.push(run);
+    });
+
+  return {
+    get(objectName: string): Promise<ISalesforceObjectDescribeResponse> {
+      let promise = cache.get(objectName);
+      if (!promise) {
+        promise = schedule(() => salesforceObjectDescribe({ user, objectName }));
+        cache.set(objectName, promise);
+      }
+      return promise;
+    },
+  };
+};
+
+type ISalesforceDescribeQueue = ReturnType<typeof createSalesforceDescribeQueue>;
+
+const buildArchivalChildRelationshipTree = async (params: {
+  user: IUser;
+  objectDescription: ISalesforceObjectDescribeResponse;
+  objectName: string;
+  filteredObjectNames: string[];
+  // Objects already expanded anywhere in this traversal — shared and mutated across
+  // the whole call (not cloned per branch), so each distinct object is expanded at
+  // most once for the whole tree instead of once per branch that reaches it.
+  visitedObjectNames: Set<string>;
+  describeQueue: ISalesforceDescribeQueue;
+  depth: number;
+  maxDepth?: number;
+}): Promise<{ children: ISalesforceArchivalChildTreeNode[]; parent: ISalesforceCascadeDeleteField[] }> => {
+  const { user, objectDescription, objectName, filteredObjectNames, visitedObjectNames, describeQueue, depth } = params;
+  const maxDepth = Math.min(params.maxDepth ?? MAX_RELATIONSHIP_DEPTH, MAX_RELATIONSHIP_DEPTH);
+
+  if (depth >= maxDepth) return { children: [], parent: [] };
+
+  const rawChildren = filterChildRelationships(objectDescription.childRelationships, objectName, 'archival', filteredObjectNames);
+  if (!rawChildren.length) return { children: [], parent: [] };
+
+  // Multiple relationships can point at the same child object type — describe
+  // each distinct one once and reuse it both for the polymorphic check below
+  // and as the next level's own objectDescription.
+  const uniqueChildNames = Array.from(new Set(rawChildren.map((child) => child.name)));
+  const childDescriptions = await Promise.all(uniqueChildNames.map((name) => describeQueue.get(name)));
+  const descriptionByName = new Map(uniqueChildNames.map((name, index) => [name, childDescriptions[index]]));
+
+  // Archival mode keeps every child relationship, including ones linked through a
+  // polymorphic foreign key (e.g. WhoId/WhatId) — those aren't a cascade edge to a
+  // single object type, so drop them the same way getSalesforceDescribeObject does.
+  const cascadeChildren = rawChildren.filter((child) => {
+    const linkingField = descriptionByName.get(child.name)?.fields.find((field) => field.name === child.field);
+    return !linkingField?.polymorphicForeignKey;
+  });
+  if (!cascadeChildren.length) return { children: [], parent: [] };
+
+  const childNodes = await Promise.all(
+    cascadeChildren.map(async (child): Promise<ISalesforceArchivalChildTreeNode> => {
+      const childDescription = descriptionByName.get(child.name)!;
+      if (visitedObjectNames.has(child.name)) {
+        return { ...child, children: [], parent: [] };
+      }
+
+      // restrictedDelete blocks deleting the parent while this child still has
+      // records, and without cascadeDelete the child isn't removed alongside
+      // it either — so there's no cascade edge to keep walking past this node.
+      if (child.restrictedDelete && !child.cascadeDelete) {
+        return { ...child, children: [], parent: [] };
+      }
+
+      visitedObjectNames.add(child.name);
+      const { children, parent } = await buildArchivalChildRelationshipTree({
+        user,
+        objectDescription: childDescription,
+        objectName: child.name,
+        filteredObjectNames,
+        visitedObjectNames,
+        describeQueue,
+        depth: depth + 1,
+        maxDepth,
+      });
+
+      return { ...child, children, parent };
+    })
+  );
+
+  // Of this level's own children, the cascadeDelete fields on the ones that are
+  // themselves a cascade-delete child in another master-detail relationship —
+  // mirrors getSalesforceDescribeObject's parent-detection, reusing the
+  // description already fetched above instead of re-describing.
+  const parent = cascadeChildren
+    .filter((child) => child.cascadeDelete)
+    .flatMap((child) => getCascadeDeleteFields(descriptionByName.get(child.name)!.fields));
+
+  return { children: childNodes, parent };
 };
 
 
@@ -225,6 +384,19 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
     return !linkingField?.polymorphicForeignKey;
   });
   
+  const parent = [];
+
+  for (let index = 0; index < children.length; index++) {
+    const child = children[index];
+    
+    if(child.cascadeDelete){
+      const describedObject = await salesforceObjectDescribe({ user, objectName: child.name });
+      const fieldIsCascade = describedObject.fields.find(field => field.cascadeDelete);
+      if(fieldIsCascade){
+        parent.push(child);
+      }
+    }
+  }
 
   return makeResponse(req, res, 200, true, 'fetch', { children, fields, });
 }
@@ -338,6 +510,21 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const filteredObjects = await salesforceObjectFilteredList({ user, apexMode, apexType });
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
+
+  if (apexMode === 'archival') {
+    const { children, parent } = await buildArchivalChildRelationshipTree({
+      user,
+      objectDescription,
+      objectName: String(objectName),
+      filteredObjectNames,
+      visitedObjectNames: new Set([String(objectName)]),
+      describeQueue: createSalesforceDescribeQueue(user, MAX_CONCURRENT_ARCHIVAL_DESCRIBES, [[String(objectName), objectDescription]]),
+      depth: 0,
+      maxDepth
+    });
+
+    return makeResponse(req, res, 200, true, 'fetch', { children, parent });
+  }
 
   const children = await buildChildRelationshipTree({
     user,
