@@ -558,6 +558,14 @@ export const buildRecordTypeDeltaSql = (
   p: { startDate?: string | null; endDate?: string | null; deltaPartition?: string | null }
 ): string => buildSchemaChangeDeltaSql(deltaTable, 'RECORDTYPE', ['UPDATE', 'DELETE'], p);
 
+// FIELD deltas — feeds retrieveMissingFields. Fields have no active/inactive
+// state (unlike record types), so only DELETE carries a "no longer exists"
+// signal; an UPDATE only ever means a property like label/dataType changed.
+export const buildFieldDeltaSql = (
+  deltaTable: string,
+  p: { startDate?: string | null; endDate?: string | null; deltaPartition?: string | null }
+): string => buildSchemaChangeDeltaSql(deltaTable, 'FIELD', ['DELETE'], p);
+
 /**
  * Partition predicate for the DELTA table. The biggest cost lever on this
  * endpoint — Athena bills by bytes scanned and the delta table grows without

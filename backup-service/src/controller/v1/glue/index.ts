@@ -14,12 +14,15 @@ import { wrapController } from '../../../utils/helper';
  *     backupConfigId: string
  *     objectNames:    string[]
  *     destConfig:     IDestinationConfig
- *     isArchival?: boolean — when true, only the Hudi table is created (no Delta)
+ *     isArchival?: boolean — when true, the Delta table is registered against
+ *       archival's schema-only delta output (Java's ArchivalService never
+ *       writes record-level deltas, only FIELD/RECORDTYPE/... schema changes)
+ *       instead of backup's combined record+schema delta output.
  *     userId?: string — when present, failures notify this user (see createNotification calls below)
  *   }
  *
  * Called after Spark reports a successful compression. For each object, ensures
- * the current-state Hudi table and (for non-archival configs) the Delta table exist in the Glue Catalog —
+ * the current-state Hudi table and the Delta table exist in the Glue Catalog —
  * created once from the committed `.hoodie` schema, never updated. Fully
  * idempotent: existing tables are left untouched, so retries and concurrent
  * completion events are safe.
@@ -63,13 +66,14 @@ const runEnsureCompressionTables = async (params: {
         policyConfigType: (isArchival ? 'archival' : 'backup') as 'backup' | 'archival',
       };
       // All independent; a missing/not-yet-written dataset must not block the others.
+      // ARCHIVAL never gets a record-level delta, but it does get a schema-only
+      // one (Java's ArchivalService writes FIELD/RECORDTYPE/... changes there,
+      // same shape as backup's) — ensureDeltaTable routes to the right S3 root
+      // via tableParams.policyConfigType, so the same call covers both.
       const tasks: [string, Promise<boolean>][] = [
         ['hudi', ensureHudiCurrentStateTable(tableParams)],
+        ['delta', ensureDeltaTable(tableParams)],
       ];
-      // ARCHIVAL keeps Hudi only — Delta is skipped entirely.
-      if (!isArchival) {
-        tasks.push(['delta', ensureDeltaTable(tableParams)]);
-      }
 
       const settled = await Promise.allSettled(tasks.map(([, task]) => task));
       const errors = settled.flatMap((result, i) =>
