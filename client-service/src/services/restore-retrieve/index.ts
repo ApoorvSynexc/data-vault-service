@@ -9,6 +9,8 @@ import { logger } from '../../middlewares/logger';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getUser } from '../user';
+import { createNotification } from '../notification';
+import { listStaleS3Objects, deleteS3Objects } from '../third-party/s3-bucket';
 import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third-party/salesforce/metadata/index';
 import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
@@ -436,6 +438,49 @@ const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthe
     region: region || AWS_REGION,
     outputLocation: bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined,
   };
+};
+
+const RETRIEVE_RETENTION_MS = 24 * 60 * 60 * 1000; // 1 day
+
+// Deletes this config's Athena "retrieve" output objects (see
+// buildRetrieveOutputLocation above, same prefix) that are older than 1 day.
+// Meant to be called fire-and-forget from the EMR cron — never throws; any
+// resolution or S3 failure is logged and (when a user is known) surfaced as
+// an in-app notification instead of propagating to the caller.
+export const cleanupStaleRetrieveObjects = async (config: IBackupConfig): Promise<void> => {
+  try {
+    const destination = await getDestinationById(config.destinationId);
+    if (!destination) return;
+
+    const s3Config = getDecryptedDestinationConfig(destination) as S3Config;
+    if (!s3Config.bucketName) return;
+
+    const prefix = `salesforce/${config.crmId}/retrieve/`;
+    const staleKeys = await listStaleS3Objects(s3Config, prefix, RETRIEVE_RETENTION_MS);
+    if (!staleKeys.length) {
+      logger.info(`[retrieve-cleanup] no stale objects | cfg:${config.backupConfigId} prefix:${prefix}`);
+      return;
+    }
+
+    await deleteS3Objects(s3Config, staleKeys);
+    logger.info(
+      `[retrieve-cleanup] deleted stale objects | cfg:${config.backupConfigId} prefix:${prefix} count:${staleKeys.length}`
+    );
+  } catch (err: any) {
+    logger.error(`[retrieve-cleanup] failed | cfg:${config.backupConfigId} err:${err?.message ?? err}`);
+    await createNotification({
+      userId: config.userId,
+      crmId: config.crmId,
+      title: 'Retrieve records failed to get deleted',
+      body: `We couldn't clean up old retrieve files for backup "${config.name ?? config.backupConfigId}". Please check the logs for more details.`,
+      targetScreen: 'backup-config',
+      targetId: config.backupConfigId,
+    }).catch((notifyErr: any) =>
+      logger.error(
+        `[retrieve-cleanup] failed to notify user | cfg:${config.backupConfigId} err:${notifyErr?.message ?? notifyErr}`
+      )
+    );
+  }
 };
 
 /**

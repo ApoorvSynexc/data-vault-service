@@ -1,4 +1,5 @@
 import {
+    DeleteObjectsCommand,
     GetObjectCommand,
     ListObjectsV2Command,
     PutObjectCommand,
@@ -120,9 +121,60 @@ const listS3Objects = async (
     return keys.sort();
 };
 
+// Same pagination as listS3Objects, but keeps LastModified to filter by age —
+// used for retention cleanup instead of a full listing + a HeadObject per key.
+const listStaleS3Objects = async (
+    config: IS3Config,
+    prefix: string,
+    olderThanMs: number
+): Promise<string[]> => {
+    const client = getS3Client(config);
+    const cutoff = Date.now() - olderThanMs;
+
+    const keys: string[] = [];
+    let continuationToken: string | undefined;
+
+    do {
+        const result = await client.send(
+            new ListObjectsV2Command({
+                Bucket: config.bucketName,
+                Prefix: prefix,
+                ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
+            })
+        );
+        for (const obj of result.Contents ?? []) {
+            if (obj.Key && obj.LastModified && obj.LastModified.getTime() < cutoff) {
+                keys.push(obj.Key);
+            }
+        }
+        continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (continuationToken !== undefined);
+
+    return keys;
+};
+
+// Deletes all keys listed in `keys` from the bucket, batched at 1,000 per request.
+const deleteS3Objects = async (config: IS3Config, keys: string[]): Promise<void> => {
+    if (!keys.length) {
+        return;
+    }
+    const client = getS3Client(config);
+    for (let i = 0; i < keys.length; i += 1000) {
+        const batch = keys.slice(i, i + 1000);
+        await client.send(
+            new DeleteObjectsCommand({
+                Bucket: config.bucketName,
+                Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
+            })
+        );
+    }
+};
+
 export {
     downloadFromS3,
     getPresignedDownloadUrl,
     listS3Objects,
     uploadToS3,
+    listStaleS3Objects,
+    deleteS3Objects,
 }
