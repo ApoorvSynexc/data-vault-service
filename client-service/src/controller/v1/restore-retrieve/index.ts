@@ -848,16 +848,19 @@ const fetchInactiveRecordTypesHandler = async (req: IRequest, res: IResponse): P
 
 /**
  * Parses the body fetchMissingFieldsHandler takes: backupConfigId,
- * objectApiName — no date window, this compares stored schema against a
- * live Salesforce describe, not schema-change deltas.
+ * objectApiName, configType, and an optional startDate/endDate window —
+ * same shape and window semantics as parseMissingRecordTypesParams. A
+ * BACKUP config's window scopes a FIELD schema-change delta scan; omit both
+ * for the whole delta history. An ARCHIVAL config is always ENTIRE — a
+ * window is rejected up front, same convention dryRunRestore/dryRunDiff use.
  */
 const parseMissingFieldsParams = (
   body: Record<string, unknown>,
   userId: string
 ):
-  | { ok: true; value: { backupConfigId: string; objectApiName: string; userId: string } }
+  | { ok: true; value: Omit<Parameters<typeof retrieveMissingFields>[0], 'user'> }
   | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  const { backupConfigId, objectApiName } = body;
+  const { backupConfigId, objectApiName, configType, startDate, endDate } = body;
 
   if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
     return { ok: false, error: 'id_required' };
@@ -865,26 +868,69 @@ const parseMissingFieldsParams = (
   if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
     return { ok: false, error: 'object_api_name_required' };
   }
+  if (typeof configType !== 'string' || !VALID_CONFIG_TYPES.includes(configType as ConfigType)) {
+    return { ok: false, error: 'invalid_config_type' };
+  }
+
+  if (startDate === undefined && endDate === undefined) {
+    return {
+      ok: true,
+      value: {
+        backupConfigId: backupConfigId.trim(),
+        objectApiName: objectApiName.trim(),
+        configType: configType as ConfigType,
+        userId,
+      },
+    };
+  }
+
+  if (configType === 'ARCHIVAL') {
+    return { ok: false, error: 'archival_missing_fields_entire_only' };
+  }
+
+  if (typeof startDate !== 'string' || !startDate.trim() || typeof endDate !== 'string' || !endDate.trim()) {
+    return { ok: false, error: 'date_range_required' };
+  }
+  const start = toIsoDateString(startDate, 'start');
+  const end = toIsoDateString(endDate, 'end');
+  if (!start || !end) {
+    return { ok: false, error: 'invalid_source_date' };
+  }
+  if (start > end) {
+    return { ok: false, error: 'invalid_time_range' };
+  }
 
   return {
     ok: true,
-    value: { backupConfigId: backupConfigId.trim(), objectApiName: objectApiName.trim(), userId },
+    value: {
+      backupConfigId: backupConfigId.trim(),
+      objectApiName: objectApiName.trim(),
+      configType: configType as ConfigType,
+      userId,
+      startDate: start,
+      endDate: end,
+    },
   };
 };
 
 /**
  * POST /retrieve/fetch-missing-fields
- * Body: { backupConfigId, objectApiName }
+ * Body: { backupConfigId, objectApiName, configType, startDate?, endDate? }
  *
- * Compares the field schema stored on S3 for the backup config against the
- * destination object's live Salesforce fields, and returns the fields the
- * backup captured that no longer exist on the destination — what a restore's
- * "missing fields in destination" edge case needs to map to an existing
- * destination field. hasMissingFields is false (with an empty missingFields
- * array) when every backed-up field still exists on the destination.
+ * Fields a restore's "missing fields in destination" edge case needs
+ * mapped: fields the backup ever knew about that no longer exist on the
+ * destination object's live Salesforce describe. hasMissingFields is false
+ * (with an empty missingFields array) when nothing is missing.
  *
- * Returns not_exist when the config doesn't exist, isn't owned by the
- * caller, or no schema has been stored for the object yet.
+ * BACKUP: a FIELD schema-change delta scan, windowed by startDate/endDate or
+ * unbounded when omitted (same shape as fetch-missing-record-types).
+ * ARCHIVAL: always ENTIRE — unions that same delta scan (archival's
+ * schema-only delta table) with a comparison of the S3 main field-schema
+ * snapshot against a live describe, since the delta history alone only
+ * covers what a Spark run actually flagged.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the
+ * caller.
  */
 const fetchMissingFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const parsed = parseMissingFieldsParams(req.body as Record<string, unknown>, req.user!.userId);
@@ -909,7 +955,9 @@ const fetchMissingFieldsHandler = async (req: IRequest, res: IResponse): Promise
  * scope types) or nothing (resolved to every restorable object on the
  * config — an ALL/ENTIRE scope). startDate/endDate are optional and, when
  * given, scope the delta scan the same way a CHANGED_BETWEEN restore's own
- * window already does; omit both for the whole delta history.
+ * window already does; omit both for the whole delta history. An ARCHIVAL
+ * config is always ENTIRE — a window is rejected up front, same convention
+ * dryRunRestore/dryRunDiff use.
  */
 const parseMissingRecordTypesParams = (
   body: Record<string, unknown>,
@@ -939,6 +987,10 @@ const parseMissingRecordTypesParams = (
         objectApiNames: (objectApiNames as string[] | undefined)?.map((o) => o.trim()).filter(Boolean),
       },
     };
+  }
+
+  if (configType === 'ARCHIVAL') {
+    return { ok: false, error: 'archival_missing_record_types_entire_only' };
   }
 
   if (typeof startDate !== 'string' || !startDate.trim() || typeof endDate !== 'string' || !endDate.trim()) {
