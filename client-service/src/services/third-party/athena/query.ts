@@ -280,6 +280,8 @@ export const runAthenaQuery = async (
   logger.info(
     `[athena] query complete | queryExecutionId:${queryExecutionId} rows:${result.rows.length}`
   );
-
+  logger.info(
+    `[athena] results | details : ${JSON.stringify(result)}`
+  );
   return result;
 };
