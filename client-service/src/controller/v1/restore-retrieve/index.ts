@@ -1269,7 +1269,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           },
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
-      } {
+      } else {
         await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
         await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
         await initalizeRestoreTransform(restoreJob.restoreJobId);
