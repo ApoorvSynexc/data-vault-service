@@ -61,27 +61,28 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       }
       finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
 
-      // if (crm.userId) {
-      //   const account = await createPaymentAccount(crm.organizationId, crm.userId);
-      //   const setup = await setupPayment({
-      //     orgId: crm.organizationId,
-      //     token: account.token,
-      //     sfSecret: account.sf_secret,
-      //     orgInfo: {
-      //       OrgType: 'Sandbox',
-      //       orgName: '360SMS',
-      //       email: 'tHh9o@example.com',
-      //       userName: 'tHh9o@example.com',
-      //     },
-      //     isTokenEncrypted: true
-      //   });
+      if (crm.userId) {
+        const account = await createPaymentAccount(crm.organizationId, crm.userId);
+        const setup = await setupPayment({
+          orgId: crm.organizationId,
+          token: account.token,
+          sfSecret: account.sf_secret,
+          orgInfo: {
+            OrgType: 'Sandbox',
+            orgName: '360SMS',
+            email: 'tHh9o@example.com',
+            userName: 'tHh9o@example.com',
+          },
+          isTokenEncrypted: true
+        });
 
-      //   const paymentToken = {
-      //     sf_secret: account.sf_secret,
-      //     token: setup.token
-      //   };
-      //   const paymentDetail= setup.data.Success;
-      // }
+        const paymentToken = encrypt(JSON.stringify({
+          sf_secret: account.sf_secret,
+          token: setup.token
+        }));
+        const paymentDetail= setup.data.Success;
+        await updateCrm(crm.crmId, { paymentToken, paymentDetail });
+      }
     }
 
     makeResponse(req, res, 200, true, 'fetch', encrypt(JSON.stringify(finalResponse)));
