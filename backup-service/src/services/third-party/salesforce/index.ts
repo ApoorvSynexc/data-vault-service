@@ -9,6 +9,7 @@ import {
   IRestoreJobDestination,
   IRestoreJobSource,
   IRestoreObjectHierarchyNode,
+  IRestoreObjectHierarchyTreeNode,
   IS3ObjectKey,
   ISource,
 } from '../../../models';
@@ -24,7 +25,7 @@ import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { runSalesforceRestore, runSalesforceRollback } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
-import { buildParentToChildHierarchy, recursivelyFlatten } from '../../../utils/helper';
+import { buildParentToChildHierarchy, recursivelyFlatten, reverseHierarchy } from '../../../utils/helper';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -167,6 +168,44 @@ const restoreObjectHierarchy = async (
   for (const child of node.children ?? []) {
     const childFailed = await restoreObjectHierarchy(child, ctx);
     hasFailure = hasFailure || childFailed;
+  }
+
+  return hasFailure;
+};
+
+// reverseHierarchy has already flattened the tree into child-before-parent order,
+// so undoing it here just means walking that list in sequence — no recursion
+// needed, unlike restoreObjectHierarchy's parent-first depth-first walk.
+const rollbackRestoreObjectHierarchy = async (
+  nodes: RestoreHierarchyNode[],
+  ctx: RestoreHierarchyContext
+): Promise<boolean> => {
+  let hasFailure = false;
+
+  for (const node of nodes) {
+    const currentNode = { name: node.name, id: uuidv4(), status: RESTORE_JOB_STATUS.inProgress };
+    const object = ctx.recurvedObject.find((obj) => obj.name === node.name);
+
+    if (object) {
+      currentNode.status = object.status || '';
+      currentNode.id = object.id;
+    }
+
+    try {
+      await runSalesforceRollback({
+        restoreId: ctx.restoreId,
+        restoreJobId: ctx.restoreJobId,
+        object: currentNode,
+        sourceS3Credentials: ctx.sourceS3Credentials,
+        destinationSalesforceCredentials: ctx.destinationSalesforceCredentials,
+        conflict: ctx.conflict,
+      });
+    } catch (err: any) {
+      hasFailure = true;
+      logger.error(
+        `[rollback] object failed, objectName:${currentNode.name}, restoreJobId:${ctx.restoreJobId}, error:${err?.message}`
+      );
+    }
   }
 
   return hasFailure;
@@ -517,7 +556,8 @@ const salesforceHandler: ICrmBackupHandler = {
     restoreJobId: string,
     source: IRestoreJobSource,
     destination: IRestoreJobDestination,
-    conflict: IRestoreConflict
+    conflict: IRestoreConflict,
+    hierarchy?: IRestoreObjectHierarchyTreeNode[]
   ): Promise<'SUCCESS' | 'FAILED'> => {
     try {
       const objects = destination.objects as any;
@@ -547,21 +587,20 @@ const salesforceHandler: ICrmBackupHandler = {
         instanceUrl: destination.instanceUrl,
       };
 
-      const hierarchyContext = {
+      const recurvedObject = recursivelyFlatten(objects || []);
+
+      const hierarchyContext: RestoreHierarchyContext = {
         restoreId,
         restoreJobId,
+        recurvedObject,
         sourceS3Credentials: resolvedSourceS3Credentials,
         destinationSalesforceCredentials: resolvedDestinationCredentials,
         conflict,
       };
 
-      for (let index = 0; index < objects.length; index++) {
-        const object = objects[index];
-        await runSalesforceRollback({
-          ...hierarchyContext,
-          object,
-        });
-      }
+      const reversedHierarchy = reverseHierarchy(hierarchy ?? []);
+
+      await rollbackRestoreObjectHierarchy(reversedHierarchy, hierarchyContext);
 
       const restoreJob = await getRestoreJobById(restoreJobId);
       if (restoreJob) {

@@ -404,7 +404,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
 };
 
 export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
-  const { restoreId, restoreJobId, source, destination, conflict } = job;
+  const { restoreId, restoreJobId, source, destination, conflict, hierarchy } = job;
   const startedAt = dayjs().toISOString();
 
   activeJobs.add(restoreJobId);
@@ -451,7 +451,8 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       restoreJobId,
       restoreSource,
       restoreDestination,
-      conflict
+      conflict,
+      hierarchy
     );
 
     await updateRestoreJobStatus({
