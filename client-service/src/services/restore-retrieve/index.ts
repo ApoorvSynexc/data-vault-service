@@ -9,8 +9,11 @@ import { logger } from '../../middlewares/logger';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getUser } from '../user';
+import { createNotification } from '../notification';
+import { listStaleS3Objects, deleteS3Objects } from '../third-party/s3-bucket';
 import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third-party/salesforce/metadata/index';
 import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
+import { ISalesforceRecordTypeInfo } from '../third-party/salesforce/metadata/recordType';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
 import { tableExists } from '../third-party/athena/glue';
 import { readSchemaFile } from '../schema';
@@ -33,6 +36,7 @@ import {
   buildWindowDeltasSql,
   buildDeltaPartitionWhere,
   buildRecordTypeDeltaSql,
+  buildFieldDeltaSql,
   buildHudiCountSql,
   buildDeltaCountSql,
   recordIdsWhere,
@@ -436,6 +440,49 @@ const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthe
     region: region || AWS_REGION,
     outputLocation: bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined,
   };
+};
+
+const RETRIEVE_RETENTION_MS = 24 * 60 * 60 * 1000; // 1 day
+
+// Deletes this config's Athena "retrieve" output objects (see
+// buildRetrieveOutputLocation above, same prefix) that are older than 1 day.
+// Meant to be called fire-and-forget from the EMR cron — never throws; any
+// resolution or S3 failure is logged and (when a user is known) surfaced as
+// an in-app notification instead of propagating to the caller.
+export const cleanupStaleRetrieveObjects = async (config: IBackupConfig): Promise<void> => {
+  try {
+    const destination = await getDestinationById(config.destinationId);
+    if (!destination) return;
+
+    const s3Config = getDecryptedDestinationConfig(destination) as S3Config;
+    if (!s3Config.bucketName) return;
+
+    const prefix = `salesforce/${config.crmId}/retrieve/`;
+    const staleKeys = await listStaleS3Objects(s3Config, prefix, RETRIEVE_RETENTION_MS);
+    if (!staleKeys.length) {
+      logger.info(`[retrieve-cleanup] no stale objects | cfg:${config.backupConfigId} prefix:${prefix}`);
+      return;
+    }
+
+    await deleteS3Objects(s3Config, staleKeys);
+    logger.info(
+      `[retrieve-cleanup] deleted stale objects | cfg:${config.backupConfigId} prefix:${prefix} count:${staleKeys.length}`
+    );
+  } catch (err: any) {
+    logger.error(`[retrieve-cleanup] failed | cfg:${config.backupConfigId} err:${err?.message ?? err}`);
+    await createNotification({
+      userId: config.userId,
+      crmId: config.crmId,
+      title: 'Retrieve records failed to get deleted',
+      body: `We couldn't clean up old retrieve files for backup "${config.name ?? config.backupConfigId}". Please check the logs for more details.`,
+      targetScreen: 'backup-config',
+      targetId: config.backupConfigId,
+    }).catch((notifyErr: any) =>
+      logger.error(
+        `[retrieve-cleanup] failed to notify user | cfg:${config.backupConfigId} err:${notifyErr?.message ?? notifyErr}`
+      )
+    );
+  }
 };
 
 /**
@@ -1288,8 +1335,15 @@ const retrieveInactiveRecordTypes = async (
 export interface IFetchMissingFieldsParams {
   backupConfigId: string;
   objectApiName: string;
+  configType: ConfigType;
   userId: string;
   user: IUser;
+  // Scopes the delta scan the same way retrieveMissingRecordTypes's own window
+  // does — omit both for the whole delta history. ARCHIVAL configs reject a
+  // window at the parse layer (parseMissingFieldsParams), so these are only
+  // ever populated for BACKUP.
+  startDate?: IsoDateString | null;
+  endDate?: IsoDateString | null;
 }
 
 export interface IMissingField {
@@ -1303,9 +1357,9 @@ export interface IFetchMissingFieldsResult {
   missingFields: IMissingField[];
 }
 
-// Unwraps the S3 schema history array fetchObjectFields returns down to the
-// current field snapshot — same "main entry, else most recent" rule
-// fetchObjectFieldsHandler applies, needed here too since the comparison
+// Unwraps the S3 schema history array fetchObjectFields/fetchObjectRecordTypes
+// return down to the current snapshot — same "main entry, else most recent"
+// rule fetchObjectFieldsHandler applies, needed here too since the comparison
 // works off the same stored shape.
 const latestStoredFields = (schema: unknown): ISalesforceFieldSnapshot[] | null => {
   const entries = schema as Array<{ sourceType?: string; context: ISalesforceFieldSnapshot[] }>;
@@ -1314,41 +1368,103 @@ const latestStoredFields = (schema: unknown): ISalesforceFieldSnapshot[] | null 
   return (mainEntry ?? entries[entries.length - 1]).context;
 };
 
+const latestStoredRecordTypes = (schema: unknown): ISalesforceRecordTypeInfo[] | null => {
+  const entries = schema as Array<{ sourceType?: string; context: ISalesforceRecordTypeInfo[] }>;
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const mainEntry = entries.find((entry) => entry.sourceType === 'main');
+  return (mainEntry ?? entries[entries.length - 1]).context;
+};
+
+// A FIELD delta row's change_data is the deleted field's raw JSON as Java's
+// FieldElement parses it — apiName/dataType with name/type as aliases (both
+// spellings appear on the wire depending on which schema writer produced the
+// entry), so both are read defensively rather than assuming one.
+const missingFieldFromChangeData = (changeData: any): IMissingField | null => {
+  const apiName = changeData?.apiName ?? changeData?.name;
+  if (!apiName) return null;
+  return { apiName, label: changeData.label, type: changeData.dataType ?? changeData.type };
+};
+
 /**
- * Compares the field schema stored on S3 for a backup config against the
- * destination object's live Salesforce describe, and reports the fields the
- * backup captured that no longer exist on the destination — the set a
- * restore's "missing fields in destination" edge case needs to map to an
- * existing destination field.
+ * Fields a restore's "missing fields in destination" edge case needs mapped:
+ * fields the backup ever knew about that no longer exist on the destination
+ * object's live Salesforce describe.
  *
- * Reuses fetchObjectFields for the stored side and diffSchemas — the same
- * comparator the backup pipeline's own schema-drift detection
- * (schemaComparison) uses — for the comparison, filtering the live describe
- * through isQueryableField first so it lines up with what backup-service
- * would have captured.
+ *   CHANGED_BETWEEN (configType BACKUP + startDate/endDate) — DELETE rows out
+ *   of the object's FIELD schema-change deltas, windowed, same query shape
+ *   retrieveMissingRecordTypes already uses for RECORDTYPE.
  *
- * Returns null when the config does not exist, is not owned by the caller,
- * or no schema has been stored for the object yet.
+ *   ENTIRE backup (configType BACKUP, no window) — the same FIELD delta scan,
+ *   unbounded.
+ *
+ *   ENTIRE archival (configType ARCHIVAL) — union of the unbounded FIELD
+ *   delta scan (archival's schema-only delta table, once Glue registers it —
+ *   see ensureDeltaTable/policyConfigType) and the S3 main field-schema
+ *   snapshot compared against a live describe (diffSchemas) — the delta
+ *   history only carries what a Spark run actually flagged, so the S3
+ *   snapshot catches anything from before schema-delta tracking existed for
+ *   this config.
+ *
+ * Every candidate is re-checked against a live describe before being
+ * reported — a field a delta once flagged deleted but that's back today
+ * (re-created) is dropped, same "still gone right now" contract
+ * retrieveMissingRecordTypes applies to record types.
+ *
+ * Returns null when the config does not exist or is not owned by the caller.
  */
 const retrieveMissingFields = async (
   params: IFetchMissingFieldsParams
 ): Promise<IFetchMissingFieldsResult | null> => {
-  const { backupConfigId, objectApiName, userId, user } = params;
+  const { backupConfigId, objectApiName, configType, userId, user, startDate, endDate } = params;
 
-  const stored = await fetchObjectFields({ objectApiName, backupConfigId, userId });
-  if (!stored.ok) return null;
+  const config = await getBackupConfigById(backupConfigId);
+  if (!config || config.userId !== userId) return null;
 
-  const storedFields = latestStoredFields(stored.schema);
-  if (!storedFields) return null;
+  const candidates = new Map<string, IMissingField>();
+
+  const databaseName = toGlueId(backupConfigId);
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  const { run } = makeRunner(databaseName, region, null, outputLocation);
+  const deltaTable = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}_delta`;
+  const deltaPartition = buildDeltaPartitionWhere(startDate ?? null, endDate ?? null);
+
+  try {
+    const result = await run('fieldDeltas', () =>
+      buildFieldDeltaSql(deltaTable, { startDate, endDate, deltaPartition })
+    );
+    for (const row of result.rows) {
+      const changeData = JSON.parse(row['change_data'] || 'null');
+      const field = missingFieldFromChangeData(changeData);
+      if (field) candidates.set(field.apiName, field);
+    }
+  } catch {
+    // A config whose object has never had a schema-change delta written yet
+    // has no candidates from this source — the S3-snapshot union (ARCHIVAL)
+    // or an empty result (BACKUP) still applies below.
+  }
+
+  let storedFields: ISalesforceFieldSnapshot[] | null = null;
+  if (configType === 'ARCHIVAL') {
+    const stored = await fetchObjectFields({ objectApiName, backupConfigId, userId });
+    storedFields = stored.ok ? latestStoredFields(stored.schema) : null;
+  }
+
+  if (candidates.size === 0 && !storedFields) return { hasMissingFields: false, missingFields: [] };
 
   const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
   const liveFields = described.fields.filter(isQueryableField).map(toFieldSnapshot);
+  const liveNames = new Set(liveFields.map((f) => f.name));
 
-  const { removedFields } = diffSchemas(storedFields, liveFields);
-  const missingFields = storedFields
-    .filter((field) => removedFields.includes(field.name))
-    .map((field) => ({ apiName: field.name, label: field.label, type: field.type }));
+  if (storedFields) {
+    const { removedFields } = diffSchemas(storedFields, liveFields);
+    for (const field of storedFields) {
+      if (removedFields.includes(field.name) && !candidates.has(field.name)) {
+        candidates.set(field.name, { apiName: field.name, label: field.label, type: field.type });
+      }
+    }
+  }
 
+  const missingFields = [...candidates.values()].filter((field) => !liveNames.has(field.apiName));
   return { hasMissingFields: missingFields.length > 0, missingFields };
 };
 
@@ -2416,6 +2532,23 @@ const retrieveMissingRecordTypes = async (
                 : undefined;
           if (flagged?.recordTypeId) candidates.set(flagged.recordTypeId, flagged);
         }
+
+        // ARCHIVAL's schema-delta table only carries what a Spark run actually
+        // flagged — union in the S3 main snapshot too, so a record type gone
+        // before schema-delta tracking existed for this config still surfaces.
+        if (configType === 'ARCHIVAL') {
+          const stored = await fetchObjectRecordTypes({ objectApiName, backupConfigId, userId });
+          const storedRecordTypes = stored.ok ? latestStoredRecordTypes(stored.schema) : null;
+          for (const rt of storedRecordTypes ?? []) {
+            // The S3 snapshot has no separate developerName field (unlike a
+            // delta row's change_data) — unused downstream (only recordTypeId/
+            // name/active are read below), so name doubles for it here.
+            if (rt.recordTypeId && !candidates.has(rt.recordTypeId)) {
+              candidates.set(rt.recordTypeId, { ...rt, developerName: rt.name });
+            }
+          }
+        }
+
         if (candidates.size === 0) return null;
 
         const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
@@ -2579,6 +2712,27 @@ const fetchObjectFields = async (
   });
 
   // No schema has been written for this object on this config yet.
+  return schema ? { ok: true, schema } : { ok: false, reason: 'not_exist' };
+};
+
+// Same shape as fetchObjectFields, for the recordTypes schema kind — used by
+// retrieveMissingRecordTypes's ARCHIVAL union.
+const fetchObjectRecordTypes = async (
+  params: IFetchObjectFieldsParams
+): Promise<FetchObjectFieldsResult> => {
+  const { objectApiName, backupConfigId, userId } = params;
+
+  const resolved = await resolveSchemaS3(backupConfigId, userId);
+  if (!resolved) {
+    return { ok: false, reason: 'not_exist' };
+  }
+
+  const schema = await readSchemaFile(resolved.destConfig, {
+    ...resolved.keyParams,
+    objectName: objectApiName,
+    kind: 'recordTypes',
+  });
+
   return schema ? { ok: true, schema } : { ok: false, reason: 'not_exist' };
 };
 

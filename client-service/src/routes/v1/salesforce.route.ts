@@ -16,7 +16,6 @@ router.post('/role/create', attachDecryptedSalesforceRequest('body'), createRole
 router.put('/role/update', attachDecryptedSalesforceRequest('body'), updateRoleValidation, salesofrceController.updateRoleHandler);
 router.delete('/role/delete', attachDecryptedSalesforceRequest('query'), salesofrceController.deleteRoleHandler);
 
-router.get('/confirm-admin-user-created', attachDecryptedSalesforceRequest('query'), salesofrceController.confirmAdminUserCreatedHandler);
 router.get('/confirm-org-authorized', salesofrceController.confirmOrgAuthorizedHandler);
 
 export const salesforceRouter = router;
