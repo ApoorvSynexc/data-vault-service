@@ -318,6 +318,12 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   try {
     const isIncrementalBackup = config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL';
     const isOneTimeSchedule = config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'ONE_TIME' && !config.lastBackupAt;
+
+    if (config.status === STATUS.draft) {
+      await deleteBackupConfig(String(backupConfigId));
+      return makeResponse(req, res, 200, true, 'delete');
+    }
+
     if (config.schedule === SCHEDULE_MODE.realtime) {
       const crm = await getCrmById(config.crmId);
       if (crm && crmCredential) {

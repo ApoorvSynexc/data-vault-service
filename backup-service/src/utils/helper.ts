@@ -615,6 +615,28 @@ function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
   return [...nodes.values()].filter((node) => !children.has(node.name));
 }
 
+// Flattens a parent→child hierarchy (buildParentToChildHierarchy's output) into a
+// single ordered list where every node appears only after all of its own
+// descendants — the reverse of the tree's natural parent-first order. A child's
+// records can reference its parent's, so a rollback that undoes a restore must
+// process objects in this order instead of parent-first.
+function reverseHierarchy(nodes: HierarchyNode[]): HierarchyNode[] {
+  const ordered: HierarchyNode[] = [];
+
+  function visit(node: HierarchyNode) {
+    for (const child of node.children ?? []) {
+      visit(child);
+    }
+    ordered.push(node);
+  }
+
+  for (const node of nodes) {
+    visit(node);
+  }
+
+  return ordered;
+}
+
 export {
   randomNumber,
   parseExpiryToSeconds,
@@ -634,6 +656,7 @@ export {
   withSystemFields,
   escapeHtml,
   buildParentToChildHierarchy,
+  reverseHierarchy,
   type IS3KeyPrefixParams,
   type ISchemaS3KeyParams,
   type ISchemaKeyParams,
