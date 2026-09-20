@@ -126,7 +126,7 @@ const AWS_S3_LOGS_BUCKET = String(process.env.AWS_S3_LOGS_BUCKET);
 // (see buildCreateAccountBearerToken there), and getSetupResponse's token is the rotating
 // value that call itself returns.
 const PAYMENT_API_BASE_URL = String(
-  process.env.PAYMENT_API_BASE_URL || 'https://testingv2.360degreeapps.com/v2/api/v3'
+  process.env.PAYMENT_API_BASE_URL || 'https://360degree--hrorg.sandbox.my.salesforce.com'
 ).trim();
 const PAYMENT_PRODUCT_NAME = String(process.env.PAYMENT_PRODUCT_NAME || '360 Data Craft');
 
