@@ -7,6 +7,7 @@ import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgI
 import { ICrm, ICrmProfile, IRole, IRolePermissions } from '../../../models';
 import { decrypt, readEnvelope } from '../../../utils/encryption';
 import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
+import { STATUS } from '../../../constant';
 
 // A role "has access" once any module has at least one granted action —
 // mirrors hasAnyAccess() in the reference UI design.
@@ -313,6 +314,11 @@ const confirmOrgAuthorizedHandler = async (req: IRequest, res: IResponse): Promi
   const existingCrm = await getCrmByOrgId(orgId);
   if (!existingCrm) {
     makeResponse(req, res, 404, false, 'crm_not_found');
+    return;
+  }
+
+  if (existingCrm.status !== STATUS.active) {
+    makeResponse(req, res, 200, true, 'fetch', { success: false });
     return;
   }
 
