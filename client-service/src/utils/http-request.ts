@@ -68,7 +68,6 @@ export async function httpRequest<TResponse = any, TBody = any>(
     }
 
     const text = await response.text();
-    console.log(JSON.stringify({text}))
     return (text ? JSON.parse(text) : null) as TResponse;
   } catch (error: any) {
     if (error?.name === 'AbortError') {
