@@ -26,8 +26,7 @@ export interface ICrm {
   };
   updatedAt: string;
   createdAt: string;
-  
-  // userId: string; // GSI: userId-crmName-index
+  userId?: string; // GSI: userId-crmName-index
   // customUrl?: string;
   // crmProfile?: ICrmProfile;
   // encryptedCredentials?: string;

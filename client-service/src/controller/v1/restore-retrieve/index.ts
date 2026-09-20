@@ -1387,7 +1387,7 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  if (restoreJob.status !== 'COMPLETED') {
+  if (restoreJob.status !== RESTORE_JOB_STATUS.success) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 

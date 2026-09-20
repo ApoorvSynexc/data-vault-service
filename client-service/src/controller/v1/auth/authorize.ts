@@ -9,6 +9,8 @@ import {
   updateUser,
   createOAuthState,
   getSalesforceLoginUrl,
+  createPaymentAccount,
+  setupPayment,
 } from '../../../services';
 import { decrypt, encrypt, generateOrgEncryptionKey, readEnvelope } from '../../../utils/encryption';
 import { encryptSalesforceResponse, resolveOrgKey } from '../../../utils/salesforce-crypto';
@@ -46,7 +48,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       return;
     }
 
-    const payload: {type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload} = JSON.parse(plaintext);
+    const payload: { type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload } = JSON.parse(plaintext);
     const finalResponse: any = {};
     if (payload.type === 'org' && payload.org_details) {
       finalResponse.org = await authorizeOrgHandler(payload.org_details);
@@ -58,8 +60,28 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
         throw new Error('Org not registered for user authorization');
       }
       finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
-      
-      
+
+      // if (crm.userId) {
+      //   const account = await createPaymentAccount(crm.organizationId, crm.userId);
+      //   const setup = await setupPayment({
+      //     orgId: crm.organizationId,
+      //     token: account.token,
+      //     sfSecret: account.sf_secret,
+      //     orgInfo: {
+      //       OrgType: 'Sandbox',
+      //       orgName: '360SMS',
+      //       email: 'tHh9o@example.com',
+      //       userName: 'tHh9o@example.com',
+      //     },
+      //     isTokenEncrypted: true
+      //   });
+
+      //   const paymentToken = {
+      //     sf_secret: account.sf_secret,
+      //     token: setup.token
+      //   };
+      //   const paymentDetail= setup.data.Success;
+      // }
     }
 
     makeResponse(req, res, 200, true, 'fetch', encrypt(JSON.stringify(finalResponse)));
@@ -70,7 +92,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
 };
 
 
-const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{encryptionKey: any}> => {
+const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{ encryptionKey: any }> => {
   // DataVaultAdminAuthorizationService.authorizeOrganization() (invoked from the
   // LWC's Authorize Admin flow, not the Post Install Handler — the installing user
   // has no Named Credential access at install time) encrypts { orgId, instanceUrl }
@@ -114,7 +136,7 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
   return { encryptionKey: rawEncryptionKey };
 };
 
-const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise<{authorizationUrl: string}> => {
+const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise<{ authorizationUrl: string }> => {
   // userDetails arrives here already plaintext: authorizationHandler decrypts
   // the whole request body (org_details + user_details together) with the
   // Bootstrap Key alone — there's no separate org-key layer on this route.
