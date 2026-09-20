@@ -3,6 +3,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
@@ -158,10 +159,56 @@ const updateCrm = async (crmId: string, updates: Record<string, any>): Promise<I
   };
 };
 
+const getCrmsInBatches = async (
+  onPage: (crms: ICrm[]) => Promise<void>,
+  filters?: { crmName?: string; status?: string },
+  limit: number = 100
+): Promise<void> => {
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  const filterExpressions: string[] = [];
+  const expressionAttributeNames: Record<string, string> = {};
+  const expressionAttributeValues: Record<string, any> = {};
+
+  if (filters?.crmName) {
+    filterExpressions.push('#crmName = :crmName');
+    expressionAttributeNames['#crmName'] = 'crmName';
+    expressionAttributeValues[':crmName'] = filters.crmName;
+  }
+  if (filters?.status) {
+    filterExpressions.push('#status = :status');
+    expressionAttributeNames['#status'] = 'status';
+    expressionAttributeValues[':status'] = filters.status;
+  }
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: CRM_TABLE,
+        Limit: limit,
+        ...(filterExpressions.length && {
+          FilterExpression: filterExpressions.join(' AND '),
+          ExpressionAttributeNames: expressionAttributeNames,
+          ExpressionAttributeValues: expressionAttributeValues,
+        }),
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const crms = (result.Items as ICrm[] | undefined) ?? [];
+    if (crms.length) {
+      await onPage(crms);
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+};
+
 export {
   upsertCrm,
   getCrmById,
   getCrmByOrgId,
   deleteCrm,
   updateCrm,
+  getCrmsInBatches,
 };
