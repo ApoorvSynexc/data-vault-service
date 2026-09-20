@@ -384,8 +384,19 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
 
   const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
 
+  // Order.StatusCode mirrors the Status picklist value rather than being
+  // independently writable — Salesforce manages it off Status, so it's
+  // excluded from Order's restore field list specifically (describe still
+  // reports it updateable/createable in many orgs).
+  const excludedFieldNames = objectApiName === 'Order' ? ['StatusCode'] : [];
+
   const updateableFieldNames = described.fields
-    .filter((field) => (field.updateable || field.createable) && !SALESFORCE_SYSTEM_FIELDS.includes(field.name))
+    .filter(
+      (field) =>
+        (field.updateable || field.createable) &&
+        !SALESFORCE_SYSTEM_FIELDS.includes(field.name) &&
+        !excludedFieldNames.includes(field.name)
+    )
     .map((field) => field.name);
 
   const fieldNames = Array.from(new Set(['Id', ...updateableFieldNames]));
