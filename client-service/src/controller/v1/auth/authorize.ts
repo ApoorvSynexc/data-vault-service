@@ -58,6 +58,8 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
         throw new Error('Org not registered for user authorization');
       }
       finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
+      
+      
     }
 
     makeResponse(req, res, 200, true, 'fetch', encrypt(JSON.stringify(finalResponse)));

@@ -1,3 +1,4 @@
+import { EncryptedPayload } from '../../utils/encryption';
 
 export interface ICrm {
   crmId: string; // PK
@@ -12,6 +13,17 @@ export interface ICrm {
   // master ENCRYPTION_KEY (same treatment as crmCredential). `string` accepted for
   // legacy rows written before this was encrypted — see resolveOrgKey() in salesforce-crypto.ts.
   encryptionKey?: string | { ciphertext: string; iv: string };
+  // The 360 Data Craft PHP auth token (see services/third-party/payment), encrypted
+  // at rest with the master ENCRYPTION_KEY. Plaintext `{ sf_secret, token }` accepted
+  // for legacy rows written before this was encrypted.
+  paymentToken?: EncryptedPayload | { sf_secret: string; token: string };
+  // Decrypted subscription status from setupPayment's getSetupResponse — see
+  // SetupPaymentStatus in services/third-party/payment.
+  paymentDetail?: {
+    status: string;
+    ExpiryDate: string;
+    trial_period_limit: string;
+  };
   updatedAt: string;
   createdAt: string;
   
