@@ -1428,7 +1428,15 @@ const retrieveMissingFields = async (
   const deltaTable = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}_delta`;
   const deltaPartition = buildDeltaPartitionWhere(startDate ?? null, endDate ?? null);
 
-  try {
+  // A config whose object has never had a schema-change delta written yet
+  // (no compression run has touched it) has no Glue table at all — checked
+  // up front via a cheap Glue GetTable call, same as dry-run/dry-run-diff
+  // (see runHudiCount/runDeltaCount), rather than letting Athena fail and
+  // catching whatever comes back, which would also swallow a genuine
+  // Athena/Glue failure on a table that DOES exist. Missing table just means
+  // no candidates from this source — the S3-snapshot union (ARCHIVAL) or an
+  // empty result (BACKUP) still applies below.
+  if (await tableExists(databaseName, deltaTable, region)) {
     const result = await run('fieldDeltas', () =>
       buildFieldDeltaSql(deltaTable, { startDate, endDate, deltaPartition })
     );
@@ -1437,10 +1445,6 @@ const retrieveMissingFields = async (
       const field = missingFieldFromChangeData(changeData);
       if (field) candidates.set(field.apiName, field);
     }
-  } catch {
-    // A config whose object has never had a schema-change delta written yet
-    // has no candidates from this source — the S3-snapshot union (ARCHIVAL)
-    // or an empty result (BACKUP) still applies below.
   }
 
   let storedFields: ISalesforceFieldSnapshot[] | null = null;
@@ -2518,19 +2522,29 @@ const retrieveMissingRecordTypes = async (
     objectNames.map(async (objectApiName): Promise<IObjectRecordTypeMapping | null> => {
       try {
         const deltaTable = `cfg_${toGlueId(backupConfigId)}_${toGlueId(objectApiName)}_delta`;
-        const result = await run(`recordTypeDeltas:${objectApiName}`, () =>
-          buildRecordTypeDeltaSql(deltaTable, { startDate, endDate, deltaPartition })
-        );
-
         const candidates = new Map<string, IInactiveRecordType>();
-        for (const row of result.rows) {
-          const changeData = JSON.parse(row['change_data'] || 'null');
-          if (!changeData) continue;
-          const flagged: IInactiveRecordType | undefined =
-            row['change_type'] === 'DELETE' ? changeData
-              : changeData.new?.active === false ? changeData.new
-                : undefined;
-          if (flagged?.recordTypeId) candidates.set(flagged.recordTypeId, flagged);
+
+        // No Glue table for this object yet (no compression run has touched
+        // it) — checked up front via a cheap Glue GetTable call, same as
+        // dry-run/dry-run-diff (see runHudiCount/runDeltaCount), rather than
+        // letting Athena fail into the catch below, which also exists to
+        // swallow a genuine describe/S3 failure and shouldn't be relied on to
+        // paper over a missing table too. Missing table just means no
+        // candidates from this source — the S3-snapshot union (ARCHIVAL)
+        // below still applies.
+        if (await tableExists(databaseName, deltaTable, region)) {
+          const result = await run(`recordTypeDeltas:${objectApiName}`, () =>
+            buildRecordTypeDeltaSql(deltaTable, { startDate, endDate, deltaPartition })
+          );
+          for (const row of result.rows) {
+            const changeData = JSON.parse(row['change_data'] || 'null');
+            if (!changeData) continue;
+            const flagged: IInactiveRecordType | undefined =
+              row['change_type'] === 'DELETE' ? changeData
+                : changeData.new?.active === false ? changeData.new
+                  : undefined;
+            if (flagged?.recordTypeId) candidates.set(flagged.recordTypeId, flagged);
+          }
         }
 
         // ARCHIVAL's schema-delta table only carries what a Spark run actually
