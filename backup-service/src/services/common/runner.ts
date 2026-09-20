@@ -378,7 +378,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
 
     await updateRestoreJobStatus({
       restoreJobId,
-      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.completed,
+      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.success,
       completedAt: dayjs().toISOString(),
     });
     await updateRestore({
@@ -457,12 +457,12 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
 
     await updateRestoreJobStatus({
       restoreJobId,
-      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.completed,
+      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.success,
       completedAt: dayjs().toISOString(),
     });
     await updateRestore({
       restoreId,
-      status: result === 'FAILED' ? 'FAILED' : RESTORE_JOB_STATUS.rollbackCompleted,
+      status: result === 'FAILED' ? 'FAILED' : RESTORE_JOB_STATUS.success,
     });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);

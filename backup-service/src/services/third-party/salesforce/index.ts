@@ -608,7 +608,7 @@ const salesforceHandler: ICrmBackupHandler = {
           if (obj.status === RESTORE_JOB_STATUS.inProgress) {
             return {
               ...obj,
-              status: 'COMPLETED',
+              status: RESTORE_JOB_STATUS.success,
             };
           }
           return obj;
