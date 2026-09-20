@@ -37,6 +37,16 @@ export interface IRestoreObjectHierarchyNode {
   parents: IRestoreObjectHierarchyNode[];
 }
 
+// The resolved, single-parent execution tree runRestore actually walks — output of
+// buildParentToChildHierarchy(objectHierarchy) (see utils/helper.ts), which collapses
+// each object's possibly-multiple parents down to one and re-roots the tree downward
+// (`children`, same direction as IRestoreJobObject). Persisted for audit/debugging;
+// distinct from `objectHierarchy`, which is the raw upward input to that function.
+export interface IRestoreObjectHierarchyTreeNode {
+  name: string;
+  children: IRestoreObjectHierarchyTreeNode[];
+}
+
 export interface IRestoreJobDestination {
   crmId: string;
   crmName: string;
@@ -73,6 +83,7 @@ export interface IRestoreJob {
   destination: IRestoreJobDestination;
   conflict: IRestoreConflict;
   objectHierarchy?: IRestoreObjectHierarchyNode[];
+  hierarchy?: IRestoreObjectHierarchyTreeNode[];
   status: string; // PENDING | RUNNING | SUCCESS | FAILED
   startedAt?: string;
   completedAt?: string;

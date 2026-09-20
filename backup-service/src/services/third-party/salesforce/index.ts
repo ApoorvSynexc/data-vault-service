@@ -434,6 +434,12 @@ const salesforceHandler: ICrmBackupHandler = {
       const hierarchy = buildParentToChildHierarchy(objectHierarchy ?? []);
       console.log(JSON.stringify({ hierarchy }));
 
+      // Persist the resolved single-parent tree this run actually walks (distinct
+      // from the raw, possibly-multi-parent objectHierarchy input) for audit/debugging.
+      if (hierarchy.length) {
+        await updateRestoreJob({ restoreJobId, hierarchy });
+      }
+
       const hierarchyContext: RestoreHierarchyContext = {
         restoreId,
         restoreJobId,
