@@ -432,7 +432,7 @@ const salesforceHandler: ICrmBackupHandler = {
 
       const recurvedObject = recursivelyFlatten(objects || []);
       const hierarchy = buildParentToChildHierarchy(objectHierarchy ?? []);
-      console.log(JSON.stringify({ hierarchy, objectHierarchy }));
+      console.log(JSON.stringify({ hierarchy }));
 
       const hierarchyContext: RestoreHierarchyContext = {
         restoreId,
