@@ -759,13 +759,25 @@ const buildRawFullRowSql = (
 
 // raw_csv only — fileOperations is ['updates'] for a BACKUP config's pending
 // snapshot rows, or ['inserts'] for an ARCHIVAL config's ENTIRE listing (see
-// file header above buildRawFullRowSql).
+// file header above buildRawFullRowSql). Tagged UPDATE for a BACKUP snapshot
+// (the record still exists live, a restore just writes its fields back) but
+// INSERT for an ARCHIVAL one — archival-v2 only ever writes `inserts/`
+// because the source record is gone from Salesforce by the time it's
+// archived, so restoring it means creating it, not updating one that's
+// already there.
 export const buildRawSnapshotSql = (
   rawTable: string,
   jobIds: string[],
   fileOperations: string[],
   p: IRetrieveSqlParams
-): string => buildRawFullRowSql(rawTable, jobIds, fileOperations, 'UPDATE', p);
+): string =>
+  buildRawFullRowSql(
+    rawTable,
+    jobIds,
+    fileOperations,
+    fileOperations.includes('inserts') ? 'INSERT' : 'UPDATE',
+    p
+  );
 
 // Deletes folder of the raw CSV table — restoring a deleted record is an
 // INSERT, same convention buildDeletedDeltaSql uses.
@@ -1309,6 +1321,17 @@ if (require.main === module) {
 
   // Injection defence carries over — job ids are quoted/escaped like every other literal.
   assert.ok(buildRawSnapshotSql('t', ["j'1"], ['inserts'], retrieve).includes(`'j''1'`));
+
+  // ARCHIVAL's inserts-folder snapshot is tagged INSERT (the source record is
+  // gone from Salesforce, so restoring it creates it) — BACKUP's updates-folder
+  // snapshot stays UPDATE (the record is still live, a restore just writes its
+  // fields back).
+  assert.ok(
+    buildRawSnapshotSql('t_raw_csv', jobIds, ['inserts'], retrieve).includes(`'INSERT' AS "dv_operation"`)
+  );
+  assert.ok(
+    buildRawSnapshotSql('t_raw_csv', jobIds, ['updates'], retrieve).includes(`'UPDATE' AS "dv_operation"`)
+  );
 
   console.log('athena-fetch self-check passed');
 }
