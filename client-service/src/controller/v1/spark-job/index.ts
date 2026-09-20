@@ -306,7 +306,13 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     console.log(JSON.stringify({restore}));
-    if(restore.destination.type !== 'EXPORT'){
+    if(restore.destination.type === 'EXPORT'){
+      const objects = restoreJob.destination.objects.map(o => ({...o, status: RESTORE_JOB_STATUS.success}));
+        await Promise.all([
+        updateRestoreJob({ restoreJobId: restoreConfigId, status: RESTORE_JOB_STATUS.success, replaceObjects: objects }),
+        updateRestore({ restoreId: restoreJob.restoreId, status: RESTORE_JOB_STATUS.success }),
+      ]);
+    }else {
       await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
     }
 
