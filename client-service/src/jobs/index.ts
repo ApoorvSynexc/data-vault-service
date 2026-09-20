@@ -5,6 +5,7 @@ import { runEmrJob } from "./run-emr-job"
 import { timer } from '../utils/helper';
 import { logger } from '../middlewares';
 import { NODE_ENV } from '../constant';
+import { runPaymentSyncJob } from './payement-sync';
 
 export const startCron = () => {
     // startBackupConfigCron();
@@ -15,10 +16,12 @@ export const startCron = () => {
     cron.schedule('0 3 * * *', async () => {
         logger.info(`[CRON] cron triggered | 3AM | started`);
         await runLogsArchive();
-        await timer(1000 * 60 * 15);
-
+        
         if (!['qa'].includes(NODE_ENV.toLowerCase())) {
+            await timer(1000 * 60 * 15);
             await runEmrJob();
+            await timer(1000 * 60 * 15);
+            runPaymentSyncJob();
         }
         logger.info(`[CRON] cron triggered | 3AM | ended`);
     });

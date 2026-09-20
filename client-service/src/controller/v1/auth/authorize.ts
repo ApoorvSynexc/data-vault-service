@@ -11,6 +11,7 @@ import {
   getSalesforceLoginUrl,
   createPaymentAccount,
   setupPayment,
+  getUser,
 } from '../../../services';
 import { decrypt, encrypt, generateOrgEncryptionKey, readEnvelope } from '../../../utils/encryption';
 import { encryptSalesforceResponse, resolveOrgKey } from '../../../utils/salesforce-crypto';
@@ -61,17 +62,18 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       }
       finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
 
-      if (crm.userId) {
-        const account = await createPaymentAccount(crm.organizationId, crm.userId);
+      const user = await getUser({userId: crm.userId});
+      if (user) {
+        const account = await createPaymentAccount(crm.organizationId, user.userId);
         const setup = await setupPayment({
           orgId: crm.organizationId,
           token: account.token,
           sfSecret: account.sf_secret,
           orgInfo: {
-            OrgType: 'Sandbox',
+            OrgType: crm.environment === 'production' ? 'Production' : 'Sandbox',
             orgName: '360SMS',
-            email: 'tHh9o@example.com',
-            userName: 'tHh9o@example.com',
+            email: user.crmProfile?.email || '',
+            userName: user.crmProfile?.username || '',
           },
           isTokenEncrypted: true
         });
@@ -80,7 +82,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
           sf_secret: account.sf_secret,
           token: setup.token
         }));
-        const paymentDetail= setup.data.Success;
+        const paymentDetail= setup.data?.Success;
         await updateCrm(crm.crmId, { paymentToken, paymentDetail });
       }
     }
