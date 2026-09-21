@@ -11,7 +11,6 @@ import { createRestoreValidation, uploadSingleCsv, bulkCsvUploadRateLimit } from
  * POST /retrieve/fetch-records          — records for one object out of the compressed Hudi/Delta
  *                                         tables: ENTIRE, or CHANGED_BETWEEN a date window, each row
  *                                         tagged with the OPERATION a restore would perform
- * POST /retrieve/fetch-inactive-record-types — Record Types made inactive or deleted inside a date window
  * POST /retrieve/fetch-missing-fields   — fields the backup config's stored S3 schema has that the
  *                                         destination object's live Salesforce fields do not
  * POST /retrieve/fetch-missing-record-types — record types, grouped by object, that the backup's
@@ -34,8 +33,9 @@ import { createRestoreValidation, uploadSingleCsv, bulkCsvUploadRateLimit } from
  *                                         (one per part) so the client downloads the exported
  *                                         CSV(s) for one object directly from S3
  * POST /bulk-csv/parse                  — uploads a CSV of record Ids (multipart, field "file",
- *                                         plus an "objectName" field) and returns
- *                                         { objectName, ids } for use as one entry of
+ *                                         plus "objectName" and "backupConfigId" fields), uploads it
+ *                                         to that config's destination S3, and returns
+ *                                         { objectName, ids, s3Key } for use as one entry of
  *                                         restoreScope.bulkCsvIds when creating a restore
  */
 const router = Router();
