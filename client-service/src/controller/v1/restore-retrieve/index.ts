@@ -3,7 +3,6 @@ import {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
-  getRestoreObjectListByConfigId,
   getBackupJobIdsChangedBetween,
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
@@ -31,8 +30,6 @@ import {
   getDestinationById,
   getDecryptedDestinationConfig,
   uploadToS3,
-  getBackupJobById,
-  getBackupJobsByConfig,
   retrieveMissingFields,
   retrieveMissingRecordTypes,
   retrieveRequiredFields,
@@ -45,7 +42,6 @@ import {
   runMetadataComparisonForConfig,
   hasMetadataChanged,
   triggerBackupJob,
-  getDecryptedCrmCredential,
   initalizeRestoreTransform,
   getRestoreJobById,
   updateRestoreJob,
@@ -60,9 +56,8 @@ import { toIsoDateString } from '../../../utils/iso-date';
 import { IBackupJob, IRestoreScope, IRestoreFilters, IS3Config } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
-import { removeCsvColumnsInFolder, parseCsvRow } from '../../../utils/restore-csv-format';
-import { ensureRestoreTrackingFields } from '../../../services/third-party/salesforce/restore-fields';
-import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission, sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
+import { parseCsvRow } from '../../../utils/restore-csv-format';
+import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
