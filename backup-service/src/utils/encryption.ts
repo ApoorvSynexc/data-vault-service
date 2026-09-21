@@ -1,62 +1,33 @@
 import crypto from 'crypto';
 import { ENCRYPTION_KEY } from '../constant';
 
-// const ALGORITHM = 'aes-256-gcm';
+const ALGORITHM = 'aes-256-gcm';
+const KEY = Buffer.from(ENCRYPTION_KEY, 'base64');
 
-// interface EncryptedPayload {
-//   ciphertext: string;
-//   iv: string;
-//   authTag: string;
-// }
-
-// const encrypt = (plaintext: string): EncryptedPayload => {
-//   const iv = crypto.randomBytes(16);
-//   const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-//   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-//   return {
-//     ciphertext: encrypted.toString('hex'),
-//     iv: iv.toString('hex'),
-//     authTag: cipher.getAuthTag().toString('hex'),
-//   };
-// };
-
-// const decrypt = ({ ciphertext, iv, authTag }: EncryptedPayload): string => {
-//   const decipher = crypto.createDecipheriv(
-//     ALGORITHM,
-//     Buffer.from(ENCRYPTION_KEY, 'hex'),
-//     Buffer.from(iv, 'hex')
-//   );
-//   decipher.setAuthTag(Buffer.from(authTag, 'hex'));
-//   return Buffer.concat([
-//     decipher.update(Buffer.from(ciphertext, 'hex')),
-//     decipher.final(),
-//   ]).toString('utf8');
-// };
-
-const ALGORITHM = 'aes-256-cbc';
 interface EncryptedPayload {
   ciphertext: string;
   iv: string;
+  authTag: string;
 }
+
 const encrypt = (plaintext: string): EncryptedPayload => {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'base64'), iv);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(ALGORITHM, KEY, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
   return {
     ciphertext: encrypted.toString('base64'),
     iv: iv.toString('base64'),
+    authTag: authTag.toString('base64'),
   };
 };
 
-const decrypt = ({ ciphertext, iv }: EncryptedPayload): string => {
-  const decipher = crypto.createDecipheriv(
-    ALGORITHM,
-    Buffer.from(ENCRYPTION_KEY, 'base64'),
-    Buffer.from(iv, 'base64')
-  );
+const decrypt = ({ ciphertext, iv, authTag }: EncryptedPayload): string => {
+  const decipher = crypto.createDecipheriv(ALGORITHM, KEY, Buffer.from(iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(authTag, 'base64'));
   return Buffer.concat([
     decipher.update(Buffer.from(ciphertext, 'base64')),
-    decipher.final(),
+    decipher.final(), // throws if auth tag verification fails
   ]).toString('utf8');
 };
 

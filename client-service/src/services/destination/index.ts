@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { DESTINATION_TABLE, STATUS } from '../../constant';
 import { IDestination } from '../../models';
-import { decrypt, deriveKey, encrypt } from '../../utils/encryption';
+import { decrypt, encrypt } from '../../utils/encryption';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
 interface CreateDestinationParams {
@@ -30,7 +30,7 @@ interface UpdateDestinationParams {
 const createDestination = async (params: CreateDestinationParams): Promise<IDestination> => {
   const { userId, name, provider, type, config } = params;
   const now = new Date().toISOString();
-  const { ciphertext, iv } = encrypt(JSON.stringify(config), deriveKey(userId));
+  const { ciphertext, iv, authTag } = encrypt(JSON.stringify(config));
 
   const item: IDestination = {
     destinationId: uuidv4(),
@@ -40,6 +40,7 @@ const createDestination = async (params: CreateDestinationParams): Promise<IDest
     type,
     ciphertext,
     iv,
+    authTag,
     status: STATUS.active,
     createdAt: now,
     updatedAt: now,
@@ -68,7 +69,7 @@ const getDestinationsByUser = async (
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
       FilterExpression: '#status = :active',
-      ProjectionExpression: 'destinationId, userId, #name, provider, #type, ciphertext, iv, #status, createdAt, updatedAt',
+      ProjectionExpression: 'destinationId, userId, #name, provider, #type, ciphertext, iv, authTag, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#status': 'status', '#name': 'name', '#type': 'type' },
       ExpressionAttributeValues: { ':uid': userId, ':active': STATUS.active },
       Limit: optional.limit,
@@ -98,9 +99,10 @@ const updateDestination = async (
   if (params.provider !== undefined) updates.provider = params.provider;
   if (params.type !== undefined) updates.type = params.type;
   if (params.config !== undefined) {
-    const { ciphertext, iv } = encrypt(JSON.stringify(params.config), deriveKey(userId));
+    const { ciphertext, iv, authTag } = encrypt(JSON.stringify(params.config));
     updates.ciphertext = ciphertext;
     updates.iv = iv;
+    updates.authTag = authTag;
   }
 
   const setExpr = Object.keys(updates)
@@ -136,7 +138,7 @@ const deleteDestination = async (destinationId: string): Promise<boolean> => {
 };
 
 const getDecryptedDestinationConfig = (destination: IDestination): Record<string, any> => {
-  return JSON.parse(decrypt({ ciphertext: destination.ciphertext, iv: destination.iv }, deriveKey(destination.userId)));
+  return JSON.parse(decrypt({ ciphertext: destination.ciphertext, iv: destination.iv, authTag: destination.authTag }));
 };
 
 export {

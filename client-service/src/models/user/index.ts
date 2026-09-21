@@ -23,6 +23,7 @@ export interface IUser {
   crmCredential?: {
     ciphertext: string;
     iv: string;
+    authTag: string;
   }
   contact?: {
     email?: string;

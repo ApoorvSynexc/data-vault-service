@@ -5,7 +5,7 @@ import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
 import { COMPRESSION_STATUS, RESTORE_JOB_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
 import { flattenBackupObjects, wrapController } from '../../../utils/helper';
-import { decrypt, decryptFromTransport, readEnvelope } from '../../../utils/encryption';
+import { decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
 import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, RESTORE_FIELD_JOB_STATUS, RESTORE_BACKUP_STATUS, toTreeSummary, filterObjectTree } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
@@ -23,15 +23,14 @@ const flattenParentObjects = (objects: IFlattenParentObjects[]): IFlattenParentO
 };
 
 // Decrypts a request, or returns null if it isn't decryptable. Accepts both shapes
-// Spark sends: a base64 transport string, or the raw { ciphertext, iv } envelope
-// posted as the body itself. Shared by both handlers so the invalid/undecryptable
-// cases stay one code path.
+// Spark sends: a base64 transport string, or the raw { ciphertext, iv, authTag }
+// envelope posted as the body itself. Shared by both handlers so the
+// invalid/undecryptable cases stay one code path.
 const decryptRequest = <T>(payload: unknown): T | null => {
   try {
-    const plaintext = typeof payload === 'string'
-      ? decryptFromTransport(payload)
-      : decrypt(readEnvelope(payload));
-    return JSON.parse(plaintext) as T;
+    return typeof payload === 'string'
+      ? decryptFromTransport<T>(payload)
+      : decryptEnvelope<T>(payload);
   } catch (error) {
     logger.error('payload decryption failed:', error);
     return null;

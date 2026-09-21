@@ -101,7 +101,6 @@ const DESTINATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.DESTINATION_TABLE ||
 const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
 const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
 
-// Encryption â€” must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
 // Webhook

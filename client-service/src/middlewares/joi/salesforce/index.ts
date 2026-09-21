@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { NextFunction, Response } from 'express';
 import { IRequest } from '../../../lib/interface/shared';
-import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
+import { decrypt, encryptEnvelope } from '../../../utils/encryption';
 import { logger } from '../../logger';
 
 const profileSchema = Joi.object({
@@ -41,8 +41,7 @@ export const upsertUsersValidation = (req: IRequest, res: Response, next: NextFu
       .required(),
   });
 
-  const { crm, plaintext } = req.salesforcePayload;
-  const body = JSON.parse(plaintext);
+  const { crm, data: body } = req.salesforcePayload;
 
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
@@ -50,7 +49,7 @@ export const upsertUsersValidation = (req: IRequest, res: Response, next: NextFu
     // diagnosed on the Node side — matches the log the other two validators
     // in this file already emit.
     logger.error(`upsertUsersValidation failed: ${JSON.stringify(error.details.map((d) => ({ path: d.path.join('.'), message: d.message })))}`);
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'VALIDATION_FAILED' }, decrypt(crm.encryptionKey)));
     return;
   }
   next();
@@ -75,13 +74,12 @@ export const createRoleValidation = (req: IRequest, res: Response, next: NextFun
     createdBy: Joi.string().optional(),
   });
 
-  const { crm, plaintext } = req.salesforcePayload;
-  const body = JSON.parse(plaintext);
+  const { crm, data: body } = req.salesforcePayload;
 
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
     logger.error(`createRoleValidation failed: ${error.message}`);
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'VALIDATION_FAILED' }, decrypt(crm.encryptionKey)));
     return;
   }
   next();
@@ -96,13 +94,12 @@ export const updateRoleValidation = (req: IRequest, res: Response, next: NextFun
     modules: modulePermissionsSchema,
   });
 
-  const { crm, plaintext } = req.salesforcePayload;
-  const body = JSON.parse(plaintext);
+  const { crm, data: body } = req.salesforcePayload;
 
   const { error } = schema.validate(body, { abortEarly: false });
   if (error) {
     logger.error(`updateRoleValidation failed: ${error.message}`);
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'VALIDATION_FAILED' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'VALIDATION_FAILED' }, decrypt(crm.encryptionKey)));
     return;
   }
   next();

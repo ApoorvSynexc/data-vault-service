@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { CRM_TABLE, STATUS } from '../../constant';
 import { ICrm } from '../../models';
+import { EncryptedPayload } from '../../utils/encryption';
 
 interface UpsertCrmParams {
   crmId?: string;
@@ -20,7 +21,7 @@ interface UpsertCrmParams {
   name?: string;
   status?: string;
   instanceUrl?: string;
-  encryptionKey?: string | { ciphertext: string; iv: string };
+  encryptionKey?: EncryptedPayload;
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {

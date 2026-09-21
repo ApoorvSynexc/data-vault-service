@@ -13,8 +13,7 @@ import {
   setupPayment,
   getUser,
 } from '../../../services';
-import { decrypt, encrypt, generateOrgEncryptionKey, readEnvelope } from '../../../utils/encryption';
-import { encryptSalesforceResponse, resolveOrgKey } from '../../../utils/salesforce-crypto';
+import { encrypt, decrypt, decryptEnvelope, encryptEnvelope, generateOrgEncryptionKey } from '../../../utils/encryption';
 import { STATUS, SALESFORCE_LOGIN_REDIRECT_URI } from '../../../constant';
 import { logger } from '../../../middlewares';
 
@@ -40,16 +39,14 @@ interface IAuthorizeUserPayload {
 const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   try {
 
-    let plaintext: string;
+    let payload: { type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload };
     try {
-      plaintext = decrypt(readEnvelope(req.body));
+      payload = decryptEnvelope<{ type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload }>(req.body);
     } catch (error: any) {
       logger.warn(`[configure-org] 401: decrypt/envelope failed: ${error?.message ?? error}`);
       makeResponse(req, res, 401, false, 'unauthorized');
       return;
     }
-
-    const payload: { type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload } = JSON.parse(plaintext);
     const finalResponse: any = {};
     if (payload.type === 'org' && payload.org_details) {
       finalResponse.org = await authorizeOrgHandler(payload.org_details);
@@ -60,7 +57,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
         logger.warn(`[configure-org] 401: org not registered for user authorization: ${payload.user_details.org_id}`);
         throw new Error('Org not registered for user authorization');
       }
-      finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
+      finalResponse.user = encryptEnvelope(await authorizeUserHandler(payload.user_details), decrypt(crm.encryptionKey!));
 
       const user = await getUser({userId: crm.userId});
       if (user && !crm.paymentToken) {
@@ -95,7 +92,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
 };
 
 
-const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{ encryptionKey: any }> => {
+const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{ encryptionKey: string }> => {
   // DataVaultAdminAuthorizationService.authorizeOrganization() (invoked from the
   // LWC's Authorize Admin flow, not the Post Install Handler — the installing user
   // has no Named Credential access at install time) encrypts { orgId, instanceUrl }
@@ -106,7 +103,7 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
   // This endpoint stays single-layer (Bootstrap Key only) — there's no org key to
   // wrap with yet, since registering the org is what produces one. Every other
   // Salesforce-facing endpoint uses the two-layer scheme (see
-  // utils/salesforce-crypto.ts) once an org key exists.
+  // middlewares/salesforce/index.ts) once an org key exists.
   const { orgId, instanceUrl } = payload;
   if (!orgId || !instanceUrl) {
     logger.warn(`[configure-org] 401: missing required field(s): hasOrgId=${!!orgId} hasInstanceUrl=${!!instanceUrl}`);
@@ -133,7 +130,7 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
     if (!crm.encryptionKey) {
       throw new Error('org_missing_encryption_key');
     }
-    rawEncryptionKey = resolveOrgKey(crm.encryptionKey);
+    rawEncryptionKey = decrypt(crm.encryptionKey);
   }
 
   return { encryptionKey: rawEncryptionKey };

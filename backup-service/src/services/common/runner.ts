@@ -131,6 +131,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       decrypt({
         ciphertext: destination.ciphertext,
         iv: destination.iv,
+        authTag: destination.authTag,
       })
     ) as IDestinationConfig;
 
@@ -235,6 +236,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       decrypt({
         ciphertext: destination.ciphertext,
         iv: destination.iv,
+        authTag: destination.authTag,
       })
     ) as IDestinationConfig;
 

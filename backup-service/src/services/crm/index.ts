@@ -2,16 +2,14 @@ import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { CRM_TABLE } from '../../constant';
 
-// Backup-service reads CRM records only to resolve the per-org encryption
-// key used in the two-layer Salesforce decrypt scheme. This is a read-only,
-// intentionally-thin projection of client-service's fuller CRM model; adding
-// more fields here should stay defensive — writes to CRM_TABLE happen in
-// client-service, not here.
+// Backup-service reads CRM records only to resolve org identity. This is a
+// read-only, intentionally-thin projection of client-service's fuller CRM
+// model; adding more fields here should stay defensive — writes to
+// CRM_TABLE happen in client-service, not here.
 export interface ICrm {
   crmId: string;
   organizationId: string;
   crmName?: string;
-  encryptionKey?: string | { ciphertext: string; iv: string };
   instanceUrl?: string;
   environment?: string;
 }

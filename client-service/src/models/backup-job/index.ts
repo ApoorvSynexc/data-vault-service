@@ -35,7 +35,7 @@ export interface IBackupJob {
   jobType: 'BULK' | 'REALTIME';
   userId: string; // GSI: userId-index
   backupConfigId: string; // GSI: backupConfigId-index
-  source: { ciphertext: string; iv: string }; // encrypted — never expose
+  source: { ciphertext: string; iv: string; authTag: string }; // encrypted — never expose
   destination: { type: string; ciphertext: string; iv: string; authTag: string }; // encrypted — never expose
   object?: IBackupObject[];
   // PENDING | RUNNING | SUCCESS | FAILED, then the compression lifecycle overwrites it:
