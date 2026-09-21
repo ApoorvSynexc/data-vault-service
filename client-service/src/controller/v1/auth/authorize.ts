@@ -75,7 +75,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
             email: user.crmProfile?.email || '',
             userName: user.crmProfile?.username || '',
           },
-          isTokenEncrypted: true
+          isTokenEncrypted: false
         });
 
         const paymentToken = encrypt(JSON.stringify({
