@@ -86,8 +86,10 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   const { crm }: { crm: ICrm } = req.salesforcePayload;
   const { crmId } = crm;
 
+  console.log(`[salesforce] getUsersHandler | crm: ${JSON.stringify(crm)}`);
   const usersByCrmId = await getUsersByCrmId(crmId);
   const users = [];
+  console.log(`[salesforce] getUsersHandler | usersByCrmId: ${JSON.stringify(usersByCrmId)}`);
   for await (const element of usersByCrmId) {
     const role = await getRole({ roleId: element.role.roleId });
     if (role && hasAnyGrant(role.permissions)) {
