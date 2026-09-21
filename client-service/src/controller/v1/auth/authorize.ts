@@ -97,7 +97,7 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
       crmName: 'salesforce',
       instanceUrl,
       encryptionKey: encrypt(rawEncryptionKey), // encrypted at rest with the master key, like crmCredential
-      status: STATUS.notAuthorized,
+      status: STATUS.inactive,
     });
   } else {
     if (crm.instanceUrl !== instanceUrl) {
