@@ -305,7 +305,17 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       }
     }
 
-    await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
+    console.log(JSON.stringify({restore}));
+    if(restore.destination.type === 'EXPORT'){
+      const objects = restoreJob.destination.objects.map(o => ({...o, status: RESTORE_JOB_STATUS.success}));
+        await Promise.all([
+        updateRestoreJob({ restoreJobId: restoreConfigId, status: RESTORE_JOB_STATUS.success, replaceObjects: objects }),
+        updateRestore({ restoreId: restoreJob.restoreId, status: RESTORE_JOB_STATUS.success }),
+      ]);
+    }else {
+      await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
+    }
+
     return makeResponse(req, res, 200, true, 'update');
   }
 };
@@ -380,8 +390,19 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
 
   const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
 
+  // Order.StatusCode mirrors the Status picklist value rather than being
+  // independently writable — Salesforce manages it off Status, so it's
+  // excluded from Order's restore field list specifically (describe still
+  // reports it updateable/createable in many orgs).
+  const excludedFieldNames = objectApiName === 'Order' ? ['StatusCode'] : [];
+
   const updateableFieldNames = described.fields
-    .filter((field) => (field.updateable || field.createable) && !SALESFORCE_SYSTEM_FIELDS.includes(field.name))
+    .filter(
+      (field) =>
+        (field.updateable || field.createable) &&
+        !SALESFORCE_SYSTEM_FIELDS.includes(field.name) &&
+        !excludedFieldNames.includes(field.name)
+    )
     .map((field) => field.name);
 
   const fieldNames = Array.from(new Set(['Id', ...updateableFieldNames]));

@@ -354,6 +354,11 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     try {
+        if (config.status === STATUS.draft) {
+            await deleteBackupConfig(String(backupConfigId));
+            return makeResponse(req, res, 200, true, 'delete');
+        }
+
         const { scheduledObjects } = filtereObjects(config.objects || []);
         if (scheduledObjects.length) {
             for (let index = 0; index < scheduledObjects.length; index++) {

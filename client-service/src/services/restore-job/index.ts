@@ -941,8 +941,8 @@ export const RESTORE_CSV_STATUS = {
 };
 
 // Stage 3 (CSV creation): submits the EMR/Spark job via the exact same
-// initalizeRestoreTransform → submitEMR path createRestoreHandler used to
-// call directly — no second EMR client, no new polling. StartJobRunCommand
+// initalizeRestoreTransform → submitEMR path createRestoreHandler2 calls
+// directly — no second EMR client, no new polling. StartJobRunCommand
 // only enqueues the run; it returns long before Spark finishes. Actual
 // completion is reported later through the pre-existing
 // /spark-job/update-spark-job-status webhook (see updateSparkJobStatusHandler

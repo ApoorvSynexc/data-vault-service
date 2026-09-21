@@ -3,8 +3,6 @@ import {
   getRestoreRetrieveJobById,
   getRestoreRetrieveJobsByConfig,
   getRestoreRetrieveJobsByUser,
-  getObjectListByConfigId,
-  getRestoreObjectListByConfigId,
   getBackupJobIdsChangedBetween,
   CHANGED_BETWEEN_JOBS_LIMIT,
   CHANGED_BETWEEN_JOBS_MAX_LIMIT,
@@ -16,7 +14,6 @@ import {
   updateRestore,
   getRestoreById,
   IRetrieveRecordsParams,
-  IFetchInactiveRecordTypesParams,
   RetrieveType,
   FilterError,
   validateColumns,
@@ -31,9 +28,8 @@ import {
   PAGE_SIZE,
   getUser,
   getDestinationById,
-  getBackupJobById,
-  getBackupJobsByConfig,
-  retrieveInactiveRecordTypes,
+  getDecryptedDestinationConfig,
+  uploadToS3,
   retrieveMissingFields,
   retrieveMissingRecordTypes,
   retrieveRequiredFields,
@@ -46,7 +42,6 @@ import {
   runMetadataComparisonForConfig,
   hasMetadataChanged,
   triggerBackupJob,
-  getDecryptedCrmCredential,
   initalizeRestoreTransform,
   getRestoreJobById,
   updateRestoreJob,
@@ -58,12 +53,11 @@ import { BACKUP_JOB_TABLE, RESTORE_JOB_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
-import { IBackupJob, IRestoreScope, IRestoreFilters } from '../../../models';
+import { IBackupJob, IRestoreScope, IRestoreFilters, IS3Config } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
-import { removeCsvColumnsInFolder } from '../../../utils/restore-csv-format';
-import { ensureRestoreTrackingFields } from '../../../services/third-party/salesforce/restore-fields';
-import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission, sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
+import { parseCsvRow } from '../../../utils/restore-csv-format';
+import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -779,17 +773,20 @@ const dryRunDiffHandler = async (req: IRequest, res: IResponse): Promise<void> =
 };
 
 /**
- * Parses the body shared by every "schema-change deltas for one object in a
- * window" endpoint: backupConfigId, objectApiName, startDate, endDate. Used by
- * fetchInactiveRecordTypesHandler.
+ * Parses the body fetchMissingFieldsHandler takes: backupConfigId,
+ * objectApiName, configType, and an optional startDate/endDate window —
+ * same shape and window semantics as parseMissingRecordTypesParams. A
+ * BACKUP config's window scopes a FIELD schema-change delta scan; omit both
+ * for the whole delta history. An ARCHIVAL config is always ENTIRE — a
+ * window is rejected up front, same convention dryRunRestore/dryRunDiff use.
  */
-const parseSchemaDeltaWindowParams = (
+const parseMissingFieldsParams = (
   body: Record<string, unknown>,
   userId: string
 ):
-  | { ok: true; value: IFetchInactiveRecordTypesParams }
+  | { ok: true; value: Omit<Parameters<typeof retrieveMissingFields>[0], 'user'> }
   | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  const { backupConfigId, objectApiName, startDate, endDate } = body;
+  const { backupConfigId, objectApiName, configType, startDate, endDate } = body;
 
   if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
     return { ok: false, error: 'id_required' };
@@ -797,10 +794,29 @@ const parseSchemaDeltaWindowParams = (
   if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
     return { ok: false, error: 'object_api_name_required' };
   }
+  if (typeof configType !== 'string' || !VALID_CONFIG_TYPES.includes(configType as ConfigType)) {
+    return { ok: false, error: 'invalid_config_type' };
+  }
+
+  if (startDate === undefined && endDate === undefined) {
+    return {
+      ok: true,
+      value: {
+        backupConfigId: backupConfigId.trim(),
+        objectApiName: objectApiName.trim(),
+        configType: configType as ConfigType,
+        userId,
+      },
+    };
+  }
+
+  if (configType === 'ARCHIVAL') {
+    return { ok: false, error: 'archival_missing_fields_entire_only' };
+  }
+
   if (typeof startDate !== 'string' || !startDate.trim() || typeof endDate !== 'string' || !endDate.trim()) {
     return { ok: false, error: 'date_range_required' };
   }
-
   const start = toIsoDateString(startDate, 'start');
   const end = toIsoDateString(endDate, 'end');
   if (!start || !end) {
@@ -815,76 +831,32 @@ const parseSchemaDeltaWindowParams = (
     value: {
       backupConfigId: backupConfigId.trim(),
       objectApiName: objectApiName.trim(),
+      configType: configType as ConfigType,
+      userId,
       startDate: start,
       endDate: end,
-      userId,
     },
   };
 };
 
 /**
- * POST /retrieve/fetch-inactive-record-types
- * Body: { backupConfigId, objectApiName, startDate, endDate }
- *
- * Record Types that are inactive or deleted, out of the RECORD_TYPE
- * schema-change deltas in [startDate, endDate] — see retrieveInactiveRecordTypes.
- * Returns not_exist when the config doesn't exist or isn't owned by the caller.
- */
-const fetchInactiveRecordTypesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const parsed = parseSchemaDeltaWindowParams(req.body as Record<string, unknown>, req.user!.userId);
-  if (!parsed.ok) {
-    makeResponse(req, res, 400, false, parsed.error);
-    return;
-  }
-
-  const result = await retrieveInactiveRecordTypes(parsed.value);
-  if (!result) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', result);
-};
-
-/**
- * Parses the body fetchMissingFieldsHandler takes: backupConfigId,
- * objectApiName — no date window, this compares stored schema against a
- * live Salesforce describe, not schema-change deltas.
- */
-const parseMissingFieldsParams = (
-  body: Record<string, unknown>,
-  userId: string
-):
-  | { ok: true; value: { backupConfigId: string; objectApiName: string; userId: string } }
-  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
-  const { backupConfigId, objectApiName } = body;
-
-  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
-    return { ok: false, error: 'id_required' };
-  }
-  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
-    return { ok: false, error: 'object_api_name_required' };
-  }
-
-  return {
-    ok: true,
-    value: { backupConfigId: backupConfigId.trim(), objectApiName: objectApiName.trim(), userId },
-  };
-};
-
-/**
  * POST /retrieve/fetch-missing-fields
- * Body: { backupConfigId, objectApiName }
+ * Body: { backupConfigId, objectApiName, configType, startDate?, endDate? }
  *
- * Compares the field schema stored on S3 for the backup config against the
- * destination object's live Salesforce fields, and returns the fields the
- * backup captured that no longer exist on the destination — what a restore's
- * "missing fields in destination" edge case needs to map to an existing
- * destination field. hasMissingFields is false (with an empty missingFields
- * array) when every backed-up field still exists on the destination.
+ * Fields a restore's "missing fields in destination" edge case needs
+ * mapped: fields the backup ever knew about that no longer exist on the
+ * destination object's live Salesforce describe. hasMissingFields is false
+ * (with an empty missingFields array) when nothing is missing.
  *
- * Returns not_exist when the config doesn't exist, isn't owned by the
- * caller, or no schema has been stored for the object yet.
+ * BACKUP: a FIELD schema-change delta scan, windowed by startDate/endDate or
+ * unbounded when omitted (same shape as fetch-missing-record-types).
+ * ARCHIVAL: always ENTIRE — unions that same delta scan (archival's
+ * schema-only delta table) with a comparison of the S3 main field-schema
+ * snapshot against a live describe, since the delta history alone only
+ * covers what a Spark run actually flagged.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the
+ * caller.
  */
 const fetchMissingFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const parsed = parseMissingFieldsParams(req.body as Record<string, unknown>, req.user!.userId);
@@ -909,7 +881,9 @@ const fetchMissingFieldsHandler = async (req: IRequest, res: IResponse): Promise
  * scope types) or nothing (resolved to every restorable object on the
  * config — an ALL/ENTIRE scope). startDate/endDate are optional and, when
  * given, scope the delta scan the same way a CHANGED_BETWEEN restore's own
- * window already does; omit both for the whole delta history.
+ * window already does; omit both for the whole delta history. An ARCHIVAL
+ * config is always ENTIRE — a window is rejected up front, same convention
+ * dryRunRestore/dryRunDiff use.
  */
 const parseMissingRecordTypesParams = (
   body: Record<string, unknown>,
@@ -939,6 +913,10 @@ const parseMissingRecordTypesParams = (
         objectApiNames: (objectApiNames as string[] | undefined)?.map((o) => o.trim()).filter(Boolean),
       },
     };
+  }
+
+  if (configType === 'ARCHIVAL') {
+    return { ok: false, error: 'archival_missing_record_types_entire_only' };
   }
 
   if (typeof startDate !== 'string' || !startDate.trim() || typeof endDate !== 'string' || !endDate.trim()) {
@@ -972,10 +950,10 @@ const parseMissingRecordTypesParams = (
  *
  * Record types a restore's "Record type missing" edge case needs mapped,
  * grouped by object: record types this backup's history ever flagged
- * inactive/deleted (the same RECORD_TYPE schema-change delta query
- * fetchInactiveRecordTypesHandler uses) that are, right now, either missing
- * from or still inactive on the destination object's live Salesforce record
- * types. Runs across every object in one call — pass objectApiNames for a
+ * inactive/deleted (same buildRecordTypeDeltaSql query pattern) that are,
+ * right now, either missing from or still inactive on the destination
+ * object's live Salesforce record types. Runs across every object in one
+ * call — pass objectApiNames for a
  * scoped restore, omit it to resolve every restorable object on the config
  * (an ENTIRE restore), so the UI never has to call this once per object.
  *
@@ -1088,70 +1066,56 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'fetch', fields);
 };
 
-const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  const { ...body } = req.body;
-
-  // Joi only checks internal consistency (e.g. DELETED_BETWEEN requires configType
-  // ARCHIVAL within the payload itself) — this confirms the claimed configType
-  // actually matches backupConfigId's stored type, same cross-check
-  // getObjectListByConfigIdHandler already applies to the object-list endpoint.
-  const { found: configTypeMatches } = await getObjectListByConfigId(
-    body.source.backupConfigId,
-    body.source.configType,
-    user!.userId
-  );
-  if (!configTypeMatches) {
-    makeResponse(req, res, 400, false, 'invalid_config_type');
-    return;
+const MAX_BULK_CSV_ROWS = 50000;
+const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const file = req.file;
+  if (!file) {
+    return makeResponse(req, res, 400, false, 'file_required');
   }
 
-  // includeChilds only means something for a BACKUP/NORMAL-sourced restore —
-  // an ARCHIVAL restore's object tree already states its own child hierarchy
-  // explicitly, so this would be redundant (or contradictory) there.
-  if (body.conflict?.edgeCases?.includeChilds && body.source.configType === 'ARCHIVAL') {
-    makeResponse(req, res, 400, false, 'include_childs_not_supported_for_archival');
-    return;
+  const { objectName, backupConfigId } = req.body as { objectName?: string; backupConfigId?: string };
+  if (!objectName) {
+    return makeResponse(req, res, 400, false, 'object_name_required');
+  }
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'config_id_required');
   }
 
-  // ARCHIVAL restores must express their scope as the object tree (root
-  // filters/recordIds + recursive children) — every other scope type assumes
-  // a flat, independently-filterable object list, which doesn't fit how an
-  // archival hierarchy is restored. Joi validates OBJECT_TREE's own shape;
-  // this is the cross-check against source.configType Joi can't reach.
-  const restoreScopeType = body.selection?.restoreScope?.type;
-  if (body.source.configType === 'ARCHIVAL' && restoreScopeType !== 'OBJECT_TREE') {
-    makeResponse(req, res, 400, false, 'archival_restore_requires_object_tree_scope');
-    return;
-  }
-  if (body.source.configType !== 'ARCHIVAL' && restoreScopeType === 'OBJECT_TREE') {
-    makeResponse(req, res, 400, false, 'object_tree_scope_requires_archival');
-    return;
+  const backupConfig = await getBackupConfigById(backupConfigId);
+  if (!backupConfig) {
+    return makeResponse(req, res, 400, false, 'backup_config_not_found');
   }
 
-  const restoreId = uuidv4();
-  const isDraft = body.status === 'DRAFT';
-  const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? 'DRAFT' : 'IN_PROGRESS' };
-  const created = await createRestore(payload);
-  if (!created) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
+  const destination = await getDestinationById(backupConfig.destinationId);
+  if (!destination) {
+    return makeResponse(req, res, 400, false, 'destination_not_found');
   }
 
-  // Job row + per-object statuses are written before the response goes out —
-  // a DynamoDB Put plus a handful of Gets, not the slow part. If this throws,
-  // wrapController turns it into a 400 and the restore record above is left
-  // IN_PROGRESS with no job — see architectural notes on this in the report.
-  const restoreJob = isDraft ? null : await createRestoreJob(payload);
-  makeResponse(req, res, 201, true, 'create');
-
-  if (restoreJob) {
-    tiggerRestoreJob(restoreJob).catch((error) => {
-      logger.error(
-        `[restore] restore workflow failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
-      );
-    });
+  const lines = file.buffer
+    .toString('utf8')
+    .split(/\r\n|\r|\n/)
+    .filter((line) => line.trim().length > 0);
+  if (!lines.length) {
+    return makeResponse(req, res, 400, false, 'empty_csv_file');
   }
+
+  const header = parseCsvRow(lines[0]);
+  const idColumnIndex = header.findIndex((column) => column.trim().toLowerCase() === 'id');
+  const hasHeader = idColumnIndex >= 0;
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+
+  if (dataLines.length > MAX_BULK_CSV_ROWS) {
+    return makeResponse(req, res, 400, false, 'too_many_records');
+  }
+  if (!dataLines.length) {
+    return makeResponse(req, res, 400, false, 'empty_csv_file');
+  }
+
+  const s3Config = getDecryptedDestinationConfig(destination) as IS3Config;
+  const s3Key = `bulk-csv-ids/${req.user!.userId}/${uuidv4()}.csv`;
+  await uploadToS3(s3Config, s3Key, file.buffer);
+
+  makeResponse(req, res, 200, true, 'fetch', { objectName, s3Key });
 };
 
 const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -1217,7 +1181,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           },
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
-      } {
+      } else {
         await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
         await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
         await initalizeRestoreTransform(restoreJob.restoreJobId);
@@ -1335,7 +1299,7 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  if (restoreJob.status !== 'COMPLETED') {
+  if (restoreJob.status !== RESTORE_JOB_STATUS.success) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
@@ -1372,14 +1336,12 @@ export const restoreRetrieveJobController = wrapController({
   getObjectListByConfigIdHandler,
   fetchChangeBetweenBackupJobsHandler,
   fetchRecordsHandler,
-  fetchInactiveRecordTypesHandler,
   fetchMissingFieldsHandler,
   fetchMissingRecordTypesHandler,
   requiredFieldsHandler,
   fetchObjectFieldsHandler,
   dryRunHandler,
   dryRunDiffHandler,
-  createRestoreHandler,
   activateRestoreHandler,
   getPicklistFieldValuesHandler,
   listRestoresHandler,
@@ -1387,5 +1349,6 @@ export const restoreRetrieveJobController = wrapController({
   getRestoreJobStatsHandler,
   createRestoreHandler2,
   createRollbackHandler,
-  downloadCsvFile
+  downloadCsvFile,
+  parseBulkCsvIdsHandler
 });

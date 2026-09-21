@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { httpRequest } from '../../../utils/http-request';
 import { logger } from '../../../middlewares';
-import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME } from '../../../constant';
+import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME, PAYMENT_SECRET_KEY } from '../../../constant';
 
 interface Create360AccountApiResponse {
   status: string;
@@ -22,24 +22,31 @@ interface GetSetupResponseApiResponse {
 
 interface SetupPaymentInput {
   orgId: string;
-  productName: string;
-  // PHP token from createPaymentAccount, or the `token` returned by the previous
-  // setupPayment call — this API rotates it on every call (see setupPayment below).
   token: string;
-  // sf_secret from createPaymentAccount's decrypted result: "<16-char iv>:<16-char key>".
   sfSecret: string;
-  // The connected Salesforce org's own REST endpoint, e.g.
-  // "https://<org>.my.salesforce.com/services/apexrest/DataCraftRest" — differs per
-  // org (and sandbox vs production), so the caller supplies it rather than this
-  // module hardcoding one.
-  salesforceEndpoint: string;
-  // Plaintext org/usage info to report (storage used, edition, org type, admin
-  // contact, etc.) — shaped by the caller, encrypted here before sending.
-  orgInfo: Record<string, unknown>;
+  orgInfo: {
+    OrgType: 'Sandbox' | 'Production',
+    orgName: string,
+    email: string,
+    userName: string,
+  };
+  isTokenEncrypted: boolean;
+}
+
+// The decrypted subscription status returned inside getSetupResponse's `Success` key.
+interface SetupPaymentStatus {
+  orgId: string;
+  status: string;
+  ExpiryDate: string;
+  trial_period_limit: string;
+}
+
+interface SetupPaymentResponseData {
+  Success: SetupPaymentStatus;
 }
 
 interface SetupPaymentResult {
-  data: Record<string, unknown>;
+  data: SetupPaymentResponseData;
   // Rotated PHP token — persist this and use it for the *next* call, not the one
   // that was just passed in.
   token: string;
@@ -140,22 +147,45 @@ const createPaymentAccount = async (orgId: string, userId: string): Promise<Crea
 // for the next call instead of the one just passed in.
 const setupPayment = async ({
   orgId,
-  productName,
   token,
   sfSecret,
-  salesforceEndpoint,
   orgInfo,
+  isTokenEncrypted
 }: SetupPaymentInput): Promise<SetupPaymentResult> => {
   const { key, iv } = parseSfSecret(sfSecret);
-  const encryptedMessage = aesCbc128Encrypt(key, iv, JSON.stringify(orgInfo));
+  const encryptedMessage = aesCbc128Encrypt(key, iv, JSON.stringify({
+    'FileStorageMB Used': 5,
+    'FileStorageMB Maximum': 50,
+    namespace: '',
+    platformuser: '',
+    sfuser: '',
+    address: {
+      city: null,
+      country: 'US',
+      geocodeAccuracy: null,
+      latitude: null,
+      longitude: null,
+      postalCode: null,
+      state: null,
+      street: null,
+    },
+    edition: 'Developer Edition',
+    phone: '',
+    mobilephone: '',
+    country: 'US',
+    Secretkey: PAYMENT_SECRET_KEY,
+    orgId,
+    ...orgInfo,
+  }));
   const body = JSON.stringify({
-    endpoint: salesforceEndpoint,
+    endpoint: `${PAYMENT_API_BASE_URL}/services/apexrest/DataCraftRest`,
     message: encryptedMessage,
   });
 
-  console.log({
-      
-  })
+  if (isTokenEncrypted) {
+    token = aesCbc128Decrypt(key, iv, token);
+  }
+
   let response: GetSetupResponseApiResponse;
   try {
     response = await httpRequest<GetSetupResponseApiResponse>({
@@ -163,7 +193,7 @@ const setupPayment = async ({
       method: 'POST',
       headers: {
         orgId,
-        'product-name': productName,
+        'product-name': PAYMENT_PRODUCT_NAME,
         Authorization: `Bearer ${token}`,
       },
       body,
@@ -180,13 +210,25 @@ const setupPayment = async ({
   }
 
   const decrypted = aesCbc128Decrypt(key, iv, response.message);
-
   logger.info(`[payment] setup response fetched for org ${orgId}`);
   return {
-    data: JSON.parse(decrypted) as Record<string, unknown>,
+    data: JSON.parse(decrypted) as SetupPaymentResponseData,
     token: response.token,
   };
 };
 
-export { createPaymentAccount, setupPayment };
+const testDecrypt = (orgId: string, createAccountEncyption: string, encryption: string, newToken: string) => {
+  const decrypted = decryptPayload(orgId, createAccountEncyption);
+  const paredDecypted = JSON.parse(decrypted);
+  console.log({ paredDecypted })
+  const { key, iv } = parseSfSecret(paredDecypted.sf_secret);
+  const decrypte = aesCbc128Decrypt(key, iv, encryption);
+
+  const decryptedtoken = aesCbc128Decrypt(key, iv, newToken);
+  console.log({ decryptedtoken })
+
+  console.log(JSON.stringify({ decrypte }));
+}
+
+export { createPaymentAccount, setupPayment, testDecrypt };
 export type { Create360AccountResult, SetupPaymentInput, SetupPaymentResult };

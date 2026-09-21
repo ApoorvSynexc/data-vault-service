@@ -1,5 +1,5 @@
 import { logger } from "../middlewares";
-import { getBackupConfigsInBatches, getUser, initalizePayloadTransform, triggerBackupJob, runMetadataComparisonForConfig, hasMetadataChanged, updateBackupConfig, checkSalesforceApiLimitUsage } from "../services";
+import { getBackupConfigsInBatches, getUser, initalizePayloadTransform, triggerBackupJob, runMetadataComparisonForConfig, hasMetadataChanged, updateBackupConfig, checkSalesforceApiLimitUsage, cleanupStaleRetrieveObjects } from "../services";
 import { BACKUP_STATUS } from '../constant';
 import { IUser } from "../models";
 import { syncObjects } from "./sync-objects";
@@ -11,6 +11,11 @@ const runEmrJob = async () => {
         for (let index = 0; index < configs.length; index++) {
           const config = configs[index];
           let user: IUser | null = null;
+
+          // Fire-and-forget: not awaited, self-catching (see
+          // cleanupStaleRetrieveObjects), so it can never delay or fail EMR
+          // triggering for this config or any other in the batch.
+          void cleanupStaleRetrieveObjects(config);
 
           if ([BACKUP_STATUS.pending].includes(config.backupStatus ?? '')) {
             continue;

@@ -1,7 +1,7 @@
 import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { RESTORE_JOB_TABLE, JOB_STATUS } from '../../constant';
-import { IRestoreJob, IRestoreJobObject } from '../../models';
+import { IRestoreJob, IRestoreJobObject, IRestoreObjectHierarchyTreeNode } from '../../models';
 
 interface UpdateRestoreJobStatusParams {
   restoreJobId: string;
@@ -211,6 +211,7 @@ interface UpdateRestoreJobParams {
   errorMessage?: string;
   objects?: RestoreJobObjectUpdate[];
   replaceObjects?: IRestoreJobObject[];
+  hierarchy?: IRestoreObjectHierarchyTreeNode[];
   conditionExpression?: string;
   conditionExpressionValues?: Record<string, any>;
 }
@@ -248,6 +249,7 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
     errorMessage,
     objects,
     replaceObjects,
+    hierarchy,
     conditionExpression,
     conditionExpressionValues,
   } = params;
@@ -285,6 +287,11 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
     expressionNames['#destination'] = 'destination';
     expressionNames['#objects'] = 'objects';
     expressionValues[':replaceObjects'] = replaceObjects;
+  }
+
+  if (hierarchy) {
+    setParts.push('hierarchy = :hierarchy');
+    expressionValues[':hierarchy'] = hierarchy;
   }
 
   if (job && objects?.length) {

@@ -23,7 +23,7 @@ import {
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
-import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, triggerBackupJob } from '../../../services';
+import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, testDecrypt, triggerBackupJob } from '../../../services';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -90,7 +90,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       continue;
     }
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
 
     /**
      * WHY we pass destination config decrypted to backup-service:
@@ -243,50 +243,34 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const orgId = '00Df600000T9DlJEAV';
   const userId = '005f6000008QmlyAAC';
-  const instanceUrl = 'https://saas-ruby-1808.my.salesforce.com'
+  const instanceUrl = 'https://360degree--hrorg.sandbox.my.salesforce.com'
   // const account = await createPaymentAccount(orgId, userId);
   // console.log(JSON.stringify({account}));
-  const account = {"token":"KTqLLhA5cOPmiS9WETTtJ4jShT36YFXsGHppaZctkclB7Ya2rcFgQUDrIU7xAec2==","sf_secret":"360SMS-Secret-IV:360SMS-Secrt-key"}
+  const account = {
+    token: 'FmwBKdNra6wnkLMLRe1UxQPSv4HvVf9TzSOh4QuDDXHjAKwOGzm54gsby3VhGsoa2RbLXcza8Q4X/mmk01qCT9ZuhIqWXKMq1hl3TvwFe/U=',
+    sf_secret: '360SMS-Secret-IV:360SMS-Secrt-key',
+  }
   const setup = await setupPayment({
     orgId,
-    productName: PAYMENT_PRODUCT_NAME,
     token: account.token,
     sfSecret: account.sf_secret,
-    // Staging Salesforce org REST endpoint from the vendor's docs — swap for the
-    // real connected org's instanceUrl-based endpoint outside this test handler.
-    salesforceEndpoint: `${instanceUrl}/services/apexrest/DataCraftRest`,
-    // Sample org/usage info shape from the vendor's docs — real callers should
-    // build this from the connected org's actual limits/profile instead.
     orgInfo: {
-      'FileStorageMB Used': 5,
-      'FileStorageMB Maximum': 50,
-      namespace: '',
-      platformuser: '',
-      sfuser: '',
-      address: {
-        city: null,
-        country: 'US',
-        geocodeAccuracy: null,
-        latitude: null,
-        longitude: null,
-        postalCode: null,
-        state: null,
-        street: null,
-      },
-      edition: 'Developer Edition',
       OrgType: 'Sandbox',
-      orgName: '360 Data Craft Dev',
-      phone: '',
-      mobilephone: '',
-      country: 'US',
-      email: 'abhay.test@360smsapp.com',
-      userName: 'User test',
-      Secretkey: 'Secretkey',
-      orgId,
+      orgName: '360SMS',
+      email: 'tHh9o@example.com',
+      userName: 'tHh9o@example.com',
     },
+    isTokenEncrypted: true
   });
 
-  makeResponse(req, res, 200, true, 'create', { setup });
+  // testDecrypt(
+  //   orgId,
+  //   "83BhQHjbEXldMrDurJDieNe+pK4uXezCvE6tIIcT8rltS38v5DyNVESGlHFq+JsDxWX0P467BOEHh79emLEuQkdg24Wb0BVOSFH4gKPoowyy+p8Gt1MLuQSnZtO3JClfy+8d1vjUpsXdlFBy0KqTR/GUVH5AaqWbbTJgLxJ2bYQ=",
+  //   "lzFdQjdND35rPacvAq2JqeZoANvaeNe3oWn/wbsYszgAKQVPd9QmcmBaUzM8GzU8W9aVc7ir9J1gsGi/kda0Koy9ylU9EiUwGeZzSPBUEOYS8jezxmlcJ+jDDID2BBlhsco8oWJwDTzTUliBJ5tJB11i/B0AeW4HUNLhm3n+rR90HYLlJM1IZzWRJV55D1Box97UkenCJB5MEt22ZyIjbQ==",
+  //   "PS0ihMYRRfbhVuJLuol9RHrM7n22YmoAaadSU4p4bEVbR0crMcz8S8lbSu7e5ymg0hRsWUwgjoV8K551dYZO3kY0KdmiAk0iwHqUvcw/BvA="
+  // );
+
+  makeResponse(req, res, 200, true, 'create', setup);
 }
 
 export const publicController = wrapController({

@@ -4,8 +4,6 @@ import { makeResponse } from '../../../lib';
 import { DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_TYPE, STATUS, WEEK_DAY } from '../../../constant';
 import { objectSchema } from '../shared';
 
-// OBJECT_TREE is ARCHIVAL-only (enforced in createRestoreHandler, not here —
-// see the cross-check note above restoreScopeSchema's objectTree field).
 const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'INSERTS_ONLY', 'CHANGE_SINCE', 'BULK_CSV', 'OBJECT_TREE'];
 const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
 const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT', 'EXPORT'];
@@ -155,10 +153,6 @@ const restoreScopeSchema = Joi.object({
     then: Joi.boolean().required(),
     otherwise: Joi.forbidden(),
   }),
-  // ARCHIVAL-only in practice — createRestoreHandler cross-checks type
-  // 'OBJECT_TREE' against source.configType === 'ARCHIVAL' (and rejects it
-  // for BACKUP), since Joi.when here can't reach across into the sibling
-  // `source` branch of the top-level createRestoreValidation schema.
   objectTree: Joi.when('type', {
     is: 'OBJECT_TREE',
     then: archivalObjectTreeSchema.required(),
@@ -233,9 +227,6 @@ const edgeCasesSchema = Joi.object({
   parentMissing: Joi.string().allow('').optional(),
   recordTypeMissing: recordTypeMissingSchema.optional(),
   missingRequiredFieldValue: missingRequiredFieldValueSchema.optional(),
-  // BACKUP/NORMAL-sourced restores only — cross-checked against
-  // source.configType in createRestoreHandler, not here (Joi refs can't
-  // cleanly reach across the source/conflict branches of this schema).
   includeChilds: Joi.string()
     .valid(...RESTORE_INCLUDE_CHILDS)
     .optional(),
