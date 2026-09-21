@@ -51,7 +51,7 @@ const toCsvFileName = (fileName: string): string => `${fileName.replace(/\.[^./]
 // or escaped ("") quotes. Doesn't handle a newline embedded inside a quoted
 // field — same accepted limitation as the row splitting elsewhere in this
 // pipeline (the file is already split into lines by '\n' before this runs).
-const parseCsvRow = (line: string): string[] => {
+export const parseCsvRow = (line: string): string[] => {
   const fields: string[] = [];
   let current = '';
   let inQuotes = false;
