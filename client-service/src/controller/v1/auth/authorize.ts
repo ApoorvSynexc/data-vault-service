@@ -62,9 +62,24 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       }
       finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
 
-      const user = await getUser({userId: crm.userId});
+      const user = await getUser({ userId: crm.userId });
       if (user && !crm.paymentToken) {
+        console.log(JSON.stringify({
+          organizationId: crm.organizationId,
+          userId: user.userId
+        }))
         const account = await createPaymentAccount(crm.organizationId, user.userId);
+        console.log(JSON.stringify({
+          orgId: crm.organizationId,
+          token: account.token,
+          sfSecret: account.sf_secret,
+          orgInfo: {
+            OrgType: crm.environment === 'production' ? 'Production' : 'Sandbox',
+            orgName: '360SMS',
+            email: user.crmProfile?.email || '',
+            userName: user.crmProfile?.username || '',
+          }
+        }))
         const setup = await setupPayment({
           orgId: crm.organizationId,
           token: account.token,
@@ -82,7 +97,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
           sf_secret: account.sf_secret,
           token: setup.token
         }));
-        const paymentDetail= setup.data?.Success;
+        const paymentDetail = setup.data?.Success;
         await updateCrm(crm.crmId, { paymentToken, paymentDetail });
       }
     }
