@@ -59,34 +59,45 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       }
       finalResponse.user = encryptEnvelope(await authorizeUserHandler(payload.user_details), decrypt(crm.encryptionKey!));
 
-      const user = await getUser({userId: crm.userId});
-      if (user && !crm.paymentToken) {
-        const account = await createPaymentAccount(crm.organizationId, user.userId);
-        const setup = await setupPayment({
-          orgId: crm.organizationId,
-          token: account.token,
-          sfSecret: account.sf_secret,
-          orgInfo: {
-            OrgType: crm.environment === 'production' ? 'Production' : 'Sandbox',
-            orgName: '360SMS',
-            email: user.crmProfile?.email || '',
-            userName: user.crmProfile?.username || '',
-          },
-          isTokenEncrypted: false
-        });
+      // if (!crm.paymentToken) {
+      //   const account = await createPaymentAccount(crm.organizationId, payload.user_details.user_id);
+      //   console.log(JSON.stringify({
+      //     orgId: crm.organizationId,
+      //     token: account.token,
+      //     sfSecret: account.sf_secret,
+      //     orgInfo: {
+      //       OrgType: crm.environment === 'production' ? 'Production' : 'Sandbox',
+      //       orgName: '360SMS',
+      //       email: payload.user_details.user_email || '',
+      //       userName: payload.user_details.user_username || '',
+      //     }
+      //   }))
+      //   const setup = await setupPayment({
+      //     orgId: crm.organizationId,
+      //     token: account.token,
+      //     sfSecret: account.sf_secret,
+      //     orgInfo: {
+      //       OrgType: crm.environment === 'production' ? 'Production' : 'Sandbox',
+      //       orgName: '360SMS',
+      //       email: payload.user_details.user_email || '',
+      //       userName: payload.user_details.user_username || '',
+      //     },
+      //     isTokenEncrypted: false
+      //   });
 
-        const paymentToken = encrypt(JSON.stringify({
-          sf_secret: account.sf_secret,
-          token: setup.token
-        }));
-        const paymentDetail= setup.data?.Success;
-        await updateCrm(crm.crmId, { paymentToken, paymentDetail });
-      }
+      //   const paymentToken = encrypt(JSON.stringify({
+      //     sf_secret: account.sf_secret,
+      //     token: setup.token
+      //   }));
+      //   const paymentDetail = setup.data?.Success;
+      //   await updateCrm(crm.crmId, { paymentToken, paymentDetail });
+      // }
     }
 
     makeResponse(req, res, 200, true, 'fetch', encryptEnvelope(finalResponse));
   } catch (error) {
     logger.error(`Error in authorizeOrganizationHandler: ${error}`);
+    console.log(`STACK TRACE: ${error instanceof Error ? error.stack : 'No stack trace available'}`);
     makeResponse(req, res, 500, false, 'unknown_error');
   }
 };
@@ -121,7 +132,7 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
       crmName: 'salesforce',
       instanceUrl,
       encryptionKey: encrypt(rawEncryptionKey), // encrypted at rest with the master key, like crmCredential
-      status: STATUS.notAuthorized,
+      status: STATUS.inactive,
     });
   } else {
     if (crm.instanceUrl !== instanceUrl) {
