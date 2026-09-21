@@ -205,11 +205,6 @@ const uploadBulkResultsByPage = async (
 };
 
 // ---------------------------------------------------------------------------
-// Incremental backup — classify records fetched since lastUpdatedAt into:
-//   insert  → CreatedDate >= lastUpdatedAt AND CreatedDate == LastModifiedDate
-//             (i.e. createdAt == updatedAt, so brand new record)
-//   update  → LastModifiedDate >= lastUpdatedAt AND LastModifiedDate != CreatedDate
-//             (i.e. modified after creation)
 //
 // Receives a CSV page, parses it with a proper RFC 4180 parser, then writes
 // three separate CSV files (insert / update / delete) to S3.
@@ -221,6 +216,7 @@ interface IClassifyAndUploadBulkResultsByPage {
   backupJobId: string;
   objectIndex: number;
   destConfig: IDestinationConfig;
+  lastUpdatedAt?: string;
   insertS3KeyPrefix: string;
   updateS3KeyPrefix: string;
   deleteS3KeyPrefix: string;
@@ -241,6 +237,7 @@ const classifyAndUploadBulkResultsByPage = async (
     backupJobId,
     objectIndex,
     destConfig,
+    lastUpdatedAt,
     insertS3KeyPrefix,
     updateS3KeyPrefix,
     deleteS3KeyPrefix,
@@ -311,7 +308,13 @@ const classifyAndUploadBulkResultsByPage = async (
             const createdDate = createdDateIdx >= 0 ? fields[createdDateIdx] : null;
             const lastModifiedDate = lastModifiedDateIdx >= 0 ? fields[lastModifiedDateIdx] : null;
 
-            if (createdDate && lastModifiedDate && createdDate === lastModifiedDate) {
+            const isNewRecord = (createdDate && lastUpdatedAt) ?
+              new Date(createdDate) >= new Date(lastUpdatedAt) :
+              createdDate === lastModifiedDate ?
+                true :
+                false;
+
+            if (isNewRecord) {
               insertRows.push(row);
             } else {
               updateRows.push(row);
