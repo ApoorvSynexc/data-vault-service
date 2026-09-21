@@ -39,20 +39,22 @@ const isDateLiteral = (value: string): boolean =>
   DATE_LITERALS.has(value.toUpperCase()) ||
   /^(LAST|NEXT)_N_(DAYS|WEEKS|MONTHS|QUARTERS|YEARS|FISCAL_QUARTERS|FISCAL_YEARS):\d+$/i.test(value);
 
-// LIMIT/OFFSET/ORDER BY apply to a whole query, not to a boolean condition —
-// a raw SOQL condition body gets wrapped inside `AND (...)`, so any of these
-// would land inside that parenthesized expression and produce invalid SOQL.
-// Caught here with a message naming the actual keyword, instead of letting it
-// through to fail later with a parser error that points at an unrelated token.
-const TOP_LEVEL_CLAUSE_RE = /\b(LIMIT|OFFSET|ORDER\s+BY)\b/i;
+// These all apply to a whole query, not to a boolean condition — a raw SOQL
+// condition body gets wrapped inside `AND (...)`, so any of them would land
+// inside that parenthesized expression and produce invalid SOQL. Caught here
+// with a message naming the actual keyword, instead of letting it through to
+// fail later with a parser error that points at an unrelated token.
+const TOP_LEVEL_CLAUSE_RE =
+  /\b(LIMIT|OFFSET|ORDER\s+BY|GROUP\s+BY|HAVING|USING\s+SCOPE|USER_MODE|SYSTEM_MODE|FOR\s+VIEW|FOR\s+REFERENCE)\b/i;
 export const assertNoTopLevelClauses = (body: string): void => {
   // Drop quoted string literals first so a legitimate value like
   // "Notes__c LIKE '%offset%'" isn't mistaken for the clause keyword.
   const withoutStringLiterals = body.replace(/'(?:[^']|'')*'/g, "''");
   const match = withoutStringLiterals.match(TOP_LEVEL_CLAUSE_RE);
   if (match) {
+    const clause = match[1].toUpperCase().replace(/\s+/g, ' ');
     throw new Error(
-      `SOQL condition cannot contain ${match[1].toUpperCase()} — LIMIT/OFFSET/ORDER BY apply to the whole query, not a filter condition. Remove it from your query.`
+      `SOQL condition cannot contain ${clause} — it applies to the whole query, not a filter condition. Remove it from your query.`
     );
   }
 };

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { restoreRetrieveJobController } from '../../controller';
-import { createRestoreValidation } from '../../middlewares';
+import { createRestoreValidation, uploadSingleCsv, bulkCsvUploadRateLimit } from '../../middlewares';
 
 /**
  * Restore & Retrieve routes — all require authentication (applied at the parent router level).
@@ -11,7 +11,6 @@ import { createRestoreValidation } from '../../middlewares';
  * POST /retrieve/fetch-records          — records for one object out of the compressed Hudi/Delta
  *                                         tables: ENTIRE, or CHANGED_BETWEEN a date window, each row
  *                                         tagged with the OPERATION a restore would perform
- * POST /retrieve/fetch-inactive-record-types — Record Types made inactive or deleted inside a date window
  * POST /retrieve/fetch-missing-fields   — fields the backup config's stored S3 schema has that the
  *                                         destination object's live Salesforce fields do not
  * POST /retrieve/fetch-missing-record-types — record types, grouped by object, that the backup's
@@ -33,10 +32,21 @@ import { createRestoreValidation } from '../../middlewares';
  * GET  /download-csv                    — for a completed restore job, returns presigned S3 URLs
  *                                         (one per part) so the client downloads the exported
  *                                         CSV(s) for one object directly from S3
+ * POST /bulk-csv/parse                  — uploads a CSV of record Ids (multipart, field "file",
+ *                                         plus "objectName" and "backupConfigId" fields), uploads it
+ *                                         to that config's destination S3, and returns
+ *                                         { objectName, ids, s3Key } for use as one entry of
+ *                                         restoreScope.bulkCsvIds when creating a restore
  */
 const router = Router();
 
 router.post('/', createRestoreValidation, restoreRetrieveJobController.createRestoreHandler2);
+router.post(
+  '/bulk-csv/parse',
+  bulkCsvUploadRateLimit,
+  uploadSingleCsv('file'),
+  restoreRetrieveJobController.parseBulkCsvIdsHandler
+);
 router.post('/activate', restoreRetrieveJobController.activateRestoreHandler);
 router.get('/config/list', restoreRetrieveJobController.listRestoresHandler);
 router.get('/job', restoreRetrieveJobController.getRestoreJobHandler);

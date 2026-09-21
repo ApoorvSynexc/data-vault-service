@@ -4,91 +4,13 @@ import { logger } from '../../../../../middlewares/logger';
 import { IDestinationConfig } from '../../../../../models';
 import { uploadToS3 } from '../../../../destination/s3';
 import { makePageFetcher, salesforceRequest, SalesforceTokens } from '../../api-request';
+import { parseCSVRecords } from '../../../../../utils/csv';
 
 const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 const INITIAL_PAGE_KEY = `initial`;
 const MAX_RECORDS_PER_PAGE = 50000; // Capped well below SF
-
-// ---------------------------------------------------------------------------
-// RFC 4180-compliant CSV parser.
-// Returns each record as { raw, fields } where raw is the original text of the
-// record (no trailing newline — ready for join('\n') reassembly) and fields is
-// the array of unquoted field values.
-// Handles: quoted fields with embedded commas, embedded newlines, escaped
-// double-quotes (""), and both LF and CRLF line endings.
-// ---------------------------------------------------------------------------
-interface CSVRecord {
-  raw: string;
-  fields: string[];
-}
-
-const parseCSVRecords = (text: string): CSVRecord[] => {
-  const records: CSVRecord[] = [];
-  const len = text.length;
-  let i = 0;
-
-  while (i < len) {
-    const recordStart = i;
-    const fields: string[] = [];
-    let field = '';
-    let inQuotes = false;
-    let contentEnd = -1;
-
-    while (i < len) {
-      const ch = text[i];
-
-      if (inQuotes) {
-        if (ch === '"' && i + 1 < len && text[i + 1] === '"') {
-          field += '"';
-          i += 2;
-        } else if (ch === '"') {
-          inQuotes = false;
-          i++;
-        } else {
-          field += ch;
-          i++;
-        }
-      } else if (ch === '"') {
-        inQuotes = true;
-        i++;
-      } else if (ch === ',') {
-        fields.push(field);
-        field = '';
-        i++;
-      } else if (ch === '\r' && i + 1 < len && text[i + 1] === '\n') {
-        contentEnd = i;
-        fields.push(field);
-        i += 2;
-        break;
-      } else if (ch === '\n') {
-        contentEnd = i;
-        fields.push(field);
-        i++;
-        break;
-      } else {
-        field += ch;
-        i++;
-      }
-    }
-
-    // End of input without a trailing newline
-    if (contentEnd === -1) {
-      contentEnd = len;
-      if (fields.length > 0 || field !== '') {
-        fields.push(field);
-      }
-    }
-
-    // Skip blank records (empty line)
-    if (!(fields.length === 1 && fields[0] === '') && fields.length > 0) {
-      records.push({ raw: text.slice(recordStart, contentEnd), fields });
-    }
-  }
-
-  return records;
-};
 
 interface IPollBulkJob {
   instanceUrl: string;
@@ -234,8 +156,8 @@ const uploadBulkResultsByPage = async (
 
       const csvBuffer = Buffer.from(await response.arrayBuffer());
 
-      // Use the Salesforce-provided record count header (exact, unaffected by
-      // multi-line field values that would corrupt a naive newline-split count).
+      // Use the Salesforce-provided record count header (exact, independent
+      // of how the page was re-serialized above).
       const pageRowCount = parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
       completedRecordCount += pageRowCount;
       sizeInBytes += csvBuffer.length;
@@ -277,11 +199,6 @@ const uploadBulkResultsByPage = async (
 };
 
 // ---------------------------------------------------------------------------
-// Incremental backup — classify records fetched since lastUpdatedAt into:
-//   insert  → CreatedDate >= lastUpdatedAt AND CreatedDate == LastModifiedDate
-//             (i.e. createdAt == updatedAt, so brand new record)
-//   update  → LastModifiedDate >= lastUpdatedAt AND LastModifiedDate != CreatedDate
-//             (i.e. modified after creation)
 //
 // Receives a CSV page, parses it with a proper RFC 4180 parser, then writes
 // three separate CSV files (insert / update / delete) to S3.
@@ -293,6 +210,7 @@ interface IClassifyAndUploadBulkResultsByPage {
   backupJobId: string;
   objectIndex: number;
   destConfig: IDestinationConfig;
+  lastUpdatedAt?: string;
   insertS3KeyPrefix: string;
   updateS3KeyPrefix: string;
   deleteS3KeyPrefix: string;
@@ -313,6 +231,7 @@ const classifyAndUploadBulkResultsByPage = async (
     backupJobId,
     objectIndex,
     destConfig,
+    lastUpdatedAt,
     insertS3KeyPrefix,
     updateS3KeyPrefix,
     deleteS3KeyPrefix,
@@ -364,41 +283,49 @@ const classifyAndUploadBulkResultsByPage = async (
         const createdDateIdx = headerRecord.fields.indexOf('CreatedDate');
         const lastModifiedDateIdx = headerRecord.fields.indexOf('LastModifiedDate');
 
-        const insertRaws: string[] = [];
-        const updateRaws: string[] = [];
-        const deleteRaws: string[] = [];
+        const insertRows: string[] = [];
+        const updateRows: string[] = [];
+        const deleteRows: string[] = [];
 
         for (const { raw, fields } of dataRecords) {
           const isDeleted = isDeletedIdx >= 0 ? fields[isDeletedIdx] : null;
 
           if (isDeleted === 'true') {
-            deleteRaws.push(raw);
+            deleteRows.push(raw);
           } else {
             const createdDate = createdDateIdx >= 0 ? fields[createdDateIdx] : null;
             const lastModifiedDate = lastModifiedDateIdx >= 0 ? fields[lastModifiedDateIdx] : null;
 
-            if (createdDate && lastModifiedDate && createdDate === lastModifiedDate) {
-              insertRaws.push(raw);
+            const isNewRecord = (createdDate && lastUpdatedAt) ?
+              new Date(createdDate) >= new Date(lastUpdatedAt) :
+              createdDate === lastModifiedDate ?
+                true :
+                false;
+
+            if (isNewRecord) {
+              insertRows.push(raw);
             } else {
-              updateRaws.push(raw);
+              updateRows.push(raw);
             }
           }
         }
 
-        if (insertRaws.length > 0) {
-          const insertCsv = Buffer.from([headerRecord.raw, ...insertRaws].join('\n'));
+        const headerRow = headerRecord.raw;
+
+        if (insertRows.length > 0) {
+          const insertCsv = Buffer.from([headerRow, ...insertRows].join('\n'));
           pageSizeInBytes += insertCsv.length;
           await uploadToS3(destConfig, `${insertS3KeyPrefix}/${pageKey}.csv`, insertCsv);
         }
 
-        if (updateRaws.length > 0) {
-          const updateCsv = Buffer.from([headerRecord.raw, ...updateRaws].join('\n'));
+        if (updateRows.length > 0) {
+          const updateCsv = Buffer.from([headerRow, ...updateRows].join('\n'));
           pageSizeInBytes += updateCsv.length;
           await uploadToS3(destConfig, `${updateS3KeyPrefix}/${pageKey}.csv`, updateCsv);
         }
 
-        if (deleteRaws.length > 0) {
-          const deleteCsv = Buffer.from([headerRecord.raw, ...deleteRaws].join('\n'));
+        if (deleteRows.length > 0) {
+          const deleteCsv = Buffer.from([headerRow, ...deleteRows].join('\n'));
           pageSizeInBytes += deleteCsv.length;
           await uploadToS3(destConfig, `${deleteS3KeyPrefix}/${pageKey}.csv`, deleteCsv);
         }
@@ -406,10 +333,10 @@ const classifyAndUploadBulkResultsByPage = async (
         // Deleted records are excluded from completedRecordCount to match
         // Salesforce's numberRecordsProcessed, which does not count soft-deleted
         // rows returned by queryAll.
-        insertCount += insertRaws.length;
-        updateCount += updateRaws.length;
-        deleteCount += deleteRaws.length;
-        completedRecordCount += insertRaws.length + updateRaws.length + deleteRaws.length;
+        insertCount += insertRows.length;
+        updateCount += updateRows.length;
+        deleteCount += deleteRows.length;
+        completedRecordCount += insertRows.length + updateRows.length + deleteRows.length;
       }
       sizeInBytes += pageSizeInBytes;
       locator = nextLocator;

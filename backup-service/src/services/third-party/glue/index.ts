@@ -193,14 +193,24 @@ const DATASET_S3_FOLDER: Record<'main_backup_files' | 'delta', string> = {
   delta: 'deltas',
 };
 
+// The delta dataset's root flips to the archival S3 prefix for an archival
+// config — that's where Java's ArchivalService actually writes the
+// schema-only delta Hudi table (PathUtils.archivalDeltaHudi, scoped by the
+// same backupConfigId Node passes as the Spark job's "jobId"). main_backup_files
+// stays on the literal 'backup' prefix regardless of policyConfigType — that's
+// ensureHudiCurrentStateTable's own, separate, pre-existing behavior, left
+// untouched here.
 const buildCompressionRootKey = (
   crmName: string,
   crmId: string,
   backupConfigId: string,
   objectName: string,
-  dataset: 'main_backup_files' | 'delta'
-): string =>
-  `${crmName}/${crmId}/backup/${backupConfigId}/${DATASET_S3_FOLDER[dataset]}/${objectName}/`;
+  dataset: 'main_backup_files' | 'delta',
+  policyConfigType: 'backup' | 'archival' = 'backup'
+): string => {
+  const root = dataset === 'delta' && policyConfigType === 'archival' ? 'archival' : 'backup';
+  return `${crmName}/${crmId}/${root}/${backupConfigId}/${DATASET_S3_FOLDER[dataset]}/${objectName}/`;
+};
 
 export interface IEnsureCompressionTableParams {
   crmId: string;
@@ -389,7 +399,7 @@ const ensureHudiFormatTable = async (
 
   await ensureGlueDatabase(databaseName, destConfig.region);
 
-  const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset);
+  const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset, policyConfigType);
 
   const syncPartitions = (): Promise<void> =>
     syncHudiTablePartitions(databaseName, tableName, destConfig, rootKey).catch((err: any) => {

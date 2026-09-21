@@ -1,5 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { ensureHudiCurrentStateTable, ensureDeltaTable } from '../../../services/third-party/glue';
+import { createNotification } from '../../../services/notification';
 import { logger } from '../../../middlewares/logger';
 import { wrapController } from '../../../utils/helper';
 
@@ -13,11 +14,15 @@ import { wrapController } from '../../../utils/helper';
  *     backupConfigId: string
  *     objectNames:    string[]
  *     destConfig:     IDestinationConfig
- *     isArchival?: boolean — when true, only the Hudi table is created (no Delta)
+ *     isArchival?: boolean — when true, the Delta table is registered against
+ *       archival's schema-only delta output (Java's ArchivalService never
+ *       writes record-level deltas, only FIELD/RECORDTYPE/... schema changes)
+ *       instead of backup's combined record+schema delta output.
+ *     userId?: string — when present, failures notify this user (see createNotification calls below)
  *   }
  *
  * Called after Spark reports a successful compression. For each object, ensures
- * the current-state Hudi table and (for non-archival configs) the Delta table exist in the Glue Catalog —
+ * the current-state Hudi table and the Delta table exist in the Glue Catalog —
  * created once from the committed `.hoodie` schema, never updated. Fully
  * idempotent: existing tables are left untouched, so retries and concurrent
  * completion events are safe.
@@ -46,8 +51,9 @@ const runEnsureCompressionTables = async (params: {
   objectNames: string[];
   destConfig: any;
   isArchival?: boolean;
+  userId?: string;
 }): Promise<IEnsureCompressionTablesResult> => {
-  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival } = params;
+  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival, userId } = params;
 
   const results = await Promise.allSettled(
     objectNames.map(async (objectName) => {
@@ -60,13 +66,14 @@ const runEnsureCompressionTables = async (params: {
         policyConfigType: (isArchival ? 'archival' : 'backup') as 'backup' | 'archival',
       };
       // All independent; a missing/not-yet-written dataset must not block the others.
+      // ARCHIVAL never gets a record-level delta, but it does get a schema-only
+      // one (Java's ArchivalService writes FIELD/RECORDTYPE/... changes there,
+      // same shape as backup's) — ensureDeltaTable routes to the right S3 root
+      // via tableParams.policyConfigType, so the same call covers both.
       const tasks: [string, Promise<boolean>][] = [
         ['hudi', ensureHudiCurrentStateTable(tableParams)],
+        ['delta', ensureDeltaTable(tableParams)],
       ];
-      // ARCHIVAL keeps Hudi only — Delta is skipped entirely.
-      if (!isArchival) {
-        tasks.push(['delta', ensureDeltaTable(tableParams)]);
-      }
 
       const settled = await Promise.allSettled(tasks.map(([, task]) => task));
       const errors = settled.flatMap((result, i) =>
@@ -102,20 +109,40 @@ const runEnsureCompressionTables = async (params: {
     logger.error(
       `[glue] ensure-compression-tables failures | cfg:${backupConfigId} ${JSON.stringify(failed)}`
     );
+    if (userId) {
+      const objectNamesList = failed.map((f) => f.objectName).join(', ');
+      await createNotification({
+        userId,
+        crmId,
+        title:
+          failed.length === 1
+            ? '1 retrieval metadata table failed to get generated'
+            : `${failed.length} retrieval metadata tables failed to get generated`,
+        body: `We couldn't generate Glue tables for: ${objectNamesList}. Please check the logs for more details.`,
+        targetScreen: 'backup-config',
+        targetId: backupConfigId,
+      }).catch((notifyErr: any) =>
+        logger.error(
+          `[glue] failed to notify user about glue table failures | cfg:${backupConfigId} err:${notifyErr?.message ?? notifyErr}`
+        )
+      );
+    }
   }
 
   return { ensured, failed };
 };
 
 const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival } = req.body as {
-    crmId: string;
-    crmName: string;
-    backupConfigId: string;
-    objectNames: string[];
-    destConfig: any;
-    isArchival?: boolean;
-  };
+  const { crmId, crmName, backupConfigId, objectNames, destConfig, isArchival, userId } =
+    req.body as {
+      crmId: string;
+      crmName: string;
+      backupConfigId: string;
+      objectNames: string[];
+      destConfig: any;
+      isArchival?: boolean;
+      userId?: string;
+    };
 
   if (
     !crmId ||
@@ -149,6 +176,7 @@ const ensureCompressionTablesHandler = async (req: IRequest, res: IResponse): Pr
       objectNames,
       destConfig,
       isArchival,
+      userId,
     }).finally(() => inFlightByConfig.delete(backupConfigId));
     inFlightByConfig.set(backupConfigId, run);
     result = await run;

@@ -378,7 +378,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
 
     await updateRestoreJobStatus({
       restoreJobId,
-      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.completed,
+      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.success,
       completedAt: dayjs().toISOString(),
     });
     await updateRestore({
@@ -404,7 +404,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
 };
 
 export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
-  const { restoreId, restoreJobId, source, destination, conflict } = job;
+  const { restoreId, restoreJobId, source, destination, conflict, hierarchy } = job;
   const startedAt = dayjs().toISOString();
 
   activeJobs.add(restoreJobId);
@@ -451,17 +451,18 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       restoreJobId,
       restoreSource,
       restoreDestination,
-      conflict
+      conflict,
+      hierarchy
     );
 
     await updateRestoreJobStatus({
       restoreJobId,
-      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.completed,
+      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.success,
       completedAt: dayjs().toISOString(),
     });
     await updateRestore({
       restoreId,
-      status: result === 'FAILED' ? 'FAILED' : RESTORE_JOB_STATUS.rollbackCompleted,
+      status: result === 'FAILED' ? 'FAILED' : RESTORE_JOB_STATUS.success,
     });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);

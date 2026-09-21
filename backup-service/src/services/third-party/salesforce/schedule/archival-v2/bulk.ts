@@ -157,8 +157,8 @@ const uploadBulkResultsByPage = async (
 
       const csvBuffer = Buffer.from(await response.arrayBuffer());
 
-      // Use the Salesforce-provided record count header (exact, unaffected by
-      // multi-line field values that would corrupt a naive newline-split count).
+      // Use the Salesforce-provided record count header (exact, independent
+      // of how the page was re-serialized above).
       const pageRowCount = parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
       completedRecordCount += pageRowCount;
       sizeInBytes += csvBuffer.length;

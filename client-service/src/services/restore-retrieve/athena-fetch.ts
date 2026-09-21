@@ -544,9 +544,8 @@ const buildSchemaChangeDeltaSql = (
     'WHERE'
   );
 
-// RECORD_TYPE deltas — feeds retrieveInactiveRecordTypes and
-// retrieveMissingRecordTypes. Only UPDATE/DELETE carry a state to report;
-// INSERT has no prior/inactive state.
+// RECORD_TYPE deltas — feeds retrieveMissingRecordTypes. Only UPDATE/DELETE
+// carry a state to report; INSERT has no prior/inactive state.
 //
 // The stored schema_change_type value is "RECORDTYPE" — no underscore,
 // unlike its own delta_id prefix ("SCHEMA_META|RECORDTYPE|...") which also
@@ -557,6 +556,14 @@ export const buildRecordTypeDeltaSql = (
   deltaTable: string,
   p: { startDate?: string | null; endDate?: string | null; deltaPartition?: string | null }
 ): string => buildSchemaChangeDeltaSql(deltaTable, 'RECORDTYPE', ['UPDATE', 'DELETE'], p);
+
+// FIELD deltas — feeds retrieveMissingFields. Fields have no active/inactive
+// state (unlike record types), so only DELETE carries a "no longer exists"
+// signal; an UPDATE only ever means a property like label/dataType changed.
+export const buildFieldDeltaSql = (
+  deltaTable: string,
+  p: { startDate?: string | null; endDate?: string | null; deltaPartition?: string | null }
+): string => buildSchemaChangeDeltaSql(deltaTable, 'FIELD', ['DELETE'], p);
 
 /**
  * Partition predicate for the DELTA table. The biggest cost lever on this
@@ -672,6 +679,19 @@ export const chunkJobIds = (
 
 const backupJobIdWhere = (jobIds: string[]): string => `backupjobid IN (${idList(jobIds)})`;
 
+// A raw CSV/JSON file's trailing blank line (e.g. a Bulk API results page
+// written to S3 with a stray empty final line) reads back through
+// TextInputFormat as one more row, with every column empty — skip.header.line
+// count only strips the header, not that. Guards every raw-table read that
+// isn't already scoped to explicit ids (buildRawCsvBaseByIdsSql's own
+// recordIdsWhere already can't match a blank Id)
+const NON_BLANK_ID = `${quoteCol(ID)} <> ''`;
+
+// Same guard for raw_json_delta — its Id column is the fixed, lowercase,
+// unquoted `id` (RAW_JSON_DELTA_COLUMNS), not the schema-derived "Id" the
+// other raw tables use.
+const NON_BLANK_ID_LOWER = `id <> ''`;
+
 /**
  * Full-record rows out of a raw CSV or raw JSON-snapshot table. For a BACKUP
  * config, UPDATES AND DELETES ONLY, never inserts — an "inserts" folder can
@@ -725,6 +745,7 @@ const buildRawFullRowSql = (
     whereClause(
       [
         backupJobIdWhere(jobIds),
+        NON_BLANK_ID,
         fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
         windowed,
         p.scopeWhere,
@@ -737,13 +758,25 @@ const buildRawFullRowSql = (
 
 // raw_csv only — fileOperations is ['updates'] for a BACKUP config's pending
 // snapshot rows, or ['inserts'] for an ARCHIVAL config's ENTIRE listing (see
-// file header above buildRawFullRowSql).
+// file header above buildRawFullRowSql). Tagged UPDATE for a BACKUP snapshot
+// (the record still exists live, a restore just writes its fields back) but
+// INSERT for an ARCHIVAL one — archival-v2 only ever writes `inserts/`
+// because the source record is gone from Salesforce by the time it's
+// archived, so restoring it means creating it, not updating one that's
+// already there.
 export const buildRawSnapshotSql = (
   rawTable: string,
   jobIds: string[],
   fileOperations: string[],
   p: IRetrieveSqlParams
-): string => buildRawFullRowSql(rawTable, jobIds, fileOperations, 'UPDATE', p);
+): string =>
+  buildRawFullRowSql(
+    rawTable,
+    jobIds,
+    fileOperations,
+    fileOperations.includes('inserts') ? 'INSERT' : 'UPDATE',
+    p
+  );
 
 // Deletes folder of the raw CSV table — restoring a deleted record is an
 // INSERT, same convention buildDeletedDeltaSql uses.
@@ -786,6 +819,7 @@ export const buildRawCsvChangedSql = (
     whereClause(
       [
         backupJobIdWhere(jobIds),
+        NON_BLANK_ID,
         `operation IN ('updates', 'deletes')`,
         windowed,
         p.scopeWhere,
@@ -823,7 +857,7 @@ export const buildRawJsonDeltaSql = (
   return (
     `SELECT id AS record_id, lastmodifieddate AS change_time, 'UPDATE' AS change_type, ` +
     `CAST(prev AS JSON) AS prev_json, CAST(new AS JSON) AS new_json FROM "${rawJsonDeltaTable}"` +
-    whereClause([backupJobIdWhere(jobIds), windowed], 'WHERE')
+    whereClause([backupJobIdWhere(jobIds), NON_BLANK_ID_LOWER, windowed], 'WHERE')
   );
 };
 
@@ -902,6 +936,7 @@ export const buildRawSnapshotCountSql = (
   whereClause(
     [
       backupJobIdWhere(jobIds),
+      NON_BLANK_ID,
       fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
       window ? inWindow(quoteCol(SYSTEM_MODSTAMP), window.startDate, window.endDate) : null,
       whereBody,
@@ -919,6 +954,7 @@ export const buildRawJsonDeltaCountSql = (
   whereClause(
     [
       backupJobIdWhere(jobIds),
+      NON_BLANK_ID_LOWER,
       window ? inWindow('lastmodifieddate', window.startDate, window.endDate) : null,
       whereBody,
     ],
@@ -942,6 +978,7 @@ export const buildRawIdsSql = (
   whereClause(
     [
       backupJobIdWhere(jobIds),
+      NON_BLANK_ID,
       fileOperations ? `operation IN (${fileOperations.map(lit).join(', ')})` : null,
       scopeWhere,
     ],
@@ -1254,11 +1291,11 @@ if (require.main === module) {
   assert.ok(buildRawCsvBaseByIdsSql('t', ["j'1"], ['i1'], ['Name']).includes(`'j''1'`));
 
   const rawSnapshotCount = buildRawSnapshotCountSql('t_raw_csv', jobIds, ['updates']);
-  assert.strictEqual(rawSnapshotCount, `SELECT COUNT(*) AS cnt FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND (operation IN ('updates'))`);
+  assert.strictEqual(rawSnapshotCount, `SELECT COUNT(*) AS cnt FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND ("Id" <> '') AND (operation IN ('updates'))`);
   const rawJsonDeletedCount = buildRawSnapshotCountSql('t_raw_json_snapshot', jobIds, null);
-  assert.strictEqual(rawJsonDeletedCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2'))`);
+  assert.strictEqual(rawJsonDeletedCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2')) AND ("Id" <> '')`);
   const rawJsonDeltaCount = buildRawJsonDeltaCountSql('t_raw_json_delta', jobIds);
-  assert.strictEqual(rawJsonDeltaCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_delta" WHERE (backupjobid IN ('job1', 'job2'))`);
+  assert.strictEqual(rawJsonDeltaCount, `SELECT COUNT(*) AS cnt FROM "t_raw_json_delta" WHERE (backupjobid IN ('job1', 'job2')) AND (id <> '')`);
 
   // Count windowing must agree with what fetch-records actually returns:
   // updates count by CreatedDate, deletes count (CSV or the deletes-only
@@ -1276,13 +1313,24 @@ if (require.main === module) {
   assert.ok(rawJsonDeltaCountWindowed.includes(`from_iso8601_timestamp('${START}')`));
 
   const rawIds = buildRawIdsSql('t_raw_csv', jobIds, ['deletes'], `"Name" = 'Acme'`);
-  assert.strictEqual(rawIds, `SELECT DISTINCT "Id" FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND (operation IN ('deletes')) AND ("Name" = 'Acme')`);
+  assert.strictEqual(rawIds, `SELECT DISTINCT "Id" FROM "t_raw_csv" WHERE (backupjobid IN ('job1', 'job2')) AND ("Id" <> '') AND (operation IN ('deletes')) AND ("Name" = 'Acme')`);
   assert.ok(!buildRawIdsSql('t', jobIds, ['deletes']).includes('LIMIT'), 'dry-run reconciliation must see every pending id, never a capped page');
   const rawJsonDeletedIds = buildRawIdsSql('t_raw_json_snapshot', jobIds, null);
-  assert.strictEqual(rawJsonDeletedIds, `SELECT DISTINCT "Id" FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2'))`);
+  assert.strictEqual(rawJsonDeletedIds, `SELECT DISTINCT "Id" FROM "t_raw_json_snapshot" WHERE (backupjobid IN ('job1', 'job2')) AND ("Id" <> '')`);
 
   // Injection defence carries over — job ids are quoted/escaped like every other literal.
   assert.ok(buildRawSnapshotSql('t', ["j'1"], ['inserts'], retrieve).includes(`'j''1'`));
+
+  // ARCHIVAL's inserts-folder snapshot is tagged INSERT (the source record is
+  // gone from Salesforce, so restoring it creates it) — BACKUP's updates-folder
+  // snapshot stays UPDATE (the record is still live, a restore just writes its
+  // fields back).
+  assert.ok(
+    buildRawSnapshotSql('t_raw_csv', jobIds, ['inserts'], retrieve).includes(`'INSERT' AS "dv_operation"`)
+  );
+  assert.ok(
+    buildRawSnapshotSql('t_raw_csv', jobIds, ['updates'], retrieve).includes(`'UPDATE' AS "dv_operation"`)
+  );
 
   console.log('athena-fetch self-check passed');
 }
