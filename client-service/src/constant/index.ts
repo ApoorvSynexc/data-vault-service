@@ -129,7 +129,7 @@ const PAYMENT_API_BASE_URL = String(
   process.env.PAYMENT_API_BASE_URL || 'https://360degree--hrorg.sandbox.my.salesforce.com'
 ).trim();
 const PAYMENT_PRODUCT_NAME = String(process.env.PAYMENT_PRODUCT_NAME || '360 Data Craft');
-const PAYMENT_SECRECT_KEY = String(process.env.PAYMENT_SECRECT_KEY || '');
+const PAYMENT_SECRET_KEY = String(process.env.PAYMENT_SECRET_KEY || '');
 
 const SCHEDULE_MODE = {
   realtime: 'REALTIME',
@@ -409,7 +409,7 @@ export {
   // 360 Data Craft payment/provisioning API
   PAYMENT_API_BASE_URL,
   PAYMENT_PRODUCT_NAME,
-  PAYMENT_SECRECT_KEY,
+  PAYMENT_SECRET_KEY,
 
   // Enums
   STATUS,

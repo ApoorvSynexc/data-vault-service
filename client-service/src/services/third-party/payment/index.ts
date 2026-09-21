@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { httpRequest } from '../../../utils/http-request';
 import { logger } from '../../../middlewares';
-import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME, PAYMENT_SECRECT_KEY } from '../../../constant';
+import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME, PAYMENT_SECRET_KEY } from '../../../constant';
 
 interface Create360AccountApiResponse {
   status: string;
@@ -173,7 +173,7 @@ const setupPayment = async ({
     phone: '',
     mobilephone: '',
     country: 'US',
-    Secretkey: PAYMENT_SECRECT_KEY,
+    Secretkey: PAYMENT_SECRET_KEY,
     orgId,
     ...orgInfo,
   }));
