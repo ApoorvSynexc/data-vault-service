@@ -63,10 +63,6 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       finalResponse.user = encryptSalesforceResponse(crm, await authorizeUserHandler(payload.user_details));
 
       if (!crm.paymentToken) {
-        console.log(JSON.stringify({
-          organizationId: crm.organizationId,
-          userId: payload.user_details.user_id
-        }))
         const account = await createPaymentAccount(crm.organizationId, payload.user_details.user_id);
         console.log(JSON.stringify({
           orgId: crm.organizationId,
