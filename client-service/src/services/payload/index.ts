@@ -499,9 +499,9 @@ type EmrTriggerPayload =
 async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommandOutput> {
     try {
         // Encrypted with ENCRYPTION_KEY (the same key Spark gets as ENCRYPTION_KEY),
-        // framed the same way decryptFromTransport expects to unpack it: base64(JSON({ ciphertext, iv })).
+        // framed the same way decryptFromTransport expects to unpack it: base64(JSON({ ciphertext, iv, authTag })).
         const payloadB64 = Buffer.from(
-            JSON.stringify(encrypt(JSON.stringify(payload), ENCRYPTION_KEY))
+            JSON.stringify(encrypt(JSON.stringify(payload)))
         ).toString('base64');
 
         const configId = 'restoreConfigId' in payload ? payload.restoreConfigId : payload.backupConfigId;

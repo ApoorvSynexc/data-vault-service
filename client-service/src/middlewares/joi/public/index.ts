@@ -9,7 +9,7 @@ import { makeResponse } from '../../../lib';
 const encryptedEnvelopeSchema = Joi.object({
   cipherText: Joi.string().required(),
   iv: Joi.string().required(),
-  authTag: Joi.string().allow('').optional(),
+  authTag: Joi.string().required(),
 });
 
 const validateEncryptedEnvelope = (req: Request, res: Response, next: NextFunction) => {

@@ -50,16 +50,7 @@ const SALESFORCE_BULK_API_VERSION = String(
   process.env.SALESFORCE_BULK_API_VERSION || 'v65.0'
 ).trim();
 
-// Encryption — must be a 64-char hex string (32 bytes for AES-256)
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
-
-// Salesforce Bootstrap Key — base64-encoded 32 bytes. MUST match the value
-// client-service uses as its ENCRYPTION_KEY (the outer envelope Salesforce
-// sends is encrypted with it). Kept as a separate constant here because
-// backup-service's own ENCRYPTION_KEY (above) is hex-encoded and used with
-// AES-256-GCM for internal data — different encoding + algorithm from the
-// Salesforce two-layer scheme, which is AES-256-CBC + base64.
-const SALESFORCE_BOOTSTRAP_KEY = String(process.env.SALESFORCE_BOOTSTRAP_KEY ?? '');
 
 //service
 const CORE_SERVICE = String(process.env.CORE_SERVICE);
@@ -201,7 +192,6 @@ export {
   PORT,
   NODE_ENV,
   ENCRYPTION_KEY,
-  SALESFORCE_BOOTSTRAP_KEY,
 
   // Email branding/contact info
   EMAIL_COMPANY_NAME,

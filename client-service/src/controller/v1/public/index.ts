@@ -22,7 +22,7 @@ import {
   STATUS,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
-import { DecryptedSalesforceRequest } from '../../../utils/salesforce-crypto';
+import { DecryptedSalesforceRequest } from '../../../middlewares/salesforce';
 import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, testDecrypt, triggerBackupJob } from '../../../services';
 
 /**
@@ -62,8 +62,7 @@ import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, get
  *   IS the authorization; there is no separate webhook-secret header any more.
  */
 const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<void> => {
-  const { crm } = sf;
-  const decryptedBody = JSON.parse(sf.plaintext);
+  const { crm, data: decryptedBody } = sf;
 
   const { transactionId, objectApiName } = decryptedBody;
 
@@ -225,7 +224,7 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 
   let backupConfigId: string | undefined;
   try {
-    ({ backupConfigId } = JSON.parse(decryptFromTransport(payload)));
+    ({ backupConfigId } = decryptFromTransport<{ backupConfigId?: string }>(payload));
     logger.info('payload decrypted');
   } catch (error) {
     logger.error('payload decryption failed:', error);

@@ -14,6 +14,7 @@ export interface IDestination {
   type: string; // S3 | (future: BLOB, GCS)
   ciphertext: string; // encrypted credentials
   iv: string;
+  authTag: string;
   status: string;
   createdAt: string;
   updatedAt: string;

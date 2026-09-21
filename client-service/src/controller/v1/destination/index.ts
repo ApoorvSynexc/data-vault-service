@@ -50,6 +50,7 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 201, true, 'create', {
     ...destination,
     ciphertext: undefined,
+    authTag: undefined,
     iv: undefined,
   });
 };
@@ -75,7 +76,7 @@ const listDestinationsHandler = async (req: IRequest, res: IResponse): Promise<v
     200,
     true,
     'fetch',
-    documents.map((d) => ({ ...d, ciphertext: undefined, iv: undefined })),
+    documents.map((d) => ({ ...d, ciphertext: undefined, iv: undefined, authTag: undefined })),
     { nextCursor }
   );
 };
@@ -99,6 +100,7 @@ const getDestinationHandler = async (req: IRequest, res: IResponse): Promise<voi
   makeResponse(req, res, 200, true, 'fetch', {
     ...destination,
     ciphertext: undefined,
+    authTag: undefined,
     iv: undefined,
   });
 };
@@ -145,6 +147,7 @@ const updateDestinationHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'update', {
     ...updated,
     ciphertext: undefined,
+    authTag: undefined,
     iv: undefined,
   });
 };

@@ -9,10 +9,9 @@ export interface ICrm {
   environment?: 'production' | 'sandbox';
   status: string;
   instanceUrl?: string; // Salesforce instance URL, set via the configure-org flow
-  // Per-org AES-256 key, set via the configure-org flow, encrypted at rest with the
-  // master ENCRYPTION_KEY (same treatment as crmCredential). `string` accepted for
-  // legacy rows written before this was encrypted — see resolveOrgKey() in salesforce-crypto.ts.
-  encryptionKey?: string | { ciphertext: string; iv: string };
+  // Per-org AES-256 key, set via the configure-org flow, encrypted at rest with
+  // the master ENCRYPTION_KEY (same treatment as crmCredential).
+  encryptionKey?: EncryptedPayload;
   // The 360 Data Craft PHP auth token (see services/third-party/payment), encrypted
   // at rest with the master ENCRYPTION_KEY. Plaintext `{ sf_secret, token }` accepted
   // for legacy rows written before this was encrypted.

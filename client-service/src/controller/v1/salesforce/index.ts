@@ -5,8 +5,7 @@ import { wrapController } from '../../../utils/helper';
 import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, updateUser } from '../../../services/user';
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrm, ICrmProfile, IRole, IRolePermissions } from '../../../models';
-import { decrypt, readEnvelope } from '../../../utils/encryption';
-import { encryptSalesforceResponse } from '../../../utils/salesforce-crypto';
+import { decrypt, decryptEnvelope, encryptEnvelope } from '../../../utils/encryption';
 import { STATUS } from '../../../constant';
 
 // A role "has access" once any module has at least one granted action —
@@ -54,23 +53,24 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 // call — mirrors the LWC's per-user permissions editor, which lets an admin
 // pick a role and customize its modules from a single screen.
 const updatePermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  const { userId, modules, roleId, organizationId } = JSON.parse(plaintext);
+  const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
+  const orgKey = decrypt(crm.encryptionKey!);
+  const { userId, modules, roleId, organizationId } = data;
 
   if (!userId || !roleId) {
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
     return;
   }
 
   const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
   if (!existingUser) {
-    res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'USER_NOT_FOUND' }));
+    res.status(404).json(encryptEnvelope({ errorCode: 'USER_NOT_FOUND' }, orgKey));
     return;
   }
 
   const updatedRole = await updateRole({ roleId: String(roleId) }, { permissions: modules ?? {} });
   if (!updatedRole) {
-    res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'ROLE_NOT_FOUND' }));
+    res.status(404).json(encryptEnvelope({ errorCode: 'ROLE_NOT_FOUND' }, orgKey));
     return;
   }
 
@@ -79,7 +79,7 @@ const updatePermissionsHandler = async (req: IRequest, res: IResponse): Promise<
     { role: { name: updatedRole.name, roleId: updatedRole.roleId } }
   );
 
-  res.status(200).json(encryptSalesforceResponse(crm, { success: true }));
+  res.status(200).json(encryptEnvelope({ success: true }, orgKey));
 };
 
 const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -109,16 +109,16 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
-  res.status(200).json(encryptSalesforceResponse(crm, { users }));
+  res.status(200).json(encryptEnvelope({ users }, decrypt(crm.encryptionKey!)));
 };
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  const decryptedBody = JSON.parse(plaintext);
-  const { users, environment, organizationId } = decryptedBody;
+  const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
+  const orgKey = decrypt(crm.encryptionKey!);
+  const { users, environment, organizationId } = data;
 
   if (!users?.length) {
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
     return;
   }
 
@@ -186,17 +186,18 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     }
   }
 
-  res.status(201).json(encryptSalesforceResponse(crm, result));
+  res.status(201).json(encryptEnvelope(result, orgKey));
 };
 
 const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
+  const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
+  const orgKey = decrypt(crm.encryptionKey!);
   const { crmId } = crm;
   // DataVaultPermissionService.createRole() (Apex) sends
   // { orgId, name, description, modules, createdBy } — `modules` on the wire
   // maps to IRole.permissions in storage. `createdBy` is derived server-side
   // in Apex from UserInfo.getName(), not user-entered.
-  const { name, description, modules, createdBy } = JSON.parse(plaintext);
+  const { name, description, modules, createdBy } = data;
 
   // Role names must be unique within an org — case/whitespace-insensitive so
   // "Sales" and " sales " aren't treated as different roles.
@@ -205,7 +206,7 @@ const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
     (role) => role.name.trim().toLowerCase() === String(name).trim().toLowerCase()
   );
   if (nameTaken) {
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ROLE_NAME_EXISTS' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'ROLE_NAME_EXISTS' }, orgKey));
     return;
   }
 
@@ -214,7 +215,7 @@ const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
   // "delete/never-create the role", so reject it explicitly here too rather
   // than storing one nothing can ever pass hasAnyGrant() for.
   if (!hasAnyGrant(modules)) {
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'PERMISSIONS_REQUIRED' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'PERMISSIONS_REQUIRED' }, orgKey));
     return;
   }
 
@@ -224,19 +225,20 @@ const createRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
   const roleId = uuidv4();
   await createRole({ roleId, crmId, name, description, permissions: modules ?? {}, createdBy });
 
-  res.status(201).json(encryptSalesforceResponse(crm, { roleId }));
+  res.status(201).json(encryptEnvelope({ roleId }, orgKey));
 };
 
 const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
+  const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
+  const orgKey = decrypt(crm.encryptionKey!);
   // DataVaultPermissionService.updateRole() (Apex) sends
   // { orgId, roleId, name, description, modules } — `modules` on the wire
   // maps to IRole.permissions in storage.
-  const { roleId, name, description, modules } = JSON.parse(plaintext);
+  const { roleId, name, description, modules } = data;
 
   const existingRole = await getRole({ roleId: String(roleId) });
   if (!existingRole) {
-    res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'ROLE_NOT_FOUND' }));
+    res.status(404).json(encryptEnvelope({ errorCode: 'ROLE_NOT_FOUND' }, orgKey));
     return;
   }
 
@@ -249,43 +251,45 @@ const updateRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
     }
   );
 
-  res.status(200).json(encryptSalesforceResponse(crm, updatedRole));
+  res.status(200).json(encryptEnvelope(updatedRole, orgKey));
 };
 
 const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  const { roleId } = JSON.parse(plaintext);
+  const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
+  const orgKey = decrypt(crm.encryptionKey!);
+  const { roleId } = data;
 
   if (!roleId) {
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
     return;
   }
 
   const deleted = await deleteRole({ roleId: String(roleId) });
   if (!deleted) {
-    res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'ROLE_NOT_FOUND' }));
+    res.status(404).json(encryptEnvelope({ errorCode: 'ROLE_NOT_FOUND' }, orgKey));
     return;
   }
 
-  res.status(200).json(encryptSalesforceResponse(crm, { success: true }));
+  res.status(200).json(encryptEnvelope({ success: true }, orgKey));
 };
 
 const confirmAdminUserCreatedHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crm, plaintext }: { crm: ICrm; plaintext: string } = req.salesforcePayload;
-  const { userId, organizationId } = JSON.parse(plaintext);
+  const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
+  const orgKey = decrypt(crm.encryptionKey!);
+  const { userId, organizationId } = data;
 
   if (!userId) {
-    res.status(400).json(encryptSalesforceResponse(crm, { errorCode: 'ID_REQUIRED' }));
+    res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
     return;
   }
 
   const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
   if (!existingUser) {
-    res.status(404).json(encryptSalesforceResponse(crm, { errorCode: 'USER_NOT_FOUND' }));
+    res.status(404).json(encryptEnvelope({ errorCode: 'USER_NOT_FOUND' }, orgKey));
     return;
   }
 
-  res.status(200).json(encryptSalesforceResponse(crm, { success: true }));
+  res.status(200).json(encryptEnvelope({ success: true }, orgKey));
 };
 
 // Bootstrap-only org existence check. This endpoint intentionally does not use
@@ -299,8 +303,8 @@ const confirmOrgAuthorizedHandler = async (req: IRequest, res: IResponse): Promi
       throw new Error('invalid_wrapper');
     }
 
-    const plaintext = decrypt(readEnvelope(JSON.parse(req.query.envelope)));
-    orgId = JSON.parse(plaintext).orgId;
+    const data = decryptEnvelope<{ orgId?: string }>(JSON.parse(req.query.envelope));
+    orgId = data.orgId;
   } catch {
     makeResponse(req, res, 401, false, 'unauthorized');
     return;
@@ -341,7 +345,7 @@ const getRolesHandler = async (req: IRequest, res: IResponse): Promise<void> => 
     createdBy: role.createdBy ?? null,
     modifiedDate: role.updatedAt ?? null,
   }));
-  res.status(200).json(encryptSalesforceResponse(crm, { roles: mappedRoles }));
+  res.status(200).json(encryptEnvelope({ roles: mappedRoles }, decrypt(crm.encryptionKey!)));
 };
 
 export const salesofrceController = wrapController({
