@@ -634,14 +634,6 @@ export interface IRetrieveRecordsParams {
   cursor?: string;
 }
 
-export interface IFetchInactiveRecordTypesParams {
-  backupConfigId: string;
-  userId: string;
-  objectApiName: string;
-  startDate: IsoDateString;
-  endDate: IsoDateString;
-}
-
 // The shape returned per inactive/deleted Record Type — always the flat
 // record-type object, never the UPDATE delta's {prev,new} wrapper. `active`
 // (not `isActive`) — matches the raw change_data payload and
@@ -1282,54 +1274,6 @@ const retrieveRecords = async (
   }
 
   return toPage(block, columnNames, page.offset, page.fingerprint, executions, PAGE_SIZE, page.blockIndex);
-};
-
-/**
- * Inactive/deleted Record Types out of the RECORD_TYPE schema-change deltas
- * inside [startDate, endDate].
- *
- * UPDATE deltas report the record type only when it went inactive in this
- * change (`change_data.new.active === false`) — a type that stayed active,
- * or went active→inactive→active again as separate deltas, is not what this
- * is for. DELETE deltas always report: a deleted type has no "new" half, and
- * being gone is itself the inactive state. INSERT never carries an inactive
- * signal, so the SQL excludes it up front.
- *
- * Returns null when the config does not exist or is not owned by the caller.
- */
-const retrieveInactiveRecordTypes = async (
-  params: IFetchInactiveRecordTypesParams
-): Promise<IInactiveRecordType[] | null> => {
-  const config = await getBackupConfigById(params.backupConfigId);
-  if (!config || config.userId !== params.userId) return null;
-
-  const databaseName = toGlueId(params.backupConfigId);
-  const table = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}`;
-  const deltaTable = `${table}_delta`;
-
-  const { startDate, endDate } = params;
-  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
-  const { run } = makeRunner(databaseName, region, null, outputLocation);
-  const result = await run('recordTypeDeltas', () =>
-    buildRecordTypeDeltaSql(deltaTable, {
-      startDate,
-      endDate,
-      deltaPartition: buildDeltaPartitionWhere(startDate, endDate),
-    })
-  );
-
-  const inactiveTypes: IInactiveRecordType[] = [];
-  for (const row of result.rows) {
-    const changeData = JSON.parse(row['change_data'] || 'null');
-    if (!changeData) continue;
-
-    if (row['change_type'] === 'DELETE') {
-      inactiveTypes.push(changeData);
-    } else if (changeData.new?.active === false) {
-      inactiveTypes.push(changeData.new);
-    }
-  }
-  return inactiveTypes;
 };
 
 export interface IFetchMissingFieldsParams {
@@ -2481,8 +2425,8 @@ export interface IFetchMissingRecordTypesParams {
 /**
  * Record types a restore's "Record type missing" edge case needs mapped, one
  * group per object: the record types this backup's RECORD_TYPE schema-change
- * deltas ever flagged inactive/deleted (retrieveInactiveRecordTypes' own
- * query, unbounded unless a window is given) that are, right now, either
+ * deltas ever flagged inactive/deleted (same buildRecordTypeDeltaSql query
+ * pattern, unbounded unless a window is given) that are, right now, either
  * absent from the destination object's live Salesforce record types
  * (MISSING) or still inactive there (INACTIVE). A record type reactivated
  * since is dropped — it needs no mapping.
@@ -2789,7 +2733,6 @@ export {
   toTreeSummary,
   filterObjectTree,
   retrieveRecords,
-  retrieveInactiveRecordTypes,
   retrieveMissingFields,
   retrieveMissingRecordTypes,
   retrieveRequiredFields,
