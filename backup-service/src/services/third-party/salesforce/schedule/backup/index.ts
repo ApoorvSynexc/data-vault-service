@@ -490,6 +490,7 @@ export const exportIncremental = async (
         objectIndex,
         destConfig,
         salesforceApiCount,
+        lastUpdatedAt,
         insertS3KeyPrefix: insertPrefix,
         updateS3KeyPrefix: updatePrefix,
         deleteS3KeyPrefix: deletePrefix,
