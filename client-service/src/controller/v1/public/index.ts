@@ -90,7 +90,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       continue;
     }
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
 
     /**
      * WHY we pass destination config decrypted to backup-service:
