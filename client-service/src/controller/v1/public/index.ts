@@ -90,7 +90,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       continue;
     }
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
 
     /**
      * WHY we pass destination config decrypted to backup-service:
@@ -252,36 +252,13 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   }
   const setup = await setupPayment({
     orgId,
-    productName: PAYMENT_PRODUCT_NAME,
     token: account.token,
     sfSecret: account.sf_secret,
-    salesforceEndpoint: `${instanceUrl}/services/apexrest/DataCraftRest`,
     orgInfo: {
-      'FileStorageMB Used': 5,
-      'FileStorageMB Maximum': 50,
-      namespace: '',
-      platformuser: '',
-      sfuser: '',
-      address: {
-        city: null,
-        country: 'US',
-        geocodeAccuracy: null,
-        latitude: null,
-        longitude: null,
-        postalCode: null,
-        state: null,
-        street: null,
-      },
-      edition: 'Developer Edition',
       OrgType: 'Sandbox',
-      orgName: '360 Data Craft Dev',
-      phone: '',
-      mobilephone: '',
-      country: 'US',
-      email: 'apoorv@gamil.com',
-      userName: 'User test',
-      Secretkey: '360DegreeCloud',
-      orgId,
+      orgName: '360SMS',
+      email: 'tHh9o@example.com',
+      userName: 'tHh9o@example.com',
     },
     isTokenEncrypted: true
   });

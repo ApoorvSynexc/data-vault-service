@@ -544,9 +544,8 @@ const buildSchemaChangeDeltaSql = (
     'WHERE'
   );
 
-// RECORD_TYPE deltas — feeds retrieveInactiveRecordTypes and
-// retrieveMissingRecordTypes. Only UPDATE/DELETE carry a state to report;
-// INSERT has no prior/inactive state.
+// RECORD_TYPE deltas — feeds retrieveMissingRecordTypes. Only UPDATE/DELETE
+// carry a state to report; INSERT has no prior/inactive state.
 //
 // The stored schema_change_type value is "RECORDTYPE" — no underscore,
 // unlike its own delta_id prefix ("SCHEMA_META|RECORDTYPE|...") which also
