@@ -4,7 +4,7 @@ import { logger } from '../../../../../middlewares/logger';
 import { IDestinationConfig } from '../../../../../models';
 import { uploadToS3 } from '../../../../destination/s3';
 import { makePageFetcher, salesforceRequest, SalesforceTokens } from '../../api-request';
-import { parseCSVRecords, toSingleLineCsv, sanitizeCsvText } from '../../../../../utils/csv';
+import { parseCSVRecords } from '../../../../../utils/csv';
 
 const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 const POLL_INTERVAL_MS = 5000;
@@ -154,13 +154,7 @@ const uploadBulkResultsByPage = async (
       const pageKey = locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`;
       const s3Key = `${s3KeyPrefix}/${pageKey}.csv`;
 
-      // Re-serialized (see utils/csv.ts): a quoted field with an embedded
-      // newline (e.g. a multi-line MailingStreet) is valid CSV, but the
-      // raw_csv Glue table reads rows by physical line, so writing
-      // Salesforce's bytes verbatim would split one record into a truncated
-      // row plus a phantom one. sanitizeCsvText guarantees one physical line
-      // per record before it ever reaches S3.
-      const csvBuffer = Buffer.from(sanitizeCsvText(Buffer.from(await response.arrayBuffer()).toString('utf-8')));
+      const csvBuffer = Buffer.from(await response.arrayBuffer());
 
       // Use the Salesforce-provided record count header (exact, independent
       // of how the page was re-serialized above).
@@ -289,21 +283,15 @@ const classifyAndUploadBulkResultsByPage = async (
         const createdDateIdx = headerRecord.fields.indexOf('CreatedDate');
         const lastModifiedDateIdx = headerRecord.fields.indexOf('LastModifiedDate');
 
-        // Re-serialized via toSingleLineCsv, not the parser's own `raw` text —
-        // `raw` still carries any embedded newline verbatim (e.g. a
-        // multi-line MailingStreet), and the raw_csv Glue table reads rows by
-        // physical line, so writing it back out would recreate the exact
-        // truncated-row/phantom-row corruption this parser exists to avoid.
         const insertRows: string[] = [];
         const updateRows: string[] = [];
         const deleteRows: string[] = [];
 
-        for (const { fields } of dataRecords) {
+        for (const { raw, fields } of dataRecords) {
           const isDeleted = isDeletedIdx >= 0 ? fields[isDeletedIdx] : null;
-          const row = toSingleLineCsv(fields);
 
           if (isDeleted === 'true') {
-            deleteRows.push(row);
+            deleteRows.push(raw);
           } else {
             const createdDate = createdDateIdx >= 0 ? fields[createdDateIdx] : null;
             const lastModifiedDate = lastModifiedDateIdx >= 0 ? fields[lastModifiedDateIdx] : null;
@@ -315,14 +303,14 @@ const classifyAndUploadBulkResultsByPage = async (
                 false;
 
             if (isNewRecord) {
-              insertRows.push(row);
+              insertRows.push(raw);
             } else {
-              updateRows.push(row);
+              updateRows.push(raw);
             }
           }
         }
 
-        const headerRow = toSingleLineCsv(headerRecord.fields);
+        const headerRow = headerRecord.raw;
 
         if (insertRows.length > 0) {
           const insertCsv = Buffer.from([headerRow, ...insertRows].join('\n'));

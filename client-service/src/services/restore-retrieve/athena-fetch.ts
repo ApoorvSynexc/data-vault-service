@@ -684,7 +684,7 @@ const backupJobIdWhere = (jobIds: string[]): string => `backupjobid IN (${idList
 // TextInputFormat as one more row, with every column empty — skip.header.line
 // count only strips the header, not that. Guards every raw-table read that
 // isn't already scoped to explicit ids (buildRawCsvBaseByIdsSql's own
-// recordIdsWhere already can't match a blank Id).
+// recordIdsWhere already can't match a blank Id)
 const NON_BLANK_ID = `${quoteCol(ID)} <> ''`;
 
 // Same guard for raw_json_delta — its Id column is the fixed, lowercase,
