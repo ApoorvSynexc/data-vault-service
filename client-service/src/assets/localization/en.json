@@ -121,5 +121,12 @@
   "invalid_record_id": "The record Id you entered is not valid. Please double-check it and try again",
   "trigger_recovery_record_not_found": "We couldn't find a record with that Id in your Salesforce org. Please verify the record exists and try again",
   "trigger_recovery_failed": "We couldn't recover this trigger. Please try again, and contact support if the issue persists",
-  "invalid_notification_status": "status must be one of UNREAD, READ, or DELETED"
+  "invalid_notification_status": "status must be one of UNREAD, READ, or DELETED",
+  "file_required": "A CSV file is required",
+  "file_too_large": "The uploaded file is too large",
+  "too_many_files": "Only one file can be uploaded at a time",
+  "invalid_file_type": "Only .csv files are supported",
+  "empty_csv_file": "The uploaded CSV file has no data rows",
+  "too_many_records": "The uploaded CSV file has too many rows",
+  "upload_failed": "The file upload failed. Please try again"
 }

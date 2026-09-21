@@ -31,6 +31,8 @@ import {
   PAGE_SIZE,
   getUser,
   getDestinationById,
+  getDecryptedDestinationConfig,
+  uploadToS3,
   getBackupJobById,
   getBackupJobsByConfig,
   retrieveInactiveRecordTypes,
@@ -58,10 +60,10 @@ import { BACKUP_JOB_TABLE, RESTORE_JOB_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
-import { IBackupJob, IRestoreScope, IRestoreFilters } from '../../../models';
+import { IBackupJob, IRestoreScope, IRestoreFilters, IS3Config } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
-import { removeCsvColumnsInFolder } from '../../../utils/restore-csv-format';
+import { removeCsvColumnsInFolder, parseCsvRow } from '../../../utils/restore-csv-format';
 import { ensureRestoreTrackingFields } from '../../../services/third-party/salesforce/restore-fields';
 import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission, sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
 
@@ -1206,6 +1208,58 @@ const createRestoreHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 };
 
+const MAX_BULK_CSV_ROWS = 50000;
+const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const file = req.file;
+  if (!file) {
+    return makeResponse(req, res, 400, false, 'file_required');
+  }
+
+  const { objectName, backupConfigId } = req.body as { objectName?: string; backupConfigId?: string };
+  if (!objectName) {
+    return makeResponse(req, res, 400, false, 'object_name_required');
+  }
+  if (!backupConfigId) {
+    return makeResponse(req, res, 400, false, 'config_id_required');
+  }
+
+  const backupConfig = await getBackupConfigById(backupConfigId);
+  if (!backupConfig) {
+    return makeResponse(req, res, 400, false, 'backup_config_not_found');
+  }
+
+  const destination = await getDestinationById(backupConfig.destinationId);
+  if (!destination) {
+    return makeResponse(req, res, 400, false, 'destination_not_found');
+  }
+
+  const lines = file.buffer
+    .toString('utf8')
+    .split(/\r\n|\r|\n/)
+    .filter((line) => line.trim().length > 0);
+  if (!lines.length) {
+    return makeResponse(req, res, 400, false, 'empty_csv_file');
+  }
+
+  const header = parseCsvRow(lines[0]);
+  const idColumnIndex = header.findIndex((column) => column.trim().toLowerCase() === 'id');
+  const hasHeader = idColumnIndex >= 0;
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+
+  if (dataLines.length > MAX_BULK_CSV_ROWS) {
+    return makeResponse(req, res, 400, false, 'too_many_records');
+  }
+  if (!dataLines.length) {
+    return makeResponse(req, res, 400, false, 'empty_csv_file');
+  }
+
+  const s3Config = getDecryptedDestinationConfig(destination) as IS3Config;
+  const s3Key = `bulk-csv-ids/${req.user!.userId}/${uuidv4()}.csv`;
+  await uploadToS3(s3Config, s3Key, file.buffer);
+
+  makeResponse(req, res, 200, true, 'fetch', { objectName, s3Key });
+};
+
 const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
   const { ...body } = req.body;
@@ -1439,5 +1493,6 @@ export const restoreRetrieveJobController = wrapController({
   getRestoreJobStatsHandler,
   createRestoreHandler2,
   createRollbackHandler,
-  downloadCsvFile
+  downloadCsvFile,
+  parseBulkCsvIdsHandler
 });

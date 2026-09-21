@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { restoreRetrieveJobController } from '../../controller';
-import { createRestoreValidation } from '../../middlewares';
+import { createRestoreValidation, uploadSingleCsv, bulkCsvUploadRateLimit } from '../../middlewares';
 
 /**
  * Restore & Retrieve routes — all require authentication (applied at the parent router level).
@@ -33,10 +33,20 @@ import { createRestoreValidation } from '../../middlewares';
  * GET  /download-csv                    — for a completed restore job, returns presigned S3 URLs
  *                                         (one per part) so the client downloads the exported
  *                                         CSV(s) for one object directly from S3
+ * POST /bulk-csv/parse                  — uploads a CSV of record Ids (multipart, field "file",
+ *                                         plus an "objectName" field) and returns
+ *                                         { objectName, ids } for use as one entry of
+ *                                         restoreScope.bulkCsvIds when creating a restore
  */
 const router = Router();
 
 router.post('/', createRestoreValidation, restoreRetrieveJobController.createRestoreHandler2);
+router.post(
+  '/bulk-csv/parse',
+  bulkCsvUploadRateLimit,
+  uploadSingleCsv('file'),
+  restoreRetrieveJobController.parseBulkCsvIdsHandler
+);
 router.post('/activate', restoreRetrieveJobController.activateRestoreHandler);
 router.get('/config/list', restoreRetrieveJobController.listRestoresHandler);
 router.get('/job', restoreRetrieveJobController.getRestoreJobHandler);

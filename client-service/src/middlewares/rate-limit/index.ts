@@ -1,6 +1,6 @@
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { Request, Response } from 'express';
-import { makeResponse } from '../../lib';
+import { makeResponse, IRequest } from '../../lib';
 
 // Applied to sensitive auth endpoints: /login, /signup, /refresh-token.
 //
@@ -23,5 +23,15 @@ export const authRateLimit = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   keyGenerator: (req) => ipKeyGenerator(req.ip || ''),
+  handler,
+});
+
+
+export const bulkCsvUploadRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as IRequest).user?.userId ?? ipKeyGenerator(req.ip || ''),
   handler,
 });
