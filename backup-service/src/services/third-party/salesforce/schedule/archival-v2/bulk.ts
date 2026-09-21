@@ -4,7 +4,6 @@ import { IBackupObject, IDestinationConfig, IS3ObjectKey } from '../../../../../
 import { updateArchivalObject } from '../../../../backup-job';
 import { uploadToS3 } from '../../../../destination';
 import { makePageFetcher, salesforceRequest, SalesforceTokens } from '../../api-request';
-import { sanitizeCsvText } from '../../../../../utils/csv';
 
 const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 const POLL_INTERVAL_MS = 5000;
@@ -156,13 +155,7 @@ const uploadBulkResultsByPage = async (
       const pageKey = locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`;
       const s3Key = `${s3KeyPrefix}/${pageKey}.csv`;
 
-      // Re-serialized (see utils/csv.ts): a quoted field with an embedded
-      // newline (e.g. a multi-line MailingStreet) is valid CSV, but the
-      // raw_csv Glue table reads rows by physical line, so writing
-      // Salesforce's bytes verbatim would split one record into a truncated
-      // row plus a phantom one. sanitizeCsvText guarantees one physical line
-      // per record before it ever reaches S3.
-      const csvBuffer = Buffer.from(sanitizeCsvText(Buffer.from(await response.arrayBuffer()).toString('utf-8')));
+      const csvBuffer = Buffer.from(await response.arrayBuffer());
 
       // Use the Salesforce-provided record count header (exact, independent
       // of how the page was re-serialized above).
