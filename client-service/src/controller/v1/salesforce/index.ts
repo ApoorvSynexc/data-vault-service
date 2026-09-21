@@ -141,6 +141,8 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           if (!backups?.length) {
             await deleteRole({ roleId: existingUser.role.roleId });
             await deleteUser(existingUser.userId);
+            console.log(`[salesforce] upsertUsersHandler | user deleted: ${JSON.stringify(user)}`);
+            result.push({ ...user, status: 'success', action: 'deleted' });
           } else {
             console.log(`[salesforce] upsertUsersHandler | user has backups, archival or restores: ${JSON.stringify(user)}`);
             result.push({ ...user, status: "failed", message: "user has backups, archival or restores" });
@@ -148,8 +150,6 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
         } else {
         }
 
-        console.log(`[salesforce] upsertUsersHandler | user deleted: ${JSON.stringify(user)}`);
-        result.push({ ...user, status: 'success', action: 'deleted' });
       } else {
         // If permission exist and if User exist then update user and role
         if (existingUser) {
