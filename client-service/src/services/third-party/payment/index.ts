@@ -115,6 +115,12 @@ const buildCreateAccountBearerToken = (orgId: string, userId: string): string =>
 // sf_secret used to authenticate/encrypt subsequent calls to the vendor's PHP API.
 const createPaymentAccount = async (orgId: string, userId: string): Promise<Create360AccountResult> => {
   let response: Create360AccountApiResponse;
+  console.log(JSON.stringify({
+    orgid: orgId,
+    product_name: PAYMENT_PRODUCT_NAME,
+    user_id: userId,
+    PAYMENT_API_BASE_URL
+  }))
   try {
     response = await httpRequest<Create360AccountApiResponse>({
       url: `${PAYMENT_API_BASE_URL}/Create360Account`,
