@@ -109,6 +109,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
+  console.log(`[salesforce] getUsersHandler | users: ${JSON.stringify(users)}`);
   res.status(200).json(encryptSalesforceResponse(crm, { users }));
 };
 
@@ -147,9 +148,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             console.log(`[salesforce] upsertUsersHandler | user has backups, archival or restores: ${JSON.stringify(user)}`);
             result.push({ ...user, status: "failed", message: "user has backups, archival or restores" });
           }
-        } else {
         }
-
       } else {
         // If permission exist and if User exist then update user and role
         if (existingUser) {
@@ -192,7 +191,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
       result.push({ ...user, status: 'failed', errorMessage: error.message });
     }
   }
-
+  console.log(`[salesforce] upsertUsersHandler | result: ${JSON.stringify(result)}`);
   res.status(201).json(encryptSalesforceResponse(crm, result));
 };
 
