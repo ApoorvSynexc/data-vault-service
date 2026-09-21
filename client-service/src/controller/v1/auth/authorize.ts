@@ -84,7 +84,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       }
     }
 
-    makeResponse(req, res, 200, true, 'fetch', encrypt(JSON.stringify(finalResponse)));
+    makeResponse(req, res, 200, true, 'fetch', encryptEnvelope(finalResponse));
   } catch (error) {
     logger.error(`Error in authorizeOrganizationHandler: ${error}`);
     makeResponse(req, res, 500, false, 'unknown_error');
