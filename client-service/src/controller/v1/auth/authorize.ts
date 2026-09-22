@@ -59,39 +59,28 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       }
       finalResponse.user = encryptEnvelope(await authorizeUserHandler(payload.user_details), decrypt(crm.encryptionKey!));
 
-      if (!crm.paymentToken) {
-        const account = await createPaymentAccount(crm.organizationId, payload.user_details.user_id);
-        console.log(JSON.stringify({
-          orgId: crm.organizationId,
-          token: account.token,
-          sfSecret: account.sf_secret,
-          orgInfo: {
-            OrgType: crm.environment === 'production' ? 'Production' : 'Sandbox',
-            orgName: '360SMS',
-            email: payload.user_details.user_email || '',
-            userName: payload.user_details.user_username || '',
-          }
-        }))
-        const setup = await setupPayment({
-          orgId: crm.organizationId,
-          token: account.token,
-          sfSecret: account.sf_secret,
-          orgInfo: {
-            OrgType: crm.environment === 'production' ? 'Production' : 'Sandbox',
-            orgName: '360SMS',
-            email: payload.user_details.user_email || '',
-            userName: payload.user_details.user_username || '',
-          },
-          isTokenEncrypted: false
-        });
+      // if (!crm.paymentToken) {
+      //   const account = await createPaymentAccount(crm.organizationId, payload.user_details.user_id);
+      //   const setup = await setupPayment({
+      //     orgId: crm.organizationId,
+      //     token: account.token,
+      //     sfSecret: account.sf_secret,
+      //     orgInfo: {
+      //       OrgType: crm.environment === 'production' ? 'Production' : 'Sandbox',
+      //       orgName: '360SMS',
+      //       email: payload.user_details.user_email || '',
+      //       userName: payload.user_details.user_username || '',
+      //     },
+      //     isTokenEncrypted: false
+      //   });
 
-        const paymentToken = encrypt(JSON.stringify({
-          sf_secret: account.sf_secret,
-          token: setup.token
-        }));
-        const paymentDetail = setup.data?.Success;
-        await updateCrm(crm.crmId, { paymentToken, paymentDetail });
-      }
+      //   const paymentToken = encrypt(JSON.stringify({
+      //     sf_secret: account.sf_secret,
+      //     token: setup.token
+      //   }));
+      //   const paymentDetail = setup.data?.Success;
+      //   await updateCrm(crm.crmId, { paymentToken, paymentDetail });
+      // }
     }
 
     makeResponse(req, res, 200, true, 'fetch', encryptEnvelope(finalResponse));
