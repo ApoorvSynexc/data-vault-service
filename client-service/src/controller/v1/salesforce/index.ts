@@ -55,14 +55,14 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 const updatePermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
   const orgKey = decrypt(crm.encryptionKey!);
-  const { userId, modules, roleId, organizationId } = data;
+  const { userId, modules, roleId } = data;
 
   if (!userId || !roleId) {
     res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
     return;
   }
 
-  const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
+  const existingUser = await getUserByCrmProfileUserId(userId, crm.organizationId);
   if (!existingUser) {
     res.status(404).json(encryptEnvelope({ errorCode: 'USER_NOT_FOUND' }, orgKey));
     return;
@@ -117,7 +117,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
   const orgKey = decrypt(crm.encryptionKey!);
-  const { users, environment, organizationId } = data;
+  const { users, environment } = data;
 
   if (!users?.length) {
     res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
@@ -129,8 +129,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     try {
       const { profile, role, ...rest } = user;
       const crmProfileUserId = profile.userId;
-      const orgId = organizationId;
-      const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, orgId);
+      const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, crm.organizationId);
       console.log(`[salesforce] upsertUsersHandler | existingUser: ${JSON.stringify(existingUser)}`);
 
       const hasGrant = hasAnyGrant(role.permissions);
@@ -169,18 +168,17 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           const roleName = 'Custom';
           const userId = uuidv4();
           const roleId = uuidv4();
-          let crmId = uuidv4();
-          const crmExist = await getCrmByOrgId(orgId);
-          if (crmExist) {
-            crmId = crmExist.crmId;
-          }
+          // attachDecryptedSalesforceRequest already resolved `crm` for this
+          // org via the X-DataCraft-Org-Id header, so it's guaranteed to
+          // exist here — no need to re-look it up by orgId.
+          const { crmId } = crm;
           await createRole({ roleId, name: roleName, permissions: role.permissions });
           await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, userId, crmId, isCrmConnected: false });
           await upsertCrm({
             userId,
             crmId,
             environment,
-            organizationId: orgId,
+            organizationId: crm.organizationId,
             crmName: 'salesforce',
           });
           console.log(`[salesforce] upsertUsersHandler | user created: ${JSON.stringify(user)}`);
@@ -282,14 +280,14 @@ const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
 const confirmAdminUserCreatedHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
   const orgKey = decrypt(crm.encryptionKey!);
-  const { userId, organizationId } = data;
+  const { userId } = data;
 
   if (!userId) {
     res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
     return;
   }
 
-  const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
+  const existingUser = await getUserByCrmProfileUserId(userId, crm.organizationId);
   if (!existingUser) {
     res.status(404).json(encryptEnvelope({ errorCode: 'USER_NOT_FOUND' }, orgKey));
     return;
