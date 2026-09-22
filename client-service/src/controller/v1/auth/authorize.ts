@@ -48,13 +48,11 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       return;
     }
     const finalResponse: any = {};
-    if (payload.type === 'org' && payload.org_details) {
+    if (payload.type === 'org' && payload.org_details && payload.user_details) {
       finalResponse.org = await authorizeOrgHandler(payload.org_details);
-    }
-    if (payload.user_details) {
-      const crm = await getCrmByOrgId(payload.user_details.org_id);
+      const crm = finalResponse.org ? await getCrmByOrgId(payload.org_details.orgId) : null;
       if (!crm) {
-        logger.warn(`[configure-org] 401: org not registered for user authorization: ${payload.user_details.org_id}`);
+        logger.warn(`[configure-org] 401: org not registered for user authorization: ${payload.org_details.orgId}`);
         throw new Error('Org not registered for user authorization');
       }
       finalResponse.user = encryptEnvelope(await authorizeUserHandler(payload.user_details), decrypt(crm.encryptionKey!));
