@@ -352,28 +352,34 @@ const resolveDestinationCrmUser = async (restore: NonNullable<Awaited<ReturnType
  */
 const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreConfigId, includeManagers } = req.query;
+  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers });
 
   if (!restoreConfigId || typeof restoreConfigId !== 'string') {
     return makeResponse(req, res, 400, false, 'id_required');
   }
+  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers });
 
   const restoreJob = await getRestoreJobById(restoreConfigId);
   if (!restoreJob) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
+  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers, restoreJob });
 
   const restore = await getRestoreById(restoreJob.restoreId);
   if (!restore) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
+  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers, restoreJob, restore });
 
   const crmUser = await resolveDestinationCrmUser(restore);
   if (!crmUser) {
     return makeResponse(req, res, 400, false, 'crm_not_connected');
   }
+  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers, restoreJob, restore, crmUser });
 
   const data = await getInactiveOwnerIds({ user: crmUser, includeManagers: includeManagers === 'true' });
-
+  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers, restoreJob, restore, crmUser, data });
+  
   return makeResponse(req, res, 200, true, 'fetch', data);
 };
 
