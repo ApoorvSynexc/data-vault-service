@@ -30,6 +30,8 @@ const runPaymentSyncJob = async () => {
                     }
                     const updatePaymentDetail = setup.data?.Success;
                     await updateCrm(crm.crmId, { paymentToken: updatePaymentToken, paymentDetail: updatePaymentDetail });
+
+                    logger.info(`[payment sync - CRON] crm ${crm.crmId} synced successfully`);
                 } catch (error) {
                     logger.error(`[payment sync - CRON] crm ${crm.crmId} threw error: ${(error as Error)?.message ?? String(error)}`);
                 }
