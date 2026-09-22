@@ -61,7 +61,7 @@ export const attachDecryptedSalesforceRequest = (source: 'body' | 'query') =>
       const orgId = req.headers[ORG_ID_HEADER] as string | undefined;
       console.log(`[attachDecryptedSalesforceRequest] orgId: ${orgId}`);
       req.salesforcePayload = source === 'body'
-        ? await decryptSalesforceRequest(orgId, req.body)
+        ? await decryptSalesforceRequest(orgId, req.body.data)
         : await decryptSalesforceQueryRequest(orgId, req.query.envelope as string);
       console.log(`[attachDecryptedSalesforceRequest] Decrypted payload: ${JSON.stringify(req.salesforcePayload)}`);
       next();
