@@ -57,8 +57,10 @@ const decryptSalesforceQueryRequest = async (orgId: string | undefined, rawQuery
 
 export const attachDecryptedSalesforceRequest = (source: 'body' | 'query') =>
   async (req: IRequest, res: Response, next: NextFunction): Promise<void> => {
+    console.log(`[attachDecryptedSalesforceRequest] Decrypting Salesforce request for ${source}`);
     try {
       const orgId = req.headers[ORG_ID_HEADER] as string | undefined;
+      console.log(`[attachDecryptedSalesforceRequest] orgId: ${orgId}`);
       req.salesforcePayload = source === 'body'
         ? await decryptSalesforceRequest(orgId, req.body)
         : await decryptSalesforceQueryRequest(orgId, req.query.envelope as string);
