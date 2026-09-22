@@ -16,12 +16,12 @@ export const startCron = () => {
     cron.schedule('0 3 * * *', async () => {
         logger.info(`[CRON] cron triggered | 3AM | started`);
         await runLogsArchive();
+        await runPaymentSyncJob();
         
         if (!['qa'].includes(NODE_ENV.toLowerCase())) {
             await timer(1000 * 60 * 15);
             await runEmrJob();
             await timer(1000 * 60 * 15);
-            runPaymentSyncJob();
         }
         logger.info(`[CRON] cron triggered | 3AM | ended`);
     });

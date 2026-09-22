@@ -7,7 +7,7 @@ const runPaymentSyncJob = async () => {
         getCrmsInBatches(async (crms) => {
             for (const crm of crms) {
                 const user = await getUser({ userId: crm.userId });
-                if (!user) continue;
+                if (!user || !crm.paymentToken) continue;
 
                 try {
                     const paymentToken = JSON.parse(decrypt(crm.paymentToken as EncryptedPayload)) as { sf_secret: string; token: string };
