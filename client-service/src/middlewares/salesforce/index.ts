@@ -30,10 +30,12 @@ const decryptSalesforceRequest = async (raw: any): Promise<DecryptedSalesforceRe
   const outer = raw as { orgId?: string; payload?: string; params?: string };
 
   const innerEnvelopeRaw = outer.payload ?? outer.params;
+  console.log('555555555 ', { outer, innerEnvelopeRaw })
   if (!outer.orgId || !innerEnvelopeRaw) {
     throw new Error('invalid_wrapper');
   }
 
+  console.log('6666666666 ', { outer, innerEnvelopeRaw })
   const crm = await getCrmByOrgId(outer.orgId);
   if (!crm?.encryptionKey) {
     throw new Error('org_not_registered');
@@ -45,15 +47,19 @@ const decryptSalesforceRequest = async (raw: any): Promise<DecryptedSalesforceRe
 };
 
 const decryptSalesforceQueryRequest = async (rawQueryParam: string): Promise<DecryptedSalesforceRequest> => {
+  console.log('11111111 ', { rawQueryParam })
   if (!rawQueryParam) {
     throw new Error('invalid_wrapper');
   }
   let raw: any;
   try {
+    console.log('22222222 ', { raw })
     raw = JSON.parse(rawQueryParam);
+    console.log('222222222 ', { raw })
   } catch {
     throw new Error('invalid_wrapper');
   }
+  console.log('4444444444 ', { raw })
   return decryptSalesforceRequest(raw);
 };
 
