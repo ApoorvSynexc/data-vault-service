@@ -12,21 +12,22 @@ export interface DecryptedSalesforceRequest {
 }
 
 /**
- * Unwraps a two-layer encrypted Salesforce request: the Bootstrap Key
- * (master ENCRYPTION_KEY) wraps `{ orgId, payload | params }`, where the
- * inner field is itself an envelope encrypted with that org's own key
- * (DataVaultCryptoService.encryptBootstrapEnvelope() on the Salesforce side
- * builds this automatically once an org is registered). `payload` carries
- * POST/PUT business data; `params` carries GET/DELETE identifiers — both are
- * unwrapped identically here. Throws on any failure — bad envelope, decrypt
- * failure, or an orgId with no registered CRM/key — callers should treat any
- * thrown error as unauthorized.
+ * Unwraps a Salesforce request: `orgId` arrives in plaintext alongside
+ * `payload | params`, which is an envelope encrypted with that org's own key
+ * (DataVaultCryptoService on the Salesforce side builds this once an org is
+ * registered). No Bootstrap/master-key layer — the org's own key, never
+ * transmitted in plaintext and established only during configure-org, is
+ * itself the authorization proof. `payload` carries POST/PUT business data;
+ * `params` carries GET/DELETE identifiers — both are unwrapped identically
+ * here. Throws on any failure — missing orgId/envelope, decrypt failure, or
+ * an orgId with no registered CRM/key — callers should treat any thrown
+ * error as unauthorized.
  *
  * Not used by configure-org: that endpoint registers the org and has no org
  * key yet, so it stays single-layer (decrypt directly with the Bootstrap Key).
  */
 const decryptSalesforceRequest = async (raw: any): Promise<DecryptedSalesforceRequest> => {
-  const outer = decryptEnvelope<{ orgId?: string; payload?: string; params?: string }>(raw);
+  const outer = raw as { orgId?: string; payload?: string; params?: string };
 
   const innerEnvelopeRaw = outer.payload ?? outer.params;
   if (!outer.orgId || !innerEnvelopeRaw) {
