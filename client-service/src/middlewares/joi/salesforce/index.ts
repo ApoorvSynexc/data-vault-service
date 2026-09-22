@@ -33,7 +33,6 @@ const userSchema = Joi.object({
 
 export const upsertUsersValidation = (req: IRequest, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    organizationId: Joi.string().required(),
     environment: Joi.string().optional(),
     users: Joi.array()
       .items(userSchema)
@@ -62,12 +61,13 @@ const modulePermissionsSchema = Joi.object()
   .optional();
 
 // DataVaultPermissionService.createRole()/updateRole() (Apex) send
-// { orgId, name, description, modules, createdBy } / { orgId, roleId, name, description, modules } —
+// { name, description, modules, createdBy } / { roleId, name, description, modules } —
 // not organizationId/environment/permissions, which nothing on the Salesforce
-// side ever sends.
+// side ever sends. Org identity comes from the X-DataCraft-Org-Id header
+// (attachDecryptedSalesforceRequest resolves it to req.salesforcePayload.crm),
+// not from this plaintext body.
 export const createRoleValidation = (req: IRequest, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    orgId: Joi.string().optional(),
     name: Joi.string().trim().required(),
     description: Joi.string().trim().allow('').optional(),
     modules: modulePermissionsSchema,
@@ -87,7 +87,6 @@ export const createRoleValidation = (req: IRequest, res: Response, next: NextFun
 
 export const updateRoleValidation = (req: IRequest, res: Response, next: NextFunction) => {
   const schema = Joi.object({
-    orgId: Joi.string().optional(),
     roleId: Joi.string().required(),
     name: Joi.string().trim().optional(),
     description: Joi.string().trim().allow('').optional(),
