@@ -86,10 +86,8 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   const { crm }: { crm: ICrm } = req.salesforcePayload;
   const { crmId } = crm;
 
-  console.log(`[salesforce] getUsersHandler | crm: ${JSON.stringify(crm)}`);
   const usersByCrmId = await getUsersByCrmId(crmId);
   const users = [];
-  console.log(`[salesforce] getUsersHandler | usersByCrmId: ${JSON.stringify(usersByCrmId)}`);
   for await (const element of usersByCrmId) {
     const role = await getRole({ roleId: element.role.roleId });
     if (role && hasAnyGrant(role.permissions)) {
@@ -111,6 +109,7 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
+  console.log(`[salesforce] getUsersHandler | users: ${JSON.stringify(users)}`);
   res.status(200).json(encryptEnvelope({ users }, decrypt(crm.encryptionKey!)));
 };
 
