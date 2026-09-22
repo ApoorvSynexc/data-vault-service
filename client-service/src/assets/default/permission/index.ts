@@ -98,23 +98,23 @@ export const defaultPermissions = [
             // }
         ]
     },
-    {
-        label: "Source Connection",
-        value: "sourceConnection",
-        description: "Connections data is pulled from",
-        permissions: [
-            {
-                label: "View",
-                value: "read",
-                description: "See source connections",
-            },
-            {
-                label: "Config",
-                value: "write",
-                description: "Add or edit source connections",
-            }
-        ]
-    },
+    // {
+    //     label: "Source Connection",
+    //     value: "sourceConnection",
+    //     description: "Connections data is pulled from",
+    //     permissions: [
+    //         {
+    //             label: "View",
+    //             value: "read",
+    //             description: "See source connections",
+    //         },
+    //         {
+    //             label: "Config",
+    //             value: "write",
+    //             description: "Add or edit source connections",
+    //         }
+    //     ]
+    // },
     {
         label: "Destination Connection",
         value: "destinationConnection",
