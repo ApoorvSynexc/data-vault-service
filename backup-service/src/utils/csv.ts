@@ -73,3 +73,13 @@ export const parseCSVRecords = (text: string): ICSVRecord[] => {
 
   return records;
 };
+
+const flattenField = (value: string): string => value.replace(/\r\n|\r|\n/g, ' ');
+
+const quoteField = (value: string): string => `"${flattenField(value).replace(/"/g, '""')}"`;
+
+export const toSingleLineCsv = (fields: string[]): string => fields.map(quoteField).join(',');
+export const sanitizeCsvText = (text: string): string =>
+  parseCSVRecords(text)
+    .map(({ fields }) => toSingleLineCsv(fields))
+    .join('\n');

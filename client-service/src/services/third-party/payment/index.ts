@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { httpRequest } from '../../../utils/http-request';
 import { logger } from '../../../middlewares';
-import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME, PAYMENT_SECRET_KEY } from '../../../constant';
+import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME, PAYMENT_SECRET_KEY, PAYMENT_SETUP_ORG_BASE_URL } from '../../../constant';
 
 interface Create360AccountApiResponse {
   status: string;
@@ -115,15 +115,9 @@ const buildCreateAccountBearerToken = (orgId: string, userId: string): string =>
 // sf_secret used to authenticate/encrypt subsequent calls to the vendor's PHP API.
 const createPaymentAccount = async (orgId: string, userId: string): Promise<Create360AccountResult> => {
   let response: Create360AccountApiResponse;
-  console.log(JSON.stringify({
-    orgid: orgId,
-    product_name: PAYMENT_PRODUCT_NAME,
-    user_id: userId,
-    PAYMENT_API_BASE_URL
-  }))
   try {
     response = await httpRequest<Create360AccountApiResponse>({
-      url: `${PAYMENT_API_BASE_URL}/Create360Account`,
+      url: `${PAYMENT_API_BASE_URL}/api/v3/Create360Account`,
       method: 'POST',
       headers: { Authorization: `Bearer ${buildCreateAccountBearerToken(orgId, userId)}` },
       body: JSON.stringify({
@@ -184,7 +178,7 @@ const setupPayment = async ({
     ...orgInfo,
   }));
   const body = JSON.stringify({
-    endpoint: `${PAYMENT_API_BASE_URL}/services/apexrest/DataCraftRest`,
+    endpoint: `${PAYMENT_SETUP_ORG_BASE_URL}/services/apexrest/DataCraftRest`,
     message: encryptedMessage,
   });
 
@@ -195,7 +189,7 @@ const setupPayment = async ({
   let response: GetSetupResponseApiResponse;
   try {
     response = await httpRequest<GetSetupResponseApiResponse>({
-      url: `${PAYMENT_API_BASE_URL}/getSetupResponse`,
+      url: `${PAYMENT_API_BASE_URL}/api/v3/getSetupResponse`,
       method: 'POST',
       headers: {
         orgId,
@@ -204,13 +198,11 @@ const setupPayment = async ({
       },
       body,
     });
-    console.log(JSON.stringify({ response }));
   } catch (err: any) {
     console.log(`[payment] getSetupResponse failed for org ${orgId} `, err);
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }
 
-  console.log(JSON.stringify({ response }));
   if (response?.status !== 'Success' || !response.message || !response.token) {
     throw new Error(response?.message || `getSetupResponse failed for org ${orgId}`);
   }
