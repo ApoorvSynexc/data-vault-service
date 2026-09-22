@@ -11,64 +11,57 @@ export interface DecryptedSalesforceRequest {
   data: any;
 }
 
+const ORG_ID_HEADER = 'x-datacraft-org-id';
+
 /**
- * Unwraps a Salesforce request: `orgId` arrives in plaintext alongside
- * `payload | params`, which is an envelope encrypted with that org's own key
- * (DataVaultCryptoService on the Salesforce side builds this once an org is
- * registered). No Bootstrap/master-key layer — the org's own key, never
- * transmitted in plaintext and established only during configure-org, is
- * itself the authorization proof. `payload` carries POST/PUT business data;
- * `params` carries GET/DELETE identifiers — both are unwrapped identically
- * here. Throws on any failure — missing orgId/envelope, decrypt failure, or
- * an orgId with no registered CRM/key — callers should treat any thrown
- * error as unauthorized.
+ * Unwraps a Salesforce request: the org id arrives in the
+ * X-DataCraft-Org-Id header; the body/query IS the envelope itself (no more
+ * outer `{orgId, payload|params}` wrapper), encrypted with that org's own
+ * key (DataVaultCryptoService on the Salesforce side builds this once an
+ * org is registered). No Bootstrap/master-key layer — the org's own key,
+ * never transmitted in plaintext and established only during configure-org,
+ * is itself the authorization proof. Throws on any failure — missing
+ * header/envelope, decrypt failure, or an orgId with no registered
+ * CRM/key — callers should treat any thrown error as unauthorized.
  *
  * Not used by configure-org: that endpoint registers the org and has no org
  * key yet, so it stays single-layer (decrypt directly with the Bootstrap Key).
  */
-const decryptSalesforceRequest = async (raw: any): Promise<DecryptedSalesforceRequest> => {
-  const outer = raw as { orgId?: string; payload?: string; params?: string };
-
-  const innerEnvelopeRaw = outer.payload ?? outer.params;
-  console.log('555555555 ', { outer, innerEnvelopeRaw })
-  if (!outer.orgId || !innerEnvelopeRaw) {
+const decryptSalesforceRequest = async (orgId: string | undefined, envelope: any): Promise<DecryptedSalesforceRequest> => {
+  if (!orgId || !envelope) {
     throw new Error('invalid_wrapper');
   }
 
-  console.log('6666666666 ', { outer, innerEnvelopeRaw })
-  const crm = await getCrmByOrgId(outer.orgId);
+  const crm = await getCrmByOrgId(orgId);
   if (!crm?.encryptionKey) {
     throw new Error('org_not_registered');
   }
 
-  const data = decryptEnvelope(JSON.parse(innerEnvelopeRaw), decrypt(crm.encryptionKey));
+  const data = decryptEnvelope(envelope, decrypt(crm.encryptionKey));
 
-  return { orgId: outer.orgId, crm, data };
+  return { orgId, crm, data };
 };
 
-const decryptSalesforceQueryRequest = async (rawQueryParam: string): Promise<DecryptedSalesforceRequest> => {
-  console.log('11111111 ', { rawQueryParam })
+const decryptSalesforceQueryRequest = async (orgId: string | undefined, rawQueryParam: string): Promise<DecryptedSalesforceRequest> => {
   if (!rawQueryParam) {
     throw new Error('invalid_wrapper');
   }
-  let raw: any;
+  let envelope: any;
   try {
-    console.log('22222222 ', { raw })
-    raw = JSON.parse(rawQueryParam);
-    console.log('222222222 ', { raw })
+    envelope = JSON.parse(rawQueryParam);
   } catch {
     throw new Error('invalid_wrapper');
   }
-  console.log('4444444444 ', { raw })
-  return decryptSalesforceRequest(raw);
+  return decryptSalesforceRequest(orgId, envelope);
 };
 
 export const attachDecryptedSalesforceRequest = (source: 'body' | 'query') =>
   async (req: IRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const orgId = req.headers[ORG_ID_HEADER] as string | undefined;
       req.salesforcePayload = source === 'body'
-        ? await decryptSalesforceRequest(req.body)
-        : await decryptSalesforceQueryRequest(req.query.envelope as string);
+        ? await decryptSalesforceRequest(orgId, req.body)
+        : await decryptSalesforceQueryRequest(orgId, req.query.envelope as string);
       next();
     } catch (error: any) {
       console.error(`[attachDecryptedSalesforceRequest] Error decrypting Salesforce request for ${source}: ${error?.message ?? error}`);
