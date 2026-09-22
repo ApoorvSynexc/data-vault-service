@@ -2940,13 +2940,13 @@ or (RESTORE variant):
 ```
 
 ### GET /api/v1/spark-job/get-inactive-owner-ids
-Resolves the org's Salesforce tokens for a CRM id and queries inactive users (`IsActive = false`), optionally also returning distinct manager ids.
+Resolves the Salesforce tokens for a restore's destination org (same resolution restore-objects/restore-fields use) and queries inactive users (`IsActive = false`), optionally also returning distinct manager ids.
 
 **Query params**
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| crmId | string | Yes | Connected CRM id |
+| restoreConfigId | string | Yes | RESTORE_JOB_TABLE id |
 | includeManagers | "true"\|"false" | No | Also return distinct `ManagerId`s |
 
 **Success response `200`**

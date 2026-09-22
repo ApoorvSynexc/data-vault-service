@@ -320,22 +320,54 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
   }
 };
 
+// Resolves the connected Salesforce user for a restore's destination org:
+// DIFFERENT names the target org directly on destination.crmId; SAME restores
+// into the requesting user's own connected org, so crmId comes from that
+// user's record instead — i.e. this always resolves the destination org,
+// never the source. Shared by restore-objects and get-inactive-owner-ids,
+// both of which need the destination org's credentials.
+const resolveDestinationCrmUser = async (restore: NonNullable<Awaited<ReturnType<typeof getRestoreById>>>) => {
+  let crmId = restore.destination?.crmId;
+  if (restore.destination?.type !== 'DIFFERENT') {
+    const restoreUser = await getUser({ userId: restore.userId });
+    crmId = restoreUser?.crmId;
+  }
+  if (!crmId) return null;
+
+  const crmUsers = await getUsersByCrmId(crmId);
+  return crmUsers.find((u) => u.crmCredential && u.crmProfile?.instanceUrl) ?? null;
+};
+
 /**
- * GET /spark-job/get-inactive-owner-ids?crmId=<uuid>&includeManagers=<boolean>
- * Resolves the Salesforce tokens for the given crmId (the internal user record
- * that connected the org), then queries the standard Data REST API
- * (SELECT Id[, ManagerId] FROM User WHERE IsActive = false). includeManagers=true
+ * GET /spark-job/get-inactive-owner-ids?restoreConfigId=<uuid>&includeManagers=<boolean>
+ * restoreConfigId is the RESTORE_JOB_TABLE PK (same id restore-fields and
+ * restore-objects read via getRestoreJobById). Credentials resolve to the
+ * restore's destination org via resolveDestinationCrmUser — same SAME/DIFFERENT
+ * split restore-objects uses — since that's the org Spark needs inactive-owner
+ * data for, not the source.
+ *
+ * Queries the standard Data REST API (SELECT Id[, ManagerId] FROM User WHERE
+ * IsActive = false) using that org's credentials. includeManagers=true
  * additionally returns the distinct set of ManagerId values off those records.
  */
 const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { crmId, includeManagers } = req.query;
+  const { restoreConfigId, includeManagers } = req.query;
 
-  if (!crmId || typeof crmId !== 'string') {
-    return makeResponse(req, res, 400, false, 'crm_id_required');
+  if (!restoreConfigId || typeof restoreConfigId !== 'string') {
+    return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const crmUsers = await getUsersByCrmId(crmId);
-  const crmUser = crmUsers.find((u) => u.crmCredential && u.crmProfile?.instanceUrl);
+  const restoreJob = await getRestoreJobById(restoreConfigId);
+  if (!restoreJob) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const restore = await getRestoreById(restoreJob.restoreId);
+  if (!restore) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const crmUser = await resolveDestinationCrmUser(restore);
   if (!crmUser) {
     return makeResponse(req, res, 400, false, 'crm_not_connected');
   }
@@ -414,13 +446,7 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
  * GET /spark-job/restore-objects?restoreConfigId=<uuid>
  * restoreConfigId is the RESTORE_JOB_TABLE PK (same id restore-fields and
  * update-spark-job-status's RESTORE branch read via getRestoreJobById).
- *
- * crmId resolves off restore.destination, same SAME/DIFFERENT split
- * createRestoreJob uses to pick the destination org: DIFFERENT names the
- * target org directly on destination.crmId; SAME restores into the requesting
- * user's own connected org, so crmId comes from that user's record instead.
- * Credentials are then looked up by crmId (not by restore.userId) so a
- * DIFFERENT-org restore runs against whoever actually connected that org.
+ * Credentials resolve to the destination org via resolveDestinationCrmUser.
  *
  * Reuses the same Object List API backup/archival and get-objectlist-by-configid
  * are built on (salesforceObjectFilteredList), with apexMode: 'restore' — already
@@ -455,17 +481,7 @@ const getRestoreObjectsHandler = async (req: IRequest, res: IResponse): Promise<
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  let crmId = restore.destination?.crmId;
-  if (restore.destination?.type !== 'DIFFERENT') {
-    const restoreUser = await getUser({ userId: restore.userId });
-    crmId = restoreUser?.crmId;
-  }
-  if (!crmId) {
-    return makeResponse(req, res, 400, false, 'crm_not_connected');
-  }
-
-  const crmUsers = await getUsersByCrmId(crmId);
-  const crmUser = crmUsers.find((u) => u.crmCredential && u.crmProfile?.instanceUrl);
+  const crmUser = await resolveDestinationCrmUser(restore);
   if (!crmUser) {
     return makeResponse(req, res, 400, false, 'crm_not_connected');
   }
