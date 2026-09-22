@@ -64,7 +64,9 @@ export const attachDecryptedSalesforceRequest = (source: 'body' | 'query') =>
         ? await decryptSalesforceRequest(req.body)
         : await decryptSalesforceQueryRequest(req.query.envelope as string);
       next();
-    } catch {
+    } catch (error: any) {
+      console.error(`[attachDecryptedSalesforceRequest] Error decrypting Salesforce request for ${source}: ${error?.message ?? error}`);
+      console.warn(`[attachDecryptedSalesforceRequest] 401: decrypt/envelope failed for ${source}`);
       makeResponse(req, res, 401, false, 'unauthorized');
     }
   };
