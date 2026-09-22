@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { httpRequest } from '../../../utils/http-request';
 import { logger } from '../../../middlewares';
-import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME, PAYMENT_SECRET_KEY } from '../../../constant';
+import { PAYMENT_API_BASE_URL, PAYMENT_PRODUCT_NAME, PAYMENT_SECRET_KEY, PAYMENT_SETUP_ORG_BASE_URL } from '../../../constant';
 
 interface Create360AccountApiResponse {
   status: string;
@@ -123,7 +123,7 @@ const createPaymentAccount = async (orgId: string, userId: string): Promise<Crea
   }))
   try {
     response = await httpRequest<Create360AccountApiResponse>({
-      url: `${PAYMENT_API_BASE_URL}/Create360Account`,
+      url: `${PAYMENT_API_BASE_URL}/api/v3/Create360Account`,
       method: 'POST',
       headers: { Authorization: `Bearer ${buildCreateAccountBearerToken(orgId, userId)}` },
       body: JSON.stringify({
@@ -184,7 +184,7 @@ const setupPayment = async ({
     ...orgInfo,
   }));
   const body = JSON.stringify({
-    endpoint: `${PAYMENT_API_BASE_URL}/services/apexrest/DataCraftRest`,
+    endpoint: `${PAYMENT_SETUP_ORG_BASE_URL}/services/apexrest/DataCraftRest`,
     message: encryptedMessage,
   });
 
@@ -195,7 +195,7 @@ const setupPayment = async ({
   let response: GetSetupResponseApiResponse;
   try {
     response = await httpRequest<GetSetupResponseApiResponse>({
-      url: `${PAYMENT_API_BASE_URL}/getSetupResponse`,
+      url: `${PAYMENT_API_BASE_URL}/api/v3/getSetupResponse`,
       method: 'POST',
       headers: {
         orgId,
