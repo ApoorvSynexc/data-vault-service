@@ -30,7 +30,7 @@ interface UpdateDestinationParams {
 const createDestination = async (params: CreateDestinationParams): Promise<IDestination> => {
   const { userId, name, provider, type, config } = params;
   const now = new Date().toISOString();
-  const { ciphertext, iv, authTag } = encrypt(JSON.stringify(config));
+  const { cipherText, iv, authTag } = encrypt(JSON.stringify(config));
 
   const item: IDestination = {
     destinationId: uuidv4(),
@@ -38,7 +38,7 @@ const createDestination = async (params: CreateDestinationParams): Promise<IDest
     name,
     provider,
     type,
-    ciphertext,
+    cipherText,
     iv,
     authTag,
     status: STATUS.active,
@@ -69,7 +69,7 @@ const getDestinationsByUser = async (
       IndexName: 'userId-index',
       KeyConditionExpression: 'userId = :uid',
       FilterExpression: '#status = :active',
-      ProjectionExpression: 'destinationId, userId, #name, provider, #type, ciphertext, iv, authTag, #status, createdAt, updatedAt',
+      ProjectionExpression: 'destinationId, userId, #name, provider, #type, cipherText, iv, authTag, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#status': 'status', '#name': 'name', '#type': 'type' },
       ExpressionAttributeValues: { ':uid': userId, ':active': STATUS.active },
       Limit: optional.limit,
@@ -99,8 +99,8 @@ const updateDestination = async (
   if (params.provider !== undefined) updates.provider = params.provider;
   if (params.type !== undefined) updates.type = params.type;
   if (params.config !== undefined) {
-    const { ciphertext, iv, authTag } = encrypt(JSON.stringify(params.config));
-    updates.ciphertext = ciphertext;
+    const { cipherText, iv, authTag } = encrypt(JSON.stringify(params.config));
+    updates.cipherText = cipherText;
     updates.iv = iv;
     updates.authTag = authTag;
   }
@@ -138,7 +138,7 @@ const deleteDestination = async (destinationId: string): Promise<boolean> => {
 };
 
 const getDecryptedDestinationConfig = (destination: IDestination): Record<string, any> => {
-  return JSON.parse(decrypt({ ciphertext: destination.ciphertext, iv: destination.iv, authTag: destination.authTag }));
+  return JSON.parse(decrypt(destination));
 };
 
 export {

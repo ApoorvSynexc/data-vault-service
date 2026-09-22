@@ -444,7 +444,7 @@ const salesforceHandler: ICrmBackupHandler = {
     try {
       const objects = destination.objects as any;
       const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
-        'ciphertext' in source.encryptedKeys
+        'cipherText' in source.encryptedKeys
           ? JSON.parse(decrypt(source.encryptedKeys))
           : source.encryptedKeys;
 
@@ -453,7 +453,7 @@ const salesforceHandler: ICrmBackupHandler = {
         refresh_token: string;
         instanceUrl: string;
       } =
-        'ciphertext' in destination.encryptedTokens
+        'cipherText' in destination.encryptedTokens
           ? JSON.parse(decrypt(destination.encryptedTokens))
           : destination.encryptedTokens;
 
@@ -562,7 +562,7 @@ const salesforceHandler: ICrmBackupHandler = {
     try {
       const objects = destination.objects as any;
       const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
-        'ciphertext' in source.encryptedKeys
+        'cipherText' in source.encryptedKeys
           ? JSON.parse(decrypt(source.encryptedKeys))
           : source.encryptedKeys;
 
@@ -571,7 +571,7 @@ const salesforceHandler: ICrmBackupHandler = {
         refresh_token: string;
         instanceUrl: string;
       } =
-        'ciphertext' in destination.encryptedTokens
+        'cipherText' in destination.encryptedTokens
           ? JSON.parse(decrypt(destination.encryptedTokens))
           : destination.encryptedTokens;
 

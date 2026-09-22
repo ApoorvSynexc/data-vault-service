@@ -5,7 +5,7 @@ const ALGORITHM = 'aes-256-gcm';
 const KEY = Buffer.from(ENCRYPTION_KEY, 'base64');
 
 interface EncryptedPayload {
-  ciphertext: string;
+  cipherText: string;
   iv: string;
   authTag: string;
 }
@@ -16,17 +16,17 @@ const encrypt = (plaintext: string): EncryptedPayload => {
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return {
-    ciphertext: encrypted.toString('base64'),
+    cipherText: encrypted.toString('base64'),
     iv: iv.toString('base64'),
     authTag: authTag.toString('base64'),
   };
 };
 
-const decrypt = ({ ciphertext, iv, authTag }: EncryptedPayload): string => {
+const decrypt = ({ cipherText, iv, authTag }: EncryptedPayload): string => {
   const decipher = crypto.createDecipheriv(ALGORITHM, KEY, Buffer.from(iv, 'base64'));
   decipher.setAuthTag(Buffer.from(authTag, 'base64'));
   return Buffer.concat([
-    decipher.update(Buffer.from(ciphertext, 'base64')),
+    decipher.update(Buffer.from(cipherText, 'base64')),
     decipher.final(), // throws if auth tag verification fails
   ]).toString('utf8');
 };

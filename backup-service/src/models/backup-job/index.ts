@@ -154,7 +154,7 @@ export interface IDestinationConfig {
 // The AES-256-GCM envelope from utils/encryption.ts, plus the destination type.
 export interface IBackupJobDestination {
   type: string;
-  ciphertext: string;
+  cipherText: string;
   iv: string;
   authTag: string;
 }

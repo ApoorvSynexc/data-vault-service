@@ -12,7 +12,7 @@ export interface IDestination {
   name: string;
   provider: 'AWS' | 'AZURE' | 'GCP';
   type: string; // S3 | (future: BLOB, GCS)
-  ciphertext: string; // encrypted credentials
+  cipherText: string; // encrypted credentials
   iv: string;
   authTag: string;
   status: string;

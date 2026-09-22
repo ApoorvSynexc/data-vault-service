@@ -4,7 +4,7 @@ import { ENCRYPTION_KEY } from '../constant';
 const ALGORITHM = 'aes-256-gcm';
 
 interface EncryptedPayload {
-  ciphertext: string;
+  cipherText: string;
   iv: string;
   authTag: string;
 }
@@ -15,17 +15,17 @@ const encryptWithKey = (plaintext: string, keyBase64: string): EncryptedPayload 
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return {
-    ciphertext: encrypted.toString('base64'),
+    cipherText: encrypted.toString('base64'),
     iv: iv.toString('base64'),
     authTag: authTag.toString('base64'),
   };
 };
 
-const decryptWithKey = ({ ciphertext, iv, authTag }: EncryptedPayload, keyBase64: string): string => {
+const decryptWithKey = ({ cipherText, iv, authTag }: EncryptedPayload, keyBase64: string): string => {
   const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(keyBase64, 'base64'), Buffer.from(iv, 'base64'));
   decipher.setAuthTag(Buffer.from(authTag, 'base64'));
   return Buffer.concat([
-    decipher.update(Buffer.from(ciphertext, 'base64')),
+    decipher.update(Buffer.from(cipherText, 'base64')),
     decipher.final(), // throws if auth tag verification fails
   ]).toString('utf8');
 };
@@ -36,20 +36,18 @@ const decrypt = (payload: EncryptedPayload): string => decryptWithKey(payload, E
 
 const generateOrgEncryptionKey = (): string => crypto.randomBytes(32).toString('base64');
 
-const encryptEnvelope = (
-  payload: unknown,
-  keyBase64: string = ENCRYPTION_KEY
-): { cipherText: string; iv: string; authTag: string } => {
-  const { ciphertext, iv, authTag } = encryptWithKey(JSON.stringify(payload), keyBase64);
-  return { cipherText: ciphertext, iv, authTag };
-};
+const encryptEnvelope = (payload: unknown, keyBase64: string = ENCRYPTION_KEY): EncryptedPayload =>
+  encryptWithKey(JSON.stringify(payload), keyBase64);
 
+// Tolerant of `ciphertext` (lowercase) too — EMR/Spark posts that casing on
+// its own request envelopes (see controller/v1/spark-job), while Salesforce's
+// DataVaultCryptoService always sends `cipherText`.
 const decryptEnvelope = <T = unknown>(raw: any, keyBase64: string = ENCRYPTION_KEY): T => {
-  const ciphertext = raw?.cipherText ?? raw?.ciphertext;
-  if (!ciphertext || !raw?.iv || !raw?.authTag) {
+  const cipherText = raw?.cipherText ?? raw?.ciphertext;
+  if (!cipherText || !raw?.iv || !raw?.authTag) {
     throw new Error('invalid_envelope');
   }
-  return JSON.parse(decryptWithKey({ ciphertext, iv: raw.iv, authTag: raw.authTag }, keyBase64));
+  return JSON.parse(decryptWithKey({ cipherText, iv: raw.iv, authTag: raw.authTag }, keyBase64));
 };
 
 const decryptFromTransport = <T = unknown>(payload: string): T =>

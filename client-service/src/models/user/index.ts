@@ -21,7 +21,7 @@ export interface IUser {
   crmProfile?: ICrmProfile;
   isCrmConnected?: boolean;
   crmCredential?: {
-    ciphertext: string;
+    cipherText: string;
     iv: string;
     authTag: string;
   }

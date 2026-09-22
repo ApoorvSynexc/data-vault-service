@@ -1305,7 +1305,7 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
 
   const path = `${restoreJob.source.csvFilePath}/${objectName}/csv`;
   const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
-    'ciphertext' in restoreJob.source.encryptedKeys
+    'cipherText' in restoreJob.source.encryptedKeys
       ? JSON.parse(decrypt(restoreJob.source.encryptedKeys))
       : restoreJob.source.encryptedKeys;
   const s3Config = {
