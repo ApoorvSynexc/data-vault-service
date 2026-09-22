@@ -242,26 +242,27 @@ const payloadHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 
 const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const orgId = '00Df600000T9DlJEAV';
+  // const orgId = '00Df600000T9DlJEAV';
   const userId = '005f6000008QmlyAAC';
   const instanceUrl = 'https://360degree--hrorg.sandbox.my.salesforce.com'
-  // const account = await createPaymentAccount(orgId, userId);
-  // console.log(JSON.stringify({account}));
-  const account = {
-    token: 'FmwBKdNra6wnkLMLRe1UxQPSv4HvVf9TzSOh4QuDDXHjAKwOGzm54gsby3VhGsoa2RbLXcza8Q4X/mmk01qCT9ZuhIqWXKMq1hl3TvwFe/U=',
-    sf_secret: '360SMS-Secret-IV:360SMS-Secrt-key',
-  }
-  const setup = await setupPayment({
-    orgId,
-    token: account.token,
-    sfSecret: account.sf_secret,
-    orgInfo: {
-      OrgType: 'Sandbox',
-      orgName: '360SMS',
-      email: 'tHh9o@example.com',
-      userName: 'tHh9o@example.com',
-    },
-    isTokenEncrypted: true
-  });
+  const account = await createPaymentAccount(orgId, userId);
+  console.log(JSON.stringify({account}));
+  // const account = {
+  //   token: 'FmwBKdNra6wnkLMLRe1UxQPSv4HvVf9TzSOh4QuDDXHjAKwOGzm54gsby3VhGsoa2RbLXcza8Q4X/mmk01qCT9ZuhIqWXKMq1hl3TvwFe/U=',
+  //   sf_secret: '360SMS-Secret-IV:360SMS-Secrt-key',
+  // }
+  // const setup = await setupPayment({
+  //   orgId,
+  //   token: account.token,
+  //   sfSecret: account.sf_secret,
+  //   orgInfo: {
+  //     OrgType: 'Sandbox',
+  //     orgName: '360SMS',
+  //     email: 'tHh9o@example.com',
+  //     userName: 'tHh9o@example.com',
+  //   },
+  //   isTokenEncrypted: true
+  // });
 
   // testDecrypt(
   //   orgId,
@@ -270,7 +271,7 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   //   "PS0ihMYRRfbhVuJLuol9RHrM7n22YmoAaadSU4p4bEVbR0crMcz8S8lbSu7e5ymg0hRsWUwgjoV8K551dYZO3kY0KdmiAk0iwHqUvcw/BvA="
   // );
 
-  makeResponse(req, res, 200, true, 'create', setup);
+  makeResponse(req, res, 200, true, 'create',);
 }
 
 export const publicController = wrapController({
