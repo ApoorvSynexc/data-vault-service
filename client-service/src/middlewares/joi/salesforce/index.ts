@@ -32,7 +32,11 @@ const userSchema = Joi.object({
 });
 
 export const upsertUsersValidation = (req: IRequest, res: Response, next: NextFunction) => {
+  // organizationId: still sent by Apex, accepted but unread — org identity
+  // now comes from crm.organizationId (X-DataCraft-Org-Id header), not this
+  // plaintext field.
   const schema = Joi.object({
+    organizationId: Joi.string().optional(),
     environment: Joi.string().optional(),
     users: Joi.array()
       .items(userSchema)
