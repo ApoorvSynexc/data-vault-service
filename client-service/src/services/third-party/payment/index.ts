@@ -115,12 +115,6 @@ const buildCreateAccountBearerToken = (orgId: string, userId: string): string =>
 // sf_secret used to authenticate/encrypt subsequent calls to the vendor's PHP API.
 const createPaymentAccount = async (orgId: string, userId: string): Promise<Create360AccountResult> => {
   let response: Create360AccountApiResponse;
-  console.log(JSON.stringify({
-    orgid: orgId,
-    product_name: PAYMENT_PRODUCT_NAME,
-    user_id: userId,
-    PAYMENT_API_BASE_URL
-  }))
   try {
     response = await httpRequest<Create360AccountApiResponse>({
       url: `${PAYMENT_API_BASE_URL}/api/v3/Create360Account`,
@@ -204,13 +198,11 @@ const setupPayment = async ({
       },
       body,
     });
-    console.log(JSON.stringify({ response }));
   } catch (err: any) {
     console.log(`[payment] getSetupResponse failed for org ${orgId} `, err);
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }
 
-  console.log(JSON.stringify({ response }));
   if (response?.status !== 'Success' || !response.message || !response.token) {
     throw new Error(response?.message || `getSetupResponse failed for org ${orgId}`);
   }
