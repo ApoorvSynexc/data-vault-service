@@ -134,13 +134,7 @@ export const getDestConfigForJob = async (backupJobId: string): Promise<IDestina
   if (!job?.destination) {
     throw new Error(`[metadata:schema] backup job ${backupJobId} has no destination configured`);
   }
-  return JSON.parse(
-    decrypt({
-      ciphertext: job.destination.ciphertext,
-      iv: job.destination.iv,
-      authTag: job.destination.authTag,
-    })
-  ) as IDestinationConfig;
+  return JSON.parse(decrypt(job.destination)) as IDestinationConfig;
 };
 
 // One snapshot in a stored history array — every change appends a new entry

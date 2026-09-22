@@ -58,13 +58,7 @@ export const runRealtimeBackupJob = async (
      *   encrypted config at job-creation time gives each job a stable, immutable
      *   snapshot of the credentials it was authorized to use.
      */
-    const destConfig = JSON.parse(
-      decrypt({
-        ciphertext: destination.ciphertext,
-        iv: destination.iv,
-        authTag: destination.authTag,
-      })
-    ) as IDestinationConfig;
+    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
 
     const handler = getRealtimeCrmHandler(crmName!);
 

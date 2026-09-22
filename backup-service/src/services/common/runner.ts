@@ -127,13 +127,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
         `Backup job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
       );
     }
-    const destConfig = JSON.parse(
-      decrypt({
-        ciphertext: destination.ciphertext,
-        iv: destination.iv,
-        authTag: destination.authTag,
-      })
-    ) as IDestinationConfig;
+    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
 
     const handler = getCrmHandler(source.crmName);
     await handler.runBackup(
@@ -232,13 +226,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
         `Archival job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
       );
     }
-    const destConfig = JSON.parse(
-      decrypt({
-        ciphertext: destination.ciphertext,
-        iv: destination.iv,
-        authTag: destination.authTag,
-      })
-    ) as IDestinationConfig;
+    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
 
     // For objects that failed during or before the delete phase, clear stale error
     // fields so they don't persist into the retry run. Objects that already reached
