@@ -12,6 +12,10 @@ export interface ICrm {
   // Per-org AES-256 key, set via the configure-org flow, encrypted at rest with
   // the master ENCRYPTION_KEY (same treatment as crmCredential).
   encryptionKey?: EncryptedPayload;
+  // Per-org shared secret for the X-Api-Key header, set via the configure-org
+  // flow, encrypted at rest with the master ENCRYPTION_KEY (same treatment as
+  // encryptionKey).
+  apiKey?: EncryptedPayload;
   // The 360 Data Craft PHP auth token (see services/third-party/payment), encrypted
   // at rest with the master ENCRYPTION_KEY. Plaintext `{ sf_secret, token }` accepted
   // for legacy rows written before this was encrypted.

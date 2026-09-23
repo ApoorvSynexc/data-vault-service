@@ -107,11 +107,6 @@ const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 const SALESFORCE_WEBHOOK_URL = String(process.env.SALESFORCE_WEBHOOK_URL);
 const SALESFORCE_WEBHOOK_SECRET = String(process.env.SALESFORCE_WEBHOOK_SECRET);
 
-// Shared secret gating every Salesforce-facing endpoint (salesforce.route.ts,
-// /auth/configure-org) — checked via the X-Api-Key header before any
-// decryption/DB work, same pattern as INTERNAL_SECRET below.
-const SALESFORCE_API_KEY = String(process.env.SALESFORCE_API_KEY);
-
 // Internal service auth â€” shared secret between this service and the backup service
 const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 
@@ -402,7 +397,6 @@ export {
   // Webhook
   SALESFORCE_WEBHOOK_URL,
   SALESFORCE_WEBHOOK_SECRET,
-  SALESFORCE_API_KEY,
   INTERNAL_SECRET,
 
   // Services

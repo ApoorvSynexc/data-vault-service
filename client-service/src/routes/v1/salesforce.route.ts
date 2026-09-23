@@ -5,12 +5,9 @@ import {
   createRoleValidation,
   updateRoleValidation,
   attachDecryptedSalesforceRequest,
-  salesforceApiKeyAuth,
 } from '../../middlewares';
 
 const router = Router();
-
-router.use(salesforceApiKeyAuth);
 
 // Permission & User endpoints
 router.get('/permissions', salesofrceController.getPermissionsHandler);
