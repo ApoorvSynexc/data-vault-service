@@ -103,6 +103,14 @@ const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE ||
 
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
+// Bootstrap-layer key for the Salesforce org-registration handshake only —
+// /auth/configure-org's request/response envelope and
+// /salesforce/confirm-org-authorized's query envelope. Distinct from
+// ENCRYPTION_KEY, which remains the only key used to encrypt anything at
+// rest in DynamoDB (crm.encryptionKey, crm.apiKey, paymentToken, ...) and is
+// untouched by this.
+const SALESFORCE_ENCRYPTION_KEY = String(process.env.SALESFORCE_ENCRYPTION_KEY);
+
 // Webhook
 const SALESFORCE_WEBHOOK_URL = String(process.env.SALESFORCE_WEBHOOK_URL);
 const SALESFORCE_WEBHOOK_SECRET = String(process.env.SALESFORCE_WEBHOOK_SECRET);
@@ -393,6 +401,7 @@ export {
   RESTORE_TABLE,
   RESTORE_JOB_TABLE,
   ENCRYPTION_KEY,
+  SALESFORCE_ENCRYPTION_KEY,
 
   // Webhook
   SALESFORCE_WEBHOOK_URL,
