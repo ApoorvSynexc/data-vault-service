@@ -6,12 +6,12 @@
 ### Archival record preview - search
 POST {{baseUrl}}/archival-config/salesforce/preview
 Content-Type: application/json
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0YzA0NmI4MS01M2E4LTQ5NzAtOWRiNy0xNzQ3NmMxZjRjMWMiLCJzZXNzaW9uSWQiOiIwMjc4NzE5MC04MWY5LTQzYWMtOGVjMy03ZDU2NmEzNjBiYTMiLCJpYXQiOjE3OTAxNTgyNDgsImV4cCI6MTc5MDE1OTE0OH0.y6VztvWvuYfehpQQHqrqNlo9w-DpxOw_rM-fYX8kGdo
+Authorization: Bearer {{authToken}}
 
 {
-  "orgId": "00DEc00000l8GvpMAE",
-  "objName": "Account",
-  "fields": ["Id", "Name", "Email"],
+  "orgId": "",
+  "objName": "",
+  "fields": [],
 
   "limit": 50,
   "page": 1
