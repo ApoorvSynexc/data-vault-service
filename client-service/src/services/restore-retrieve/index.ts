@@ -898,14 +898,8 @@ const resolveOrphanBaseRows = async (
   const found: IRankedRecord[] = [];
   const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
 
-  // Same TABLE_NOT_FOUND tolerance runRawQuery/makeRunner's run already apply
-  // elsewhere in this file — hudiTable/rawCsvTable existence is checked by the
-  // caller before calling in (hudiExists, csvJobIds.length), but a table that
-  // existed moments ago can still be dropped or fail to resolve mid-request;
-  // this is a best-effort resolution step, so a missing table here means "no
-  // orphan base row found this way," not a request failure.
   const resolveFrom = async (sql: string): Promise<void> => {
-    const result = await runRawQuery(databaseName, region, outputLocation, sql);
+    const result = await runAthenaQuery(sql, databaseName, region, outputLocation);
     for (const ranked of toRankedRows(result, columns, derived)) {
       const id = ranked.record['Id'];
       if (id && remaining.has(id)) {
