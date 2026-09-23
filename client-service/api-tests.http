@@ -1,1 +1,33 @@
 
+
+@baseUrl = http://localhost:3000/api/v1
+@authToken = PASTE_YOUR_TOKEN_HERE
+
+### Archival record preview - search
+POST {{baseUrl}}/archival-config/salesforce/preview
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0YzA0NmI4MS01M2E4LTQ5NzAtOWRiNy0xNzQ3NmMxZjRjMWMiLCJzZXNzaW9uSWQiOiIwMjc4NzE5MC04MWY5LTQzYWMtOGVjMy03ZDU2NmEzNjBiYTMiLCJpYXQiOjE3OTAxNTgyNDgsImV4cCI6MTc5MDE1OTE0OH0.y6VztvWvuYfehpQQHqrqNlo9w-DpxOw_rM-fYX8kGdo
+
+{
+  "orgId": "00DEc00000l8GvpMAE",
+  "objName": "Account",
+  "fields": ["Id", "Name", "Email"],
+
+  "limit": 50,
+  "page": 1
+}
+
+### Archival record preview - record detail
+POST {{baseUrl}}/archival-config/salesforce/record-detail
+Content-Type: application/json
+Authorization: Bearer {{authToken}}
+
+{
+  "orgId": "your-org-id",
+  "objName": "Account",
+  "recordId": "001xx000003DGb2AAG",
+  "fields": ["Id", "Name"]
+}
+
+
+

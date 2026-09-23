@@ -409,28 +409,11 @@ export class CursorError extends Error {
   }
 }
 
-// The Glue Data Catalog and Athena are regional AWS services. Every query
-// against a config's tables must run in the client's OWN destination bucket's
-// region, never the platform's own default region (which may not even match
-// where the client's S3 bucket actually lives) — otherwise Athena/Glue calls
-// fail outright (cross-region Glue Catalog access isn't just "slower", it's
-// generally not addressable the way same-region access is).
 export interface IAthenaLocation {
   region: string;
   outputLocation?: string;
 }
 
-/**
- * Where Athena writes result files for a config's queries: the client's own
- * destination bucket, under salesforce/{crmId}/retrieve/ — the same
- * salesforce/{crmId}/ prefix the backup files themselves live under (see
- * backup-service's buildCompressionRootKey), so results sit next to the data
- * they came from and the client owns their lifecycle. `outputLocation` is
- * undefined when the destination isn't a resolvable S3 bucket; Athena then
- * falls back to the workgroup's own result setting. `region` falls back to
- * the platform default only when the destination itself can't be resolved at
- * all — a broken-config edge case with no data to query either way.
- */
 const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthenaLocation> => {
   const destination = await getDestinationById(config.destinationId);
   if (!destination) return { region: AWS_REGION };
@@ -443,12 +426,6 @@ const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthe
 };
 
 const RETRIEVE_RETENTION_MS = 24 * 60 * 60 * 1000; // 1 day
-
-// Deletes this config's Athena "retrieve" output objects (see
-// buildRetrieveOutputLocation above, same prefix) that are older than 1 day.
-// Meant to be called fire-and-forget from the EMR cron — never throws; any
-// resolution or S3 failure is logged and (when a user is known) surfaced as
-// an in-app notification instead of propagating to the caller.
 export const cleanupStaleRetrieveObjects = async (config: IBackupConfig): Promise<void> => {
   try {
     const destination = await getDestinationById(config.destinationId);
@@ -921,8 +898,14 @@ const resolveOrphanBaseRows = async (
   const found: IRankedRecord[] = [];
   const derived = { from: OPERATION_COLUMN, to: OPERATION_FIELD };
 
+  // Same TABLE_NOT_FOUND tolerance runRawQuery/makeRunner's run already apply
+  // elsewhere in this file — hudiTable/rawCsvTable existence is checked by the
+  // caller before calling in (hudiExists, csvJobIds.length), but a table that
+  // existed moments ago can still be dropped or fail to resolve mid-request;
+  // this is a best-effort resolution step, so a missing table here means "no
+  // orphan base row found this way," not a request failure.
   const resolveFrom = async (sql: string): Promise<void> => {
-    const result = await runAthenaQuery(sql, databaseName, region, outputLocation);
+    const result = await runRawQuery(databaseName, region, outputLocation, sql);
     for (const ranked of toRankedRows(result, columns, derived)) {
       const id = ranked.record['Id'];
       if (id && remaining.has(id)) {
