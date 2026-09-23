@@ -46,7 +46,8 @@ const timingSafeStringEqual = (a: string, b: string): boolean =>
  *
  * Not used by configure-org: that endpoint registers the org (and is what
  * issues both of these keys), so it stays single-layer (decrypt directly
- * with the Bootstrap Key).
+ * with SALESFORCE_ENCRYPTION_KEY, the org-bootstrap key — see
+ * constant/index.ts — never ENCRYPTION_KEY or an org-specific key).
  */
 const decryptSalesforceRequest = async (
   orgId: string | undefined,

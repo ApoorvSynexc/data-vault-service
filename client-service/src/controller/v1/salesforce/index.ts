@@ -6,7 +6,7 @@ import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, upd
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrm, ICrmProfile, IRole, IRolePermissions } from '../../../models';
 import { decrypt, decryptEnvelope, encryptEnvelope } from '../../../utils/encryption';
-import { STATUS } from '../../../constant';
+import { STATUS, SALESFORCE_ENCRYPTION_KEY } from '../../../constant';
 
 // A role "has access" once any module has at least one granted action —
 // mirrors hasAnyAccess() in the reference UI design.
@@ -297,7 +297,8 @@ const confirmAdminUserCreatedHandler = async (req: IRequest, res: IResponse): Pr
 
 // Bootstrap-only org existence check. This endpoint intentionally does not use
 // attachDecryptedSalesforceRequest because Salesforce may not have the org key
-// yet; the query envelope is decrypted only with ENCRYPTION_KEY.
+// yet; the query envelope is decrypted only with SALESFORCE_ENCRYPTION_KEY
+// (never ENCRYPTION_KEY, the at-rest storage key — see constant/index.ts).
 const confirmOrgAuthorizedHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   let orgId: string | undefined;
 
@@ -306,7 +307,7 @@ const confirmOrgAuthorizedHandler = async (req: IRequest, res: IResponse): Promi
       throw new Error('invalid_wrapper');
     }
 
-    const data = decryptEnvelope<{ orgId?: string }>(JSON.parse(req.query.envelope));
+    const data = decryptEnvelope<{ orgId?: string }>(JSON.parse(req.query.envelope), SALESFORCE_ENCRYPTION_KEY);
     orgId = data.orgId;
   } catch {
     makeResponse(req, res, 401, false, 'unauthorized');
