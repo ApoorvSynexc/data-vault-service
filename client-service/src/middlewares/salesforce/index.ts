@@ -21,10 +21,7 @@ const API_KEY_HEADER = 'x-api-key';
 // internalAuth (middlewares/internal-auth) for /internal/*, just a
 // different header/secret pair.
 export const salesforceApiKeyAuth = (req: IRequest, res: Response, next: NextFunction): void => {
-  console.log(`[salesforceApiKeyAuth] Checking Salesforce API key for ${req.method} ${req.originalUrl}`);
   const provided = req.headers[API_KEY_HEADER];
-  console.log(`[salesforceApiKeyAuth] Provided API key: ${provided}`);
-  console.log(`[salesforceApiKeyAuth] Expected API key: ${SALESFORCE_API_KEY}`);
 
   if (
     typeof provided === 'string' &&
