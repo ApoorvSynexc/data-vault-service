@@ -24,7 +24,7 @@ import {
   NOTIFICATION_TABLE,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
-  DYNAMODB_ENDPOINT,
+  //DYNAMODB_ENDPOINT,
   NODE_ENV,
 } from '../../constant';
 import { IAwsCredentials } from '../../models';
@@ -33,15 +33,16 @@ const awsCredentials: IAwsCredentials = {
   region: AWS_REGION
 }
 
-if (DYNAMODB_ENDPOINT) {
+// if (DYNAMODB_ENDPOINT) {
 
-  // Local mode: talk to DynamoDB Local / LocalStack with throwaway credentials.
-  awsCredentials.endpoint = DYNAMODB_ENDPOINT;
-  awsCredentials.credentials = {
-    accessKeyId: AWS_ACCESS_KEY_ID || 'local',
-    secretAccessKey: AWS_SECRET_ACCESS_KEY || 'local',
-  }
-} else if (NODE_ENV === 'dev' && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+//   // Local mode: talk to DynamoDB Local / LocalStack with throwaway credentials.
+//   //awsCredentials.endpoint = DYNAMODB_ENDPOINT;
+//   awsCredentials.credentials = {
+//     accessKeyId: AWS_ACCESS_KEY_ID || 'local',
+//     secretAccessKey: AWS_SECRET_ACCESS_KEY || 'local',
+//   }
+// } else 
+  if (NODE_ENV === 'dev' && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
   awsCredentials.credentials = {
     accessKeyId: AWS_ACCESS_KEY_ID,
     secretAccessKey: AWS_SECRET_ACCESS_KEY,
