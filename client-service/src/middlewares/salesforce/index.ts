@@ -1,9 +1,11 @@
 import { NextFunction, Response } from 'express';
+import { timingSafeEqual } from 'crypto';
 import { IRequest } from '../../lib/interface/shared';
 import { makeResponse } from '../../lib';
 import { decrypt, decryptEnvelope } from '../../utils/encryption';
 import { getCrmByOrgId } from '../../services';
 import { ICrm } from '../../models';
+import { SALESFORCE_API_KEY } from '../../constant';
 
 export interface DecryptedSalesforceRequest {
   orgId: string;
@@ -12,6 +14,27 @@ export interface DecryptedSalesforceRequest {
 }
 
 const ORG_ID_HEADER = 'x-datacraft-org-id';
+const API_KEY_HEADER = 'x-api-key';
+
+// Shared-secret gate in front of every Salesforce-facing endpoint, checked
+// before any decryption/DB work. Same timing-safe-compare pattern as
+// internalAuth (middlewares/internal-auth) for /internal/*, just a
+// different header/secret pair.
+export const salesforceApiKeyAuth = (req: IRequest, res: Response, next: NextFunction): void => {
+  const provided = req.headers[API_KEY_HEADER];
+
+  if (
+    typeof provided === 'string' &&
+    SALESFORCE_API_KEY.length > 0 &&
+    provided.length === SALESFORCE_API_KEY.length &&
+    timingSafeEqual(Buffer.from(provided), Buffer.from(SALESFORCE_API_KEY))
+  ) {
+    next();
+    return;
+  }
+
+  makeResponse(req, res, 401, false, 'unauthorized');
+};
 
 /**
  * Unwraps a Salesforce request: the org id arrives in the

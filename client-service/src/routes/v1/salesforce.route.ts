@@ -1,8 +1,16 @@
 import { Router } from 'express';
 import { salesofrceController } from '../../controller';
-import { upsertUsersValidation, createRoleValidation, updateRoleValidation, attachDecryptedSalesforceRequest } from '../../middlewares';
+import {
+  upsertUsersValidation,
+  createRoleValidation,
+  updateRoleValidation,
+  attachDecryptedSalesforceRequest,
+  salesforceApiKeyAuth,
+} from '../../middlewares';
 
 const router = Router();
+
+router.use(salesforceApiKeyAuth);
 
 // Permission & User endpoints
 router.get('/permissions', salesofrceController.getPermissionsHandler);
