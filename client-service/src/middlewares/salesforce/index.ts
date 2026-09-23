@@ -22,6 +22,7 @@ const API_KEY_HEADER = 'x-api-key';
 // different header/secret pair.
 export const salesforceApiKeyAuth = (req: IRequest, res: Response, next: NextFunction): void => {
   const provided = req.headers[API_KEY_HEADER];
+  console.log(`[salesforceApiKeyAuth] provided: ${provided}, expected: ${SALESFORCE_API_KEY}`);
 
   if (
     typeof provided === 'string' &&
