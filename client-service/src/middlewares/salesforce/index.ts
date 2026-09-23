@@ -5,7 +5,6 @@ import { makeResponse } from '../../lib';
 import { decrypt, decryptEnvelope } from '../../utils/encryption';
 import { getCrmByOrgId } from '../../services';
 import { ICrm } from '../../models';
-import { SALESFORCE_API_KEY } from '../../constant';
 
 export interface DecryptedSalesforceRequest {
   orgId: string;
@@ -16,26 +15,8 @@ export interface DecryptedSalesforceRequest {
 const ORG_ID_HEADER = 'x-datacraft-org-id';
 const API_KEY_HEADER = 'x-api-key';
 
-// Shared-secret gate in front of every Salesforce-facing endpoint, checked
-// before any decryption/DB work. Same timing-safe-compare pattern as
-// internalAuth (middlewares/internal-auth) for /internal/*, just a
-// different header/secret pair.
-export const salesforceApiKeyAuth = (req: IRequest, res: Response, next: NextFunction): void => {
-  const provided = req.headers[API_KEY_HEADER];
-  console.log(`[salesforceApiKeyAuth] provided: ${provided}, expected: ${SALESFORCE_API_KEY}`);
-
-  if (
-    typeof provided === 'string' &&
-    SALESFORCE_API_KEY.length > 0 &&
-    provided.length === SALESFORCE_API_KEY.length &&
-    timingSafeEqual(Buffer.from(provided), Buffer.from(SALESFORCE_API_KEY))
-  ) {
-    next();
-    return;
-  }
-
-  makeResponse(req, res, 401, false, 'unauthorized');
-};
+const timingSafeStringEqual = (a: string, b: string): boolean =>
+  a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 /**
  * Unwraps a Salesforce request: the org id arrives in the
@@ -44,7 +25,10 @@ export const salesforceApiKeyAuth = (req: IRequest, res: Response, next: NextFun
  * with that org's own key (DataVaultCryptoService on the Salesforce side
  * builds this once an org is registered). No Bootstrap/master-key layer —
  * the org's own key, never transmitted in plaintext and established only
- * during configure-org, is itself the authorization proof.
+ * during configure-org, is itself part of the authorization proof, alongside
+ * a per-org API key (also issued at configure-org time) sent via the
+ * X-Api-Key header — both are checked against the same CRM record fetched
+ * by orgId, so there's no extra DB read for the key check.
  *
  * The `payload`/`params` wrapper still exists, just moved inside the
  * encrypted plaintext instead of outside it: decrypting a body request
@@ -54,25 +38,33 @@ export const salesforceApiKeyAuth = (req: IRequest, res: Response, next: NextFun
  * decrypted object itself if that key isn't present, in case a caller sends
  * an unwrapped plaintext.
  *
- * Throws on any failure — missing header/envelope, decrypt failure, or an
- * orgId with no registered CRM/key — callers should treat any thrown error
- * as unauthorized.
+ * Throws on any failure — missing header/envelope, bad API key, decrypt
+ * failure, or an orgId with no registered CRM/key — callers should treat
+ * any thrown error as unauthorized. Deliberately generic ('org_not_registered'
+ * covers both "no such org" and "not fully registered yet") so a bad API key
+ * and a bad org id are indistinguishable to the caller.
  *
- * Not used by configure-org: that endpoint registers the org and has no org
- * key yet, so it stays single-layer (decrypt directly with the Bootstrap Key).
+ * Not used by configure-org: that endpoint registers the org (and is what
+ * issues both of these keys), so it stays single-layer (decrypt directly
+ * with the Bootstrap Key).
  */
 const decryptSalesforceRequest = async (
   orgId: string | undefined,
   envelope: any,
-  wrapperKey: 'payload' | 'params'
+  wrapperKey: 'payload' | 'params',
+  providedApiKey: string | undefined
 ): Promise<DecryptedSalesforceRequest> => {
   if (!orgId || !envelope) {
     throw new Error('invalid_wrapper');
   }
 
   const crm = await getCrmByOrgId(orgId);
-  if (!crm?.encryptionKey) {
+  if (!crm?.encryptionKey || !crm?.apiKey) {
     throw new Error('org_not_registered');
+  }
+
+  if (typeof providedApiKey !== 'string' || !timingSafeStringEqual(providedApiKey, decrypt(crm.apiKey))) {
+    throw new Error('invalid_api_key');
   }
 
   const decrypted = decryptEnvelope<any>(envelope, decrypt(crm.encryptionKey));
@@ -81,7 +73,11 @@ const decryptSalesforceRequest = async (
   return { orgId, crm, data };
 };
 
-const decryptSalesforceQueryRequest = async (orgId: string | undefined, rawQueryParam: string): Promise<DecryptedSalesforceRequest> => {
+const decryptSalesforceQueryRequest = async (
+  orgId: string | undefined,
+  rawQueryParam: string,
+  providedApiKey: string | undefined
+): Promise<DecryptedSalesforceRequest> => {
   if (!rawQueryParam) {
     throw new Error('invalid_wrapper');
   }
@@ -91,16 +87,17 @@ const decryptSalesforceQueryRequest = async (orgId: string | undefined, rawQuery
   } catch {
     throw new Error('invalid_wrapper');
   }
-  return decryptSalesforceRequest(orgId, envelope, 'params');
+  return decryptSalesforceRequest(orgId, envelope, 'params', providedApiKey);
 };
 
 export const attachDecryptedSalesforceRequest = (source: 'body' | 'query') =>
   async (req: IRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
       const orgId = req.headers[ORG_ID_HEADER] as string | undefined;
+      const providedApiKey = req.headers[API_KEY_HEADER] as string | undefined;
       req.salesforcePayload = source === 'body'
-        ? await decryptSalesforceRequest(orgId, req.body, 'payload')
-        : await decryptSalesforceQueryRequest(orgId, req.query.envelope as string);
+        ? await decryptSalesforceRequest(orgId, req.body, 'payload', providedApiKey)
+        : await decryptSalesforceQueryRequest(orgId, req.query.envelope as string, providedApiKey);
       next();
     } catch (error: any) {
       console.error(`[attachDecryptedSalesforceRequest] Error decrypting Salesforce request for ${source}: ${error?.message ?? error}`);

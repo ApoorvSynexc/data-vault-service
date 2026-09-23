@@ -90,7 +90,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
 };
 
 
-const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{ encryptionKey: string }> => {
+const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{ encryptionKey: string; apiKey: string }> => {
   // DataVaultAdminAuthorizationService.authorizeOrganization() (invoked from the
   // LWC's Authorize Admin flow, not the Post Install Handler — the installing user
   // has no Named Credential access at install time) encrypts { orgId, instanceUrl }
@@ -110,28 +110,34 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
 
   let crm = await getCrmByOrgId(orgId);
   let rawEncryptionKey: string;
+  let rawApiKey: string;
 
   if (!crm) {
     rawEncryptionKey = generateOrgEncryptionKey();
+    // Same random-secret generator as the encryption key — it's just
+    // crypto.randomBytes(32), which is exactly what a per-org API key needs too.
+    rawApiKey = generateOrgEncryptionKey();
     crm = await upsertCrm({
       crmId: uuidv4(),
       organizationId: orgId,
       crmName: 'salesforce',
       instanceUrl,
       encryptionKey: encrypt(rawEncryptionKey), // encrypted at rest with the master key, like crmCredential
+      apiKey: encrypt(rawApiKey),
       status: STATUS.inactive,
     });
   } else {
     if (crm.instanceUrl !== instanceUrl) {
       crm = (await updateCrm(crm.crmId, { instanceUrl })) ?? crm;
     }
-    if (!crm.encryptionKey) {
+    if (!crm.encryptionKey || !crm.apiKey) {
       throw new Error('org_missing_encryption_key');
     }
     rawEncryptionKey = decrypt(crm.encryptionKey);
+    rawApiKey = decrypt(crm.apiKey);
   }
 
-  return { encryptionKey: rawEncryptionKey };
+  return { encryptionKey: rawEncryptionKey, apiKey: rawApiKey };
 };
 
 const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise<{ authorizationUrl: string }> => {
