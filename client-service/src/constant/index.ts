@@ -39,6 +39,13 @@ const AWS_EMR_APPLICATION_ID = String(process.env.AWS_EMR_APPLICATION_ID);
 const AWS_EMR_EXECUTION_ROLE_ARN = String(process.env.AWS_EMR_EXECUTION_ROLE_ARN).trim();
 const AWS_EMR_ENCRYPTION_KEY = String(process.env.AWS_EMR_ENCRYPTION_KEY);
 const AWS_EMR_S3_FILE_PATH = String(process.env.AWS_EMR_S3_FILE_PATH);
+// Shared secret gating every /spark-job/* route (the EMR Spark job's callback
+// endpoints — build-payload, update-spark-job-status, get-inactive-owner-ids,
+// restore-fields, restore-objects). Checked via the X-Api-Key header, same
+// pattern as INTERNAL_SECRET. Handed to the Spark job itself at submit time
+// (see submitEMR in services/payload/index.ts, same mechanism ENCRYPTION_KEY
+// already uses) so it can send it back on every callback.
+const SPARK_JOB_API_KEY = String(process.env.SPARK_JOB_API_KEY);
 
 // AWS Athena
 // IAM Role ARN that Athena assumes when reading from client S3 buckets.
@@ -370,6 +377,7 @@ export {
   AWS_EMR_APPLICATION_ID,
   AWS_EMR_EXECUTION_ROLE_ARN,
   AWS_EMR_ENCRYPTION_KEY,
+  SPARK_JOB_API_KEY,
   AWS_EMR_S3_FILE_PATH,
 
   // AWS Athena

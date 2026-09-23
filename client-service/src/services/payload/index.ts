@@ -4,7 +4,7 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig, getBackupJobsByConfigAndStatuses } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL } from '../../constant';
+import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL, SPARK_JOB_API_KEY } from '../../constant';
 import { logger } from '../../middlewares';
 import { IAwsCredentials, IBackupConfig, IBackupJob, IObject, IObjectRelationshipNode, IRestoreScope, IRestoreSource } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
@@ -594,8 +594,10 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                         properties: {
                             "spark.executorEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
                             "spark.emr-serverless.driverEnv.ENCRYPTION_KEY": ENCRYPTION_KEY,
-                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
-                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
+                            "spark.executorEnv.SPARK_JOB_API_KEY": SPARK_JOB_API_KEY,
+                            "spark.emr-serverless.driverEnv.SPARK_JOB_API_KEY": SPARK_JOB_API_KEY,
+                            "spark.driver.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DSPARK_JOB_API_KEY=${SPARK_JOB_API_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
+                            "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DSPARK_JOB_API_KEY=${SPARK_JOB_API_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
                             "spark.executorEnv.NODE_SERVER_URL": NODE_ENV_URL,
                             "spark.emr-serverless.driverEnv.NODE_SERVER_URL": NODE_ENV_URL,
                         },
