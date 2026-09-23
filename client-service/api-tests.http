@@ -1,0 +1,33 @@
+
+
+@baseUrl = http://localhost:3000/api/v1
+@authToken = PASTE_YOUR_TOKEN_HERE
+
+### Archival record preview - search
+POST {{baseUrl}}/archival-config/salesforce/preview
+Content-Type: application/json
+Authorization: Bearer {{authToken}}
+
+{
+  "orgId": "",
+  "objName": "",
+  "fields": [],
+
+  "limit": 50,
+  "page": 1
+}
+
+### Archival record preview - record detail
+POST {{baseUrl}}/archival-config/salesforce/record-detail
+Content-Type: application/json
+Authorization: Bearer {{authToken}}
+
+{
+  "orgId": "your-org-id",
+  "objName": "Account",
+  "recordId": "001xx000003DGb2AAG",
+  "fields": ["Id", "Name"]
+}
+
+
+

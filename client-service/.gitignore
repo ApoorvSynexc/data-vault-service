@@ -9,3 +9,6 @@ src/assets/logs/
 uploads/
 
 .sfdx/
+
+api-tests.http
+
