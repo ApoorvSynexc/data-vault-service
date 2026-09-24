@@ -41,6 +41,20 @@ const hudiTableFor = (config: IBackupConfig, objectApiName: string): { databaseN
 // neither re-implements the orgId -> crm -> archival configs lookup on its own.
 // ---------------------------------------------------------------------------
 
+// Depth-first search over a config's actual object tree (root objects +
+// nested children[]) for a node named `targetName`. objectNames (the flat
+// array stored alongside `objects`) only ever reflected top-level tree
+// selections, not nested children, so a config archiving a child object
+// (e.g. Contact under Account) would never match on that field — the tree
+// itself is the accurate source, so this walks it directly instead.
+const treeHasObject = (nodes: any[] | undefined, targetName: string): boolean => {
+  for (const node of nodes ?? []) {
+    if (node?.name === targetName) return true;
+    if (treeHasObject(node?.children, targetName)) return true;
+  }
+  return false;
+};
+
 /**
  * Every ARCHIVAL config in this org that covers objName, plus the resolved
  * crm. Null when the org itself doesn't exist — a distinct case from "org
@@ -60,16 +74,16 @@ const resolveArchivalConfigsForObject = async (
       TableName: BACKUP_CONFIG_TABLE,
       IndexName: 'crmId-index',
       KeyConditionExpression: 'crmId = :crmId',
-      FilterExpression: '#type = :type AND contains(objectNames, :objName)',
+      FilterExpression: '#type = :type',
       ExpressionAttributeNames: { '#type': 'type' },
       ExpressionAttributeValues: {
         ':crmId': crm.crmId,
         ':type': BACKUP_TYPE.archival,
-        ':objName': objName,
       },
     })
   );
-  const configs = (result.Items as IBackupConfig[] | undefined) ?? [];
+  const allConfigs = (result.Items as IBackupConfig[] | undefined) ?? [];
+  const configs = allConfigs.filter((config) => treeHasObject(config.objects as any[], objName));
   return { crm, configs };
 };
 
