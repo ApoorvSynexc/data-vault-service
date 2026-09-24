@@ -39,19 +39,28 @@ const AWS_EMR_APPLICATION_ID = String(process.env.AWS_EMR_APPLICATION_ID);
 const AWS_EMR_EXECUTION_ROLE_ARN = String(process.env.AWS_EMR_EXECUTION_ROLE_ARN).trim();
 const AWS_EMR_ENCRYPTION_KEY = String(process.env.AWS_EMR_ENCRYPTION_KEY);
 const AWS_EMR_S3_FILE_PATH = String(process.env.AWS_EMR_S3_FILE_PATH);
+// Shared secret gating every /spark-job/* route (the EMR Spark job's callback
+// endpoints — build-payload, update-spark-job-status, get-inactive-owner-ids,
+// restore-fields, restore-objects). Checked via the X-Api-Key header, same
+// pattern as INTERNAL_SECRET. Handed to the Spark job itself at submit time
+// (see submitEMR in services/payload/index.ts, same mechanism ENCRYPTION_KEY
+// already uses) so it can send it back on every callback.
+const SPARK_JOB_API_KEY = String(process.env.SPARK_JOB_API_KEY);
 
 // AWS Athena
 // IAM Role ARN that Athena assumes when reading from client S3 buckets.
 // The client's bucket policy must grant this ARN s3:GetObject + s3:ListBucket.
 const AWS_ATHENA_ROLE_ARN = String(process.env.AWS_ATHENA_ROLE_ARN).trim();
 // Dedicated IAM credentials scoped to Athena (separate from the default AWS creds).
-const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
-const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
+// Unused — not imported anywhere. Kept commented instead of deleted.
+// const AWS_ATHENA_ACCESS_KEY = String(process.env.AWS_ATHENA_ACCESS_KEY);
+// const AWS_ATHENA_SECRET_KEY = String(process.env.AWS_ATHENA_SECRET_KEY);
 // Credentials used only to construct the Glue and Athena SDK clients (glue.ts,
 // query.ts) — kept separate from AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY so
 // those two are never touched by anything Glue/Athena-related.
-const AWS_ACCESS_KEY = String(process.env.AWS_ACCESS_KEY);
-const AWS_SECRET_KEY = String(process.env.AWS_SECRET_KEY);
+// Unused — not imported anywhere. Kept commented instead of deleted.
+// const AWS_ACCESS_KEY = String(process.env.AWS_ACCESS_KEY);
+// const AWS_SECRET_KEY = String(process.env.AWS_SECRET_KEY);
 
 const JWT_ACCESS_SECRET = String(process.env.JWT_ACCESS_SECRET);
 const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET);
@@ -102,6 +111,14 @@ const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-v
 const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
 
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
+
+// Bootstrap-layer key for the Salesforce org-registration handshake only —
+// /auth/configure-org's request/response envelope and
+// /salesforce/confirm-org-authorized's query envelope. Distinct from
+// ENCRYPTION_KEY, which remains the only key used to encrypt anything at
+// rest in DynamoDB (crm.encryptionKey, crm.apiKey, paymentToken, ...) and is
+// untouched by this.
+const SALESFORCE_ENCRYPTION_KEY = String(process.env.SALESFORCE_ENCRYPTION_KEY);
 
 // Webhook
 const SALESFORCE_WEBHOOK_URL = String(process.env.SALESFORCE_WEBHOOK_URL);
@@ -360,14 +377,16 @@ export {
   AWS_EMR_APPLICATION_ID,
   AWS_EMR_EXECUTION_ROLE_ARN,
   AWS_EMR_ENCRYPTION_KEY,
+  SPARK_JOB_API_KEY,
   AWS_EMR_S3_FILE_PATH,
 
   // AWS Athena
   AWS_ATHENA_ROLE_ARN,
-  AWS_ATHENA_ACCESS_KEY,
-  AWS_ATHENA_SECRET_KEY,
-  AWS_ACCESS_KEY,
-  AWS_SECRET_KEY,
+  // Unused — not imported anywhere. Kept commented instead of deleted.
+  // AWS_ATHENA_ACCESS_KEY,
+  // AWS_ATHENA_SECRET_KEY,
+  // AWS_ACCESS_KEY,
+  // AWS_SECRET_KEY,
 
   // JWT Config
   JWT_ACCESS_SECRET,
@@ -393,6 +412,7 @@ export {
   RESTORE_TABLE,
   RESTORE_JOB_TABLE,
   ENCRYPTION_KEY,
+  SALESFORCE_ENCRYPTION_KEY,
 
   // Webhook
   SALESFORCE_WEBHOOK_URL,

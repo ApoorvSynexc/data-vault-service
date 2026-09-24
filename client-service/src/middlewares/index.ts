@@ -4,4 +4,5 @@ export * from './logger';
 export * from './rate-limit';
 export * from './internal-auth';
 export * from './salesforce';
+export * from './spark-job-auth';
 export * from './upload';
