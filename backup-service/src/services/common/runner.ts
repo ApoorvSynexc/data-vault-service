@@ -134,11 +134,11 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       job.lastUpdatedAt
     );
 
-    await updateJobStatus({
-      backupJobId,
-      status: STATUS.success,
-      completedAt: dayjs().toISOString(),
-    });
+    // await updateJobStatus({
+    //   backupJobId,
+    //   status: STATUS.success,
+    //   completedAt: dayjs().toISOString(),
+    // });
 
     if (job.schemaSync) {
       await notifySchemaSyncCompleted(backupConfigId, triggerSource);
@@ -231,7 +231,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     }
 
     const handler = getCrmHandler(source.crmName);
-    const archivalResult = await handler.runArchival(
+    await handler.runArchival(
       backupConfigId,
       backupJobId,
       source,
@@ -241,14 +241,14 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       job.lastUpdatedAt
     );
 
-    const finalJobStatus =
-      archivalResult === STATUS.partialFailure ? STATUS.partialFailure : STATUS.success;
+    // const finalJobStatus =
+    //   archivalResult === STATUS.partialFailure ? STATUS.partialFailure : STATUS.success;
 
-    await updateJobStatus({
-      backupJobId,
-      status: finalJobStatus,
-      completedAt: dayjs().toISOString(),
-    });
+    // await updateJobStatus({
+    //   backupJobId,
+    //   status: finalJobStatus,
+    //   completedAt: dayjs().toISOString(),
+    // });
 
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
