@@ -5,7 +5,7 @@ import {
   JWT_REFRESH_EXPIRY,
   JWT_REFRESH_SECRET,
   SESSION_STATUS,
-  STATUS,
+  VISIBILITY_STATUS,
 } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
@@ -23,7 +23,7 @@ const SALT_ROUNDS = 10;
 const signupHandler = async (req: IRequest, res: IResponse) => {
   const body = req.body;
 
-  const existing = await getUser({ 'contact.email': body.contact.email, status: STATUS.active });
+  const existing = await getUser({ 'contact.email': body.contact.email, status: VISIBILITY_STATUS.active });
   if (existing) {
     return makeResponse(req, res, 400, false, 'email_exit');
   }
@@ -50,7 +50,7 @@ const baseCookieOptions = {
 const loginHandler = async (req: IRequest, res: IResponse) => {
   const { email, password } = req.body;
 
-  const user = await getUser({ 'contact.email': email, status: STATUS.active });
+  const user = await getUser({ 'contact.email': email, status: VISIBILITY_STATUS.active });
 
   if (!user) {
     return makeResponse(req, res, 401, false, 'unauthorized');
@@ -92,7 +92,7 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
 
   const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
 
-  const user = await getUser({ userId: payload.userId, status: STATUS.active });
+  const user = await getUser({ userId: payload.userId, status: VISIBILITY_STATUS.active });
   if (!user) {
     return makeResponse(req, res, 401, false, 'unauthorized');
   }

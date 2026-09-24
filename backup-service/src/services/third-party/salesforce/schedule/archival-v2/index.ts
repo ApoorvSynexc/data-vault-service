@@ -1,4 +1,4 @@
-import { OBJECT_STATUS } from '../../../../../constant';
+import { JOB_OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares';
 import {
   IBackupConfig,
@@ -401,7 +401,7 @@ const archiveObject = async (payload: IArchiveObject) => {
         object: {
           id: object.id,
           salesforceApiCount: 1,
-          status: OBJECT_STATUS.bulkQueryInProgress,
+          status: JOB_OBJECT_STATUS.bulkQueryInProgress,
         },
       });
 
@@ -446,7 +446,7 @@ const archiveObject = async (payload: IArchiveObject) => {
         object: {
           id: object.id,
           salesforceApiCount: 1,
-          status: OBJECT_STATUS.bulkQueryCompleted,
+          status: JOB_OBJECT_STATUS.bulkQueryCompleted,
           bulkJobId: jobId,
           totalRecordCount,
         },
@@ -461,7 +461,7 @@ const archiveObject = async (payload: IArchiveObject) => {
         backupJobId,
         object: {
           id: object.id,
-          status: OBJECT_STATUS.completed,
+          status: JOB_OBJECT_STATUS.uploadCompleted,
           completedRecordCount: 0,
           errorMessage: '',
         },
@@ -528,7 +528,7 @@ const archiveObject = async (payload: IArchiveObject) => {
             backupJobId,
             object: {
               id: childObject.id,
-              status: OBJECT_STATUS.failed,
+              status: JOB_OBJECT_STATUS.failed,
               errorMessage: `parent ${objectName} export failed: ${error?.message}`,
             },
           });
@@ -541,7 +541,7 @@ const archiveObject = async (payload: IArchiveObject) => {
       backupJobId,
       object: {
         id: object.id,
-        status: OBJECT_STATUS.failed,
+        status: JOB_OBJECT_STATUS.failed,
         errorMessage: error?.message,
       },
     });
@@ -568,7 +568,7 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
           s3Keys,
         });
 
-        if (childStatus !== OBJECT_STATUS.completed) {
+        if (childStatus !== JOB_OBJECT_STATUS.uploadCompleted) {
           // Child didn't fully delete (some records rejected by Salesforce). Keep
           // going on remaining siblings, but remember to block the parent below —
           // deleting it now would let Salesforce cascade-delete this child's
@@ -587,7 +587,7 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
           backupJobId: payload.backupJobId,
           object: {
             id: childObject.id,
-            status: OBJECT_STATUS.failed,
+            status: JOB_OBJECT_STATUS.failed,
             errorMessage: `parent ${payload.object.name} delete failed: ${error?.message}`,
           },
         });
@@ -601,11 +601,11 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
       backupJobId,
       object: {
         id: object.id,
-        status: OBJECT_STATUS.deletionJobFailed,
+        status: JOB_OBJECT_STATUS.deletionJobFailed,
         errorMessage: blockedMessage,
       },
     });
-    return OBJECT_STATUS.deletionJobFailed;
+    return JOB_OBJECT_STATUS.deletionJobFailed;
   }
 
   const backupConfigId = backupConfig.backupConfigId;
@@ -621,7 +621,7 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
       backupJobId,
       object: {
         id: object.id,
-        status: OBJECT_STATUS.deletionInProgress,
+        status: JOB_OBJECT_STATUS.deletionInProgress,
       },
     });
 
@@ -641,7 +641,7 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
     //   backupJobId,
     //   object: {
     //     id: object.id,
-    //     status: OBJECT_STATUS.completed,
+    //     status: JOB_OBJECT_STATUS.uploadCompleted,
     //   },
     // });
 
@@ -654,7 +654,7 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
       backupJobId,
       object: {
         id: object.id,
-        status: OBJECT_STATUS.deletionJobFailed,
+        status: JOB_OBJECT_STATUS.deletionJobFailed,
         errorMessage: error?.message,
       },
     });

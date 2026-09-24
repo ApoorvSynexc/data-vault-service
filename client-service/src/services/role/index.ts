@@ -1,7 +1,7 @@
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { ROLE_TABLE, STATUS } from '../../constant';
+import { ROLE_TABLE, VISIBILITY_STATUS } from '../../constant';
 import { IRole } from '../../models';
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ const createRole = async (data: Partial<IRole>): Promise<void> => {
   const item: Record<string, any> = {
     ...data,
     roleId: data.roleId ?? uuidv4(),
-    status: data.status ?? STATUS.active,
+    status: data.status ?? VISIBILITY_STATUS.active,
     createdAt: now,
     updatedAt: now,
   };

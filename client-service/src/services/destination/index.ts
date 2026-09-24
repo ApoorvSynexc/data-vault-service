@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { DESTINATION_TABLE, STATUS } from '../../constant';
+import { DESTINATION_TABLE, VISIBILITY_STATUS } from '../../constant';
 import { IDestination } from '../../models';
 import { decrypt, encrypt } from '../../utils/encryption';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
@@ -41,7 +41,7 @@ const createDestination = async (params: CreateDestinationParams): Promise<IDest
     cipherText,
     iv,
     authTag,
-    status: STATUS.active,
+    status: VISIBILITY_STATUS.active,
     createdAt: now,
     updatedAt: now,
   };
@@ -71,7 +71,7 @@ const getDestinationsByUser = async (
       FilterExpression: '#status = :active',
       ProjectionExpression: 'destinationId, userId, #name, provider, #type, cipherText, iv, authTag, #status, createdAt, updatedAt',
       ExpressionAttributeNames: { '#status': 'status', '#name': 'name', '#type': 'type' },
-      ExpressionAttributeValues: { ':uid': userId, ':active': STATUS.active },
+      ExpressionAttributeValues: { ':uid': userId, ':active': VISIBILITY_STATUS.active },
       Limit: optional.limit,
       ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
     })

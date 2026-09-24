@@ -4,7 +4,7 @@ import {
   JWT_REFRESH_EXPIRY,
   SALESFORCE_LOGIN_REDIRECT_URI,
   STANDARD_OBJECT_LIST,
-  STATUS,
+  VISIBILITY_STATUS,
 } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { logger } from '../../../middlewares';
@@ -190,7 +190,7 @@ const socialLoginCallbackHandler = async (
       crmId,
       organizationId: organizationId,
       crmName: 'salesforce',
-      status: STATUS.active,
+      status: VISIBILITY_STATUS.active,
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
     };
@@ -229,7 +229,7 @@ const socialLoginCallbackHandler = async (
         crmId,
         firstName: crmProfile.firstName,
         lastName: crmProfile.lastName,
-        status: STATUS.active,
+        status: VISIBILITY_STATUS.active,
         crmCredential: encrptedCrm,
         isCrmConnected: true,
         ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
@@ -240,11 +240,11 @@ const socialLoginCallbackHandler = async (
         environment: oauthState.environment === 'custom' ? undefined : oauthState.environment,
         organizationId,
         crmName: 'salesforce',
-        status: STATUS.active,
+        status: VISIBILITY_STATUS.active,
       });
       // createUser returns void and the GSI read is eventually consistent —
       // use the record we just wrote for the rest of the login flow.
-      user = { userId, crmId, crmProfile, status: STATUS.active, isCrmConnected: true, customUrl: oauthState.customUrl } as IUser;
+      user = { userId, crmId, crmProfile, status: VISIBILITY_STATUS.active, isCrmConnected: true, customUrl: oauthState.customUrl } as IUser;
       userJustCreated = true;
     } else {
       await updateUser(
@@ -278,7 +278,7 @@ const socialLoginCallbackHandler = async (
   }
 
   // Check user status
-  if (user.status === STATUS.inactive) {
+  if (user.status === VISIBILITY_STATUS.inactive) {
     makeResponse(req, res, 403, false, 'blocked_or_removed');
     return;
   }

@@ -1,7 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { createBackupJob, createArchivalJob } from '../../../services';
 import { resumeBackupJob, runBackupJob, runArchivalJob } from '../../../services/common/runner';
-import { JOB_STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 
 const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -27,7 +26,7 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
 
-  makeResponse(req, res, 200, true, 'job_resume', { backupJobId, status: JOB_STATUS.running });
+  makeResponse(req, res, 200, true, 'job_resume', { backupJobId, status: job.status });
   runBackupJob(job).catch(() => {});
 };
 
@@ -52,7 +51,7 @@ const resumeArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<
     return;
   }
 
-  makeResponse(req, res, 200, true, 'job_resume', { backupJobId, status: JOB_STATUS.running });
+  makeResponse(req, res, 200, true, 'job_resume', { backupJobId, status: job.status });
   runArchivalJob(job).catch(() => {});
 };
 

@@ -166,8 +166,14 @@ export interface IBackupJob {
   userId: string; // GSI: userId-index
   backupConfigId: string; // GSI: backupConfigId-index
   destination: IBackupJobDestination; // encrypted IDestinationConfig + type
-  status: string; // PENDING | RUNNING | SUCCESS | FAILED
+  status: string; // PENDING | SUCCESS | FAILED | PARTIAL_FAILURE | CANCELLED
   startedAt?: string;
+  // Concurrency lock: set when a runner claims this job (conditional write —
+  // fails if already present), cleared on every terminal write. Distinct from
+  // `startedAt`, which is a permanent display timestamp and is never cleared.
+  // Replaces the old status===RUNNING guard now that `status` no longer has a
+  // distinct in-flight value.
+  processingStartedAt?: string;
   completedAt?: string;
   errorMessage?: string;
   createdAt: string;

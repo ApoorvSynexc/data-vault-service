@@ -4,7 +4,7 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig, getBackupJobsByConfigAndStatuses } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL, SPARK_JOB_API_KEY } from '../../constant';
+import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, STATUS, JOB_OBJECT_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL, SPARK_JOB_API_KEY } from '../../constant';
 import { logger } from '../../middlewares';
 import { IAwsCredentials, IBackupConfig, IBackupJob, IObject, IObjectRelationshipNode, IRestoreScope, IRestoreSource } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
@@ -176,9 +176,9 @@ async function fetchAllBackupJobs(backupConfigId: string) {
 // via fetchCompressibleBackupJobs) and the in-memory predicate (isCompressible, kept for
 // payload.check.ts and any caller that already has a job in hand).
 const COMPRESSIBLE_STATUSES: string[] = [
-    JOB_STATUS.success,
-    BACKUP_STATUS.partialFailure,
-    COMPRESSION_STATUS.failed,
+    STATUS.success,
+    STATUS.partialFailure,
+    JOB_OBJECT_STATUS.compressionFailed,
 ];
 const isCompressible = (job: IBackupJob): boolean => COMPRESSIBLE_STATUSES.includes(job.status);
 

@@ -62,54 +62,60 @@ const LANGUAGE = {
   gu: 'gu',
 };
 
-const JOB_STATUS = {
-  pending: 'PENDING',
-  running: 'RUNNING',
-  success: 'SUCCESS',
-  failed: 'FAILED',
-  partialFailure: 'PARTIAL_FAILURE',
-};
-
 const JOB_TYPE = {
   bulk: 'BULK',
   realtime: 'REALTIME',
 };
 
-const BACKUP_STATUS = {
+// Config lifecycle/visibility — backup-config, archival-config (same table),
+// restore's initial draft state. Mirrors client-service's own copy of this
+// constant (the two services don't share a package).
+const VISIBILITY_STATUS = {
   draft: 'DRAFT',
-  pending: 'PENDING',
+  paused: 'PAUSED',
+  resumed: 'RESUMED',
   active: 'ACTIVE',
+  inactive: 'INACTIVE',
+  deleted: 'DELETED',
+  notAuthorized: 'NOT_AUTHORIZED',
+  deleteFailed: 'DELETE_FAILED',
+};
+
+// Outcome status — backupConfig.backupStatus, backupJob.status, restore.status
+// (outcome dimension), restoreJob.status. A job's own status stays `pending`
+// for its entire in-flight duration — there's no separate "now actively
+// running" value; the `processingStartedAt` lock field (see backup-job /
+// restore-job services) is what now guards against double-starts.
+const STATUS = {
+  pending: 'PENDING',
   success: 'SUCCESS',
   failed: 'FAILED',
   partialFailure: 'PARTIAL_FAILURE',
-  paused: 'PAUSED',
-  resumed: 'RESUMED',
+  cancelled: 'CANCELLED',
 };
 
-const OBJECT_STATUS = {
+// Per-object/per-item progress inside a job's object[]/objects[] array —
+// backup/archival object lifecycle, restore/rollback per-object phases, and
+// compression phases. Mirrors client-service's own copy of this constant.
+const JOB_OBJECT_STATUS = {
   created: 'CREATED',
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   transferInProgress: 'TRANSFER_IN_PROGRESS',
   uploadCompleted: 'UPLOAD_COMPLETED',
   deletionInProgress: 'DELETION_IN_PROGRESS',
-  completed: 'COMPLETED',
   // Delete phase failed before any records were processed (job-level / infrastructure error)
   deletionJobFailed: 'DELETION_JOB_FAILED',
   // Delete job succeeded but some individual records were rejected by Salesforce
   deletionRecordsFailed: 'DELETION_RECORDS_FAILED',
-  failed: 'FAILED',
-};
-
-const RESTORE_JOB_STATUS = {
-  inProgress: 'IN_PROGRESS',
-  bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
-  bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
   rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
   rollbackCompleted: 'ROLLBACK_COMPLETED',
-  completed: 'COMPLETED',
-  success: 'SUCCESS',
+  compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
+  compressed: 'COMPRESSED',
+  compressionFailed: 'COMPRESSION_JOB_FAILED',
+  restoreCsvCreating: 'CSV_CREATING',
+  restoreIngestInProgress: 'INGEST_IN_PROGRESS',
   failed: 'FAILED',
 };
 
@@ -231,11 +237,10 @@ export {
 
   // Enums
   LANGUAGE,
-  JOB_STATUS,
-  BACKUP_STATUS,
+  VISIBILITY_STATUS,
+  STATUS,
   JOB_TYPE,
-  OBJECT_STATUS,
-  RESTORE_JOB_STATUS,
+  JOB_OBJECT_STATUS,
   DESTINATION_TYPE,
   CRM_NAME,
   CONDITION_TYPE,

@@ -1,5 +1,5 @@
 import bcrypt from 'bcrypt';
-import { SESSION_STATUS, STATUS, USER_TABLE } from '../../../constant';
+import { SESSION_STATUS, VISIBILITY_STATUS, USER_TABLE } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   getTableCounter,
@@ -75,7 +75,7 @@ const updateProfileHandler = async (req: IRequest, res: IResponse) => {
 };
 
 const deleteProfileHandler = async (req: IRequest, res: IResponse) => {
-  await updateUser({ userId: req.user!.userId }, { status: STATUS.deleted });
+  await updateUser({ userId: req.user!.userId }, { status: VISIBILITY_STATUS.deleted });
   makeResponse(req, res, 200, true, 'delete');
 };
 
