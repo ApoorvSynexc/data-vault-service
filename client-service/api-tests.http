@@ -24,7 +24,7 @@ Content-Type: application/json
 Authorization: Bearer {{authToken}}
 
 {
-  "orgId": "your-org-id",
+  "orgId": "00Dbm00000u7PhOEAU",
   "objName": "Account",
   "recordId": "001xx000003DGb2AAG",
   "fields": ["Id", "Name"]
