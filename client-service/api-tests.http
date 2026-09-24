@@ -1,6 +1,7 @@
 
 
-@baseUrl = http://localhost:3000/api/v1
+# @baseUrl = http://localhost:3000/api/v1
+@baseUrl = https://qa-app.360datacraft.com/api/v1
 @authToken = PASTE_YOUR_TOKEN_HERE
 
 ### Archival record preview - search
@@ -9,9 +10,9 @@ Content-Type: application/json
 Authorization: Bearer {{authToken}}
 
 {
-  "orgId": "",
-  "objName": "",
-  "fields": [],
+  "orgId": "00Dbm00000u7PhOEAU",
+  "objName": "PricebookEntry",
+
 
   "limit": 50,
   "page": 1
