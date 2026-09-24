@@ -15,7 +15,7 @@ import {
 } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
-import { getBackupJob } from '../../backup-job';
+import { getBackupJob, updateJobStatus } from '../../backup-job';
 import { createNotification } from '../../notification';
 import { getRestoreById } from '../../restore';
 import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
@@ -26,6 +26,7 @@ import { runSalesforceRestore, runSalesforceRollback } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
 import { buildParentToChildHierarchy, recursivelyFlatten, reverseHierarchy } from '../../../utils/helper';
+import dayjs from 'dayjs';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
@@ -274,15 +275,11 @@ const salesforceHandler: ICrmBackupHandler = {
         completedRecordCount += obj.completedRecordCount ?? 0;
       });
     }
-    await updateBackupConfig(backupConfigId, {
-      backupStatus: STATUS.success,
-      sizeInBytes,
-      completedRecordCount,
-    });
 
     logger.info(`Backup job completed, backupJobId=${backupJobId}`);
 
     const completedJob = await getBackupJob(backupJobId);
+    const latestObjects = completedJob?.object ?? [];
     const failedStatus = [
       JOB_OBJECT_STATUS.failed,
       JOB_OBJECT_STATUS.deletionJobFailed,
@@ -291,6 +288,23 @@ const salesforceHandler: ICrmBackupHandler = {
     const failedObjects = (completedJob?.object ?? []).filter((obj) =>
       failedStatus.includes(obj.status ?? '')
     );
+
+    const finalStatus = latestObjects.length === failedObjects.length ?
+      STATUS.failed :
+      failedObjects.length ?
+        STATUS.partialFailure :
+        STATUS.success;
+
+    await updateBackupConfig(backupConfigId, {
+      backupStatus: finalStatus,
+      sizeInBytes,
+      completedRecordCount,
+    });
+    await updateJobStatus({
+      backupJobId,
+      status: finalStatus,
+      completedAt: dayjs().toISOString(),
+    });
 
     if (failedObjects.length) {
       const objectNames = failedObjects.map((obj) => obj.name).join(', ');
@@ -385,16 +399,10 @@ const salesforceHandler: ICrmBackupHandler = {
         deletedRecordCount += obj.deletedSuccessRecordCount ?? 0;
       });
     }
-    await updateBackupConfig(backupConfigId, {
-      backupStatus: STATUS.success,
-      sizeInBytes,
-      completedRecordCount,
-      deletedRecordCount,
-    });
 
     logger.info(`Archival job completed, backupJobId=${backupJobId}`);
-
     const freshJob = await getBackupJob(backupJobId);
+    const latestObjects = freshJob?.object ?? [];
     const ARCHIVAL_FAILURE_STATUSES = new Set([
       JOB_OBJECT_STATUS.failed,
       JOB_OBJECT_STATUS.deletionJobFailed,
@@ -403,6 +411,24 @@ const salesforceHandler: ICrmBackupHandler = {
     const failedObjects = recursivelyFlatten(freshJob?.object ?? []).filter((obj) =>
       ARCHIVAL_FAILURE_STATUSES.has(obj.status ?? '')
     );
+
+    const finalStatus = latestObjects.length === failedObjects.length ?
+      STATUS.failed :
+      failedObjects.length ?
+        STATUS.partialFailure :
+        STATUS.success;
+
+    await updateBackupConfig(backupConfigId, {
+      backupStatus: finalStatus,
+      sizeInBytes,
+      completedRecordCount,
+      deletedRecordCount,
+    });
+    await updateJobStatus({
+      backupJobId,
+      status: finalStatus,
+      completedAt: dayjs().toISOString(),
+    });
 
     if (failedObjects.length) {
       const objectNames = failedObjects.map((obj) => obj.name).join(', ');
@@ -431,7 +457,7 @@ const salesforceHandler: ICrmBackupHandler = {
       );
     }
 
-    return STATUS.success;
+    return finalStatus;
   },
   runRestore: async (
     restoreId: string,
