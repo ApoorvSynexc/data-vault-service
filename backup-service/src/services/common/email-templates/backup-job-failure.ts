@@ -2,7 +2,7 @@ import { EMAIL_APP_URL } from '../../../constant';
 import { IEmailTemplate, renderEmail } from './render';
 
 // Fires when a BULK backup job's status transitions to FAILED — see
-// services/common/runner.ts (the backup-job success/failure branch, JOB_STATUS.failed).
+// services/common/runner.ts (the backup-job success/failure branch, STATUS.failed).
 export interface IBackupJobFailureEmailParams {
   recipientName?: string;
   backupConfigId: string;

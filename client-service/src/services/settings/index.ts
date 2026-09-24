@@ -1,7 +1,7 @@
 import { PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { SETTINGS_TABLE, STATUS } from '../../constant';
+import { SETTINGS_TABLE, VISIBILITY_STATUS } from '../../constant';
 import { ISettings, ISettingsNotification, IStandardObject } from '../../models';
 
 interface UpsertSettingsParams {
@@ -58,7 +58,7 @@ const upsertSettings = async (params: UpsertSettingsParams): Promise<ISettings> 
     settingId: existing?.settingId ?? uuidv4(),
     userId,
     standardObjects: standardObjects ?? existing?.standardObjects ?? [],
-    status: status ?? existing?.status ?? STATUS.active,
+    status: status ?? existing?.status ?? VISIBILITY_STATUS.active,
 
     ...((crmId ?? existing?.crmId) !== undefined && { crmId: crmId ?? existing?.crmId }),
     ...((salesforceApiThreshold ?? existing?.salesforceApiThreshold) !== undefined && {

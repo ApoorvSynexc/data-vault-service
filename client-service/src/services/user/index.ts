@@ -10,7 +10,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { STATUS, USER_TABLE } from '../../constant';
+import { VISIBILITY_STATUS, USER_TABLE } from '../../constant';
 import { IUser } from '../../models';
 import { incrementTableCounter } from '../counter';
 import { decrypt } from '../../utils/encryption';
@@ -38,7 +38,7 @@ const createUser = async (data: Record<string, any>): Promise<void> => {
     userId: data.userId ?? uuidv4(),
     contactEmail: data.crmProfile?.email ?? data.contact?.email ?? data.contactEmail,
     crmProfileUserId: data.crmProfile?.userId ?? undefined,
-    status: data.status ?? STATUS.active,
+    status: data.status ?? VISIBILITY_STATUS.active,
     createdAt: now,
     updatedAt: now,
   };

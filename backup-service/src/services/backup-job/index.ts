@@ -1,7 +1,7 @@
 import { GetCommand, PutCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE, OBJECT_STATUS } from '../../constant';
+import { BACKUP_JOB_TABLE, STATUS, JOB_TYPE, JOB_OBJECT_STATUS } from '../../constant';
 import { IBackupJob, IBackupObject, ISource, IDestinationConfig } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
@@ -34,7 +34,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
   const encryptedDestConfig: any = encrypt(JSON.stringify(destination.config));
   const allObjects = object?.map((item) => ({
     ...item,
-    status: OBJECT_STATUS.created,
+    status: JOB_OBJECT_STATUS.created,
     bulkJobId: '',
     totalRecordCount: 0,
   }));
@@ -49,7 +49,7 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     source: encryptedSource,
     destination: { type: destination.type, ...encryptedDestConfig },
     ...(allObjects?.length ? { object: allObjects } : {}),
-    status: JOB_STATUS.pending,
+    status: STATUS.pending,
     ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     ...(schemaSync ? { schemaSync: true } : {}),
     createdAt: now,
@@ -74,7 +74,7 @@ interface CreateArchivalJobParams {
 const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
   return objects.map((item) => ({
     ...item,
-    status: OBJECT_STATUS.created,
+    status: JOB_OBJECT_STATUS.created,
     bulkJobId: '',
     totalRecordCount: 0,
     completedRecordCount: 0,
@@ -104,7 +104,7 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
     source: encryptedSource,
     destination: { type: destination.type, ...encryptedDestConfig },
     ...(trackedObjects?.length ? { object: trackedObjects } : {}),
-    status: JOB_STATUS.pending,
+    status: STATUS.pending,
     createdAt: now,
     updatedAt: now,
   };
@@ -147,18 +147,21 @@ const updateJobStatus = async (params: UpdateJobStatusParams): Promise<void> => 
   const expressionValues: Record<string, any> = { ':status': status, ':updatedAt': now };
 
   if (startedAt) {
-    expressionParts.push('startedAt = :startedAt');
+    // startedAt is a permanent display timestamp; processingStartedAt is the
+    // concurrency lock (see model comment) — same value, cleared independently.
+    expressionParts.push('startedAt = :startedAt', 'processingStartedAt = :startedAt');
     expressionValues[':startedAt'] = startedAt;
   }
   if (completedAt) {
     expressionParts.push('completedAt = :completedAt');
     expressionValues[':completedAt'] = completedAt;
+    removeParts.push('processingStartedAt');
   }
   if (errorMessage) {
     expressionParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
-  } else if (status === 'RUNNING') {
-    // Clear stale error from a previous failed run when the job is retried.
+  } else if (startedAt !== undefined) {
+    // Clear stale error from a previous failed run when the job is (re)claimed.
     removeParts.push('errorMessage');
   }
 
@@ -339,7 +342,7 @@ const recursivelyUpdateObjects = async (
   const results = await Promise.all(
     objects.map(async (obj) => {
       if (obj.id === object.id) {
-        const isReset = (object as any).status === OBJECT_STATUS.created;
+        const isReset = (object as any).status === JOB_OBJECT_STATUS.created;
         const merged = {
           ...obj,
           ...object,
@@ -468,9 +471,13 @@ const getStaleRunningJobs = async (
     const result = await docClient.send(
       new ScanCommand({
         TableName: BACKUP_JOB_TABLE,
-        FilterExpression: '#status = :running AND updatedAt < :cutoff',
+        // "Stale" now means: claimed (processingStartedAt set) but never reached
+        // a terminal status, and not touched in a while — status itself stays
+        // PENDING for the whole in-flight duration, so it's no longer part of
+        // this filter.
+        FilterExpression: 'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
         ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: { ':running': JOB_STATUS.running, ':cutoff': cutoff },
+        ExpressionAttributeValues: { ':pending': STATUS.pending, ':cutoff': cutoff },
         ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
       })
     );

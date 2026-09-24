@@ -58,17 +58,6 @@ export interface IRestoreJobDestination {
   } | EncryptedPayload;
 }
 
-// Interface-level enum for RESTORE_JOB_STATUS (constant/index.ts) — mirrors
-// BulkJobState's string-literal-union convention elsewhere in this codebase.
-export type RestoreJobStatus =
-  | 'IN_PROGRESS'
-  | 'BULK_QUERY_IN_PROGRESS'
-  | 'BULK_QUERY_COMPLETED'
-  | 'RESTORE_IN_PROGRESS'
-  | 'COMPLETED'
-  | 'SUCCESS'
-  | 'FAILED';
-
 export interface IRestoreJob {
   restoreJobId: string; // PK
   restoreId: string; // GSI: restoreId-index — parent restore request this job belongs to
@@ -78,7 +67,11 @@ export interface IRestoreJob {
   conflict: IRestoreConflict;
   objectHierarchy?: IRestoreObjectHierarchyNode[];
   hierarchy?: IRestoreObjectHierarchyTreeNode[];
-  status: string; // PENDING | IN_PROGRESS | RUNNING | SUCCESS | FAILED
+  // STATUS (PENDING | SUCCESS | FAILED | PARTIAL_FAILURE | CANCELLED) for most of
+  // the job's lifecycle, but temporarily overwritten with a JOB_OBJECT_STATUS
+  // value during the CSV-creation/ingest stages (see the comment on
+  // JOB_OBJECT_STATUS in constant/index.ts for this known one-way-door quirk).
+  status: string;
   startedAt?: string;
   completedAt?: string;
   errorMessage?: string;

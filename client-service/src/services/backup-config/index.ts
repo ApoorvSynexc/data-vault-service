@@ -8,7 +8,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS } from '../../constant';
+import { BACKUP_CONFIG_TABLE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS } from '../../constant';
 import { IBackupConfig, IObject, IScheduleConfig, ITriggerResult, IUpcomingJob, IDeletedRecordsCacheEntry } from '../../models';
 import { toSlug, buildSlug } from '../../utils/helper';
 import { incrementAndGetCounter, incrementTableCounter } from '../counter';
@@ -165,14 +165,14 @@ const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> 
         '#objects': 'objects',
       },
       ExpressionAttributeValues: {
-        ':active': STATUS.active,
-        ':backupResume': STATUS.resumed,
+        ':active': VISIBILITY_STATUS.active,
+        ':backupResume': VISIBILITY_STATUS.resumed,
         ':schedule': 'SCHEDULE',
         ':normalType': BACKUP_TYPE.normal,
         ':archivalType': BACKUP_TYPE.archival,
-        ':backupSuccess': BACKUP_STATUS.success,
-        ':backupFailed': BACKUP_STATUS.failed,
-        ':backupPartialFailure': BACKUP_STATUS.partialFailure,
+        ':backupSuccess': STATUS.success,
+        ':backupFailed': STATUS.failed,
+        ':backupPartialFailure': STATUS.partialFailure,
       },
     })
   );
@@ -308,7 +308,7 @@ const restoreBackupConfigAfterFailedTriggerDelete = async (
 ): Promise<void> => {
   const item: IBackupConfig = {
     ...config,
-    status: STATUS.deleteFailed,
+    status: VISIBILITY_STATUS.deleteFailed,
     triggerResults,
     updatedAt: new Date().toISOString(),
   };
@@ -687,14 +687,14 @@ const getBackupOverview = async (
       overview.totalRecords += item.completedRecordCount ?? 0;
       overview.totalSize += item.sizeInBytes ?? 0;
 
-      if (item.status === STATUS.active) {
+      if (item.status === VISIBILITY_STATUS.active) {
         overview.activeBackupConfigs += 1;
       }
-      if (item.backupStatus === BACKUP_STATUS.failed) {
+      if (item.backupStatus === STATUS.failed) {
         overview.failedBackupStatus += 1;
-      } else if (item.backupStatus === BACKUP_STATUS.success) {
+      } else if (item.backupStatus === STATUS.success) {
         overview.successBackupStatus += 1;
-      } else if (item.backupStatus === BACKUP_STATUS.pending) {
+      } else if (item.backupStatus === STATUS.pending) {
         overview.pendingBackupStatus += 1;
       }
     }

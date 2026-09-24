@@ -8,14 +8,7 @@ import {
   IRestoreJobSource,
   ISource,
 } from '../../models';
-import {
-  BACKUP_STATUS,
-  JOB_STATUS,
-  OBJECT_STATUS,
-  CORE_SERVICE,
-  INTERNAL_SECRET,
-  RESTORE_JOB_STATUS,
-} from '../../constant';
+import { STATUS, JOB_OBJECT_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
 import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
@@ -63,13 +56,15 @@ export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> 
   if (!job) {
     throw new HttpError(404, `Backup job ${backupJobId} not found`);
   }
-  if (job.status === JOB_STATUS.success) {
+  if (job.status === STATUS.success) {
     throw new HttpError(409, `Backup job ${backupJobId} already completed successfully`);
   }
-  if (job.status === JOB_STATUS.partialFailure || job.status === JOB_STATUS.failed) {
+  if (job.status === STATUS.partialFailure || job.status === STATUS.failed || job.status === STATUS.cancelled) {
     return job; // allow retry on any non-success terminal state
   }
-  if (job.status === JOB_STATUS.running) {
+  // status stays PENDING for a job's whole in-flight duration now — an
+  // in-progress job is one that's PENDING with the concurrency lock held.
+  if (job.status === STATUS.pending && job.processingStartedAt) {
     throw new HttpError(409, `Backup job ${backupJobId} is already running`);
   }
   return job;
@@ -91,17 +86,17 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
 
   activeJobs.add(backupJobId);
 
-  // Atomically transition to RUNNING only if the job is not already running.
+  // Atomically claim this job for processing only if it's not already claimed.
   // Two concurrent resume calls will both pass the in-memory check in
   // resumeBackupJob, but only one will win this conditional write — the other
   // gets ConditionalCheckFailedException and stops without double-processing.
+  // status itself stays PENDING for the whole in-flight duration; processingStartedAt is the lock.
   try {
     await updateJobStatus({
       backupJobId,
-      status: JOB_STATUS.running,
+      status: STATUS.pending,
       startedAt,
-      conditionExpression: '#status <> :runningStatus',
-      conditionExpressionValues: { ':runningStatus': JOB_STATUS.running },
+      conditionExpression: 'attribute_not_exists(processingStartedAt)',
     });
   } catch (err: any) {
     activeJobs.delete(backupJobId);
@@ -141,7 +136,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
 
     await updateJobStatus({
       backupJobId,
-      status: JOB_STATUS.success,
+      status: STATUS.success,
       completedAt: dayjs().toISOString(),
     });
 
@@ -152,7 +147,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
     logger.error(`Backup job ${backupJobId} failed: ${err?.message}`);
     await updateJobStatus({
       backupJobId,
-      status: JOB_STATUS.failed,
+      status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
     }).catch(() => {});
@@ -173,10 +168,9 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
   try {
     await updateJobStatus({
       backupJobId,
-      status: JOB_STATUS.running,
+      status: STATUS.pending,
       startedAt,
-      conditionExpression: '#status <> :runningStatus',
-      conditionExpressionValues: { ':runningStatus': JOB_STATUS.running },
+      conditionExpression: 'attribute_not_exists(processingStartedAt)',
     });
   } catch (err: any) {
     activeJobs.delete(backupJobId);
@@ -210,9 +204,9 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     const clearObjectError = async (obj: IBackupObject) => {
       const st = obj.status;
       if (
-        st === OBJECT_STATUS.failed ||
-        st === OBJECT_STATUS.deletionJobFailed ||
-        st === OBJECT_STATUS.deletionRecordsFailed
+        st === JOB_OBJECT_STATUS.failed ||
+        st === JOB_OBJECT_STATUS.deletionJobFailed ||
+        st === JOB_OBJECT_STATUS.deletionRecordsFailed
       ) {
         // Clear stale error fields before retry. For DELETION_RECORDS_FAILED, preserve
         // deletedSuccessRecordCount — the retry only resubmits previously-failed records,
@@ -224,7 +218,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
             id: obj.id,
             errorMessage: '',
             deletedfailedRecordCount: 0,
-            ...(st !== OBJECT_STATUS.deletionRecordsFailed ? { deletedSuccessRecordCount: 0 } : {}),
+            ...(st !== JOB_OBJECT_STATUS.deletionRecordsFailed ? { deletedSuccessRecordCount: 0 } : {}),
           },
         });
       }
@@ -248,7 +242,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     );
 
     const finalJobStatus =
-      archivalResult === 'PARTIAL_FAILURE' ? JOB_STATUS.partialFailure : JOB_STATUS.success;
+      archivalResult === STATUS.partialFailure ? STATUS.partialFailure : STATUS.success;
 
     await updateJobStatus({
       backupJobId,
@@ -261,11 +255,11 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     await Promise.all([
       updateJobStatus({
         backupJobId,
-        status: JOB_STATUS.failed,
+        status: STATUS.failed,
         completedAt: dayjs().toISOString(),
         errorMessage: err?.message ?? 'Unknown error',
       }).catch(() => {}),
-      updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed }).catch(() => {}),
+      updateBackupConfig(backupConfigId, { backupStatus: STATUS.failed }).catch(() => {}),
     ]);
   } finally {
     activeJobs.delete(backupJobId);
@@ -281,15 +275,14 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
 
   activeJobs.add(restoreJobId);
 
-  // Same atomic RUNNING transition as backup/archival — see runBackupJob for the
-  // concurrent-resume rationale.
+  // Same atomic claim as backup/archival — see runBackupJob for the
+  // concurrent-resume rationale. status stays PENDING; processingStartedAt is the lock.
   try {
     await updateRestoreJobStatus({
       restoreJobId,
-      status: JOB_STATUS.running,
+      status: STATUS.pending,
       startedAt,
-      conditionExpression: '#status <> :runningStatus',
-      conditionExpressionValues: { ':runningStatus': JOB_STATUS.running },
+      conditionExpression: 'attribute_not_exists(processingStartedAt)',
     });
   } catch (err: any) {
     activeJobs.delete(restoreJobId);
@@ -324,24 +317,24 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
 
     await updateRestoreJobStatus({
       restoreJobId,
-      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.success,
+      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
       completedAt: dayjs().toISOString(),
     });
     await updateRestore({
       restoreId,
-      status: result === 'FAILED' ? 'FAILED' : 'SUCCESS',
+      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
     });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
     await updateRestoreJobStatus({
       restoreJobId,
-      status: JOB_STATUS.failed,
+      status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
     }).catch(() => {});
     await updateRestore({
       restoreId,
-      status: 'FAILED',
+      status: STATUS.failed,
       errorMessage: err?.message ?? 'Unknown error',
     });
   } finally {
@@ -355,15 +348,14 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
 
   activeJobs.add(restoreJobId);
 
-  // Same atomic RUNNING transition as backup/archival — see runBackupJob for the
-  // concurrent-resume rationale.
+  // Same atomic claim as backup/archival — see runBackupJob for the
+  // concurrent-resume rationale. status stays PENDING; processingStartedAt is the lock.
   try {
     await updateRestoreJobStatus({
       restoreJobId,
-      status: JOB_STATUS.running,
+      status: STATUS.pending,
       startedAt,
-      conditionExpression: '#status <> :runningStatus',
-      conditionExpressionValues: { ':runningStatus': JOB_STATUS.running },
+      conditionExpression: 'attribute_not_exists(processingStartedAt)',
     });
   } catch (err: any) {
     activeJobs.delete(restoreJobId);
@@ -385,7 +377,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
 
     await updateRestore({
       restoreId,
-      status: RESTORE_JOB_STATUS.rollbackInProgress,
+      status: STATUS.pending,
     });
 
     const restoreSource = source as unknown as IRestoreJobSource;
@@ -403,24 +395,24 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
 
     await updateRestoreJobStatus({
       restoreJobId,
-      status: result === 'FAILED' ? RESTORE_JOB_STATUS.failed : RESTORE_JOB_STATUS.success,
+      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
       completedAt: dayjs().toISOString(),
     });
     await updateRestore({
       restoreId,
-      status: result === 'FAILED' ? 'FAILED' : RESTORE_JOB_STATUS.success,
+      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
     });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
     await updateRestoreJobStatus({
       restoreJobId,
-      status: JOB_STATUS.failed,
+      status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
     }).catch(() => {});
     await updateRestore({
       restoreId,
-      status: 'FAILED',
+      status: STATUS.failed,
       errorMessage: err?.message ?? 'Unknown error',
     });
   } finally {

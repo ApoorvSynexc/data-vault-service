@@ -2,6 +2,7 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { IRestoreObjectHierarchyNode } from '../../../models';
 import { getRestoreJobById } from '../../../services';
 import { runRestoreJob, runRollbackJob } from '../../../services/common/runner';
+import { STATUS } from '../../../constant';
 import { wrapController } from '../../../utils/helper';
 
 const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -15,7 +16,7 @@ const createRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<v
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  if (restoreJob.status !== 'IN_PROGRESS') {
+  if (restoreJob.status !== STATUS.pending) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
@@ -32,7 +33,7 @@ const createRollbackJobHandler = async (req: IRequest, res: IResponse): Promise<
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  if (restoreJob.status !== 'IN_PROGRESS') {
+  if (restoreJob.status !== STATUS.pending) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 

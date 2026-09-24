@@ -1,7 +1,7 @@
 import { GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { RESTORE_TABLE } from '../../constant';
+import { RESTORE_TABLE, STATUS } from '../../constant';
 import {
   IRestore,
   IRestoreConflict,
@@ -33,7 +33,7 @@ const createRestore = async (params: CreateRestoreParams): Promise<IRestore> => 
     restoreId,
     userId,
     crmId,
-    status = 'PENDING',
+    status = STATUS.pending,
     source,
     selection,
     destination,
@@ -87,7 +87,7 @@ const updateRestore = async (params: UpdateRestoreParams): Promise<void> => {
   if (errorMessage) {
     setParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
-  } else if (status && status !== 'FAILED') {
+  } else if (status && status !== STATUS.failed) {
     // Clear stale error from a previous failed run once the restore succeeds or retries.
     removeParts.push('errorMessage');
   }

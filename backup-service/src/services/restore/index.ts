@@ -1,6 +1,6 @@
 import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
-import { RESTORE_TABLE } from '../../constant';
+import { RESTORE_TABLE, STATUS } from '../../constant';
 import { IRestore } from '../../models';
 
 interface UpdateRestoreParams {
@@ -29,7 +29,7 @@ const updateRestore = async (params: UpdateRestoreParams): Promise<void> => {
   if (errorMessage) {
     setParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
-  } else if (status && status !== 'FAILED') {
+  } else if (status && status !== STATUS.failed) {
     // Clear stale error from a previous failed run once the restore succeeds or retries.
     removeParts.push('errorMessage');
   }

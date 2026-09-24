@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
-import { DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_TYPE, STATUS, WEEK_DAY } from '../../../constant';
+import { DURATION_TYPE, FILTER_OPERATOR, SCHEDULE_TYPE, VISIBILITY_STATUS, WEEK_DAY } from '../../../constant';
 import { objectSchema } from '../shared';
 
 const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'INSERTS_ONLY', 'CHANGE_SINCE', 'BULK_CSV', 'OBJECT_TREE'];
@@ -326,7 +326,7 @@ export const createRestoreValidation = (req: Request, res: Response, next: NextF
     conflict: conflictSchema.required(),
     jobDetail: jobDetailSchema.optional(),
     schedule: scheduleConfigSchema.required(),
-    status: Joi.string().valid(...Object.values(STATUS)).optional(),
+    status: Joi.string().valid(...Object.values(VISIBILITY_STATUS)).optional(),
   });
 
   const { error } = schema.validate(req.body, { abortEarly: false });

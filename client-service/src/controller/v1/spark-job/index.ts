@@ -3,11 +3,11 @@ import { buildPayload, buildRestorePayload } from '../../../services/payload';
 import { getBackupConfigById, updateBackupConfig } from '../../../services/backup-config';
 import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
-import { COMPRESSION_STATUS, RESTORE_JOB_STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
+import { JOB_OBJECT_STATUS, STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
 import { flattenBackupObjects, wrapController } from '../../../utils/helper';
 import { decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, RESTORE_FIELD_JOB_STATUS, RESTORE_BACKUP_STATUS, toTreeSummary, filterObjectTree } from '../../../services';
+import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, toTreeSummary, filterObjectTree } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 import { sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
@@ -90,7 +90,7 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
   const jobIds = Object.keys(built.details.objectOperations);
   const { failed } = await setCompressionStatusBulk({
     backupConfigId,
-    jobs: jobIds.map((backupJobId) => ({ backupJobId, status: COMPRESSION_STATUS.inProgress })),
+    jobs: jobIds.map((backupJobId) => ({ backupJobId, status: JOB_OBJECT_STATUS.compressionInProgress })),
   });
 
   if (failed.length) {
@@ -98,7 +98,7 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
     return makeResponse(req, res, 400, false, 'compression_status_update_failed');
   }
 
-  logger.info(`[COMPRESSION] build-payload complete | configId=${backupConfigId} jobs=${jobIds.length} status=${COMPRESSION_STATUS.inProgress}`);
+  logger.info(`[COMPRESSION] build-payload complete | configId=${backupConfigId} jobs=${jobIds.length} status=${JOB_OBJECT_STATUS.compressionInProgress}`);
 
   return sendSparkPayload(res, built);
 };
@@ -173,7 +173,7 @@ const applyCompressionStatus = async (
     return makeResponse(req, res, 400, false, 'backup_config_not_found');
   }
 
-  const status = success ? COMPRESSION_STATUS.compressed : COMPRESSION_STATUS.failed;
+  const status = success ? JOB_OBJECT_STATUS.compressed : JOB_OBJECT_STATUS.compressionFailed;
   logger.info(`[COMPRESSION] applying ${status} to ${backupJobIds.length} job(s) | configId=${backupConfigId}`);
 
   const { updated, failed } = await setCompressionStatusBulk({
@@ -269,8 +269,8 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
         `[restore-csv] EMR reported failure | restoreJobId=${restoreConfigId} err:${failureMessage}`
       );
       await Promise.all([
-        updateRestoreJob({ restoreJobId: restoreConfigId, status: 'FAILED', errorMessage: failureMessage }),
-        updateRestore({ restoreId: restoreJob.restoreId, status: 'FAILED', errorMessage: failureMessage }),
+        updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage }),
+        updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
       ]);
       return makeResponse(req, res, 200, true, 'update');
     }
@@ -291,10 +291,10 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
             return {
               ...obj,
               id: backupConfigObject.id || uuidv4(),
-              status: RESTORE_JOB_STATUS.inProgress
+              status: JOB_OBJECT_STATUS.restoreInProgress
             };
           }
-          return { ...obj, id: uuidv4(), status: RESTORE_JOB_STATUS.inProgress };
+          return { ...obj, id: uuidv4(), status: JOB_OBJECT_STATUS.restoreInProgress };
         });
 
         await updateRestoreJob({
@@ -306,10 +306,10 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
 
     console.log(JSON.stringify({restore}));
     if(restore.destination.type === 'EXPORT'){
-      const objects = restoreJob.destination.objects.map(o => ({...o, status: RESTORE_JOB_STATUS.success}));
+      const objects = restoreJob.destination.objects.map(o => ({...o, status: STATUS.success}));
         await Promise.all([
-        updateRestoreJob({ restoreJobId: restoreConfigId, status: RESTORE_JOB_STATUS.success, replaceObjects: objects }),
-        updateRestore({ restoreId: restoreJob.restoreId, status: RESTORE_JOB_STATUS.success }),
+        updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.success, replaceObjects: objects }),
+        updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.success }),
       ]);
     }else {
       await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });

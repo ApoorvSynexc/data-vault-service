@@ -1,4 +1,4 @@
-import { OBJECT_STATUS, JOB_STATUS, BACKUP_STATUS } from '../../constant';
+import { JOB_OBJECT_STATUS, STATUS } from '../../constant';
 import { logger } from '../../middlewares/logger';
 import { IBackupJob } from '../../models';
 import { updateBackupConfig } from '../backup-config';
@@ -8,8 +8,8 @@ const STALE_THRESHOLD_MINUTES = 360;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 const STUCK_STATUSES = new Set([
-  OBJECT_STATUS.transferInProgress,
-  OBJECT_STATUS.bulkQueryInProgress,
+  JOB_OBJECT_STATUS.transferInProgress,
+  JOB_OBJECT_STATUS.bulkQueryInProgress,
 ]);
 
 const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
@@ -26,7 +26,7 @@ const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
             updateBackupObject({
               backupJobId: job.backupJobId,
               objectIndex: idx,
-              status: OBJECT_STATUS.failed,
+              status: JOB_OBJECT_STATUS.failed,
               errorMessage: 'Marked stale — server crash or restart detected',
             })
           )
@@ -35,12 +35,12 @@ const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
 
     await updateJobStatus({
       backupJobId: job.backupJobId,
-      status: JOB_STATUS.failed,
+      status: STATUS.failed,
       completedAt: new Date().toISOString(),
       errorMessage: 'Job became stale — server crash or restart detected',
     });
 
-    await updateBackupConfig(job.backupConfigId, { backupStatus: BACKUP_STATUS.failed });
+    await updateBackupConfig(job.backupConfigId, { backupStatus: STATUS.failed });
     logger.info(`Stale job sweeper: marked job ${job.backupJobId} as FAILED`);
   }
 };

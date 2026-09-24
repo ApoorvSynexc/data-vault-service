@@ -1,4 +1,4 @@
-import { OBJECT_STATUS } from '../../../../../constant';
+import { JOB_OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateBackupObject } from '../../../../backup-job';
@@ -230,7 +230,7 @@ export const exportFirstTime = async (
       await updateBackupObject({
         backupJobId,
         objectIndex,
-        status: OBJECT_STATUS.bulkQueryInProgress,
+        status: JOB_OBJECT_STATUS.bulkQueryInProgress,
       });
 
       const whereClause = buildWhereClause(object);
@@ -260,7 +260,7 @@ export const exportFirstTime = async (
       await updateBackupObject({
         backupJobId,
         objectIndex,
-        status: totalRecordCount ? OBJECT_STATUS.bulkQueryCompleted : OBJECT_STATUS.completed,
+        status: totalRecordCount ? JOB_OBJECT_STATUS.bulkQueryCompleted : JOB_OBJECT_STATUS.uploadCompleted,
         bulkJobId: jobId,
         salesforceApiCount,
       });
@@ -327,7 +327,7 @@ export const exportFirstTime = async (
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.failed,
+      status: JOB_OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
     logger.error(
@@ -406,7 +406,7 @@ export const exportIncremental = async (
       await updateBackupObject({
         backupJobId,
         objectIndex,
-        status: OBJECT_STATUS.bulkQueryInProgress,
+        status: JOB_OBJECT_STATUS.bulkQueryInProgress,
       });
 
       // IsDeleted (needed for classify/delete split) is already in allFieldNames
@@ -440,7 +440,7 @@ export const exportIncremental = async (
       await updateBackupObject({
         backupJobId,
         objectIndex,
-        status: totalRecordCount ? OBJECT_STATUS.bulkQueryCompleted : OBJECT_STATUS.completed,
+        status: totalRecordCount ? JOB_OBJECT_STATUS.bulkQueryCompleted : JOB_OBJECT_STATUS.uploadCompleted,
         bulkJobId,
         salesforceApiCount,
       });
@@ -449,8 +449,8 @@ export const exportIncremental = async (
     // ── Phase 2: classify results → insert/ update/ delete/ ──────────────────
     if (
       totalRecordCount > 0 &&
-      object.status !== OBJECT_STATUS.transferInProgress &&
-      object.status !== OBJECT_STATUS.completed
+      object.status !== JOB_OBJECT_STATUS.transferInProgress &&
+      object.status !== JOB_OBJECT_STATUS.uploadCompleted
     ) {
       logger.info(
         `Object found changes, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, Changes=${totalRecordCount}`
@@ -615,7 +615,7 @@ export const exportIncremental = async (
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.failed,
+      status: JOB_OBJECT_STATUS.failed,
       errorMessage: errorMsg,
     });
     logger.error(

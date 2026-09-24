@@ -9,7 +9,7 @@ import {
   updateUser,
   initalizeRestoreTransform,
 } from '../../../services';
-import { BACKUP_STATUS, STATUS } from '../../../constant';
+import { STATUS, VISIBILITY_STATUS } from '../../../constant';
 import {
   refreashSalesforceToken,
   SalesforceAuthExpiredError,
@@ -71,11 +71,11 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
     switch (eventType) {
       case 'backup.completed': {
         const backupConfig = await getBackupConfigById(backupConfigId);
-        if (backupConfig?.status !== STATUS.paused) {
+        if (backupConfig?.status !== VISIBILITY_STATUS.paused) {
           await updateBackupConfig(
             backupConfigId,
             {
-              backupStatus: BACKUP_STATUS.success,
+              backupStatus: STATUS.success,
               lastBackupAt: new Date().toISOString(),
               lastEventId: eventId,
             },
@@ -86,11 +86,11 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         break;
       case 'backup.failed': {
         const backupConfig = await getBackupConfigById(backupConfigId);
-        if (backupConfig?.status !== STATUS.paused) {
+        if (backupConfig?.status !== VISIBILITY_STATUS.paused) {
           await updateBackupConfig(
             backupConfigId,
             {
-              backupStatus: BACKUP_STATUS.failed,
+              backupStatus: STATUS.failed,
               lastBackupAt: new Date().toISOString(),
               lastEventId: eventId,
             },

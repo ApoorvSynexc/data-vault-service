@@ -1,4 +1,4 @@
-import { OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
+import { JOB_OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
 import { logger } from '../../../../../middlewares';
 import { IBackupObject, IDestinationConfig, IS3ObjectKey } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
@@ -133,7 +133,7 @@ const uploadBulkResultsByPage = async (
       backupJobId,
       object: {
         id: object.id,
-        status: OBJECT_STATUS.transferInProgress,
+        status: JOB_OBJECT_STATUS.transferInProgress,
       },
     });
     do {
@@ -178,7 +178,7 @@ const uploadBulkResultsByPage = async (
           sizeInBytes,
           ...(locator
             ? { currentLocator: locator }
-            : { status: OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
+            : { status: JOB_OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
         },
       });
     } while (locator !== null);
@@ -193,7 +193,7 @@ const uploadBulkResultsByPage = async (
       backupJobId,
       object: {
         id: object.id,
-        status: OBJECT_STATUS.failed,
+        status: JOB_OBJECT_STATUS.failed,
         errorMessage,
       },
     });

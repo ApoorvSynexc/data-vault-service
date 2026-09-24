@@ -9,6 +9,7 @@ import {
   IRestoreObjectHierarchyTreeNode,
   ISource,
 } from '../../models';
+import { STATUS } from '../../constant';
 
 export interface ICrmBackupHandler {
   runBackup(
@@ -28,7 +29,7 @@ export interface ICrmBackupHandler {
     destConfig: IDestinationConfig,
     object?: IBackupObject[],
     lastUpdatedAt?: string
-  ): Promise<'SUCCESS' | 'PARTIAL_FAILURE'>;
+  ): Promise<typeof STATUS.success | typeof STATUS.partialFailure>;
   runRestore(
     restoreId: string,
     restoreJobId: string,
@@ -36,7 +37,7 @@ export interface ICrmBackupHandler {
     destination: IRestoreJobDestination,
     conflict: IRestoreConflict,
     objectHierarchy?: IRestoreObjectHierarchyNode[]
-  ): Promise<'SUCCESS' | 'FAILED'>;
+  ): Promise<typeof STATUS.success | typeof STATUS.failed>;
   runRollback(
     restoreId: string,
     restoreJobId: string,
@@ -44,7 +45,7 @@ export interface ICrmBackupHandler {
     destination: IRestoreJobDestination,
     conflict: IRestoreConflict,
     hierarchy?: IRestoreObjectHierarchyTreeNode[]
-  ): Promise<'SUCCESS' | 'FAILED'>;
+  ): Promise<typeof STATUS.success | typeof STATUS.failed>;
 }
 
 export interface ICrmRealtimeHandler {

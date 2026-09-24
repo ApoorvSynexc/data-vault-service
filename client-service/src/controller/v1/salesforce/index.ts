@@ -6,7 +6,7 @@ import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, upd
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrm, ICrmProfile, IRole, IRolePermissions } from '../../../models';
 import { decrypt, decryptEnvelope, encryptEnvelope } from '../../../utils/encryption';
-import { STATUS, SALESFORCE_ENCRYPTION_KEY } from '../../../constant';
+import { VISIBILITY_STATUS, SALESFORCE_ENCRYPTION_KEY } from '../../../constant';
 
 // A role "has access" once any module has at least one granted action —
 // mirrors hasAnyAccess() in the reference UI design.
@@ -325,7 +325,7 @@ const confirmOrgAuthorizedHandler = async (req: IRequest, res: IResponse): Promi
     return;
   }
 
-  if (existingCrm.status !== STATUS.active) {
+  if (existingCrm.status !== VISIBILITY_STATUS.active) {
     makeResponse(req, res, 200, true, 'fetch', { success: false });
     return;
   }

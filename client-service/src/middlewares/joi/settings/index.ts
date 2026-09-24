@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
-import { STATUS } from '../../../constant';
+import { VISIBILITY_STATUS } from '../../../constant';
 
 export const upsertSettingsValidation = async (
   req: Request,
@@ -23,7 +23,7 @@ export const upsertSettingsValidation = async (
       email: Joi.boolean().required(),
     }).optional(),
     status: Joi.string()
-      .valid(...Object.values(STATUS))
+      .valid(...Object.values(VISIBILITY_STATUS))
       .optional(),
   });
 

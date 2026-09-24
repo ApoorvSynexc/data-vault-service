@@ -8,7 +8,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { CRM_TABLE, STATUS } from '../../constant';
+import { CRM_TABLE, VISIBILITY_STATUS } from '../../constant';
 import { ICrm } from '../../models';
 import { EncryptedPayload } from '../../utils/encryption';
 
@@ -53,7 +53,7 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     crmName,
 
     environment: environment ?? existingCrm?.environment ?? 'production',
-    status: status ?? existingCrm?.status ?? STATUS.active,
+    status: status ?? existingCrm?.status ?? VISIBILITY_STATUS.active,
 
     ...(name !== undefined && { name }),
     ...(userId !== undefined && { userId }),
