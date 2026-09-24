@@ -123,7 +123,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
-    const { search, status, backupStatus, schedule } = req.query as Record<string, string>;
+    const { search, status, backupStatus, schedule, destinationId } = req.query as Record<string, string>;
 
     const result = await getBackupConfigsWithPagination(
       {
@@ -133,6 +133,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
         ...(status && { status }),
         ...(backupStatus && { backupStatus }),
         ...(schedule && { schedule }),
+        ...(destinationId && { destinationId }),
       },
       { limit: limitNum, cursor }
     );
