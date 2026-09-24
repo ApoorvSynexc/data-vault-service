@@ -14,7 +14,7 @@ import {
   getUser,
 } from '../../../services';
 import { encrypt, decrypt, decryptEnvelope, encryptEnvelope, generateOrgEncryptionKey } from '../../../utils/encryption';
-import { STATUS, SALESFORCE_LOGIN_REDIRECT_URI } from '../../../constant';
+import { STATUS, SALESFORCE_LOGIN_REDIRECT_URI, SALESFORCE_ENCRYPTION_KEY } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 interface IAuthorizeOrganizationPayload {
@@ -41,7 +41,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
 
     let payload: { type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload };
     try {
-      payload = decryptEnvelope<{ type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload }>(req.body);
+      payload = decryptEnvelope<{ type?: string; user_details?: IAuthorizeUserPayload; org_details?: IAuthorizeOrganizationPayload }>(req.body, SALESFORCE_ENCRYPTION_KEY);
     } catch (error: any) {
       logger.warn(`[configure-org] 401: decrypt/envelope failed: ${error?.message ?? error}`);
       makeResponse(req, res, 401, false, 'unauthorized');
@@ -81,7 +81,7 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
       // }
     }
 
-    makeResponse(req, res, 200, true, 'fetch', encryptEnvelope(finalResponse));
+    makeResponse(req, res, 200, true, 'fetch', encryptEnvelope(finalResponse, SALESFORCE_ENCRYPTION_KEY));
   } catch (error) {
     logger.error(`Error in authorizeOrganizationHandler: ${error}`);
     console.log(`STACK TRACE: ${error instanceof Error ? error.stack : 'No stack trace available'}`);
@@ -90,18 +90,20 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
 };
 
 
-const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{ encryptionKey: string }> => {
+const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Promise<{ encryptionKey: string; apiKey: string }> => {
   // DataVaultAdminAuthorizationService.authorizeOrganization() (invoked from the
   // LWC's Authorize Admin flow, not the Post Install Handler — the installing user
   // has no Named Credential access at install time) encrypts { orgId, instanceUrl }
-  // as a whole with the shared Bootstrap Key and sends the envelope as the entire
-  // request body — there's no separate plaintext orgId to cross-check against, so a
-  // successful decrypt (and presence of the expected fields) is the validation itself.
+  // as a whole with the shared SALESFORCE_ENCRYPTION_KEY and sends the envelope as
+  // the entire request body — there's no separate plaintext orgId to cross-check
+  // against, so a successful decrypt (and presence of the expected fields) is the
+  // validation itself.
   //
-  // This endpoint stays single-layer (Bootstrap Key only) — there's no org key to
-  // wrap with yet, since registering the org is what produces one. Every other
-  // Salesforce-facing endpoint uses the two-layer scheme (see
-  // middlewares/salesforce/index.ts) once an org key exists.
+  // This endpoint stays single-layer (SALESFORCE_ENCRYPTION_KEY only, never
+  // ENCRYPTION_KEY — see constant/index.ts) — there's no org key to wrap with yet,
+  // since registering the org is what produces one. Every other Salesforce-facing
+  // endpoint uses the two-layer scheme (see middlewares/salesforce/index.ts) once
+  // an org key exists.
   const { orgId, instanceUrl } = payload;
   if (!orgId || !instanceUrl) {
     logger.warn(`[configure-org] 401: missing required field(s): hasOrgId=${!!orgId} hasInstanceUrl=${!!instanceUrl}`);
@@ -110,28 +112,34 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
 
   let crm = await getCrmByOrgId(orgId);
   let rawEncryptionKey: string;
+  let rawApiKey: string;
 
   if (!crm) {
     rawEncryptionKey = generateOrgEncryptionKey();
+    // Same random-secret generator as the encryption key — it's just
+    // crypto.randomBytes(32), which is exactly what a per-org API key needs too.
+    rawApiKey = generateOrgEncryptionKey();
     crm = await upsertCrm({
       crmId: uuidv4(),
       organizationId: orgId,
       crmName: 'salesforce',
       instanceUrl,
       encryptionKey: encrypt(rawEncryptionKey), // encrypted at rest with the master key, like crmCredential
+      apiKey: encrypt(rawApiKey),
       status: STATUS.inactive,
     });
   } else {
     if (crm.instanceUrl !== instanceUrl) {
       crm = (await updateCrm(crm.crmId, { instanceUrl })) ?? crm;
     }
-    if (!crm.encryptionKey) {
+    if (!crm.encryptionKey || !crm.apiKey) {
       throw new Error('org_missing_encryption_key');
     }
     rawEncryptionKey = decrypt(crm.encryptionKey);
+    rawApiKey = decrypt(crm.apiKey);
   }
 
-  return { encryptionKey: rawEncryptionKey };
+  return { encryptionKey: rawEncryptionKey, apiKey: rawApiKey };
 };
 
 const authorizeUserHandler = async (userDetails: IAuthorizeUserPayload): Promise<{ authorizationUrl: string }> => {

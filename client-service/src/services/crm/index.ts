@@ -22,6 +22,7 @@ interface UpsertCrmParams {
   status?: string;
   instanceUrl?: string;
   encryptionKey?: EncryptedPayload;
+  apiKey?: EncryptedPayload;
 }
 
 const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
@@ -35,6 +36,7 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     status,
     instanceUrl,
     encryptionKey,
+    apiKey,
   } = params;
 
   const id = crmId ?? uuidv4();
@@ -57,6 +59,7 @@ const upsertCrm = async (params: UpsertCrmParams): Promise<ICrm> => {
     ...(userId !== undefined && { userId }),
     ...(instanceUrl !== undefined && { instanceUrl }),
     ...(encryptionKey !== undefined && { encryptionKey }),
+    ...(apiKey !== undefined && { apiKey }),
 
     createdAt: existingCrm?.createdAt ?? now,
     updatedAt: now,

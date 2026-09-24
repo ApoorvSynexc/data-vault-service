@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { salesofrceController } from '../../controller';
-import { upsertUsersValidation, createRoleValidation, updateRoleValidation, attachDecryptedSalesforceRequest } from '../../middlewares';
+import {
+  upsertUsersValidation,
+  createRoleValidation,
+  updateRoleValidation,
+  attachDecryptedSalesforceRequest,
+} from '../../middlewares';
 
 const router = Router();
 

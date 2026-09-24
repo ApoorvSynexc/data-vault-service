@@ -6,7 +6,7 @@ import { createUser, deleteUser, getUserByCrmProfileUserId, getUsersByCrmId, upd
 import { createRole, deleteCrm, deleteRole, getBackupConfigsByUser, getCrmByOrgId, getRole, getRoles, getRolesByCrmId, updateRole, upsertCrm } from '../../../services';
 import { ICrm, ICrmProfile, IRole, IRolePermissions } from '../../../models';
 import { decrypt, decryptEnvelope, encryptEnvelope } from '../../../utils/encryption';
-import { STATUS } from '../../../constant';
+import { STATUS, SALESFORCE_ENCRYPTION_KEY } from '../../../constant';
 
 // A role "has access" once any module has at least one granted action —
 // mirrors hasAnyAccess() in the reference UI design.
@@ -55,14 +55,14 @@ const getPermissionsHandler = async (req: IRequest, res: IResponse): Promise<voi
 const updatePermissionsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
   const orgKey = decrypt(crm.encryptionKey!);
-  const { userId, modules, roleId, organizationId } = data;
+  const { userId, modules, roleId } = data;
 
   if (!userId || !roleId) {
     res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
     return;
   }
 
-  const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
+  const existingUser = await getUserByCrmProfileUserId(userId, crm.organizationId);
   if (!existingUser) {
     res.status(404).json(encryptEnvelope({ errorCode: 'USER_NOT_FOUND' }, orgKey));
     return;
@@ -86,10 +86,8 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
   const { crm }: { crm: ICrm } = req.salesforcePayload;
   const { crmId } = crm;
 
-  console.log(`[salesforce] getUsersHandler | crm: ${JSON.stringify(crm)}`);
   const usersByCrmId = await getUsersByCrmId(crmId);
   const users = [];
-  console.log(`[salesforce] getUsersHandler | usersByCrmId: ${JSON.stringify(usersByCrmId)}`);
   for await (const element of usersByCrmId) {
     const role = await getRole({ roleId: element.role.roleId });
     if (role && hasAnyGrant(role.permissions)) {
@@ -111,13 +109,14 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
+  console.log(`[salesforce] getUsersHandler | users: ${JSON.stringify(users)}`);
   res.status(200).json(encryptEnvelope({ users }, decrypt(crm.encryptionKey!)));
 };
 
 const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
   const orgKey = decrypt(crm.encryptionKey!);
-  const { users, environment, organizationId } = data;
+  const { users, environment } = data;
 
   if (!users?.length) {
     res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
@@ -129,8 +128,7 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
     try {
       const { profile, role, ...rest } = user;
       const crmProfileUserId = profile.userId;
-      const orgId = organizationId;
-      const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, orgId);
+      const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, crm.organizationId);
       console.log(`[salesforce] upsertUsersHandler | existingUser: ${JSON.stringify(existingUser)}`);
 
       const hasGrant = hasAnyGrant(role.permissions);
@@ -169,18 +167,17 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           const roleName = 'Custom';
           const userId = uuidv4();
           const roleId = uuidv4();
-          let crmId = uuidv4();
-          const crmExist = await getCrmByOrgId(orgId);
-          if (crmExist) {
-            crmId = crmExist.crmId;
-          }
+          // attachDecryptedSalesforceRequest already resolved `crm` for this
+          // org via the X-DataCraft-Org-Id header, so it's guaranteed to
+          // exist here — no need to re-look it up by orgId.
+          const { crmId } = crm;
           await createRole({ roleId, name: roleName, permissions: role.permissions });
           await createUser({ ...rest, crmProfile: profile, role: { name: roleName, roleId }, userId, crmId, isCrmConnected: false });
           await upsertCrm({
             userId,
             crmId,
             environment,
-            organizationId: orgId,
+            organizationId: crm.organizationId,
             crmName: 'salesforce',
           });
           console.log(`[salesforce] upsertUsersHandler | user created: ${JSON.stringify(user)}`);
@@ -282,14 +279,14 @@ const deleteRoleHandler = async (req: IRequest, res: IResponse): Promise<void> =
 const confirmAdminUserCreatedHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crm, data }: { crm: ICrm; data: any } = req.salesforcePayload;
   const orgKey = decrypt(crm.encryptionKey!);
-  const { userId, organizationId } = data;
+  const { userId } = data;
 
   if (!userId) {
     res.status(400).json(encryptEnvelope({ errorCode: 'ID_REQUIRED' }, orgKey));
     return;
   }
 
-  const existingUser = await getUserByCrmProfileUserId(userId, organizationId);
+  const existingUser = await getUserByCrmProfileUserId(userId, crm.organizationId);
   if (!existingUser) {
     res.status(404).json(encryptEnvelope({ errorCode: 'USER_NOT_FOUND' }, orgKey));
     return;
@@ -300,7 +297,8 @@ const confirmAdminUserCreatedHandler = async (req: IRequest, res: IResponse): Pr
 
 // Bootstrap-only org existence check. This endpoint intentionally does not use
 // attachDecryptedSalesforceRequest because Salesforce may not have the org key
-// yet; the query envelope is decrypted only with ENCRYPTION_KEY.
+// yet; the query envelope is decrypted only with SALESFORCE_ENCRYPTION_KEY
+// (never ENCRYPTION_KEY, the at-rest storage key — see constant/index.ts).
 const confirmOrgAuthorizedHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   let orgId: string | undefined;
 
@@ -309,7 +307,7 @@ const confirmOrgAuthorizedHandler = async (req: IRequest, res: IResponse): Promi
       throw new Error('invalid_wrapper');
     }
 
-    const data = decryptEnvelope<{ orgId?: string }>(JSON.parse(req.query.envelope));
+    const data = decryptEnvelope<{ orgId?: string }>(JSON.parse(req.query.envelope), SALESFORCE_ENCRYPTION_KEY);
     orgId = data.orgId;
   } catch {
     makeResponse(req, res, 401, false, 'unauthorized');

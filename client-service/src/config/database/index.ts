@@ -24,6 +24,7 @@ import {
   NOTIFICATION_TABLE,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
+  //DYNAMODB_ENDPOINT,
   NODE_ENV,
 } from '../../constant';
 import { IAwsCredentials } from '../../models';
@@ -32,7 +33,16 @@ const awsCredentials: IAwsCredentials = {
   region: AWS_REGION
 }
 
-if (NODE_ENV === 'dev' && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+// if (DYNAMODB_ENDPOINT) {
+
+//   // Local mode: talk to DynamoDB Local / LocalStack with throwaway credentials.
+//   //awsCredentials.endpoint = DYNAMODB_ENDPOINT;
+//   awsCredentials.credentials = {
+//     accessKeyId: AWS_ACCESS_KEY_ID || 'local',
+//     secretAccessKey: AWS_SECRET_ACCESS_KEY || 'local',
+//   }
+// } else 
+  if (NODE_ENV === 'dev' && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
   awsCredentials.credentials = {
     accessKeyId: AWS_ACCESS_KEY_ID,
     secretAccessKey: AWS_SECRET_ACCESS_KEY,
@@ -366,7 +376,6 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
 const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
   try {
     await client.send(new DescribeTableCommand({ TableName: def.TableName }));
-    console.log(`Table exists: ${def.TableName}`);
   } catch (err: any) {
     if (err.name !== 'ResourceNotFoundException') {
       throw err;

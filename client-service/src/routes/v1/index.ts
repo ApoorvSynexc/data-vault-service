@@ -11,6 +11,7 @@ import { destinationRouter } from './destination.route';
 import { internalRouter } from './internal.route';
 import { publicRouter } from './public.routes';
 import { archivalRouter } from './archival-config.routes';
+import { archivalRecordPreviewRouter } from './archival-record-preview.routes';
 import { sparkRouter } from './spark-job.routes';
 import { salesforceRouter } from './salesforce.route';
 import { aclGateway } from '../../middlewares/gateway';
@@ -27,6 +28,7 @@ router.use('/internal', internalRouter);
 router.use('/public', publicRouter);
 router.use('/spark-job', sparkRouter);
 router.use('/salesforce', salesforceRouter);
+router.use('/archival-config', archivalRecordPreviewRouter);
 
 // Private routes
 router.use(authenticate);
