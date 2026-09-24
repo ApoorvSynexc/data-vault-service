@@ -237,11 +237,11 @@ const searchArchivalRecords = async (
   const selectClause = fieldsCheck.fields
     ? [...new Set([...fieldsCheck.fields, 'CreatedDate'])].map((f) => `"${f}"`).join(', ')
     : '*';
-// console.log(configs)
+console.log(configs,'selectClause')
   const perConfigResults = await Promise.all(
     configs.map(async (config) => {
       const { databaseName, hudiTable } = hudiTableFor(config, params.objectApiName);
-      // console.log(databaseName,'uuu', hudiTable)
+      console.log(databaseName,'uuu hudi table ', hudiTable)
       const { region, outputLocation } = await buildArchivalOutputLocation(config);
       if (!(await tableExists(databaseName, hudiTable, region))) return [];
 
@@ -251,9 +251,11 @@ const searchArchivalRecords = async (
       if (filterCheck.where) conditions.push(filterCheck.where);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
+      
       // Fetch one extra row past `limit` so hasMore can be determined without
       // a second COUNT query.
       const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "CreatedDate" DESC OFFSET ${offset} LIMIT ${limit + 1}`;
+      console.log(sql,'sql')
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
       return result.rows;
     })
