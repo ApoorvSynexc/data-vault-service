@@ -27,6 +27,7 @@ const resolveOrgAndConfigs = async (
   }
 
   const resolved = await resolveArchivalConfigsForObject(orgId, objName);
+  console.log(`[resolveOrgAndConfigs] orgId=${orgId}, objName=${objName}, resolved=${JSON.stringify(resolved)}`);
   if (!resolved) {
     makeResponse(req, res, 404, false, 'crm_not_found');
     return null;
