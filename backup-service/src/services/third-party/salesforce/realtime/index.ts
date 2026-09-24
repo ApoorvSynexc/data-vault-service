@@ -161,11 +161,12 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     // an object into one shared raw_data/<object>/ folder.
     const folder = operationToFolder(operation);
     const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.json`;
-    // Newline-delimited JSON (one object per line), NOT a JSON array: Glue's
-    // JSON SerDe (org.openx.data.jsonserde.JsonSerDe, used by
-    // ensureRawJsonSnapshotTable/ensureRawJsonDeltaTable) parses each LINE of
-    // the file as one row's JSON object — a file starting with `[` fails to
-    // parse as a row at all, even with exactly one record inside.
+    // Newline-delimited JSON (one object per line), NOT a JSON array — this
+    // raw_data output is still what Spark's compression job reads to build
+    // Hudi/Delta, and its JSON reader parses each LINE as one row's JSON
+    // object, same constraint as the retired raw-data Glue/Athena SerDe had —
+    // a file starting with `[` fails to parse as a row at all, even with
+    // exactly one record inside.
     const csvBuffer = Buffer.from(filteredRecords.map((r) => JSON.stringify(r)).join('\n'), 'utf8');
     const sizeInBytes = csvBuffer.length;
     const s3Path = await uploadToS3(destConfig, s3Key, csvBuffer);
