@@ -270,7 +270,7 @@ export const runAthenaQuery = async (
   );
 
   const queryExecutionId = await startQuery(sql, database, region, outputLocation);
-
+console.log(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
   logger.info(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
 
   await waitForQuery(queryExecutionId, region);
