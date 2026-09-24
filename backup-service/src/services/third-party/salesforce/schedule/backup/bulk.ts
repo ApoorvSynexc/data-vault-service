@@ -289,9 +289,10 @@ const classifyAndUploadBulkResultsByPage = async (
 
         // Re-serialized via toSingleLineCsv, not the parser's own `raw` text —
         // `raw` still carries any embedded newline verbatim (e.g. a
-        // multi-line MailingStreet), and the raw_csv Glue table reads rows by
-        // physical line, so writing it back out would recreate the exact
-        // truncated-row/phantom-row corruption this parser exists to avoid.
+        // multi-line MailingStreet), and this raw_data CSV output is still
+        // read by physical line downstream (Spark's compression reader), so
+        // writing it back out would recreate the exact truncated-row/
+        // phantom-row corruption this parser exists to avoid.
         const insertRows: string[] = [];
         const updateRows: string[] = [];
         const deleteRows: string[] = [];

@@ -19,12 +19,11 @@ import {
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
 import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
-import { ensureRawCsvTable } from '../third-party/glue';
 import { updateBackupConfig } from '../backup-config';
 import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
-import { HttpError, recursivelyFlatten } from '../../utils/helper';
+import { HttpError } from '../../utils/helper';
 import { httpRequest } from '../../utils/http-request';
 
 // A Schema-Sync job refreshed the stored schema/picklist/record-type metadata; tell
@@ -146,30 +145,6 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       completedAt: dayjs().toISOString(),
     });
 
-    // Best-effort: make this job's raw_data queryable via Athena right away,
-    // ahead of the next Spark compression run. Idempotent (safe no-op once
-    // the table already matches), so calling it on every job completion is
-    // intentional, not just the object's first-ever backup. Never allowed to
-    // fail the job — a Glue hiccup here is infrastructure noise, not a backup
-    // failure. Covers a realtime object's initial Bulk-API sync too, since it
-    // runs through this same runner — but that sync's own `inserts/` output
-    // is deliberately not tracked (see glue/index.ts's raw-table header for
-    // why inserts are excluded entirely).
-    for (const obj of object ?? []) {
-      ensureRawCsvTable({
-        crmId: source.crmId,
-        crmName: source.crmName,
-        backupConfigId,
-        objectName: obj.name,
-        destConfig,
-        policyConfigType: 'backup',
-      }).catch((err: any) => {
-        logger.warn(
-          `[glue] ensureRawCsvTable failed | backupJobId:${backupJobId} object:${obj.name} err:${err?.message ?? err}`
-        );
-      });
-    }
-
     if (job.schemaSync) {
       await notifySchemaSyncCompleted(backupConfigId, triggerSource);
     }
@@ -281,25 +256,6 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       completedAt: dayjs().toISOString(),
     });
 
-    // Best-effort: make this job's raw_data queryable via Athena right away,
-    // ahead of the next Spark compression run — same reasoning as
-    // runBackupJob's own hook. Archival's object tree nests (children get
-    // archived too — see clearObjectError's recursion above), so flatten it
-    // first; a flat BACKUP job's `object` array flattens to itself unchanged.
-    for (const obj of recursivelyFlatten(object ?? [])) {
-      ensureRawCsvTable({
-        crmId: source.crmId,
-        crmName: source.crmName,
-        backupConfigId,
-        objectName: obj.name,
-        destConfig,
-        policyConfigType: 'archival',
-      }).catch((err: any) => {
-        logger.warn(
-          `[glue] ensureRawCsvTable failed | backupJobId:${backupJobId} object:${obj.name} err:${err?.message ?? err}`
-        );
-      });
-    }
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
     await Promise.all([
