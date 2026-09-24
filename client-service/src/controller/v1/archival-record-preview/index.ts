@@ -27,6 +27,7 @@ const resolveOrgAndConfigs = async (
   }
 
   const resolved = await resolveArchivalConfigsForObject(orgId, objName);
+
   if (!resolved) {
     makeResponse(req, res, 404, false, 'crm_not_found');
     return null;
@@ -54,8 +55,9 @@ const resolveOrgAndConfigs = async (
  */
 const searchArchivalRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { orgId, objName, fields, startDate, endDate, filters, limit, page } = req.body as Record<string, unknown>;
-
+console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, fields=${JSON.stringify(fields)}, startDate=${startDate}, endDate=${endDate}, filters=${JSON.stringify(filters)}, limit=${limit}, page=${page}`);
   const resolved = await resolveOrgAndConfigs(req, res, orgId, objName);
+  console.log('resolve', resolved);
   if (!resolved) return;
 
   let start: IsoDateString | undefined;
@@ -83,7 +85,7 @@ const searchArchivalRecordsHandler = async (req: IRequest, res: IResponse): Prom
     limit: limit as number | undefined,
     page: page as number | undefined,
   });
-
+console.log('searched', searched);
   if (!searched.ok) {
     return makeResponse(req, res, 400, false, searched.error as Parameters<typeof makeResponse>[4]);
   }
