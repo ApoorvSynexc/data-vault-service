@@ -255,6 +255,7 @@ const JOB_OBJECT_STATUS = {
   transferInProgress: 'TRANSFER_IN_PROGRESS',
   uploadCompleted: 'UPLOAD_COMPLETED',
   deletionInProgress: 'DELETION_IN_PROGRESS',
+  deletionCompleted: 'DELETION_COMPLETED',
   deletionJobFailed: 'DELETION_JOB_FAILED',
   deletionRecordsFailed: 'DELETION_RECORDS_FAILED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',

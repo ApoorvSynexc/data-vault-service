@@ -568,7 +568,7 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
           s3Keys,
         });
 
-        if (childStatus !== JOB_OBJECT_STATUS.uploadCompleted) {
+        if (childStatus !== JOB_OBJECT_STATUS.deletionCompleted) {
           // Child didn't fully delete (some records rejected by Salesforce). Keep
           // going on remaining siblings, but remember to block the parent below —
           // deleting it now would let Salesforce cascade-delete this child's
@@ -641,7 +641,7 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
     //   backupJobId,
     //   object: {
     //     id: object.id,
-    //     status: JOB_OBJECT_STATUS.uploadCompleted,
+    //     status: JOB_OBJECT_STATUS.deletionCompleted,
     //   },
     // });
 

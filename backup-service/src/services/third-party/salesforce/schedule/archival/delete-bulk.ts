@@ -497,7 +497,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
             ...(jobResults.successCount
               ? {
                   deletedSuccessRecordCount: jobResults.successCount,
-                  status: JOB_OBJECT_STATUS.uploadCompleted,
+                  status: JOB_OBJECT_STATUS.deletionCompleted,
                 }
               : {}),
             ...(jobResults.failedCount
@@ -547,7 +547,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
   );
 
   const objectFinalStatus =
-    totalFailed > 0 ? JOB_OBJECT_STATUS.deletionRecordsFailed : JOB_OBJECT_STATUS.uploadCompleted;
+    totalFailed > 0 ? JOB_OBJECT_STATUS.deletionRecordsFailed : JOB_OBJECT_STATUS.deletionCompleted;
 
   await updateArchivalObject({
     backupJobId,

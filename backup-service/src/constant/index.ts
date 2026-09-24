@@ -104,6 +104,7 @@ const JOB_OBJECT_STATUS = {
   transferInProgress: 'TRANSFER_IN_PROGRESS',
   uploadCompleted: 'UPLOAD_COMPLETED',
   deletionInProgress: 'DELETION_IN_PROGRESS',
+  deletionCompleted: 'DELETION_COMPLETED',
   // Delete phase failed before any records were processed (job-level / infrastructure error)
   deletionJobFailed: 'DELETION_JOB_FAILED',
   // Delete job succeeded but some individual records were rejected by Salesforce
