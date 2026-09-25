@@ -126,28 +126,59 @@ const findParentEdge = (nodes: any[] | undefined, targetName: string): { parentN
   return null;
 };
 
-/**
- * POST /archival-preview/salesforce/record-detail
- * Body: { orgId, objName, recordId, fields? }
- *
- * Only orgId + objName + recordId are required — fields is optional.
- *
- * One record's own fields plus every related object the record's config
- * actually knows about — child/junction objects (this object's `children[]`
- * in the tree) and the parent/master object (found by walking the tree for
- * whoever lists this object as a child). An object never selected for this
- * config's archival simply has no Hudi table, so it's silently left out
- * rather than surfaced as an error or fetched live from Salesforce.
- *
- * `fields`, when given, trims BOTH the main record and every related
- * record's rows to just those columns — omitted, full rows are returned.
- *
- * Tries every archival policy covering objName (there can be more than one)
- * and uses the first one that actually has this record.
- */
+interface IRelatedObject {
+  objectName: string;
+  relationship: 'child' | 'parent';
+  fieldApiName: string;
+  records: Record<string, string>[];
+}
+
+const RELATED_LOOKUP_CONCURRENCY = 4;
+
+// Runs async tasks with at most `limit` in flight, preserving result order.
+const runWithConcurrency = async <T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> => {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+};
+
+// Concurrent callers with the same key share one in-flight load; a finished
+// result is reused for `ttlMs`. Rejections are never cached, so a failed load
+// is retried by the next call. Bounded so it can't grow without limit.
+const createSharedLoadCache = <T>(ttlMs: number, maxEntries: number) => {
+  const entries = new Map<string, { value: Promise<T>; expiresAt: number }>();
+
+  const get = (key: string, load: () => Promise<T>): Promise<T> => {
+    const now = Date.now();
+    const hit = entries.get(key);
+    if (hit && hit.expiresAt > now) return hit.value;
+
+    if (entries.size >= maxEntries) {
+      for (const [k, v] of entries) if (v.expiresAt <= now) entries.delete(k);
+      if (entries.size >= maxEntries) entries.delete(entries.keys().next().value as string);
+    }
+
+    const value = load();
+    entries.set(key, { value, expiresAt: now + ttlMs });
+    value.catch(() => entries.delete(key));
+    return value;
+  };
+
+  return { get };
+};
+
+const recordDetailCache = createSharedLoadCache<Record<string, unknown> | null>(60_000, 500);
+
 const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  // Same defensive default as searchArchivalRecordsHandler — see comment there.
-  const { orgId, objName, recordId, fields } = (req.body ?? {}) as Record<string, unknown>;
+  const { orgId, objName, fields, ...rest } = (req.body ?? {}) as Record<string, unknown>;
+  const recordId = rest.recordId ?? rest.Id ?? rest.id;
   if (typeof recordId !== 'string' || !recordId) {
     return makeResponse(req, res, 400, false, 'params_required');
   }
@@ -160,54 +191,89 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
     return makeResponse(req, res, 400, false, 'invalid_fields' as Parameters<typeof makeResponse>[4]);
   }
 
+  // Same record asked again (client/gateway retry, double click) shares the
+  // running Athena work or a just-finished result instead of re-querying —
+  // every uncached lookup is billed and queues behind other queries.
+  const cacheKey = JSON.stringify([orgId, resolved.objName, recordId, fieldsCheck.fields]);
+  const payload = await recordDetailCache.get(cacheKey, () =>
+    loadRecordDetail(resolved.configs, resolved.objName, recordId, fieldsCheck.fields)
+  );
+
+  if (!payload) return makeResponse(req, res, 400, false, 'not_exist');
+  makeResponse(req, res, 200, true, 'fetch', payload);
+};
+
+const loadRecordDetail = async (
+  configs: IBackupConfig[],
+  objName: string,
+  recordId: string,
+  fields: string[] | null
+): Promise<Record<string, unknown> | null> => {
+  const resolved = { objName, configs };
+  const fieldsCheck = { fields };
   for (const config of resolved.configs) {
-    const record = await getArchivedRecordById(config, resolved.objName, recordId);
-    if (!record) continue;
-
     const node = findObjectNode(config.objects, resolved.objName);
-    const relatedObjects: { objectName: string; relationship: 'child' | 'parent'; fieldApiName: string; records: Record<string, string>[] }[] = [];
+    const childLookups = (node?.children ?? [])
+      .filter((child: any) => child?.name && child?.fieldApiName)
+      .map((child: any) => async (): Promise<IRelatedObject | null> => {
+        const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId, fieldsCheck.fields);
+        return childRecords.length
+          ? {
+              objectName: child.name,
+              relationship: 'child',
+              fieldApiName: child.fieldApiName,
+              records: childRecords.map((r) => applyFieldSelection(r, fieldsCheck.fields)),
+            }
+          : null;
+      });
 
-    for (const child of node?.children ?? []) {
-      if (!child?.name || !child?.fieldApiName) continue;
-      const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId);
-      if (childRecords.length) {
-        relatedObjects.push({
-          objectName: child.name,
-          relationship: 'child',
-          fieldApiName: child.fieldApiName,
-          records: childRecords.map((r) => applyFieldSelection(r, fieldsCheck.fields)),
-        });
-      }
+    // Children only need recordId, not the fetched record, so they start together
+    // with the record's own query — one Athena round-trip (~3s) less per request.
+    // Only the parent lookup has to wait for the record (it needs the FK value).
+    const childrenPromise = runWithConcurrency(childLookups, RELATED_LOOKUP_CONCURRENCY);
+    const settleChildren = (): Promise<unknown> => childrenPromise.catch(() => undefined);
+
+    let record: Record<string, string> | null;
+    try {
+      record = await getArchivedRecordById(config, resolved.objName, recordId);
+    } catch (err) {
+      await settleChildren();
+      throw err;
+    }
+    if (!record) {
+      await settleChildren();
+      continue;
     }
 
     const parentEdge = findParentEdge(config.objects, resolved.objName);
-    if (parentEdge) {
-      const parentId = getField(record, parentEdge.fieldApiName);
-      if (parentId) {
-        const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId);
-        if (parentRecord) {
-          relatedObjects.push({
+    const parentId = parentEdge ? getField(record, parentEdge.fieldApiName) : undefined;
+    const parentLookup = async (): Promise<IRelatedObject | null> => {
+      if (!parentEdge || !parentId) return null;
+      const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId, fieldsCheck.fields);
+      return parentRecord
+        ? {
             objectName: parentEdge.parentNode.name,
             relationship: 'parent',
             fieldApiName: parentEdge.fieldApiName,
             records: [applyFieldSelection(parentRecord, fieldsCheck.fields)],
-          });
-        }
-      }
-    }
+          }
+        : null;
+    };
 
-    makeResponse(req, res, 200, true, 'fetch', {
+    const [childResults, parentResult] = await Promise.all([childrenPromise, parentLookup()]);
+    const relatedObjects = [...childResults, parentResult].filter((r): r is IRelatedObject => r !== null);
+
+    return {
       configId: config.backupConfigId,
       policyName: config.name,
       objName: resolved.objName,
       recordId,
       record: applyFieldSelection(record, fieldsCheck.fields),
       relatedObjects,
-    });
-    return;
+    };
   }
 
-  makeResponse(req, res, 400, false, 'not_exist');
+  return null;
 };
 
 export const archivalRecordPreviewController = wrapArchivalPreviewController({
