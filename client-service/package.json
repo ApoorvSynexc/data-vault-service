@@ -22,6 +22,7 @@
     "@aws-sdk/client-emr-serverless": "^3.1050.0",
     "@aws-sdk/client-eventbridge": "^3.1035.0",
     "@aws-sdk/client-glue": "^3.1075.0",
+    "@aws-sdk/client-kms": "^3.1140.0",
     "@aws-sdk/client-s3": "^3.1026.0",
     "@aws-sdk/client-scheduler": "^3.1032.0",
     "@aws-sdk/credential-providers": "^3.1116.0",
