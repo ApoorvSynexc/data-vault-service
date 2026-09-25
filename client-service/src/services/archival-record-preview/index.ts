@@ -5,7 +5,7 @@ import { IBackupConfig, ICrm } from '../../models';
 import { getCrmByOrgId } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery } from '../third-party/athena/query';
-import { tableExists } from '../third-party/athena/glue';
+import { tableExists, getTableAllColumnNames } from '../third-party/athena/glue';
 import { S3Config } from '../../utils/validate-aws-credentials';
 import { IsoDateString } from '../../utils/iso-date';
 
@@ -109,7 +109,7 @@ const NOT_EQUAL_SUFFIX = '_ne';
 type IArchivalFilters = Record<string, string>;
 
 type IValidateFiltersResult =
-  | { ok: true; where: string }
+  | { ok: true; where: string; fields: string[] }
   | { ok: false; error: 'invalid_filters' | 'invalid_filter_field' };
 
 /**
@@ -119,18 +119,25 @@ type IValidateFiltersResult =
  * validation failure the controller turns into a 400.
  */
 const validateAndBuildFilterWhere = (filters: unknown): IValidateFiltersResult => {
-  if (filters === undefined) return { ok: true, where: '' };
+  if (filters === undefined) return { ok: true, where: '', fields: [] };
   if (typeof filters !== 'object' || filters === null || Array.isArray(filters)) {
     return { ok: false, error: 'invalid_filters' };
   }
 
   const conditions: string[] = [];
-  for (const [key, value] of Object.entries(filters as Record<string, unknown>)) {
-    if (typeof value !== 'string') return { ok: false, error: 'invalid_filters' };
+  const fields: string[] = [];
+  for (const [key, rawValue] of Object.entries(filters as Record<string, unknown>)) {
+    // Numbers/booleans are accepted and compared as text (the column is CAST to
+    // varchar below), so { "IsDeleted": false } works the same as "false".
+    if (typeof rawValue !== 'string' && typeof rawValue !== 'number' && typeof rawValue !== 'boolean') {
+      return { ok: false, error: 'invalid_filters' };
+    }
+    const value = String(rawValue);
 
     const isNotEqual = key.endsWith(NOT_EQUAL_SUFFIX);
     const field = isNotEqual ? key.slice(0, -NOT_EQUAL_SUFFIX.length) : key;
     if (!FIELD_NAME_RE.test(field)) return { ok: false, error: 'invalid_filter_field' };
+    fields.push(field);
 
     // CAST to varchar: the column's Athena type isn't guaranteed (a boolean/number
     // column compared to a quoted literal fails the whole query). "_ne" also keeps
@@ -142,7 +149,7 @@ const validateAndBuildFilterWhere = (filters: unknown): IValidateFiltersResult =
         : `${column} = ${escapeSqlValue(value)}`
     );
   }
-  return { ok: true, where: conditions.join(' AND ') };
+  return { ok: true, where: conditions.join(' AND '), fields };
 };
 
 const validateFields = (fields: unknown): { ok: true; fields: string[] | null } | { ok: false } => {
@@ -197,21 +204,49 @@ const CREATED_DATE_INSTANT =
 const DATETIME_COLUMN_RE = /(date|datetime|time|stamp)(__c)?$/i;
 const isDatetimeColumn = (name: string): boolean => DATETIME_COLUMN_RE.test(name);
 
+// Column lists come from the Glue catalog (instant, never queued) instead of an
+// Athena information_schema query, and are cached per table — concurrent callers
+// share one in-flight lookup. Schemas change rarely, so a short TTL is enough to
+// pick up new columns; failures are never cached.
+const COLUMNS_TTL_MS = 10 * 60_000;
+const columnsCache = new Map<string, { columns: Promise<string[]>; cachedAt: number }>();
+
+const getTableColumns = (hudiTable: string, databaseName: string, region: string): Promise<string[]> => {
+  const cacheKey = `${region}:${databaseName}:${hudiTable}`;
+  const cached = columnsCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < COLUMNS_TTL_MS) return cached.columns;
+
+  const columns = getTableAllColumnNames(databaseName, hudiTable, region);
+  columnsCache.set(cacheKey, { columns, cachedAt: Date.now() });
+  columns.catch(() => columnsCache.delete(cacheKey));
+  return columns;
+};
+
+const quoteColumn = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+
+/**
+ * SELECT list for one table. Parquet is columnar and Athena bills per byte
+ * scanned, so when the caller asked for specific `fields` only those columns
+ * (plus `alwaysInclude`, which the handler needs internally, e.g. a parent FK)
+ * are selected — matched case-insensitively against the table's real columns;
+ * ones the table doesn't have are skipped (applyFieldSelection fills them ''),
+ * and datetime columns stay excluded (see DATETIME_COLUMN_RE). No `fields`
+ * means every non-datetime column.
+ */
 const buildSelectClause = async (
   hudiTable: string,
   databaseName: string,
   region: string,
-  outputLocation?: string
+  fields: string[] | null = null,
+  alwaysInclude: string[] = []
 ): Promise<string> => {
-  const sql =
-    `SELECT column_name FROM information_schema.columns ` +
-    `WHERE table_schema = '${databaseName}' AND table_name = '${hudiTable}' ORDER BY ordinal_position`;
-  const result = await runAthenaQuery(sql, databaseName, region, outputLocation, 1000);
-  const columns = result.rows
-    .map((row) => row.column_name)
-    .filter((name): name is string => !!name && !isDatetimeColumn(name))
-    .map((name) => `"${name.replace(/"/g, '""')}"`);
-  return columns.length ? columns.join(', ') : '"Id"';
+  const columns = (await getTableColumns(hudiTable, databaseName, region)).filter((name) => !isDatetimeColumn(name));
+  let selected = columns;
+  if (fields) {
+    const wanted = new Set([...fields, ...alwaysInclude].map((f) => f.toLowerCase()));
+    selected = columns.filter((name) => wanted.has(name.toLowerCase()));
+  }
+  return selected.length ? selected.map(quoteColumn).join(', ') : '"Id"';
 };
 
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -231,6 +266,7 @@ export interface IArchivalSearchParams {
 export type ArchivalSearchError =
   | 'invalid_filters'
   | 'invalid_filter_field'
+  | 'unknown_filter_field'
   | 'invalid_fields'
   | 'invalid_limit'
   | 'invalid_page';
@@ -291,7 +327,14 @@ console.log(configs,'selectClause')
       const { databaseName, hudiTable } = hudiTableFor(config, params.objectApiName);
       console.log(databaseName,'uuu hudi table ', hudiTable)
       const { region, outputLocation } = await buildArchivalOutputLocation(config);
-      if (!(await tableExists(databaseName, hudiTable, region))) return [];
+      if (!(await tableExists(databaseName, hudiTable, region))) return { rows: [], missingFilterField: false };
+
+      // A filter on a column this table doesn't have would fail the whole Athena
+      // query (and cost a round trip) — no row here can match it, so skip the query.
+      if (filterCheck.fields.length) {
+        const known = new Set((await getTableColumns(hudiTable, databaseName, region)).map((c) => c.toLowerCase()));
+        if (filterCheck.fields.some((f) => !known.has(f.toLowerCase()))) return { rows: [], missingFilterField: true };
+      }
 
       const conditions: string[] = [];
       // TEMP-GLUE-WORKAROUND: date window disabled, it reads CreatedDate.
@@ -305,16 +348,22 @@ console.log(configs,'selectClause')
       // datetime columns) while the Glue column types are being fixed.
       // Fetch one extra row past `limit` so hasMore can be determined without
       // a second COUNT query.
-      const selectClause = await buildSelectClause(hudiTable, databaseName, region, outputLocation);
+      const selectClause = await buildSelectClause(hudiTable, databaseName, region, fieldsCheck.fields);
       const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
       console.log(sql,'sql')
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
-      return result.rows;
+      return { rows: result.rows, missingFilterField: false };
     })
   );
 
+  // Every archived table lacked a filtered column -> the field name is wrong
+  // (not merely "no matches"), so say so instead of returning an empty page.
+  if (perConfigResults.length && perConfigResults.every((r) => r.missingFilterField)) {
+    return { ok: false, error: 'unknown_filter_field' };
+  }
+
   // TEMP-GLUE-WORKAROUND: was sorted by CreatedDate desc. Revert after Glue table fix.
-  const merged = perConfigResults.flat();
+  const merged = perConfigResults.flatMap((r) => r.rows);
 
   const hasMore = merged.length > limit;
   const records = merged.slice(0, limit).map((row) => applyFieldSelection(row, fieldsCheck.fields));
@@ -338,7 +387,9 @@ console.log(configs,'selectClause')
 const getArchivedRecordById = async (
   config: IBackupConfig,
   objectApiName: string,
-  recordId: string
+  recordId: string,
+  fields: string[] | null = null,
+  alwaysInclude: string[] = []
 ): Promise<Record<string, string> | null> => {
   if (!RECORD_ID_RE.test(recordId)) return null;
 
@@ -347,7 +398,7 @@ const getArchivedRecordById = async (
 
   if (!(await tableExists(databaseName, hudiTable, region))) return null;
 
-  const selectClause = await buildSelectClause(hudiTable, databaseName, region, outputLocation);
+  const selectClause = await buildSelectClause(hudiTable, databaseName, region, fields, alwaysInclude);
   const sql = `SELECT ${selectClause} FROM "${hudiTable}" WHERE "Id" = '${recordId}' LIMIT 1`;
   const result = await runAthenaQuery(sql, databaseName, region, outputLocation, 1);
   return result.rows[0] ?? null;
@@ -368,7 +419,8 @@ const getArchivedRelatedRecords = async (
   config: IBackupConfig,
   objectApiName: string,
   fkField: string,
-  fkValue: string
+  fkValue: string,
+  fields: string[] | null = null
 ): Promise<Record<string, string>[]> => {
   if (!FIELD_NAME_RE.test(fkField) || !RECORD_ID_RE.test(fkValue)) return [];
 
@@ -377,7 +429,7 @@ const getArchivedRelatedRecords = async (
 
   if (!(await tableExists(databaseName, hudiTable, region))) return [];
 
-  const selectClause = await buildSelectClause(hudiTable, databaseName, region, outputLocation);
+  const selectClause = await buildSelectClause(hudiTable, databaseName, region, fields);
   const sql = `SELECT ${selectClause} FROM "${hudiTable}" WHERE "${fkField}" = '${fkValue}' LIMIT ${RELATED_RECORDS_LIMIT}`;
   const result = await runAthenaQuery(sql, databaseName, region, outputLocation, RELATED_RECORDS_LIMIT);
   return result.rows;
