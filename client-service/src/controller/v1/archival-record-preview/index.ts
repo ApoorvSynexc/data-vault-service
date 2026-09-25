@@ -147,7 +147,10 @@ const findParentEdge = (nodes: any[] | undefined, targetName: string): { parentN
  */
 const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   // Same defensive default as searchArchivalRecordsHandler — see comment there.
-  const { orgId, objName, recordId, fields } = (req.body ?? {}) as Record<string, unknown>;
+  // The preview API returns records keyed by "Id", so callers pass that value
+  // straight back — `Id`/`id` are accepted as aliases of `recordId`.
+  const { orgId, objName, fields, ...rest } = (req.body ?? {}) as Record<string, unknown>;
+  const recordId = rest.recordId ?? rest.Id ?? rest.id;
   if (typeof recordId !== 'string' || !recordId) {
     return makeResponse(req, res, 400, false, 'params_required');
   }
