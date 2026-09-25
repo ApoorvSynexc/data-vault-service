@@ -826,7 +826,7 @@ const getBackupJobOverview = async (
         overview.pendingStatus += 1;
       } else if (item.status === STATUS.success) {
         overview.successStatus += 1;
-      } else if (item.status === STATUS.failed) {
+      } else if (item.status === STATUS.failed || item.status === STATUS.partialFailure) {
         overview.failedStatus += 1;
       }
     }
