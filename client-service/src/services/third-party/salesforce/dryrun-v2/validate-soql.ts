@@ -63,11 +63,27 @@ export interface IValidateSoqlResult {
   relationshipDepth?: number;
 }
 
+// Safety net behind assertNoTopLevelClauses/assertNoSubqueries/assertNoFunctionCalls
+// (soql-generation.ts) — those name the SPECIFIC clause a condition used, but
+// their keyword list can't cover every clause Salesforce supports. A clause
+// they don't yet know about reaches this parser instead, and because the app
+// wraps the condition in its own `AND (...)` before parsing, a clause the
+// parser correctly recognizes as valid (e.g. WITH SYSTEM_MODE, FOR VIEW) makes
+// its WHERE-expression loop stop consuming before that closing paren, so the
+// error always comes out shaped as one of these two library-internal messages
+// — never anything more specific. Translated here so an unlisted clause still
+// reads as a real validation message instead of parser-library internals.
+const RAW_PARSER_LEAK_RE = /mismatched parentheses|expected identifier but found/i;
+
 export const validateSoqlSyntax = (soql: string): IValidateSoqlResult => {
   try {
     parseQuery(forLocalSyntaxCheck(soql));
   } catch (error: any) {
-    return { isValid: false, error: `Invalid SOQL syntax: ${error?.message ?? 'parse error'}` };
+    const rawMessage = error?.message ?? 'parse error';
+    const friendly = RAW_PARSER_LEAK_RE.test(rawMessage)
+      ? 'This condition uses SOQL syntax that is not supported in a filter condition (e.g. an unsupported clause like GROUP BY, LIMIT, ORDER BY, USING SCOPE, or a subquery), or contains a syntax error. Please check your condition and try again.'
+      : rawMessage;
+    return { isValid: false, error: `Invalid SOQL syntax: ${friendly}` };
   }
 
   const whereBody = soql.match(/\bWHERE\b([\s\S]*)/i)?.[1]?.trim();

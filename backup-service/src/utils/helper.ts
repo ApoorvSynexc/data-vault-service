@@ -349,11 +349,8 @@ const formatValueByDataType = (value: string, dataType: string): string => {
     case 'datetime':
       return formatDateTime(strValue);
 
-    // Already arrives in Salesforce's own Time literal format (HH:mm:ss.SSSZ) —
-    // unlike date/datetime, there's no separate parse/reformat step needed,
-    // just strip the quoting the default branch would otherwise add.
     case 'time':
-      return strValue;
+      return formatTime(strValue);
 
     case 'integer':
     case 'double':
@@ -406,6 +403,38 @@ const formatDate = (dateString: string): string => {
 const formatDateTime = (dateString: string): string => {
   const date = new Date(dateString);
   return date.toISOString();
+};
+
+// SOQL Time literal format is HH:MM:SS.sssZ — the trailing Z is a fixed part
+// of the literal syntax, not a UTC offset: Salesforce's Time type carries no
+// timezone at all, so unlike formatDateTime there's no timezone conversion to
+// do, only normalization. A UI time input can arrive as "H:MM", "HH:MM",
+// "HH:MM:SS", "HH:MM:SS.sss", or already the full literal — all of those
+// match and get padded out to the same shape. Anything else (e.g. a picker
+// that submits a full date/datetime string) falls back to parsing it as a
+// Date and reading off its time-of-day component. Mirrors client-service's
+// own copy of this function (utils/helper.ts, formatSalesforceValueByDataType's
+// case 'time') byte-for-byte — that one drives the dry-run preview SOQL, this
+// one drives the archival job's actual SOQL, and the two must always agree on
+// what a filter value compiles to.
+const TIME_VALUE_RE = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?Z?$/;
+
+const formatTime = (timeString: string): string => {
+  const match = TIME_VALUE_RE.exec(timeString.trim());
+  if (match) {
+    const [, hh, mm, ss = '00', ms = '000'] = match;
+    return `${hh.padStart(2, '0')}:${mm}:${ss}.${ms.padEnd(3, '0')}Z`;
+  }
+
+  const date = new Date(timeString);
+  if (!Number.isNaN(date.getTime())) {
+    return date.toISOString().split('T')[1];
+  }
+
+  // Unparseable — pass through rather than emit a worse-mangled value; the
+  // subsequent Salesforce query will reject it with a clearer error than
+  // anything we could construct here.
+  return timeString;
 };
 
 const recursivelyFlatten = (objects: IBackupObject[]): IBackupObject[] => {
