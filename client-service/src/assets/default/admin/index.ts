@@ -1,4 +1,5 @@
 import { defaultRoles } from '../role';
+import { VISIBILITY_STATUS } from '../../../constant';
 
 const adminRole = defaultRoles.find((r) => r.name === 'admin')!;
 
@@ -17,5 +18,5 @@ export const defaultAdmin = {
     roleId: adminRole.roleId,
   }}),
   authProvider: 'EMAIL',
-  status: 'ACTIVE',
+  status: VISIBILITY_STATUS.active,
 };

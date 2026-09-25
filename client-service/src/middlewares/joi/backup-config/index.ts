@@ -9,7 +9,7 @@ import {
   SCHEDULE_MODE,
   SCHEDULE_TYPE,
   WEEK_DAY,
-  STATUS,
+  VISIBILITY_STATUS,
   DATASET,
 } from '../../../constant';
 
@@ -142,7 +142,7 @@ export const createBackupConfigValidation = (
       .valid(...Object.values(DATASET))
       .optional(),
     status: Joi.string()
-      .valid(...Object.values(STATUS))
+      .valid(...Object.values(VISIBILITY_STATUS))
       .optional()
   });
 
@@ -186,7 +186,7 @@ export const updateBackupConfigValidation = (req: Request, res: Response, next: 
       .valid(...Object.values(DATASET))
       .optional(),
     status: Joi.string()
-      .valid(...Object.values(STATUS))
+      .valid(...Object.values(VISIBILITY_STATUS))
       .optional()
   }).min(1);
 

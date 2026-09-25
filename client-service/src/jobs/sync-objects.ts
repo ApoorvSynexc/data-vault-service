@@ -1,4 +1,4 @@
-import { BACKUP_STATUS } from "../constant";
+import { STATUS } from "../constant";
 import { logger } from "../middlewares";
 import { IBackupConfig, IObject, IUser } from "../models";
 import { v4 as uuidv4 } from 'uuid';
@@ -58,7 +58,7 @@ const syncObjects = async (params: ISyncObject) => {
             }));
             const updateObjects = [...(backupConfig.objects || []), ...formatObject];
 
-            await updateBackupConfig(backupConfig.backupConfigId, { objects: updateObjects, backupStatus: BACKUP_STATUS.pending });
+            await updateBackupConfig(backupConfig.backupConfigId, { objects: updateObjects, backupStatus: STATUS.pending });
             const payload = {
                 userId: backupConfig.userId,
                 backupConfigId: backupConfig.backupConfigId,

@@ -1,4 +1,4 @@
-import { BACKUP_CONFIG_TABLE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE } from "../../../constant";
+import { BACKUP_CONFIG_TABLE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS, SCHEDULE_TYPE } from "../../../constant";
 import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { logger } from "../../../middlewares";
 import {
@@ -136,13 +136,13 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     const config = await createBackupConfig({
         userId: req.user!.userId,
         ...req.body,
-        status: req.body.status || 'ACTIVE',
+        status: req.body.status || VISIBILITY_STATUS.active,
         type: BACKUP_TYPE.archival,
     });
 
     try {
         // Skip schedule/trigger setup if status is DRAFT
-        if (config.status === 'DRAFT') {
+        if (config.status === VISIBILITY_STATUS.draft) {
             makeResponse(req, res, 201, true, 'create', config);
             return;
         }
@@ -294,7 +294,7 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         // trigger/schedule off the persisted config, not the request body —
         // and a schedule that has never existed in AWS needs to be created,
         // not updated. Mirrors backup-config's draft->active handling.
-        const isActivatingDraft = previousStatus === STATUS.draft && updated.status === STATUS.active;
+        const isActivatingDraft = previousStatus === VISIBILITY_STATUS.draft && updated.status === VISIBILITY_STATUS.active;
         const { immediateObjects, scheduledObjects } = filtereObjects(updated.objects || []);
         if (immediateObjects.length > 0) {
             await triggerArchivalBackupJob({ user, config: updated, objects: immediateObjects });
@@ -348,13 +348,13 @@ const deletearchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
     }
     const config = existing!;
 
-    if (config.backupStatus === BACKUP_STATUS.pending && config.status !== STATUS.paused) {
+    if (config.backupStatus === STATUS.pending && config.status !== VISIBILITY_STATUS.paused) {
         makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
         return;
     }
 
     try {
-        if (config.status === STATUS.draft) {
+        if (config.status === VISIBILITY_STATUS.draft) {
             await deleteBackupConfig(String(backupConfigId));
             return makeResponse(req, res, 200, true, 'delete');
         }

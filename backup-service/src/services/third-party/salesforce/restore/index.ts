@@ -1,4 +1,5 @@
 import { logger } from '../../../../middlewares/logger';
+import { STATUS } from '../../../../constant';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3, uploadToS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
@@ -201,7 +202,10 @@ const restoreObjectData = async (
       objectName,
       processedRecordCount: 0,
       failedRecordCount: 0,
-      status: 'SUCCESS',
+      // Cast needed: updateRestoreObject's status param is still the narrow
+      // 'FAILED' | 'SUCCESS' literal union (left as-is, out of scope) while
+      // STATUS's members are typed as plain string.
+      status: STATUS.success as 'SUCCESS',
     });
 
     console.log(`[Restore] No backed-up data found for object ${objectName} under ${csvFilePath}`);
@@ -247,7 +251,9 @@ const restoreObjectData = async (
       objectName,
       processedRecordCount: job.processed,
       failedRecordCount: job.failed,
-      status: job.failed ? 'FAILED' : 'SUCCESS',
+      // Same cast as above — updateRestoreObject's status param type is
+      // intentionally left as its own narrow literal union.
+      status: job.failed ? (STATUS.failed as 'FAILED') : (STATUS.success as 'SUCCESS'),
       errors: job.errors.length ? job.errors : undefined,
     });
     logger.info(
@@ -309,7 +315,7 @@ const restoreObjectData = async (
 
 export const runSalesforceRestore = async (
   payload: RunSalesforceRestorePayload
-): Promise<'SUCCESS' | 'FAILED'> => {
+): Promise<typeof STATUS.success | typeof STATUS.failed> => {
   const externalIdFieldName = 'Id';
   const {
     restoreId,
@@ -328,7 +334,7 @@ export const runSalesforceRestore = async (
     logger.info(
       `[restore] skipping object per restoreMode=SKIP, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectName=${object.name}`
     );
-    return 'SUCCESS';
+    return STATUS.success;
   }
 
   // let operation: 'insert' | 'update' | 'upsert';
@@ -378,12 +384,12 @@ export const runSalesforceRestore = async (
   logger.info(
     `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${'upsert'}`
   );
-  return 'SUCCESS';
+  return STATUS.success;
 };
 
 export const runSalesforceRollback = async (
   payload: RunSalesforceRestorePayload
-): Promise<'SUCCESS' | 'FAILED'> => {
+): Promise<typeof STATUS.success | typeof STATUS.failed> => {
   const externalIdFieldName = 'Id';
   const { restoreId, restoreJobId, object, sourceS3Credentials, destinationSalesforceCredentials } =
     payload;
@@ -438,5 +444,5 @@ export const runSalesforceRollback = async (
   logger.info(
     `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${'upsert'}`
   );
-  return 'SUCCESS';
+  return STATUS.success;
 };

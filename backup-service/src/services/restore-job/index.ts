@@ -1,6 +1,6 @@
 import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
-import { RESTORE_JOB_TABLE, JOB_STATUS } from '../../constant';
+import { RESTORE_JOB_TABLE } from '../../constant';
 import { IRestoreJob, IRestoreJobObject, IRestoreObjectHierarchyTreeNode } from '../../models';
 
 interface UpdateRestoreJobStatusParams {
@@ -31,17 +31,21 @@ const updateRestoreJobStatus = async (params: UpdateRestoreJobStatusParams): Pro
   const expressionValues: Record<string, any> = { ':status': status, ':updatedAt': now };
 
   if (startedAt) {
-    expressionParts.push('startedAt = :startedAt');
+    // startedAt is a permanent display timestamp; processingStartedAt is the
+    // concurrency lock (see model comment) — same value, cleared independently.
+    expressionParts.push('startedAt = :startedAt', 'processingStartedAt = :startedAt');
     expressionValues[':startedAt'] = startedAt;
   }
   if (completedAt) {
     expressionParts.push('completedAt = :completedAt');
     expressionValues[':completedAt'] = completedAt;
+    removeParts.push('processingStartedAt');
   }
   if (errorMessage) {
     expressionParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
-  } else if (status === JOB_STATUS.running) {
+  } else if (startedAt !== undefined) {
+    // Clear stale error from a previous failed run when the job is (re)claimed.
     removeParts.push('errorMessage');
   }
 
@@ -268,17 +272,18 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
     expressionValues[':status'] = status;
   }
   if (startedAt) {
-    setParts.push('startedAt = :startedAt');
+    setParts.push('startedAt = :startedAt', 'processingStartedAt = :startedAt');
     expressionValues[':startedAt'] = startedAt;
   }
   if (completedAt) {
     setParts.push('completedAt = :completedAt');
     expressionValues[':completedAt'] = completedAt;
+    removeParts.push('processingStartedAt');
   }
   if (errorMessage) {
     setParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
-  } else if (status === JOB_STATUS.running) {
+  } else if (startedAt !== undefined) {
     removeParts.push('errorMessage');
   }
 

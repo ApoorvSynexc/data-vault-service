@@ -1,6 +1,6 @@
 import { logger } from "../middlewares";
 import { getBackupConfigsInBatches, getUser, initalizePayloadTransform, triggerBackupJob, runMetadataComparisonForConfig, hasMetadataChanged, updateBackupConfig, checkSalesforceApiLimitUsage, cleanupStaleRetrieveObjects } from "../services";
-import { BACKUP_STATUS } from '../constant';
+import { STATUS } from '../constant';
 import { IUser } from "../models";
 import { syncObjects } from "./sync-objects";
 
@@ -17,7 +17,7 @@ const runEmrJob = async () => {
           // triggering for this config or any other in the batch.
           void cleanupStaleRetrieveObjects(config);
 
-          if ([BACKUP_STATUS.pending].includes(config.backupStatus ?? '')) {
+          if ([STATUS.pending].includes(config.backupStatus ?? '')) {
             continue;
           }
 

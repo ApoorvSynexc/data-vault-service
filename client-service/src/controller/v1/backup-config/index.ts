@@ -33,7 +33,7 @@ import {
   checkSalesforceApiLimitUsage,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, BACKUP_STATUS, BACKUP_TYPE, STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
+import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
 import { salesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/index';
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
@@ -62,12 +62,12 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   const config = await createBackupConfig({
     userId: req.user!.userId,
     ...req.body,
-    status: req.body.status || 'ACTIVE',
+    status: req.body.status || VISIBILITY_STATUS.active,
   });
 
   try {
     // Skip schedule/trigger setup if status is DRAFT
-    if (config.status === 'DRAFT') {
+    if (config.status === VISIBILITY_STATUS.draft) {
       makeResponse(req, res, 201, true, 'create', config);
       return;
     }
@@ -97,7 +97,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       // The response already went out as 201 by this point, so a conflict
       // here just leaves the trigger Active (logged) rather than unwinding
       // the config that was just reported created.
-      if (config.status === STATUS.paused) {
+      if (config.status === VISIBILITY_STATUS.paused) {
         const conflict = await checkSharedTriggerConflict({ ...config, triggerResults });
         if (conflict) {
           logger.error(`backupConfigId ${config.backupConfigId} created paused, but trigger left Active — ${conflict}`);
@@ -123,7 +123,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
-    const { search, status, backupStatus, schedule } = req.query as Record<string, string>;
+    const { search, status, backupStatus, schedule, destinationId } = req.query as Record<string, string>;
 
     const result = await getBackupConfigsWithPagination(
       {
@@ -133,6 +133,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
         ...(status && { status }),
         ...(backupStatus && { backupStatus }),
         ...(schedule && { schedule }),
+        ...(destinationId && { destinationId }),
       },
       { limit: limitNum, cursor }
     );
@@ -239,9 +240,9 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   // the status write below so a blocked pause never leaves the config's
   // stored status out of sync with what's actually deployed in Salesforce.
   if (
-    req.body.status === STATUS.paused &&
+    req.body.status === VISIBILITY_STATUS.paused &&
     existing!.schedule === SCHEDULE_MODE.realtime &&
-    existing!.status !== STATUS.paused
+    existing!.status !== VISIBILITY_STATUS.paused
   ) {
     const conflict = await checkSharedTriggerConflict(existing!);
     if (conflict) {
@@ -256,12 +257,12 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   // a realtime config must inactivate/reactivate those triggers in step, or a
   // paused config keeps syncing (or a resumed one stays dark).
   if (updated!.schedule === SCHEDULE_MODE.realtime && updated!.status !== existing!.status) {
-    if (updated!.status === STATUS.paused) {
+    if (updated!.status === VISIBILITY_STATUS.paused) {
       const triggerResults = await realTimeTriggerManagement('inactivate', updated!);
       await updateBackupConfig(updated!.backupConfigId, { triggerResults });
       updated!.triggerResults = triggerResults;
       logger.info(`backupConfigId ${updated!.backupConfigId} paused: inactivated ${triggerResults.length} trigger(s)`);
-    } else if (existing!.status === STATUS.paused) {
+    } else if (existing!.status === VISIBILITY_STATUS.paused) {
       const triggerResults = await realTimeTriggerManagement('activate', updated!);
       await updateBackupConfig(updated!.backupConfigId, { triggerResults });
       updated!.triggerResults = triggerResults;
@@ -269,7 +270,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
   }
 
-  if (updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig && updated.scheduleConfig.type === SCHEDULE_TYPE.oneTime && updated.status === STATUS.active && !updated.lastBackupAt) {
+  if (updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig && updated.scheduleConfig.type === SCHEDULE_TYPE.oneTime && updated.status === VISIBILITY_STATUS.active && !updated.lastBackupAt) {
     const scheduleConfig = updated.scheduleConfig;
     const isOnceImmediate = scheduleConfig?.scheduling?.frequency === 'ONCE'
       && !scheduleConfig?.scheduling?.startDate
@@ -278,12 +279,12 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
       await triggerBackupJob({ user, config: updated, type: 'backup' });
     }
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
-    if (existing?.status === STATUS.draft && updated.status === STATUS.active) {
+    if (existing?.status === VISIBILITY_STATUS.draft && updated.status === VISIBILITY_STATUS.active) {
       await createAwsEventScheduler(buildEventScheduleInput(updated));
-    } else if ([STATUS.paused, STATUS.active, STATUS.resumed].includes(existing?.status ?? '')) {
+    } else if ([VISIBILITY_STATUS.paused, VISIBILITY_STATUS.active, VISIBILITY_STATUS.resumed].includes(existing?.status ?? '')) {
       await updateAwsEventSchedule(buildEventScheduleInput(updated!));
     }
-  } else if (updated?.schedule === SCHEDULE_MODE.realtime && updated?.status === STATUS.active && !updated.lastBackupAt) {
+  } else if (updated?.schedule === SCHEDULE_MODE.realtime && updated?.status === VISIBILITY_STATUS.active && !updated.lastBackupAt) {
     await triggerBackupJob({ user, config: updated, type: 'backup' });
     const triggerResults = await realTimeTriggerManagement('create', updated);
     await updateBackupConfig(updated.backupConfigId, { triggerResults });
@@ -310,7 +311,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   }
   const config = existing!;
 
-  if (config.backupStatus === BACKUP_STATUS.pending && config.status !== STATUS.paused) {
+  if (config.backupStatus === STATUS.pending && config.status !== VISIBILITY_STATUS.paused) {
     makeResponse(req, res, 400, false, 'backup_pending_cannot_delete');
     return;
   }
@@ -319,7 +320,7 @@ const deleteBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     const isIncrementalBackup = config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'INCREMENTAL';
     const isOneTimeSchedule = config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.type === 'ONE_TIME' && !config.lastBackupAt;
 
-    if (config.status === STATUS.draft) {
+    if (config.status === VISIBILITY_STATUS.draft) {
       await deleteBackupConfig(String(backupConfigId));
       return makeResponse(req, res, 200, true, 'delete');
     }
@@ -607,7 +608,7 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
     const currentObject = config.objects?.find((object) => object.name === objectApiName);
     if (!currentObject) throw new Error(`object_not_found:${objectApiName}`);
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending });
     const payload = {
       userId: config.userId,
       backupConfigId: config.backupConfigId,

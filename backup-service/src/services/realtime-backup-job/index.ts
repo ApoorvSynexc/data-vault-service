@@ -1,7 +1,7 @@
 import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
-import { BACKUP_JOB_TABLE, JOB_STATUS, JOB_TYPE } from '../../constant';
+import { BACKUP_JOB_TABLE, STATUS, JOB_TYPE } from '../../constant';
 import { IBackupJob, IDestinationConfig } from '../../models';
 import { encrypt } from '../../utils/encryption';
 import { incrementTableCounter } from '../counter';
@@ -55,10 +55,11 @@ const getRealtimeJobById = async (backupJobId: string): Promise<IBackupJob | nul
  *     (inserts/ vs deletes/) so they must be separate jobs.
  *   The combination of all four precisely identifies one independent accumulation bucket.
  *
- * WHY status is filtered to RUNNING or SUCCESS (not FAILED):
+ * WHY status is filtered to PENDING or SUCCESS (not FAILED):
  *   A FAILED job is a dead end — its upload did not complete. If a subsequent hit arrives
  *   for the same transaction we want a fresh job, not to pile more records onto a broken one.
- *   Only RUNNING and SUCCESS jobs are healthy accumulation targets.
+ *   A job's own status stays PENDING for its entire in-flight duration (there's no separate
+ *   "now actively running" value), so PENDING and SUCCESS are the healthy accumulation targets.
  *
  * WHY ScanIndexForward: false with Limit: 1:
  *   Returns the newest matching job first. In the rare case two jobs exist for the same
@@ -77,7 +78,7 @@ const findActiveJobByTransaction = async (
       IndexName: 'backupConfigId-index',
       KeyConditionExpression: 'backupConfigId = :backupConfigId',
       FilterExpression:
-        'jobType = :jobType AND transactionId = :transactionId AND objectApiName = :objectApiName AND #operation = :operation AND #status IN (:running, :success)',
+        'jobType = :jobType AND transactionId = :transactionId AND objectApiName = :objectApiName AND #operation = :operation AND #status IN (:pending, :success)',
       ExpressionAttributeNames: { '#status': 'status', '#operation': 'operation' },
       ExpressionAttributeValues: {
         ':backupConfigId': backupConfigId,
@@ -85,8 +86,8 @@ const findActiveJobByTransaction = async (
         ':transactionId': transactionId,
         ':objectApiName': objectApiName,
         ':operation': operation,
-        ':running': JOB_STATUS.running,
-        ':success': JOB_STATUS.success,
+        ':pending': STATUS.pending,
+        ':success': STATUS.success,
       },
       ScanIndexForward: false,
       Limit: 1,
@@ -157,7 +158,7 @@ const createRealtimeJob = async (params: UpsertRealtimeBackupJobParams): Promise
     transactionId,
     recordCount: 0,
     sizeInBytes: 0,
-    status: JOB_STATUS.running,
+    status: STATUS.pending,
     startedAt: now,
     createdAt: now,
     updatedAt: now,

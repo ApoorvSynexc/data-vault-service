@@ -10,19 +10,19 @@
 import assert from 'assert';
 import { processObjectOperations, isCompressible, mapRestoreSource, mapRestoreScope } from './index';
 import { isBackupCompleted } from '../backup-job';
-import { BACKUP_STATUS, COMPRESSION_STATUS, JOB_STATUS } from '../../constant';
+import { STATUS, JOB_OBJECT_STATUS } from '../../constant';
 import { IBackupJob, IRestoreScope, IRestoreSource } from '../../models';
 
 const job = (backupJobId: string, status: string, object: any[] = []): IBackupJob =>
   ({ backupJobId, status, jobType: 'BULK', object } as IBackupJob);
 
 // ─── 1. objectOperations group per job, and don't bleed across jobs ────────────
-const jobA = job('job-a', JOB_STATUS.success, [{ name: 'Asset', insertCount: 5 }]);
-const jobB = job('job-b', JOB_STATUS.success, [
+const jobA = job('job-a', STATUS.success, [{ name: 'Asset', insertCount: 5 }]);
+const jobB = job('job-b', STATUS.success, [
   { name: 'Account', insertCount: 1 },
   { name: 'Asset', insertCount: 2, updateCount: 3 },
 ]);
-const jobEmpty = job('job-c', JOB_STATUS.success, []);
+const jobEmpty = job('job-c', STATUS.success, []);
 
 const grouped: Record<string, Record<string, string[]>> = {};
 for (const j of [jobA, jobB, jobEmpty]) {
@@ -45,25 +45,24 @@ assert.deepStrictEqual(processObjectOperations([jobA, jobB]), {
 // ─── 2. Finished (full or partial) backups not already mid-compression are sent ───
 // A job already in the lifecycle must never be re-sent: Spark holds it, and a second
 // send would double-compress — except COMPRESSION_JOB_FAILED, which gets retried.
-// PENDING/RUNNING exclusion is what keeps compression from overwriting an in-flight
-// backup's status and breaking the hasActiveBackupJob dedup.
-assert.strictEqual(isCompressible(job('j', JOB_STATUS.success)), true);
-assert.strictEqual(isCompressible(job('j', BACKUP_STATUS.partialFailure)), true);
-assert.strictEqual(isCompressible(job('j', COMPRESSION_STATUS.failed)), true);
-assert.strictEqual(isCompressible(job('j', COMPRESSION_STATUS.compressed)), false);
-assert.strictEqual(isCompressible(job('j', COMPRESSION_STATUS.inProgress)), false);
-assert.strictEqual(isCompressible(job('j', JOB_STATUS.running)), false);
-assert.strictEqual(isCompressible(job('j', JOB_STATUS.pending)), false);
-assert.strictEqual(isCompressible(job('j', JOB_STATUS.failed)), false);
+// PENDING exclusion is what keeps compression from overwriting an in-flight backup's
+// status and breaking the hasActiveBackupJob dedup — a job's own status has no separate
+// "now actively running" value, it stays PENDING for its entire in-flight duration.
+assert.strictEqual(isCompressible(job('j', STATUS.success)), true);
+assert.strictEqual(isCompressible(job('j', STATUS.partialFailure)), true);
+assert.strictEqual(isCompressible(job('j', JOB_OBJECT_STATUS.compressionFailed)), true);
+assert.strictEqual(isCompressible(job('j', JOB_OBJECT_STATUS.compressed)), false);
+assert.strictEqual(isCompressible(job('j', JOB_OBJECT_STATUS.compressionInProgress)), false);
+assert.strictEqual(isCompressible(job('j', STATUS.pending)), false);
+assert.strictEqual(isCompressible(job('j', STATUS.failed)), false);
 
 // ─── 3. Compression statuses still count as a completed backup ────────────────
-assert.strictEqual(isBackupCompleted(JOB_STATUS.success), true);
-assert.strictEqual(isBackupCompleted(COMPRESSION_STATUS.inProgress), true);
-assert.strictEqual(isBackupCompleted(COMPRESSION_STATUS.compressed), true);
-assert.strictEqual(isBackupCompleted(COMPRESSION_STATUS.failed), true);
-assert.strictEqual(isBackupCompleted(JOB_STATUS.running), false);
-assert.strictEqual(isBackupCompleted(JOB_STATUS.pending), false);
-assert.strictEqual(isBackupCompleted(JOB_STATUS.failed), false);
+assert.strictEqual(isBackupCompleted(STATUS.success), true);
+assert.strictEqual(isBackupCompleted(JOB_OBJECT_STATUS.compressionInProgress), true);
+assert.strictEqual(isBackupCompleted(JOB_OBJECT_STATUS.compressed), true);
+assert.strictEqual(isBackupCompleted(JOB_OBJECT_STATUS.compressionFailed), true);
+assert.strictEqual(isBackupCompleted(STATUS.pending), false);
+assert.strictEqual(isBackupCompleted(STATUS.failed), false);
 
 // ─── 4. mapRestoreSource — only the fields the source type actually reads ─────
 const baseSource: IRestoreSource = { backupConfigId: 'bc-1', backupJobIds: ['job-a', 'job-b'], type: 'ENTIRE', startDate: 'stale-start', endDate: 'stale-end' };

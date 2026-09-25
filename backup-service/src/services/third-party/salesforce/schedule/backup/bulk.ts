@@ -1,4 +1,4 @@
-import { OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
+import { JOB_OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
 import { updateBackupObject } from '../../../../backup-job';
 import { logger } from '../../../../../middlewares/logger';
 import { IDestinationConfig } from '../../../../../models';
@@ -133,7 +133,7 @@ const uploadBulkResultsByPage = async (
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.transferInProgress,
+      status: JOB_OBJECT_STATUS.transferInProgress,
     });
     do {
       const url = locator
@@ -180,7 +180,7 @@ const uploadBulkResultsByPage = async (
         sizeInBytes,
         ...(locator
           ? { currentLocator: locator }
-          : { status: OBJECT_STATUS.completed, errorMessage: '' }),
+          : { status: JOB_OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
       });
     } while (locator !== null);
   } catch (err: any) {
@@ -192,7 +192,7 @@ const uploadBulkResultsByPage = async (
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.failed,
+      status: JOB_OBJECT_STATUS.failed,
       errorMessage,
     });
 
@@ -257,7 +257,7 @@ const classifyAndUploadBulkResultsByPage = async (
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.transferInProgress,
+      status: JOB_OBJECT_STATUS.transferInProgress,
     });
     do {
       const url = locator
@@ -363,7 +363,7 @@ const classifyAndUploadBulkResultsByPage = async (
         salesforceApiCount,
         ...(locator
           ? { currentLocator: locator }
-          : { status: OBJECT_STATUS.completed, errorMessage: '' }),
+          : { status: JOB_OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
       });
     } while (locator !== null);
   } catch (err: any) {
@@ -375,7 +375,7 @@ const classifyAndUploadBulkResultsByPage = async (
     await updateBackupObject({
       backupJobId,
       objectIndex,
-      status: OBJECT_STATUS.failed,
+      status: JOB_OBJECT_STATUS.failed,
       errorMessage,
     });
     throw new Error(errorMessage, { cause: err });
