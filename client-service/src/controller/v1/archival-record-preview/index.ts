@@ -212,9 +212,6 @@ const loadRecordDetail = async (
   const resolved = { objName, configs };
   const fieldsCheck = { fields };
   for (const config of resolved.configs) {
-    const record = await getArchivedRecordById(config, resolved.objName, recordId);
-    if (!record) continue;
-
     const node = findObjectNode(config.objects, resolved.objName);
     const childLookups = (node?.children ?? [])
       .filter((child: any) => child?.name && child?.fieldApiName)
@@ -229,6 +226,24 @@ const loadRecordDetail = async (
             }
           : null;
       });
+
+    // Children only need recordId, not the fetched record, so they start together
+    // with the record's own query — one Athena round-trip (~3s) less per request.
+    // Only the parent lookup has to wait for the record (it needs the FK value).
+    const childrenPromise = runWithConcurrency(childLookups, RELATED_LOOKUP_CONCURRENCY);
+    const settleChildren = (): Promise<unknown> => childrenPromise.catch(() => undefined);
+
+    let record: Record<string, string> | null;
+    try {
+      record = await getArchivedRecordById(config, resolved.objName, recordId);
+    } catch (err) {
+      await settleChildren();
+      throw err;
+    }
+    if (!record) {
+      await settleChildren();
+      continue;
+    }
 
     const parentEdge = findParentEdge(config.objects, resolved.objName);
     const parentId = parentEdge ? getField(record, parentEdge.fieldApiName) : undefined;
@@ -245,10 +260,8 @@ const loadRecordDetail = async (
         : null;
     };
 
-    // Children and parent are independent lookups — run them concurrently
-    // (bounded, so a wide object tree can't flood Athena's query queue).
-    const lookups = await runWithConcurrency([...childLookups, parentLookup], RELATED_LOOKUP_CONCURRENCY);
-    const relatedObjects = lookups.filter((r): r is IRelatedObject => r !== null);
+    const [childResults, parentResult] = await Promise.all([childrenPromise, parentLookup()]);
+    const relatedObjects = [...childResults, parentResult].filter((r): r is IRelatedObject => r !== null);
 
     return {
       configId: config.backupConfigId,
