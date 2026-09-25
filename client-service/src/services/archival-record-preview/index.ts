@@ -132,7 +132,15 @@ const validateAndBuildFilterWhere = (filters: unknown): IValidateFiltersResult =
     const field = isNotEqual ? key.slice(0, -NOT_EQUAL_SUFFIX.length) : key;
     if (!FIELD_NAME_RE.test(field)) return { ok: false, error: 'invalid_filter_field' };
 
-    conditions.push(`"${field}" ${isNotEqual ? '<>' : '='} ${escapeSqlValue(value)}`);
+    // CAST to varchar: the column's Athena type isn't guaranteed (a boolean/number
+    // column compared to a quoted literal fails the whole query). "_ne" also keeps
+    // NULL rows — SQL's `NULL <> 'x'` is NULL, which would silently drop them.
+    const column = `CAST("${field}" AS varchar)`;
+    conditions.push(
+      isNotEqual
+        ? `("${field}" IS NULL OR ${column} <> ${escapeSqlValue(value)})`
+        : `${column} = ${escapeSqlValue(value)}`
+    );
   }
   return { ok: true, where: conditions.join(' AND ') };
 };
@@ -149,19 +157,36 @@ const validateFields = (fields: unknown): { ok: true; fields: string[] | null } 
 // results and for the detail endpoint's main record + every related record,
 // so "give me only Id/Name" behaves the same everywhere. null/undefined
 // fields means "no selection requested", i.e. return the row as-is.
+// Athena returns column names lowercased (Glue/Hive catalog), however they
+// were quoted in the SQL — a row from `SELECT "Id"` comes back keyed "id".
+// Callers know fields by their Salesforce API name ("Id", "CreatedDate"), so
+// every lookup into an Athena row goes through this instead of record[name].
+const getField = (record: Record<string, string>, name: string): string | undefined =>
+  record[name] ?? record[name.toLowerCase()];
+
 const applyFieldSelection = (
   record: Record<string, string>,
   fields: string[] | null
 ): Record<string, string> => {
   if (!fields) return record;
   const trimmed: Record<string, string> = {};
-  for (const field of fields) trimmed[field] = record[field] ?? '';
+  for (const field of fields) trimmed[field] = getField(record, field) ?? '';
   return trimmed;
 };
 
 // ---------------------------------------------------------------------------
 // API 1 — search/list, across every config covering the object
 // ---------------------------------------------------------------------------
+
+// Same three-way parse restore-retrieve/athena-fetch.ts uses (asInstant): the
+// CreatedDate column is a native timestamp on some Glue tables, an ISO varchar
+// (Salesforce's "+0000" spelling) or epoch millis on others, so comparing it
+// straight against an ISO string is wrong or a type error depending on the table.
+// Kept as a local copy for the same isolation reason as toGlueId above.
+const CREATED_DATE_INSTANT =
+  `COALESCE(TRY(CAST("CreatedDate" AS timestamp)), ` +
+  `TRY(from_iso8601_timestamp(CAST("CreatedDate" AS varchar))), ` +
+  `TRY(from_unixtime(CAST(CAST("CreatedDate" AS varchar) AS bigint) / 1000, 'UTC')))`;
 
 const DEFAULT_SEARCH_LIMIT = 50;
 const MAX_SEARCH_LIMIT = 200;
@@ -246,8 +271,8 @@ console.log(configs,'selectClause')
       if (!(await tableExists(databaseName, hudiTable, region))) return [];
 
       const conditions: string[] = [];
-      if (params.startDate) conditions.push(`"CreatedDate" >= '${params.startDate}'`);
-      if (params.endDate) conditions.push(`"CreatedDate" <= '${params.endDate}'`);
+      if (params.startDate) conditions.push(`${CREATED_DATE_INSTANT} >= from_iso8601_timestamp('${params.startDate}')`);
+      if (params.endDate) conditions.push(`${CREATED_DATE_INSTANT} <= from_iso8601_timestamp('${params.endDate}')`);
       if (filterCheck.where) conditions.push(filterCheck.where);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -263,7 +288,7 @@ console.log(configs,'selectClause')
 
   const merged = perConfigResults
     .flat()
-    .sort((a, b) => (b['CreatedDate'] ?? '').localeCompare(a['CreatedDate'] ?? ''));
+    .sort((a, b) => (getField(b, 'CreatedDate') ?? '').localeCompare(getField(a, 'CreatedDate') ?? ''));
 
   const hasMore = merged.length > limit;
   const records = merged.slice(0, limit).map((row) => applyFieldSelection(row, fieldsCheck.fields));
@@ -334,6 +359,7 @@ export {
   resolveArchivalConfigsForObject,
   searchArchivalRecords,
   applyFieldSelection,
+  getField,
   validateFields,
   getArchivedRecordById,
   getArchivedRelatedRecords,
