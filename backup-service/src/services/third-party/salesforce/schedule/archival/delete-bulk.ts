@@ -1,4 +1,4 @@
-import { JOB_OBJECT_STATUS } from '../../../../../constant';
+import { JOB_OBJECT_STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../../constant';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
 import { incrementBackupConfigCounters } from '../../../../backup-config';
@@ -530,17 +530,23 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
     throw err;
   }
 
-  // Upload accumulated errors (replace-on-retry handled inside uploadErrorsToS3).
-  const recordErrorsS3Prefix = await uploadErrorsToS3(
-    allErrors,
-    destConfig,
-    crmId,
-    crmName,
-    backupConfigId,
-    backupJobId,
-    objectName,
-    object.id
-  );
+  // Previously uploaded accumulated errors to S3 (replace-on-retry handled
+  // inside uploadErrorsToS3) — replaced with DB storage below, mirroring the
+  // restore flow's submitIngestChunk error-storage pattern.
+  // const recordErrorsS3Prefix = await uploadErrorsToS3(
+  //   allErrors,
+  //   destConfig,
+  //   crmId,
+  //   crmName,
+  //   backupConfigId,
+  //   backupJobId,
+  //   objectName,
+  //   object.id
+  // );
+
+  const storedErrors = allErrors
+    .slice(0, MAX_STORED_ERRORS_COUNT)
+    .map((e) => `${e.recordId}: ${e.reason}`);
 
   logger.info(
     `[archival:delete] all files processed | backupJobId:${backupJobId} objectName:${objectName} totalDeleted:${totalDeleted} totalFailed:${totalFailed}`
@@ -554,7 +560,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
     object: {
       id: object.id,
       status: objectFinalStatus,
-      ...(recordErrorsS3Prefix ? { recordErrorsS3Prefix } : {}),
+      errors: storedErrors,
     },
   });
 

@@ -51,6 +51,7 @@ const SALESFORCE_BULK_API_VERSION = String(
 ).trim();
 
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
+const MAX_STORED_ERRORS_COUNT = Number(process.env.MAX_STORED_ERRORS_COUNT) || 25;
 
 //service
 const CORE_SERVICE = String(process.env.CORE_SERVICE);
@@ -199,6 +200,7 @@ export {
   PORT,
   NODE_ENV,
   ENCRYPTION_KEY,
+  MAX_STORED_ERRORS_COUNT,
 
   // Email branding/contact info
   EMAIL_COMPANY_NAME,
