@@ -4,14 +4,16 @@
 @baseUrl = https://qa-app.360datacraft.com/api/v1
 @authToken = PASTE_YOUR_TOKEN_HERE
 
-### Archival record preview - search
+### Archival record preview - search -
+### confitId - 1263f8ab-96a5-4727-99cd-7af6e80989b8
 POST {{baseUrl}}/archival-config/salesforce/preview
 Content-Type: application/json
 Authorization: Bearer {{authToken}}
 
 {
-  "orgId": "00Dbm00000u7PhOEAU",
-  "objName": "PricebookEntry",
+ 
+  "orgId": "00Df600000ULYSBEA5",
+  "objName": "Account",
 
 
   "limit": 50,
@@ -26,7 +28,7 @@ Authorization: Bearer {{authToken}}
 {
   "orgId": "00Dbm00000u7PhOEAU",
   "objName": "Account",
-  "recordId": "001xx000003DGb2AAG",
+  "recordId": "001bm00002YUEh4AAH",
   "fields": ["Id", "Name"]
 }
 
