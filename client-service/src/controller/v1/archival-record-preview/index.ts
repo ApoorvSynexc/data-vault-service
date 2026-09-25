@@ -194,9 +194,12 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
   // Same record asked again (client/gateway retry, double click) shares the
   // running Athena work or a just-finished result instead of re-querying —
   // every uncached lookup is billed and queues behind other queries.
-  const cacheKey = JSON.stringify([orgId, resolved.objName, recordId, fieldsCheck.fields]);
+  // Each related object costs its own Athena query (~3s each), so callers that
+  // only need the record itself can opt out with includeRelated:false.
+  const includeRelated = rest.includeRelated !== false;
+  const cacheKey = JSON.stringify([orgId, resolved.objName, recordId, fieldsCheck.fields, includeRelated]);
   const payload = await recordDetailCache.get(cacheKey, () =>
-    loadRecordDetail(resolved.configs, resolved.objName, recordId, fieldsCheck.fields)
+    loadRecordDetail(resolved.configs, resolved.objName, recordId, fieldsCheck.fields, includeRelated)
   );
 
   if (!payload) return makeResponse(req, res, 400, false, 'not_exist');
@@ -207,13 +210,14 @@ const loadRecordDetail = async (
   configs: IBackupConfig[],
   objName: string,
   recordId: string,
-  fields: string[] | null
+  fields: string[] | null,
+  includeRelated = true
 ): Promise<Record<string, unknown> | null> => {
   const resolved = { objName, configs };
   const fieldsCheck = { fields };
   for (const config of resolved.configs) {
     const node = findObjectNode(config.objects, resolved.objName);
-    const childLookups = (node?.children ?? [])
+    const childLookups = (includeRelated ? node?.children ?? [] : [])
       .filter((child: any) => child?.name && child?.fieldApiName)
       .map((child: any) => async (): Promise<IRelatedObject | null> => {
         const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId, fieldsCheck.fields);
@@ -245,7 +249,7 @@ const loadRecordDetail = async (
       continue;
     }
 
-    const parentEdge = findParentEdge(config.objects, resolved.objName);
+    const parentEdge = includeRelated ? findParentEdge(config.objects, resolved.objName) : null;
     const parentId = parentEdge ? getField(record, parentEdge.fieldApiName) : undefined;
     const parentLookup = async (): Promise<IRelatedObject | null> => {
       if (!parentEdge || !parentId) return null;
