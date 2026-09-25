@@ -1,5 +1,5 @@
 import { logger } from '../../../../middlewares/logger';
-import { STATUS } from '../../../../constant';
+import { STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3, uploadToS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
@@ -152,7 +152,7 @@ const submitIngestChunk = async (
   let errors: string[] = [];
   if (failed > 0 || status.state === 'Failed') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
-    errors = parseFirstNErrors(failedCsv, 25);
+    errors = parseFirstNErrors(failedCsv, MAX_STORED_ERRORS_COUNT);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
 
