@@ -1,0 +1,49 @@
+import { IBackupObject } from '../backup-job';
+
+export interface IScheduling {
+  frequency: string;
+  interval?: number;
+  monthDate?: number;
+  startDate?: string;
+  startTime?: string;
+}
+
+export interface IScheduleConfig {
+  type?: string;
+  scheduling?: IScheduling;
+}
+
+export interface ITriggerResult {
+  [key: string]: any;
+}
+
+export interface IBackupConfig {
+  backupConfigId: string;
+  userId: string;
+  crmId: string;
+  destinationId: string;
+  slug: string;
+  name?: string;
+  description?: string;
+  type: string;
+  objectNames: string[];
+  schedule: string;
+  scheduleConfig?: IScheduleConfig;
+  objects?: IBackupObject[];
+  status: string;
+  backupStatus: string;
+  lastBackupAt?: string;
+  lastSchemaSyncAt?: string;
+  lastEventId?: string;
+  schemaChange?: boolean;
+  uploadedRecords?: number;
+  sizeInBytes?: number;
+  completedRecordCount?: number;
+  deletedRecordCount?: number;
+  successRecordCount?: number;
+  triggerResults?: ITriggerResult[];
+  crm?: any;
+  destination?: any;
+  createdAt: string;
+  updatedAt: string;
+}

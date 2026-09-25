@@ -1,0 +1,626 @@
+import { JOB_OBJECT_STATUS } from '../../../../../constant';
+import { logger } from '../../../../../middlewares/logger';
+import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../../models';
+import { updateBackupObject } from '../../../../backup-job';
+import { buildS3KeyPrefix, withSystemFields } from '../../../../../utils/helper';
+import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
+import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
+import { updateBackupConfigObject } from '../../../../backup-config';
+import { salesforceMetadataHandler } from '../../metadata';
+
+// SOQL injection guards.
+// Field names:  standard Salesforce API name (e.g. "Account", "Owner.Name")
+// Operators:    must be one of the Joi-validated enum values
+// Values:       allow the character set needed for SOQL literals (quoted
+//               strings, numbers, dates, booleans, IN lists, the
+//               semicolon-joined value INCLUDES/EXCLUDES need for a
+//               Multi-Select Picklist, and a leading currency symbol —
+//               stripped by buildFilterCondition's numeric sanitization
+//               below, not left in the emitted SOQL) while blocking SQL/SOQL
+//               meta-characters like ` -- /* */ that have no legitimate use
+//               in a filter value
+// Expression:   CUSTOM expressions must only contain index numbers,
+//               whitespace, parentheses, and the keywords AND / OR / NOT
+const SAFE_FIELD_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)?$/;
+const SAFE_VALUE_RE = /^[\w\s.'@%(),:.+;$-]+$/;
+const ALLOWED_OPERATORS = new Set([
+  '=',
+  '!=',
+  '>',
+  '<',
+  '>=',
+  '<=',
+  'LIKE',
+  'IN',
+  'NOT IN',
+  'INCLUDES',
+  'EXCLUDES',
+]);
+
+const buildFilterCondition = (name: string, operator: string, value: string): string => {
+  if (!SAFE_FIELD_NAME_RE.test(name)) {
+    throw new Error(`Invalid SOQL field name: "${name}"`);
+  }
+  if (!ALLOWED_OPERATORS.has(operator)) {
+    throw new Error(`Disallowed SOQL operator: "${operator}"`);
+  }
+  if (!SAFE_VALUE_RE.test(value)) {
+    throw new Error(`Invalid SOQL filter value: "${value}"`);
+  }
+
+  // Multi-Select Picklist membership test: Salesforce's own syntax is a
+  // SINGLE quoted string with the candidate values semicolon-joined inside
+  // it — Field INCLUDES ('A;B') — not a parenthesized list the way IN's
+  // values are. The raw value arrives comma-separated, same convention every
+  // other multi-value filter here uses; only the wire format changes.
+  if (operator === 'INCLUDES' || operator === 'EXCLUDES') {
+    const parts = value
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const joined = parts.map((v) => v.replace(/'/g, "''")).join(';');
+    return `${name} ${operator} ('${joined}')`;
+  }
+
+  // If value is not already quoted and not a number/boolean, wrap it in single quotes.
+  // A Currency field's UI input is the one numeric type likely to arrive
+  // formatted (e.g. "$1,234.56") — Number() rejects that outright, which used
+  // to fall through to being quoted as a STRING against a numeric field
+  // ("Field = '1,234.56'"), a type mismatch Salesforce rejects. Strip
+  // currency-symbol/thousands-separator cruft and re-test before giving up on
+  // it being numeric.
+  let formattedValue = value;
+  if (!value.startsWith("'") && !value.startsWith('(') && value !== 'true' && value !== 'false') {
+    if (!isNaN(Number(value))) {
+      // already a clean numeric literal — unchanged
+    } else {
+      const sanitized = value.trim().replace(/[^0-9.-]/g, '');
+      formattedValue = sanitized && !isNaN(Number(sanitized)) ? sanitized : `'${value}'`;
+    }
+  }
+
+  return `${name} ${operator} ${formattedValue}`;
+};
+
+// Build a SOQL WHERE clause from an object's field filters + condition.
+// Fields are 1-indexed (field[0] -> "1", field[1] -> "2", ...).
+// Only fields that have a filter contribute to the WHERE clause.
+// AND/OR  -> join all filter conditions with the given logical operator.
+// CUSTOM  -> replace 1-based indexes in condition.expression with the
+//            corresponding filter condition strings.
+const buildWhereClause = (object: IBackupObject): string => {
+  const { field, condition } = object;
+  if (!field?.length || !condition) {
+    return '';
+  }
+
+  const filterMap = new Map<number, string>();
+  field.forEach((f, idx) => {
+    if (f.filter) {
+      filterMap.set(idx + 1, buildFilterCondition(f.name, f.filter.operator, f.filter.value));
+    }
+  });
+
+  if (filterMap.size === 0) {
+    return '';
+  }
+
+  if (condition.type === 'CUSTOM' && condition.expression) {
+    // Strip recognized keywords then reject anything other than digits,
+    // spaces, and parentheses — prevents injecting arbitrary SOQL clauses
+    // via the expression string itself.
+    const stripped = condition.expression.replace(/\b(AND|OR|NOT)\b/gi, ' ');
+    if (!/^[\d\s()]+$/.test(stripped)) {
+      throw new Error(`Invalid SOQL custom expression: "${condition.expression}"`);
+    }
+
+    let expr = condition.expression;
+    const sorted = Array.from(filterMap.entries()).sort((a, b) => b[0] - a[0]);
+    for (const [idx, cond] of sorted) {
+      expr = expr.replace(new RegExp(`\\b${idx}\\b`, 'g'), cond);
+    }
+    return `WHERE ${expr}`;
+  }
+
+  const separator = condition.type === 'OR' ? ' OR ' : ' AND ';
+  return `WHERE ${Array.from(filterMap.values()).join(separator)}`;
+};
+
+// First-time backup: export all records into insert/ and schema into schema/
+export const exportFirstTime = async (
+  backupConfig: IBackupConfig,
+  backupJobId: string,
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  crmName: string,
+  objectNames: Array<string>,
+  object: IBackupObject,
+  objectIndex: number,
+  destConfig: IDestinationConfig
+): Promise<void> => {
+  const { crmId } = tokens;
+  const objectName = object.name;
+  const backupConfigId = backupConfig.backupConfigId;
+  let salesforceApiCount: number = 0;
+  let totalRecordCount: number = 0;
+  let jobId: string;
+
+  try {
+    const fieldsMetadata = await salesforceMetadataHandler(
+      {
+        metadataType: 'fields',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
+
+    if (!fieldsMetadata?.fields) {
+      return;
+    }
+
+    const fieldNames: string[] = [];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'fromid'];
+    fieldsMetadata.fields.forEach((f) => {
+      if (
+        f.referenceTo.length > 1 &&
+        !excludeName.includes(f.name.toLowerCase()) &&
+        f.name.toLowerCase().includes('id')
+      ) {
+        const nameWithType = f.name.toLowerCase().replace('id', '.type');
+        fieldNames.push(nameWithType);
+      }
+      fieldNames.push(f.name);
+    });
+
+    const allFieldNames = withSystemFields(fieldNames);
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'picklist',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'recordTypes',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'childs',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: true,
+      },
+      { instanceUrl, tokens }
+    );
+
+    if (object.bulkJobId) {
+      jobId = object.bulkJobId;
+      salesforceApiCount += object.salesforceApiCount ?? 0;
+    } else {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: JOB_OBJECT_STATUS.bulkQueryInProgress,
+      });
+
+      const whereClause = buildWhereClause(object);
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
+
+      console.log(JSON.stringify({ soql }));
+      try {
+        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
+        salesforceApiCount += 2;
+      } catch (err: any) {
+        throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      try {
+        totalRecordCount = await pollBulkJob({
+          instanceUrl,
+          tokens,
+          jobId,
+          backupJobId,
+          objectIndex,
+          salesforceApiCount,
+        });
+      } catch (err: any) {
+        throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: totalRecordCount ? JOB_OBJECT_STATUS.bulkQueryCompleted : JOB_OBJECT_STATUS.uploadCompleted,
+        bulkJobId: jobId,
+        salesforceApiCount,
+      });
+    }
+
+    if (totalRecordCount) {
+      logger.info(
+        `Object found records, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, Changes=${totalRecordCount}`
+      );
+
+      const insertPrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        backupJobId,
+        objectName,
+        operation: 'inserts',
+        type: 'backup',
+      });
+      const { sizeInBytes, completedRecordCount } = await uploadBulkResultsByPage({
+        instanceUrl,
+        tokens,
+        jobId,
+        backupJobId,
+        objectIndex,
+        destConfig,
+        salesforceApiCount,
+        s3KeyPrefix: insertPrefix,
+        startLocator: object.currentLocator ?? null,
+        startCompletedRecordCount: object.completedRecordCount ?? 0,
+      });
+
+      await updateBackupConfigObject({
+        backupConfigId,
+        objectName,
+        sizeInBytes,
+        completedRecordCount,
+      });
+      // backupConfig = await getBackupConfigById(backupConfigId);
+      // if (backupConfig?.objects) {
+      //   const updateParams: any = { sizeInBytes };
+      //   updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+      //   updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + completedRecordCount;
+
+      //   await updateBackupConfig(backupConfigId, updateParams);
+      // }
+    } else {
+      logger.info(
+        `Object changes not found, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+      );
+    }
+
+    // await writeSchemaFile(
+    //   destConfig,
+    //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
+    //   schema
+    // );
+
+    logger.info(
+      `Object first-time backup complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+    );
+  } catch (err: any) {
+    const errorMsg = err?.message ?? String(err);
+    await updateBackupObject({
+      backupJobId,
+      objectIndex,
+      status: JOB_OBJECT_STATUS.failed,
+      errorMessage: errorMsg,
+    });
+    logger.error(
+      `Object first-time backup failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, errorMsg=${errorMsg}`
+    );
+    throw err;
+  }
+};
+
+// Incremental backup:
+//  1. Query new+updated records (LastModifiedDate >= lastUpdatedAt) → classify
+//     into insert/ and update/ folders
+//  2. Query deleted records (queryAll with IsDeleted=true AND LastModifiedDate
+//     >= lastUpdatedAt) → delete/ folder
+//  3. Compare schema — if changed, overwrite schema/ and call core service
+export const exportIncremental = async (
+  backupConfig: IBackupConfig,
+  backupJobId: string,
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  crmName: string,
+  objectNames: Array<string>,
+  object: IBackupObject,
+  objectIndex: number,
+  destConfig: IDestinationConfig,
+  lastUpdatedAt: string
+): Promise<void> => {
+  const { crmId } = tokens;
+  const objectName = object.name;
+  const backupConfigId = backupConfig.backupConfigId;
+  let salesforceApiCount = 0;
+  // let backupConfig;
+
+  try {
+    const fieldsMetadata = await salesforceMetadataHandler(
+      {
+        metadataType: 'fields',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
+
+    if (!fieldsMetadata?.fields) {
+      return;
+    }
+
+    const fieldNames: string[] = [];
+    const excludeName = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'fromid'];
+    fieldsMetadata.fields.forEach((f) => {
+      if (
+        f.referenceTo.length > 1 &&
+        !excludeName.includes(f.name.toLowerCase()) &&
+        f.name.toLowerCase().includes('id')
+      ) {
+        const nameWithType = f.name.toLowerCase().replace('id', '.type');
+        fieldNames.push(nameWithType);
+      }
+      fieldNames.push(f.name);
+    });
+
+    const allFieldNames = withSystemFields(fieldNames);
+
+    // ── Phase 1: query new + updated + deleted records in one queryAll job ────
+    let bulkJobId = object.bulkJobId;
+    let totalRecordCount = object.totalRecordCount ?? 0;
+    salesforceApiCount += object.salesforceApiCount ?? 0;
+
+    if (!bulkJobId) {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: JOB_OBJECT_STATUS.bulkQueryInProgress,
+      });
+
+      // IsDeleted (needed for classify/delete split) is already in allFieldNames
+      // via withSystemFields, same as every other system field.
+      const userWhere = buildWhereClause(object);
+      const dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
+      const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} WITH USER_MODE ORDER BY Id ASC`;
+
+      // queryAll so Salesforce includes soft-deleted records in the result set
+      try {
+        bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
+        salesforceApiCount += 2;
+      } catch (err: any) {
+        throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      try {
+        totalRecordCount = await pollBulkJob({
+          instanceUrl,
+          tokens,
+          jobId: bulkJobId,
+          backupJobId,
+          objectIndex,
+          salesforceApiCount,
+        });
+      } catch (err: any) {
+        throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
+      }
+
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: totalRecordCount ? JOB_OBJECT_STATUS.bulkQueryCompleted : JOB_OBJECT_STATUS.uploadCompleted,
+        bulkJobId,
+        salesforceApiCount,
+      });
+    }
+
+    // ── Phase 2: classify results → insert/ update/ delete/ ──────────────────
+    if (
+      totalRecordCount > 0 &&
+      object.status !== JOB_OBJECT_STATUS.transferInProgress &&
+      object.status !== JOB_OBJECT_STATUS.uploadCompleted
+    ) {
+      logger.info(
+        `Object found changes, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, Changes=${totalRecordCount}`
+      );
+      const insertPrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        backupJobId,
+        objectName,
+        operation: 'inserts',
+        type: 'backup',
+      });
+      const updatePrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        backupJobId,
+        objectName,
+        operation: 'updates',
+        type: 'backup',
+      });
+      const deletePrefix = buildS3KeyPrefix({
+        crmId,
+        crmName,
+        backupConfigId,
+        backupJobId,
+        objectName,
+        operation: 'deletes',
+        type: 'backup',
+      });
+      const { sizeInBytes } = await classifyAndUploadBulkResultsByPage({
+        instanceUrl,
+        tokens,
+        jobId: bulkJobId,
+        backupJobId,
+        objectIndex,
+        destConfig,
+        salesforceApiCount,
+        lastUpdatedAt,
+        insertS3KeyPrefix: insertPrefix,
+        updateS3KeyPrefix: updatePrefix,
+        deleteS3KeyPrefix: deletePrefix,
+        startLocator: object.currentLocator ?? null,
+        startCompletedRecordCount: object.completedRecordCount ?? 0,
+      });
+
+      // backupConfig = await getBackupConfigById(backupConfigId);
+      // if (backupConfig?.objects) {
+      //   const updateParams: any = { sizeInBytes };
+      //   const updatedObjects = backupConfig.objects.map((obj) =>
+      //     obj.name === objectName ? { ...obj, sizeInBytes } : obj
+      //   );
+      //   updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
+      //   updateParams.objects = updatedObjects;
+      //   await updateBackupConfig(backupConfigId, updateParams);
+      // }
+
+      await updateBackupConfigObject({
+        backupConfigId,
+        objectName,
+        sizeInBytes,
+        completedRecordCount: object.completedRecordCount,
+      });
+
+      logger.info(
+        `Object changes transfered, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, sizeInBytes=${sizeInBytes}`
+      );
+    } else if (totalRecordCount === 0) {
+      logger.info(
+        `Object changes not found, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+      );
+    }
+
+    // ── Phase 3: schema comparison ─────────────────────────────────────────────
+    // The write below is unconditional (main/ + this job's changes/ folder). The read
+    // is only here to answer "did the schema move?" — Glue and the EMR schema-change
+    // operation key off that, and claiming a change every run would force a Hudi
+    // rewrite on every job.
+
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'picklist',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'recordTypes',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        crmName,
+        objectNames,
+        object,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
+    await salesforceMetadataHandler(
+      {
+        metadataType: 'childs',
+        policyConfigType: 'backup',
+        backupConfig,
+        backupJobId,
+        crmId,
+        objectNames,
+        crmName,
+        object,
+        isInitialBackup: false,
+      },
+      { instanceUrl, tokens }
+    );
+    // const storedSchema = await readLatestSchema(destConfig, {
+    //   crmId,
+    //   crmName,
+    //   backupConfigId,
+    //   objectName,
+    //   type: 'backup',
+    // });
+    // const schemaChanged = !storedSchema || !schemasAreEqual(storedSchema, latestSchema);
+
+    // await writeSchemaFile(
+    //   destConfig,
+    //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
+    //   latestSchema
+    // );
+
+    if (fieldsMetadata?.metadataType === 'fields' && fieldsMetadata?.diff.schemaChanged) {
+      // if (backupConfig?.objects) {
+      //   const updatedObjects = backupConfig.objects.map((obj) =>
+      //     obj.name === objectName ? { ...obj, schemaChange: true } : obj
+      //   );
+      //   await updateBackupConfig(backupConfigId, { objects: updatedObjects });
+      // }
+
+      await updateBackupConfigObject({
+        backupConfigId,
+        objectName,
+        schemaChange: true,
+      });
+
+      logger.info(
+        `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+      );
+    }
+
+    logger.info(
+      `Object incremental backup complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
+    );
+  } catch (err: any) {
+    const errorMsg = err?.message ?? String(err);
+    await updateBackupObject({
+      backupJobId,
+      objectIndex,
+      status: JOB_OBJECT_STATUS.failed,
+      errorMessage: errorMsg,
+    });
+    logger.error(
+      `Object incremental backup failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, errorMsg=${errorMsg}`
+    );
+    throw err;
+  }
+};

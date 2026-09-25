@@ -1,0 +1,399 @@
+import {
+  DeleteCommand,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  QueryCommandInput,
+  ScanCommand,
+  ScanCommandInput,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
+import { v4 as uuidv4 } from 'uuid';
+import { docClient } from '../../config';
+import { VISIBILITY_STATUS, USER_TABLE } from '../../constant';
+import { IUser } from '../../models';
+import { incrementTableCounter } from '../counter';
+import { decrypt } from '../../utils/encryption';
+
+// ---------------------------------------------------------------------------
+// DynamoDB table layout
+//   PK:  userId           (UUID)
+//   GSI: email-index      PK = contactEmail
+// ---------------------------------------------------------------------------
+// crmCredential is stored encrypted (utils/encryption.ts). Every caller that
+// needs the underlying Salesforce { access_token, refresh_token } shape was
+// decrypting it inline with the same guard — centralized here so there's one
+// place to change if the credential shape or the decrypt call ever moves.
+// ---------------------------------------------------------------------------
+
+const getDecryptedCrmCredential = (user?: Pick<IUser, 'crmCredential'> | null): { access_token: string, refresh_token: string } =>
+  user?.crmCredential ? JSON.parse(decrypt(user.crmCredential)) : { access_token: "", refresh_token: "" };
+
+// ---------------------------------------------------------------------------
+
+const createUser = async (data: Record<string, any>): Promise<void> => {
+  const now = new Date().toISOString();
+  const item: Record<string, any> = {
+    ...data,
+    userId: data.userId ?? uuidv4(),
+    contactEmail: data.crmProfile?.email ?? data.contact?.email ?? data.contactEmail,
+    crmProfileUserId: data.crmProfile?.userId ?? undefined,
+    status: data.status ?? VISIBILITY_STATUS.active,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // DynamoDB rejects undefined values
+  Object.keys(item).forEach((k) => item[k] === undefined && delete item[k]);
+
+  await Promise.all([
+    docClient.send(new PutCommand({ TableName: USER_TABLE, Item: item })),
+    incrementTableCounter(USER_TABLE, 'GLOBAL'),
+  ]);
+};
+
+const buildStatusFilter = (
+  statuses: string[]
+): Pick<
+  QueryCommandInput,
+  'FilterExpression' | 'ExpressionAttributeNames' | 'ExpressionAttributeValues'
+> | null => {
+  if (!statuses.length) {
+    return null;
+  }
+  const values: Record<string, any> = {};
+  statuses.forEach((s, i) => (values[`:s${i}`] = s));
+  return {
+    FilterExpression: statuses.map((_, i) => `#status = :s${i}`).join(' OR '),
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: values,
+  };
+};
+
+const getUser = async (search: Record<string, any>): Promise<IUser | null> => {
+  const statusFilter = search.status ? buildStatusFilter(Array.isArray(search.status) ? search.status : [search.status]) : null;
+
+  // ── By email (GSI) ────────────────────────────────────────────────────────
+  if (search['contact.email']) {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: USER_TABLE,
+        IndexName: 'email-index',
+        KeyConditionExpression: 'contactEmail = :email',
+        ProjectionExpression: 'userId, contactEmail, firstName, lastName, gender, #status, createdAt, updatedAt',
+        ExpressionAttributeValues: {
+          ':email': search['contact.email'],
+          ...statusFilter?.ExpressionAttributeValues,
+        },
+        ExpressionAttributeNames: { '#status': 'status', ...statusFilter?.ExpressionAttributeNames },
+        FilterExpression: statusFilter?.FilterExpression,
+        Limit: 1,
+      })
+    );
+    return (result.Items?.[0] as IUser) ?? null;
+  }
+
+  // ── By userId (primary key) ───────────────────────────────────────────────
+  const userId = search.userId ?? search._id;
+  if (userId) {
+    const result = await docClient.send(new GetCommand({ TableName: USER_TABLE, Key: { userId } }));
+    const user = result.Item as IUser | undefined;
+    if (!user) {
+      return null;
+    }
+    if (search.status) {
+      const allowedStatuses = Array.isArray(search.status) ? search.status : [search.status];
+      if (!allowedStatuses.includes(user.status)) {
+        return null;
+      }
+    }
+    return user;
+  }
+
+  return null;
+};
+
+const updateUser = async (
+  search: Record<string, any>,
+  payload: Record<string, any>
+): Promise<void> => {
+  const userId = search.userId ?? search._id;
+  if (!userId) {
+    return;
+  }
+
+  const $set: Record<string, any> = (payload as any).$set ?? payload;
+  const now = new Date().toISOString();
+
+  // Extract crmProfileUserId from crmProfile if present
+  if ($set.crmProfile?.userId) {
+    $set.crmProfileUserId = $set.crmProfile.userId;
+  }
+
+  const names: Record<string, string> = { '#updatedAt': 'updatedAt' };
+  const values: Record<string, any> = { ':updatedAt': now };
+  const parts: string[] = ['#updatedAt = :updatedAt'];
+
+  let valueIndex = 0;
+  Object.entries($set).forEach(([key, val]) => {
+    if (key === 'userId' || val === undefined || val === null) {
+      return;
+    } // never overwrite the PK or include undefined/null values
+    const i = valueIndex++;
+    names[`#f${i}`] = key;
+    values[`:v${i}`] = val;
+    parts.push(`#f${i} = :v${i}`);
+  });
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: USER_TABLE,
+      Key: { userId },
+      UpdateExpression: `SET ${parts.join(', ')}`,
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    })
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Builds FilterExpression parts for gender (and any future scalar fields).
+// Returns null when no filter fields are present.
+// ---------------------------------------------------------------------------
+const buildFilterExpression = (search: Record<string, any>) => {
+  const names: Record<string, string> = {};
+  const values: Record<string, any> = {};
+  const parts: string[] = [];
+
+  if (search.gender) {
+    names['#gender'] = 'gender';
+    values[':gender'] = search.gender;
+    parts.push('#gender = :gender');
+  }
+
+  if (search.search) {
+    values[':search'] = search.search;
+    names['#firstName'] = 'firstName';
+    names['#lastName'] = 'lastName';
+    names['#contactEmail'] = 'contactEmail';
+    parts.push(
+      '(contains(#firstName, :search) OR contains(#lastName, :search) OR contains(#contactEmail, :search))'
+    );
+  }
+
+  if (!parts.length) {
+    return null;
+  }
+  return {
+    FilterExpression: parts.join(' AND '),
+    ExpressionAttributeNames: names,
+    ExpressionAttributeValues: values,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Queries by email GSI and applies an optional FilterExpression for
+// remaining fields (e.g. gender).
+// ---------------------------------------------------------------------------
+const queryByContact = async (
+  search: Record<string, any>,
+  extraParams: Record<string, any> = {}
+): Promise<IUser[]> => {
+  const filter = buildFilterExpression(search);
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: USER_TABLE,
+      IndexName: 'email-index',
+      KeyConditionExpression: 'contactEmail = :email',
+      ExpressionAttributeValues: {
+        ':email': search['contact.email'],
+        ...filter?.ExpressionAttributeValues,
+      },
+      ...(filter && {
+        FilterExpression: filter.FilterExpression,
+        ExpressionAttributeNames: filter.ExpressionAttributeNames,
+      }),
+      ...extraParams,
+    })
+  );
+  return (result.Items ?? []) as IUser[];
+};
+
+const getUsers = async (search: Record<string, any> = {}): Promise<IUser[]> => {
+  const hasContact = search['contact.email'];
+
+  if (hasContact) {
+    return queryByContact(search);
+  }
+
+  const filter = buildFilterExpression(search);
+  const result = await docClient.send(
+    new ScanCommand({
+      TableName: USER_TABLE,
+      ...(filter && {
+        FilterExpression: filter.FilterExpression,
+        ExpressionAttributeNames: filter.ExpressionAttributeNames,
+        ExpressionAttributeValues: filter.ExpressionAttributeValues,
+      }),
+    })
+  );
+  return (result.Items ?? []) as IUser[];
+};
+
+interface IGetUsersByContactEmailParams {
+  contactEmail: string;
+}
+
+const getUsersByContactEmail = async (params: IGetUsersByContactEmailParams): Promise<IUser[]> => {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: USER_TABLE,
+      IndexName: 'email-index',
+      KeyConditionExpression: 'contactEmail = :email',
+      ExpressionAttributeValues: {
+        ':email': params.contactEmail,
+      },
+    })
+  );
+  return (result.Items ?? []) as IUser[];
+};
+
+// ---------------------------------------------------------------------------
+// Converts a MongoDB-style projection { firstName: 1, email: 1 } into
+// DynamoDB ProjectionExpression params.  Returns null when projection is empty.
+// ---------------------------------------------------------------------------
+const buildProjectionExpression = (projection: Record<string, any>) => {
+  const fields = Object.keys(projection).filter((k) => projection[k]);
+  if (!fields.length) {
+    return null;
+  }
+
+  const names: Record<string, string> = {};
+  const parts = fields.map((field, i) => {
+    const alias = `#p${i}`;
+    names[alias] = field;
+    return alias;
+  });
+
+  return {
+    ProjectionExpression: parts.join(', '),
+    ExpressionAttributeNames: names,
+  };
+};
+
+import { encodeCursor, decodeCursor } from '../../utils/cursor';
+
+const getUsersWithPagination = async (
+  search: Record<string, any> = {},
+  projection: Record<string, any> = {},
+  optional: { limit: number; cursor?: string }
+) => {
+  const proj = buildProjectionExpression(projection);
+  const filter = buildFilterExpression(search);
+  const exclusiveStartKey = decodeCursor(optional.cursor);
+  const mergedNames = { ...filter?.ExpressionAttributeNames, ...proj?.ExpressionAttributeNames };
+
+  const hasContact = search['contact.email'];
+
+  if (hasContact) {
+    const baseParams = {
+      Limit: optional.limit,
+      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
+      ...(filter && { FilterExpression: filter.FilterExpression }),
+      ...(proj && { ProjectionExpression: proj.ProjectionExpression }),
+      ...(Object.keys(mergedNames).length && { ExpressionAttributeNames: mergedNames }),
+    };
+
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: USER_TABLE,
+        IndexName: 'email-index',
+        KeyConditionExpression: 'contactEmail = :email',
+        ExpressionAttributeValues: {
+          ':email': search['contact.email'],
+          ...filter?.ExpressionAttributeValues,
+        },
+        ...baseParams,
+      })
+    );
+
+    return {
+      documents: (result.Items ?? []) as IUser[],
+      nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+    };
+  }
+
+  const scanParams: ScanCommandInput = {
+    TableName: USER_TABLE,
+    Limit: optional.limit,
+    ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
+    ...(filter && {
+      FilterExpression: filter.FilterExpression,
+      ExpressionAttributeValues: filter.ExpressionAttributeValues,
+    }),
+    ...(proj && { ProjectionExpression: proj.ProjectionExpression }),
+    ...(Object.keys(mergedNames).length && { ExpressionAttributeNames: mergedNames }),
+  };
+
+  const result = await docClient.send(new ScanCommand(scanParams));
+  return {
+    documents: (result.Items ?? []) as IUser[],
+    nextCursor: result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : null,
+  };
+};
+
+const getUserByCrmProfileUserId = async (crmProfileUserId: string, orgId: string): Promise<IUser | null> => {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: USER_TABLE,
+      IndexName: 'crmProfileUserId-index',
+      KeyConditionExpression: 'crmProfileUserId = :crmProfileUserId',
+      // The same Salesforce user id can show up under more than one org connection,
+      // so orgId disambiguates which row to return. No Limit here — DynamoDB applies
+      // Limit before FilterExpression, so capping items read could discard the
+      // matching org's row before the filter ever sees it.
+      FilterExpression: 'crmProfile.organizationId = :orgId',
+      ExpressionAttributeValues: {
+        ':crmProfileUserId': crmProfileUserId,
+        ':orgId': orgId,
+      },
+    })
+  );
+  return (result.Items?.[0] as IUser) ?? null;
+};
+
+const getUsersByCrmId = async (crmId: string): Promise<IUser[]> => {
+  if (!crmId) {
+    return [];
+  }
+
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: USER_TABLE,
+      IndexName: 'crmId-index',
+      KeyConditionExpression: 'crmId = :crmId',
+      ExpressionAttributeValues: { ':crmId': crmId },
+    })
+  );
+
+  return (result.Items ?? []) as IUser[];
+};
+
+const deleteUser = async (userId: string): Promise<boolean> => {
+  const existing = await getUser({ userId });
+  if (!existing) {
+    return false;
+  }
+
+  await docClient.send(
+    new DeleteCommand({
+      TableName: USER_TABLE,
+      Key: { userId },
+    })
+  );
+
+  return true;
+};
+
+export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser, getDecryptedCrmCredential };

@@ -1,0 +1,175 @@
+import { IScheduleConfig } from '../backup-config';
+
+export interface IRestoreScopeRecord {
+  id: string;
+  objectName: string;
+  recordIds: string[];
+  children?: IRestoreScopeRecord[];
+}
+
+export interface IRestoreScopeField {
+  objectName: string;
+  fieldNames: string[];
+}
+
+export interface IRestoreFilterField {
+  name: string;
+  dataType: string;
+  operator: string; // FILTER_OPERATOR values, e.g. LIKE
+  value: any;
+}
+
+export interface IRestoreFilters {
+  type: string; // AND | OR | SOQL
+  soqlQuery?: string;
+  fields?: IRestoreFilterField[];
+}
+
+export interface IRestoreChangeSince {
+  date: string;
+}
+
+export interface IRestoreBulkCsvIds {
+  objectName: string;
+  ids: string[];
+}
+
+export interface IRestoreScopeFilter {
+  objectName: string;
+  filter: IRestoreFilters;
+}
+
+// type === 'OBJECT' on IRestoreScope below — mirrors client-service's
+// models/shared IObject (same shape backup-config's own `objects` uses),
+// narrowed to what a restore's flat object selection actually needs.
+export interface IRestoreScopeObject {
+  id: string;
+  name: string;
+  type: string; // STANDARD | CUSTOM
+}
+
+export interface IRestoreScope {
+  type: string; // ALL | OBJECT | RECORD | FIELD | FILTER | DELETED_ONLY | INSERTS_ONLY | CHANGE_SINCE | BULK_CSV
+  objects?: IRestoreScopeObject[];
+  records?: IRestoreScopeRecord[];
+  fields?: IRestoreScopeField[];
+  filters?: IRestoreScopeFilter[];
+  changeSince?: IRestoreChangeSince;
+  bulkCsvIds?: IRestoreBulkCsvIds[];
+  deletedOnly?: boolean;
+}
+
+export interface IRestoreDestination {
+  type: string; // SAME | DIFFERENT
+  crmId?: string;
+  tagRestoredRecord?: string;
+}
+
+export interface IRestoreEdgeCaseFieldMapping {
+  sourceObject: string;
+  sourceFields: string;
+  destinationObject: string;
+  destinationFields: string;
+}
+
+export interface IRestoreMissingFieldInDestination {
+  type: string;
+  sourceDestinationMapping: IRestoreEdgeCaseFieldMapping[];
+}
+
+export interface IRestoreOwnerInactive {
+  type: string;
+  fallbackValue: string;
+}
+
+export interface IRestoreRecordTypeIdMapping {
+  sourceRecordTypeId: string;
+  destinationRecordTypeId: string;
+}
+
+export interface IRestoreRecordTypeObjectMapping {
+  name: string;
+  mapping: IRestoreRecordTypeIdMapping[];
+}
+
+export interface IRestoreRecordTypeMissing {
+  type: string;
+  objects: IRestoreRecordTypeObjectMapping[];
+}
+
+export interface IRestoreMissingRequiredField {
+  name: string;
+  type: string;
+  value: string;
+}
+
+export interface IRestoreMissingRequiredFieldMapping {
+  object: string;
+  fields: IRestoreMissingRequiredField[];
+}
+
+export interface IRestoreMissingRequiredFieldValue {
+  type: string;
+  mapping: IRestoreMissingRequiredFieldMapping[];
+}
+
+// Mirrors client-service's models/restore/index.ts — this is the shape client-service
+// sends in the POST /v1/restore payload, so it has to stay in sync with that side or
+// createRestoreJobValidation below will reject any restore that populates edgeCases.
+export interface IRestoreEdgeCases {
+  onDuplicateRecord?: string; // SKIP | OVERWRITE
+  missingFieldInDestination?: IRestoreMissingFieldInDestination;
+  ownerInactive?: IRestoreOwnerInactive;
+  parentMissing?: string;
+  recordTypeMissing?: IRestoreRecordTypeMissing;
+  missingRequiredFieldValue?: IRestoreMissingRequiredFieldValue;
+}
+
+export interface IRestoreMergeRuleField {
+  name: string;
+  value: string; // USE_DEFAULT | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
+}
+
+export interface IRestoreMergeRuleObject {
+  name: string;
+  fields: IRestoreMergeRuleField[];
+}
+
+export interface IRestoreMergeRule {
+  default: string; // NEWEST_LAST_MODIFIED_DATE_WINS | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
+  objects: IRestoreMergeRuleObject[];
+}
+
+export interface IRestoreConflict {
+  restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
+  edgeCases?: IRestoreEdgeCases;
+  mergeRule?: IRestoreMergeRule;
+}
+
+export interface IRestoreJobDetail {
+  name?: string;
+  description?: string;
+  tags?: string[];
+}
+
+export interface IRestore {
+  restoreId: string; // PK
+  userId: string; // GSI: userId-index
+  crmId?: string; // GSI: crmId-index
+  status: string; // DRAFT | PENDING | RUNNING | SUCCESS | FAILED
+  errorMessage?: string;
+
+  source: {
+    backupJobIds: string[];
+  };
+  selection: {
+    restoreScope: IRestoreScope;
+  };
+  destination: IRestoreDestination;
+  conflict: IRestoreConflict;
+  jobDetail: IRestoreJobDetail;
+  schedule: IScheduleConfig;
+
+  createdAt: string;
+  updatedAt: string;
+}

@@ -1,0 +1,60 @@
+/v1/spark-job/build-payload:
+  post:
+    tags: [Spark Job]
+    summary: Build the payload an EMR/Spark job runs against
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+
+/v1/spark-job/update-spark-job-status:
+  post:
+    tags: [Spark Job]
+    summary: Callback used by the EMR/Spark job to report its run status
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+
+/v1/spark-job/get-inactive-owner-ids:
+  get:
+    tags: [Spark Job]
+    summary: List Salesforce owner ids that are inactive, for the Spark job to exclude
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+
+/v1/spark-job/restore-fields:
+  get:
+    tags: [Spark Job]
+    summary: Get the field list an EMR/Spark restore job should write
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+
+/v1/spark-job/restore-objects:
+  get:
+    tags: [Spark Job]
+    summary: Get the object list an EMR/Spark restore job should process
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'

@@ -1,0 +1,56 @@
+/v1/notification/list:
+  get:
+    tags: [Notification]
+    summary: List in-app notifications for the authenticated user
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/notification/unread-count:
+  get:
+    tags: [Notification]
+    summary: Get the count of unread notifications for the authenticated user
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/notification/:
+  put:
+    tags: [Notification]
+    summary: Mark a single notification as read/unread
+    security: [{ cookieAuth: [] }]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/notification/mark-all-read:
+  put:
+    tags: [Notification]
+    summary: Mark all notifications as read for the authenticated user
+    security: [{ cookieAuth: [] }]
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      401:
+        $ref: '#/components/responses/Unauthorized'
