@@ -690,7 +690,7 @@ const getBackupOverview = async (
       if (item.status === VISIBILITY_STATUS.active) {
         overview.activeBackupConfigs += 1;
       }
-      if (item.backupStatus === STATUS.failed) {
+      if (item.backupStatus === STATUS.failed || item.status === STATUS.partialFailure) {
         overview.failedBackupStatus += 1;
       } else if (item.backupStatus === STATUS.success) {
         overview.successBackupStatus += 1;
