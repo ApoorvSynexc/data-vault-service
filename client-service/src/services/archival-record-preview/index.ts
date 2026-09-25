@@ -189,9 +189,13 @@ const CREATED_DATE_INSTANT =
   `TRY(from_unixtime(CAST(CAST("CreatedDate" AS varchar) AS bigint) / 1000, 'UTC')))`;
 
 // Athena has no SELECT * EXCEPT, so the column list is read from the catalog.
-// CreatedDate is left out because the Glue type (varchar) disagrees with the
-// Parquet type (timestamp) on some archival tables, which fails the whole query.
-const EXCLUDED_COLUMNS = new Set(['createddate']);
+// Datetime columns are left out because the Glue type (varchar) disagrees with
+// the Parquet type (timestamp) on some archival tables, which fails the whole query.
+// The Glue type is the wrong one here, so information_schema can't say which
+// columns are datetimes — they're recognised by name: CreatedDate,
+// LastModifiedDate, SystemModstamp, Test_Time__c, Some_DateTime__c, ...
+const DATETIME_COLUMN_RE = /(date|datetime|time|stamp)(__c)?$/i;
+const isDatetimeColumn = (name: string): boolean => DATETIME_COLUMN_RE.test(name);
 
 const buildSelectClause = async (
   hudiTable: string,
@@ -205,7 +209,7 @@ const buildSelectClause = async (
   const result = await runAthenaQuery(sql, databaseName, region, outputLocation, 1000);
   const columns = result.rows
     .map((row) => row.column_name)
-    .filter((name): name is string => !!name && !EXCLUDED_COLUMNS.has(name.toLowerCase()))
+    .filter((name): name is string => !!name && !isDatetimeColumn(name))
     .map((name) => `"${name.replace(/"/g, '""')}"`);
   return columns.length ? columns.join(', ') : '"Id"';
 };
@@ -373,7 +377,8 @@ const getArchivedRelatedRecords = async (
 
   if (!(await tableExists(databaseName, hudiTable, region))) return [];
 
-  const sql = `SELECT * FROM "${hudiTable}" WHERE "${fkField}" = '${fkValue}' LIMIT ${RELATED_RECORDS_LIMIT}`;
+  const selectClause = await buildSelectClause(hudiTable, databaseName, region, outputLocation);
+  const sql = `SELECT ${selectClause} FROM "${hudiTable}" WHERE "${fkField}" = '${fkValue}' LIMIT ${RELATED_RECORDS_LIMIT}`;
   const result = await runAthenaQuery(sql, databaseName, region, outputLocation, RELATED_RECORDS_LIMIT);
   return result.rows;
 };
