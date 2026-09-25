@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { BACKUP_STATUS, JOB_STATUS } from '../../constant';
+import { STATUS } from '../../constant';
 import { logger } from '../../middlewares/logger';
 import { IBackupJob, IDestinationConfig, IRealtimePayload } from '../../models';
 import { decrypt } from '../../utils/encryption';
@@ -23,7 +23,7 @@ import { updateBackupConfig } from '../backup-config';
  *   the UI can surface it; Salesforce never needs to know.
  *
  * WHAT happens on every hit:
- *   1. Mark the job RUNNING (so the UI shows live activity for every incoming batch).
+ *   1. Mark the job PENDING (so the UI shows live activity for every incoming batch).
  *   2. Decrypt destination credentials (stored encrypted on the job record at creation).
  *   3. Delegate to the CRM-specific handler (Salesforce) which uploads the CSV to S3.
  *   4. Atomically accumulate sizeInBytes and recordCount using DynamoDB ADD.
@@ -37,15 +37,17 @@ export const runRealtimeBackupJob = async (
   const { backupJobId, crmId, crmName, backupConfigId, destination } = job;
 
   /**
-   * WHY RUNNING is set on every hit (not just the first):
+   * WHY PENDING is set on every hit (not just the first):
    *   A realtime job accumulates hits over time. Between hits the job shows SUCCESS
-   *   (last hit finished). When a new hit arrives we flip to RUNNING immediately so
-   *   the UI reflects that processing is in progress. Without this, the status would
-   *   stay SUCCESS during the upload window of subsequent hits, misleading operators.
+   *   (last hit finished). When a new hit arrives we flip back to PENDING immediately so
+   *   the UI reflects that processing is in progress — a job's own status stays PENDING
+   *   for its entire in-flight duration; there's no separate "now actively running" value.
+   *   Without this, the status would stay SUCCESS during the upload window of subsequent
+   *   hits, misleading operators.
    */
   await updateRealtimeJob({
     backupJobId,
-    status: JOB_STATUS.running,
+    status: STATUS.pending,
     startedAt: dayjs().toISOString(),
   });
 
@@ -97,7 +99,7 @@ export const runRealtimeBackupJob = async (
      */
     await updateRealtimeJob({
       backupJobId,
-      status: JOB_STATUS.success,
+      status: STATUS.success,
       lastCompletedAt: dayjs().toISOString(),
       s3Path,
       schemaChanged,
@@ -105,7 +107,7 @@ export const runRealtimeBackupJob = async (
       recordCountIncrement: payload.records.length,
     });
 
-    await updateBackupConfig(job.backupConfigId, { backupStatus: BACKUP_STATUS.success });
+    await updateBackupConfig(job.backupConfigId, { backupStatus: STATUS.success });
   } catch (err: any) {
     const errorMsg = err?.message ?? 'Unknown error';
     logger.error(`Realtime job failed, backupJobId=${backupJobId}, errorMessage=${errorMsg}`);
@@ -118,7 +120,7 @@ export const runRealtimeBackupJob = async (
      */
     await updateRealtimeJob({
       backupJobId,
-      status: JOB_STATUS.failed,
+      status: STATUS.failed,
       lastCompletedAt: dayjs().toISOString(),
       errorMessage: errorMsg,
     }).catch(() => {});

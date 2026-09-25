@@ -1,4 +1,4 @@
-import { OBJECT_STATUS } from '../../../../../constant';
+import { JOB_OBJECT_STATUS } from '../../../../../constant';
 import { IBackupObject, IDestinationConfig } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
 import { incrementBackupConfigCounters } from '../../../../backup-config';
@@ -372,7 +372,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
 
   await updateArchivalObject({
     backupJobId,
-    object: { id: object.id, status: OBJECT_STATUS.deletionInProgress },
+    object: { id: object.id, status: JOB_OBJECT_STATUS.deletionInProgress },
   });
 
   let totalDeleted = 0;
@@ -497,13 +497,13 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
             ...(jobResults.successCount
               ? {
                   deletedSuccessRecordCount: jobResults.successCount,
-                  status: OBJECT_STATUS.completed,
+                  status: JOB_OBJECT_STATUS.deletionCompleted,
                 }
               : {}),
             ...(jobResults.failedCount
               ? {
                   deletedfailedRecordCount: jobResults.failedCount,
-                  status: OBJECT_STATUS.deletionJobFailed,
+                  status: JOB_OBJECT_STATUS.deletionJobFailed,
                 }
               : {}),
             salesforceApiCount: 3,
@@ -525,7 +525,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
     );
     await updateArchivalObject({
       backupJobId,
-      object: { id: object.id, status: OBJECT_STATUS.deletionJobFailed, errorMessage: errorMsg },
+      object: { id: object.id, status: JOB_OBJECT_STATUS.deletionJobFailed, errorMessage: errorMsg },
     });
     throw err;
   }
@@ -547,7 +547,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
   );
 
   const objectFinalStatus =
-    totalFailed > 0 ? OBJECT_STATUS.deletionRecordsFailed : OBJECT_STATUS.completed;
+    totalFailed > 0 ? JOB_OBJECT_STATUS.deletionRecordsFailed : JOB_OBJECT_STATUS.deletionCompleted;
 
   await updateArchivalObject({
     backupJobId,

@@ -15,11 +15,11 @@ import { httpRequest } from '../../../utils/http-request';
 import {
   AWS_EVENT_DESTINATION_API_KEY,
   BACKUP_SERVICE,
-  BACKUP_STATUS,
+  STATUS,
   INTERNAL_SECRET,
   PAYMENT_PRODUCT_NAME,
   SCHEDULE_MODE,
-  STATUS,
+  VISIBILITY_STATUS,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../middlewares/salesforce';
@@ -81,7 +81,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
 
   for (const config of realtimeConfigs) {
     const ojectNames = config.objects?.map(o => o.name) || [];
-    if (!ojectNames.includes(objectApiName) || config.backupStatus === STATUS.paused) continue;
+    if (!ojectNames.includes(objectApiName) || config.backupStatus === VISIBILITY_STATUS.paused) continue;
 
     const destination = await getDestinationById(config.destinationId);
     if (!destination) {
@@ -89,7 +89,7 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       continue;
     }
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending, status: VISIBILITY_STATUS.active });
 
     /**
      * WHY we pass destination config decrypted to backup-service:
@@ -163,7 +163,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
-    if (config.status === STATUS.paused) {
+    if (config.status === VISIBILITY_STATUS.paused) {
       logger.info('Backup config is paused, skipping event');
       return makeResponse(req, res, 200, true, 'fetch');
     }

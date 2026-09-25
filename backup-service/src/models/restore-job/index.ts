@@ -61,17 +61,6 @@ export interface IRestoreJobDestination {
     | EncryptedPayload;
 }
 
-// Interface-level enum for RESTORE_JOB_STATUS (constant/index.ts) — mirrors
-// BulkJobState's string-literal-union convention elsewhere in this codebase.
-export type RestoreJobStatus =
-  | 'IN_PROGRESS'
-  | 'BULK_QUERY_IN_PROGRESS'
-  | 'BULK_QUERY_COMPLETED'
-  | 'RESTORE_IN_PROGRESS'
-  | 'COMPLETED'
-  | 'SUCCESS'
-  | 'FAILED';
-
 export interface IRestoreJob {
   restoreJobId: string; // PK
   restoreId: string; // GSI: restoreId-index — parent restore request this job belongs to
@@ -84,8 +73,14 @@ export interface IRestoreJob {
   conflict: IRestoreConflict;
   objectHierarchy?: IRestoreObjectHierarchyNode[];
   hierarchy?: IRestoreObjectHierarchyTreeNode[];
-  status: string; // PENDING | RUNNING | SUCCESS | FAILED
+  status: string; // PENDING | SUCCESS | FAILED | PARTIAL_FAILURE | CANCELLED
   startedAt?: string;
+  // Concurrency lock: set when a runner claims this job (conditional write —
+  // fails if already present), cleared on every terminal write. Distinct from
+  // `startedAt`, which is a permanent display timestamp and is never cleared.
+  // Replaces the old status===RUNNING guard now that `status` no longer has a
+  // distinct in-flight value.
+  processingStartedAt?: string;
   completedAt?: string;
   errorMessage?: string;
   createdAt: string;

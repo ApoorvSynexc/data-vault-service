@@ -208,7 +208,11 @@ const FILTER_OPERATOR = {
   excludes: 'EXCLUDES',
 };
 
-const STATUS = {
+// Config lifecycle/visibility — backup-config, archival-config (same table),
+// restore's initial draft state, plus user/crm/destination/settings (unrelated
+// entities that happen to share this same shape). Mirrors backup-service's own
+// copy of this constant (the two services don't share a package).
+const VISIBILITY_STATUS = {
   draft: 'DRAFT',
   paused: 'PAUSED',
   resumed: 'RESUMED',
@@ -220,44 +224,49 @@ const STATUS = {
   // Apex Triggers failed to delete in the org — see restoreBackupConfigAfterFailedTriggerDelete.
   deleteFailed: 'DELETE_FAILED',
 };
+
 const NOTIFICATION_STATUS = {
   unread: 'UNREAD',
   read: 'READ',
   deleted: 'DELETED',
 };
-const BACKUP_STATUS = {
-  // draft: 'DRAFT',
-  // active: 'ACTIVE',
-  // paused: 'PAUSED',
-  // resumed: 'RESUMED',
+// Outcome status — backupConfig.backupStatus, backupJob.status, restore.status
+// (outcome dimension), restoreJob.status. A job's own status stays `pending`
+// for its entire in-flight duration — there's no separate "now actively
+// running" value; the `processingStartedAt` lock field (see backup-job /
+// restore-job services) is what now guards against double-starts.
+const STATUS = {
+  pending: 'PENDING',
   success: 'SUCCESS',
   failed: 'FAILED',
   partialFailure: 'PARTIAL_FAILURE',
-  pending: 'PENDING',
+  cancelled: 'CANCELLED',
 };
-const JOB_STATUS = {
-  pending: 'PENDING',
-  running: 'RUNNING',
-  success: 'SUCCESS',
-  failed: 'FAILED',
-};
-const RESTORE_JOB_STATUS = {
-  inProgress: 'IN_PROGRESS',
+// Per-object/per-item progress inside a job's object[]/objects[] array —
+// backup/archival object lifecycle, restore/rollback per-object phases, and
+// compression phases (written to a backupJob's objects[] entry, or overwrites
+// the job's own `status` field once compression starts — see the model
+// comment on IBackupJob.status for that known one-way-door quirk, unchanged
+// by this consolidation). Mirrors backup-service's own copy of this constant.
+const JOB_OBJECT_STATUS = {
+  created: 'CREATED',
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
+  transferInProgress: 'TRANSFER_IN_PROGRESS',
+  uploadCompleted: 'UPLOAD_COMPLETED',
+  deletionInProgress: 'DELETION_IN_PROGRESS',
+  deletionCompleted: 'DELETION_COMPLETED',
+  deletionJobFailed: 'DELETION_JOB_FAILED',
+  deletionRecordsFailed: 'DELETION_RECORDS_FAILED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
-  completed: 'COMPLETED',
-  success: 'SUCCESS',
-  failed: 'FAILED',
-};
-// Compression lifecycle. Written to the same `status` field as JOB_STATUS, so a
-// compressed job no longer reports the backup outcome it had before compression.
-// ponytail: one-way door â€” SUCCESS vs FAILED is lost once compression starts.
-// Move to a separate `compressionStatus` attribute if that outcome is ever needed.
-const COMPRESSION_STATUS = {
-  inProgress: 'COMPRESSION_JOB_IN_PROGRESS',
+  rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
+  rollbackCompleted: 'ROLLBACK_COMPLETED',
+  compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
   compressed: 'COMPRESSED',
-  failed: 'COMPRESSION_JOB_FAILED',
+  compressionFailed: 'COMPRESSION_JOB_FAILED',
+  restoreCsvCreating: 'CSV_CREATING',
+  restoreIngestInProgress: 'INGEST_IN_PROGRESS',
+  failed: 'FAILED',
 };
 const ENVIRONMENT_TYPE = {
   production: 'PRODUCTION',
@@ -433,7 +442,7 @@ export {
   PAYMENT_SECRET_KEY,
 
   // Enums
-  STATUS,
+  VISIBILITY_STATUS,
   NOTIFICATION_STATUS,
   AUTH_PROVIDER,
   LANGUAGE,
@@ -447,10 +456,8 @@ export {
   DESTINATION_TYPE,
   CLOUD_PROVIDER,
   FILTER_OPERATOR,
-  BACKUP_STATUS,
-  JOB_STATUS,
-  RESTORE_JOB_STATUS,
-  COMPRESSION_STATUS,
+  STATUS,
+  JOB_OBJECT_STATUS,
   CONDITION_TYPE,
   OBJECT_TYPE,
   BACKUP_TYPE,

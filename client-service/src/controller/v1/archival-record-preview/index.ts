@@ -54,7 +54,7 @@ const resolveOrgAndConfigs = async (
  * NOT_EQUALS; a plain key means EQUALS). `page` is 1-based, defaults to 1.
  */
 const searchArchivalRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { orgId, objName, fields, startDate, endDate, filters, limit, page } = req.body as Record<string, unknown>;
+  const { orgId, objName, fields, startDate, endDate, filters, limit, page } = (req.body ?? {}) as Record<string, unknown>;
 console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, fields=${JSON.stringify(fields)}, startDate=${startDate}, endDate=${endDate}, filters=${JSON.stringify(filters)}, limit=${limit}, page=${page}`);
   const resolved = await resolveOrgAndConfigs(req, res, orgId, objName);
   console.log('resolve', resolved);
@@ -145,7 +145,8 @@ const findParentEdge = (nodes: any[] | undefined, targetName: string): { parentN
  * and uses the first one that actually has this record.
  */
 const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { orgId, objName, recordId, fields } = req.body as Record<string, unknown>;
+  // Same defensive default as searchArchivalRecordsHandler — see comment there.
+  const { orgId, objName, recordId, fields } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof recordId !== 'string' || !recordId) {
     return makeResponse(req, res, 400, false, 'params_required');
   }

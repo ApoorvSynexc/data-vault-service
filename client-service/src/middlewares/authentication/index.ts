@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { NextFunction } from 'express';
-import { JWT_ACCESS_SECRET, SESSION_STATUS, STATUS } from '../../constant';
+import { JWT_ACCESS_SECRET, SESSION_STATUS, VISIBILITY_STATUS } from '../../constant';
 import { IRequest, IResponse, makeResponse } from '../../lib';
 import { getSession, getUser, getUserByCrmProfileUserId } from '../../services';
 import { x } from 'joi';
@@ -24,14 +24,14 @@ const authenticate = async (req: IRequest, res: IResponse, next: NextFunction): 
 
     const user = await getUser({
       userId: payload.userId,
-      status: [STATUS.active, STATUS.inactive],
+      status: [VISIBILITY_STATUS.active, VISIBILITY_STATUS.inactive],
     });
     if (!user) {
       await makeResponse(req, res, 401, false, 'unauthorized');
       return;
     }
 
-    if (user.status === STATUS.inactive) {
+    if (user.status === VISIBILITY_STATUS.inactive) {
       await makeResponse(req, res, 403, false, 'blocked_or_removed');
       return;
     }

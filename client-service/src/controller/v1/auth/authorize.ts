@@ -14,7 +14,7 @@ import {
   getUser,
 } from '../../../services';
 import { encrypt, decrypt, decryptEnvelope, encryptEnvelope, generateOrgEncryptionKey } from '../../../utils/encryption';
-import { STATUS, SALESFORCE_LOGIN_REDIRECT_URI, SALESFORCE_ENCRYPTION_KEY } from '../../../constant';
+import { VISIBILITY_STATUS, SALESFORCE_LOGIN_REDIRECT_URI, SALESFORCE_ENCRYPTION_KEY } from '../../../constant';
 import { logger } from '../../../middlewares';
 
 interface IAuthorizeOrganizationPayload {
@@ -126,7 +126,7 @@ const authorizeOrgHandler = async (payload: IAuthorizeOrganizationPayload): Prom
       instanceUrl,
       encryptionKey: encrypt(rawEncryptionKey), // encrypted at rest with the master key, like crmCredential
       apiKey: encrypt(rawApiKey),
-      status: STATUS.inactive,
+      status: VISIBILITY_STATUS.inactive,
     });
   } else {
     if (crm.instanceUrl !== instanceUrl) {

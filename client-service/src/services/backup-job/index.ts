@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_STATUS, COMPRESSION_STATUS, INTERNAL_SECRET, JOB_STATUS, SCHEDULE_MODE, STATUS } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, STATUS, JOB_OBJECT_STATUS, INTERNAL_SECRET, SCHEDULE_MODE, VISIBILITY_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
@@ -32,7 +32,9 @@ export const getSourceObjects = (objects?: IObject[], includeChildren = false) =
   }
 };
 
-// Returns true if a PENDING or RUNNING job already exists for this config.
+// Returns true if a PENDING (in-flight) job already exists for this config —
+// a job's own status has no separate "now actively running" value, it stays
+// PENDING for its entire in-flight duration (see STATUS in constant/index.ts).
 // Used to prevent duplicate concurrent backup jobs on the same config.
 const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
   const startedAt = Date.now();
@@ -41,12 +43,11 @@ const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
       TableName: BACKUP_JOB_TABLE,
       IndexName: 'backupConfigId-index',
       KeyConditionExpression: 'backupConfigId = :backupConfigId',
-      FilterExpression: '#status = :pending OR #status = :running',
+      FilterExpression: '#status = :pending',
       ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: {
         ':backupConfigId': backupConfigId,
-        ':pending': JOB_STATUS.pending,
-        ':running': JOB_STATUS.running,
+        ':pending': STATUS.pending,
       },
       Limit: 1,
     })
@@ -70,7 +71,7 @@ const submitBackupJobRequest = async (params: {
       body,
     });
   } catch (error) {
-    await updateBackupConfig(backupConfigId, { backupStatus: BACKUP_STATUS.failed });
+    await updateBackupConfig(backupConfigId, { backupStatus: STATUS.failed });
     throw error;
   }
 };
@@ -116,7 +117,7 @@ const triggerArchivalBackupJob = async (params: {
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} CRM=${crm.crmName} destinationType=${destination.type}`);
 
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set backupStatus=PENDING`);
-  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
+  await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending, status: VISIBILITY_STATUS.active });
   const credentials = getDecryptedCrmCredential(user);
   const payload = {
     userId: config.userId,
@@ -184,7 +185,7 @@ const triggerBackupJob = async (params: {
     if (!crm) throw new Error(`crm_not_found:${config.crmId}`);
     if (!destination) throw new Error(`destination_not_found:${config.destinationId}`);
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending, status: STATUS.active });
+    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending, status: VISIBILITY_STATUS.active });
     const credentials = getDecryptedCrmCredential(user);
     if (!credentials) throw new SalesforceAuthExpiredError();
 
@@ -272,7 +273,8 @@ const runBackupNow = async (params: { user?: IUser; config: IBackupConfig }): Pr
 // Note: a job that FAILED its backup and was then compressed also lands here — the
 // original outcome is no longer on the record to distinguish it.
 const isBackupCompleted = (status: string): boolean =>
-  status === JOB_STATUS.success || Object.values(COMPRESSION_STATUS).includes(status);
+  status === STATUS.success ||
+  [JOB_OBJECT_STATUS.compressionInProgress, JOB_OBJECT_STATUS.compressed, JOB_OBJECT_STATUS.compressionFailed].includes(status);
 
 // Single writer for the compression lifecycle. The condition is what makes an unknown
 // or foreign backupJobId fail loudly: UpdateCommand upserts by default, so without it a
@@ -500,7 +502,7 @@ const getBackupJobsByConfigAndStatuses = async (
 };
 
 const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
-  await updateBackupConfig(config.backupConfigId, { backupStatus: BACKUP_STATUS.pending });
+  await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending });
 
   const endpoint = config.type === 'ARCHIVAL' ? '/archival/resume' : '/resume';
   const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`
@@ -623,9 +625,9 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
             recordsLastWeek += jobRecordCount;
           }
         }
-      } else if (job.status === JOB_STATUS.running || job.status === JOB_STATUS.pending) {
+      } else if (job.status === STATUS.pending) {
         runningCount++;
-      } else if (job.status === JOB_STATUS.failed || job.status === COMPRESSION_STATUS.failed) {
+      } else if (job.status === STATUS.failed || job.status === JOB_OBJECT_STATUS.compressionFailed) {
         failedCount++;
       }
     }
@@ -820,11 +822,11 @@ const getBackupJobOverview = async (
 
     const items = (result.Items ?? []) as IBackupJob[];
     for (const item of items) {
-      if (item.status === JOB_STATUS.pending) {
+      if (item.status === STATUS.pending) {
         overview.pendingStatus += 1;
-      } else if (item.status === JOB_STATUS.success) {
+      } else if (item.status === STATUS.success) {
         overview.successStatus += 1;
-      } else if (item.status === JOB_STATUS.failed) {
+      } else if (item.status === STATUS.failed) {
         overview.failedStatus += 1;
       }
     }

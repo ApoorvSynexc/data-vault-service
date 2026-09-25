@@ -49,7 +49,7 @@ import {
   getPresignedDownloadUrl,
   checkSalesforceApiLimitUsage,
 } from '../../../services';
-import { BACKUP_JOB_TABLE, RESTORE_JOB_STATUS } from '../../../constant';
+import { BACKUP_JOB_TABLE, STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
@@ -1142,8 +1142,8 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     }
   }
 
-  const isDraft = body.status === 'DRAFT';
-  const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? 'DRAFT' : 'IN_PROGRESS' };
+  const isDraft = body.status === VISIBILITY_STATUS.draft;
+  const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? VISIBILITY_STATUS.draft : STATUS.pending };
   const created = await createRestore(payload);
   if (!created) {
     return makeResponse(req, res, 400, false, 'not_exist');
@@ -1202,8 +1202,8 @@ const createRollbackHandler = async (req: IRequest, res: IResponse): Promise<voi
   if (!restoreJob) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
-  const objectPayload = restoreJob.destination.objects.map((obj => ({ name: obj.name, id: obj.id, status: RESTORE_JOB_STATUS.inProgress })));
-  await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload, status: RESTORE_JOB_STATUS.inProgress });
+  const objectPayload = restoreJob.destination.objects.map((obj => ({ name: obj.name, id: obj.id, status: JOB_OBJECT_STATUS.restoreInProgress })));
+  await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload, status: STATUS.pending });
 
   makeResponse(req, res, 200, true, 'update');
   await createRollbackService(restoreJob);
@@ -1224,13 +1224,13 @@ const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
 
-  if (restore!.status !== 'DRAFT') {
+  if (restore!.status !== VISIBILITY_STATUS.draft) {
     makeResponse(req, res, 400, false, 'restore_not_draft');
     return;
   }
 
-  await updateRestore({ restoreId, status: 'IN_PROGRESS' });
-  const restoreJob = await createRestoreJob({ ...restore!, status: 'IN_PROGRESS' });
+  await updateRestore({ restoreId, status: STATUS.pending });
+  const restoreJob = await createRestoreJob({ ...restore!, status: STATUS.pending });
 
   makeResponse(req, res, 200, true, 'update');
 
@@ -1299,7 +1299,7 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  if (restoreJob.status !== RESTORE_JOB_STATUS.success) {
+  if (restoreJob.status !== STATUS.success) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
