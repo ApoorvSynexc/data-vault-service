@@ -405,16 +405,6 @@ const getArchivedRecordById = async (
 };
 
 const RELATED_RECORDS_LIMIT = 50;
-
-/**
- * Child/junction records pointing at one parent record — used for both
- * directions of a relationship walk over the config's object tree: a real
- * child object filtered on its own FK field, or a parent object filtered on
- * "Id" (the caller passes "Id" as fkField and the parent's own id as the
- * value in that case). Same missing-table tolerance as the other lookups
- * here — an object that was configured but never actually compressed reads
- * as "no related records", not an error.
- */
 const getArchivedRelatedRecords = async (
   config: IBackupConfig,
   objectApiName: string,
