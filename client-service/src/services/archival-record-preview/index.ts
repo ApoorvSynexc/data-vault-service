@@ -5,7 +5,7 @@ import { IBackupConfig, ICrm } from '../../models';
 import { getCrmByOrgId } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery } from '../third-party/athena/query';
-import { tableExists } from '../third-party/athena/glue';
+import { tableExists, getTableColumnNames } from '../third-party/athena/glue';
 import { S3Config } from '../../utils/validate-aws-credentials';
 import { IsoDateString } from '../../utils/iso-date';
 
@@ -188,6 +188,11 @@ const CREATED_DATE_INSTANT =
   `TRY(from_iso8601_timestamp(CAST("CreatedDate" AS varchar))), ` +
   `TRY(from_unixtime(CAST(CAST("CreatedDate" AS varchar) AS bigint) / 1000, 'UTC')))`;
 
+// TEMP-GLUE-WORKAROUND: standard Salesforce datetime columns (lowercase, as Glue
+// names them). Remove with the rest of the workaround once the Glue table is healed.
+const TEMP_UNREADABLE_COLUMNS = ['createddate', 'lastmodifieddate', 'systemmodstamp'];
+const MAX_UNREADABLE_RETRIES = 15;
+
 const DEFAULT_SEARCH_LIMIT = 50;
 const MAX_SEARCH_LIMIT = 200;
 
@@ -259,9 +264,6 @@ const searchArchivalRecords = async (
   // ask for it — the merge-across-configs sort below depends on it being
   // present on every row. applyFieldSelection trims it back out afterwards
   // if the caller didn't actually request it.
-  const selectClause = fieldsCheck.fields
-    ? [...new Set([...fieldsCheck.fields, 'CreatedDate'])].map((f) => `"${f}"`).join(', ')
-    : '*';
 console.log(configs,'selectClause')
   const perConfigResults = await Promise.all(
     configs.map(async (config) => {
@@ -271,24 +273,45 @@ console.log(configs,'selectClause')
       if (!(await tableExists(databaseName, hudiTable, region))) return [];
 
       const conditions: string[] = [];
-      if (params.startDate) conditions.push(`${CREATED_DATE_INSTANT} >= from_iso8601_timestamp('${params.startDate}')`);
-      if (params.endDate) conditions.push(`${CREATED_DATE_INSTANT} <= from_iso8601_timestamp('${params.endDate}')`);
+      // TEMP-GLUE-WORKAROUND: date window disabled, it reads CreatedDate.
+      // if (params.startDate) conditions.push(`${CREATED_DATE_INSTANT} >= from_iso8601_timestamp('${params.startDate}')`);
+      // if (params.endDate) conditions.push(`${CREATED_DATE_INSTANT} <= from_iso8601_timestamp('${params.endDate}')`);
       if (filterCheck.where) conditions.push(filterCheck.where);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
       
+      // TEMP-GLUE-WORKAROUND: no `fields` -> every column except the datetime ones
+      // Athena can't read (Glue varchar vs Parquet timestamp).
+      const allColumns = fieldsCheck.fields
+        ? fieldsCheck.fields
+        : await getTableColumnNames(databaseName, hudiTable, region);
+      const excluded = new Set(TEMP_UNREADABLE_COLUMNS);
+
       // Fetch one extra row past `limit` so hasMore can be determined without
       // a second COUNT query.
-      const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "CreatedDate" DESC OFFSET ${offset} LIMIT ${limit + 1}`;
-      console.log(sql,'sql')
-      const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
-      return result.rows;
+      for (let attempt = 0; ; attempt++) {
+        const columns = fieldsCheck.fields
+          ? allColumns
+          : allColumns.filter((c) => !excluded.has(c.toLowerCase()));
+        const selectClause = columns.map((c) => `"${c}"`).join(', ');
+        const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
+        console.log(sql,'sql')
+        try {
+          const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
+          return result.rows;
+        } catch (err: any) {
+          // Custom datetime fields (X__c) hit the same error; the message names
+          // the column, so drop it and retry.
+          const bad = /Parquet column \(\[(\w+)\]/.exec(String(err?.message ?? err))?.[1]?.toLowerCase();
+          if (fieldsCheck.fields || !bad || excluded.has(bad) || attempt >= MAX_UNREADABLE_RETRIES) throw err;
+          excluded.add(bad);
+        }
+      }
     })
   );
 
-  const merged = perConfigResults
-    .flat()
-    .sort((a, b) => (getField(b, 'CreatedDate') ?? '').localeCompare(getField(a, 'CreatedDate') ?? ''));
+  // TEMP-GLUE-WORKAROUND: was sorted by CreatedDate desc. Revert after Glue table fix.
+  const merged = perConfigResults.flat();
 
   const hasMore = merged.length > limit;
   const records = merged.slice(0, limit).map((row) => applyFieldSelection(row, fieldsCheck.fields));

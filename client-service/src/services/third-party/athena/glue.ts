@@ -17,6 +17,18 @@ const getGlueClient = (region: string): GlueClient => {
   return client;
 };
 
+// Data-column names (partition keys excluded) as the Glue catalog declares them.
+export const getTableColumnNames = async (
+  databaseName: string,
+  tableName: string,
+  region: string
+): Promise<string[]> => {
+  const { Table } = await getGlueClient(region).send(
+    new GetTableCommand({ DatabaseName: databaseName, Name: tableName })
+  );
+  return (Table?.StorageDescriptor?.Columns ?? []).map((c) => c.Name ?? '').filter(Boolean);
+};
+
 // A table, once created, is never un-created — so a `true` result is cached
 // forever. A `false` result is cached only briefly: the moment compression
 // first runs for an object, existence flips false→true, and a fetch-records
