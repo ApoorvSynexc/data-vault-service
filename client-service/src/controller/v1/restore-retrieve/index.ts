@@ -1182,13 +1182,13 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
       } else {
-        await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
-        await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
+        const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
+        await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
         await initalizeRestoreTransform(restoreJob.restoreJobId);
       }
     } else {
-      await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
-      await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId });
+      const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
+      await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
       await initalizeRestoreTransform(restoreJob.restoreJobId);
     }
   } catch (error) {

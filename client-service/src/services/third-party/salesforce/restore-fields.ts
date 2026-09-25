@@ -70,15 +70,24 @@ const describeFieldNames = async (
 // failure (throws, doesn't touch any job/status record) so the caller can run
 // this across many objects independently and let one object's failure leave
 // every other object unaffected.
+//
+// Returns exactly the fields this call found missing (and, on success, just
+// created) — the caller (salesforceFieldCreation) hands this list to
+// provisionRestorePermissionSet so the permission set only ever grants access
+// to a field this restore actually created, never a pre-existing one. Must be
+// computed here, not re-derived from a later describe: by the time the
+// permission step runs, field creation has already happened, so a fresh
+// describe would find every tracking field already present and report none
+// as new.
 export const ensureRestoreTrackingFields = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiName: string
-): Promise<void> => {
+): Promise<IRestoreTrackingField[]> => {
   const existingFieldNames = await describeFieldNames(instanceUrl, tokens, objectApiName);
   const missing = RESTORE_TRACKING_FIELDS.filter((f) => !existingFieldNames.has(f.apiName));
   if (!missing.length) {
-    return;
+    return missing;
   }
 
   const deployTarget = fieldCreationTarget(objectApiName);
@@ -94,4 +103,6 @@ export const ensureRestoreTrackingFields = async (
       missing.map((field) => `${deployTarget}.${field.apiName}`)
     ),
   });
+
+  return missing;
 };

@@ -12,6 +12,7 @@ const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT
 // REQUIRED_AND_MASTER_DETAIL: Include Required AND Master-Detail Child Objects
 // SKIP_CHILDREN: Skip Child Objects
 const RESTORE_INCLUDE_CHILDS = ['REQUIRED_CHILDRENS_ONLY', 'SKIP_CHILDREN'];
+const RESTORE_INCLUDE_AUDIT_FIELDS = ['Include', 'Skip'];
 const RESTORE_CONFIG_TYPE = ['BACKUP', 'ARCHIVAL'];
 // Each configType has its own restore type set — see the configType-conditional
 // `type` field below. BACKUP never accepts DELETED_BETWEEN; ARCHIVAL never accepts CHANGED_BETWEEN.
@@ -229,6 +230,9 @@ const edgeCasesSchema = Joi.object({
   missingRequiredFieldValue: missingRequiredFieldValueSchema.optional(),
   includeChilds: Joi.string()
     .valid(...RESTORE_INCLUDE_CHILDS)
+    .optional(),
+  includeAuditFields: Joi.string()
+    .valid(...RESTORE_INCLUDE_AUDIT_FIELDS)
     .optional(),
 });
 

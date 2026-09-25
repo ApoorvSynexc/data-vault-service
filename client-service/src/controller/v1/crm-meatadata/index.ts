@@ -204,8 +204,21 @@ const buildArchivalChildRelationshipTree = async (params: {
   });
   if (!cascadeChildren.length) return { children: [], parent: [] };
 
+  // Archival deletes the source record after it's exported, so a child object
+  // the connected user can't delete has no business being offered here at
+  // all — excluded outright, not just left unexpanded, the same way the
+  // polymorphic filter above drops a relationship rather than stubbing it.
+  // filteredObjectNames (salesforceObjectFilteredList's own deletable===true
+  // filter for apexMode='archival') already keeps most of these out upstream;
+  // this is a direct, explicit check on each child's own describe response so
+  // the guarantee doesn't rest solely on that list staying in sync.
+  const deletableChildren = cascadeChildren.filter(
+    (child) => descriptionByName.get(child.name)?.deletable === true
+  );
+  if (!deletableChildren.length) return { children: [], parent: [] };
+
   const childNodes = await Promise.all(
-    cascadeChildren.map(async (child): Promise<ISalesforceArchivalChildTreeNode> => {
+    deletableChildren.map(async (child): Promise<ISalesforceArchivalChildTreeNode> => {
       const childDescription = descriptionByName.get(child.name)!;
       if (visitedObjectNames.has(child.name)) {
         return { ...child, children: [], parent: [] };
@@ -237,8 +250,10 @@ const buildArchivalChildRelationshipTree = async (params: {
   // Of this level's own children, the cascadeDelete fields on the ones that are
   // themselves a cascade-delete child in another master-detail relationship —
   // mirrors getSalesforceDescribeObject's parent-detection, reusing the
-  // description already fetched above instead of re-describing.
-  const parent = cascadeChildren
+  // description already fetched above instead of re-describing. Scoped to
+  // deletableChildren, not cascadeChildren — a child excluded for lacking
+  // delete access isn't in the tree, so it shouldn't surface here either.
+  const parent = deletableChildren
     .filter((child) => child.cascadeDelete)
     .flatMap((child) => getCascadeDeleteFields(descriptionByName.get(child.name)!.fields));
 
