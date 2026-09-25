@@ -4,6 +4,7 @@ import {
   resolveArchivalConfigsForObject,
   searchArchivalRecords,
   applyFieldSelection,
+  getField,
   validateFields,
   getArchivedRecordById,
   getArchivedRelatedRecords,
@@ -181,7 +182,7 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
 
     const parentEdge = findParentEdge(config.objects, resolved.objName);
     if (parentEdge) {
-      const parentId = record[parentEdge.fieldApiName];
+      const parentId = getField(record, parentEdge.fieldApiName);
       if (parentId) {
         const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId);
         if (parentRecord) {
