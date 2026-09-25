@@ -155,15 +155,38 @@ export const buildMainFieldSchemaKey = (identity: {
 // Glue table's columns at the object's very first backup and never pick up
 // fields added or removed afterward.
 export const pickMainTableColumns = (
-  entries: Array<{ context: Array<{ name: string }> }>,
-  key: string
+  entries: Array<{ context: Array<{ name: string; type?: string }> }>,
+  key: string,
+  typing: MainColumnTyping = 'string'
 ): IGlueColumnDef[] => {
   const latest = entries[entries.length - 1];
   if (!latest) {
     throw new Error(`no stored field schema under ${key}`);
   }
-  return latest.context.map((field) => ({ name: field.name, type: 'string' }));
+  return latest.context.map((field) => ({
+    name: field.name,
+    type: toGlueColumnType(field.type, typing),
+  }));
 };
+
+// Salesforce datetime fields the archival Spark job writes as native Parquet
+// timestamps (int64 TIMESTAMP(MICROS)). Athena refuses to read one through a
+// varchar column ("Unsupported Trino column type (varchar) for Parquet column"),
+// so the Glue type has to match the physical Parquet type.
+const NATIVE_TIMESTAMP_SF_TYPES = new Set(['datetime']);
+
+// How resolved columns are typed:
+//  - 'string': every column is string. Required for the raw CSV table
+//    (OpenCSVSerde reads everything as text) and kept for backup Parquet, whose
+//    tables have always been all-string and which restore/retrieve already copes with.
+//  - 'archival-parquet': datetime fields become timestamp to match the archival
+//    Parquet files; everything else stays string.
+export type MainColumnTyping = 'string' | 'archival-parquet';
+
+const toGlueColumnType = (salesforceType: string | undefined, typing: MainColumnTyping): string =>
+  typing === 'archival-parquet' && salesforceType && NATIVE_TIMESTAMP_SF_TYPES.has(salesforceType)
+    ? 'timestamp'
+    : 'string';
 
 // The current-state table's columns come from the client's S3-stored field
 // schema instead of a Hudi/Parquet footer inspection — see pickMainTableColumns.
@@ -175,11 +198,12 @@ const resolveMainTableColumns = async (
     policyConfigType: 'backup' | 'archival';
     backupConfigId: string;
     objectName: string;
-  }
+  },
+  typing: MainColumnTyping = 'string'
 ): Promise<IGlueColumnDef[]> => {
   const key = buildMainFieldSchemaKey(identity);
-  const entries = await getStoredEntries<Array<{ name: string }>>(destConfig, key);
-  return pickMainTableColumns(entries, key);
+  const entries = await getStoredEntries<Array<{ name: string; type?: string }>>(destConfig, key);
+  return pickMainTableColumns(entries, key, typing);
 };
 
 const buildHudiTableName = (backupConfigId: string, objectName: string): string =>
@@ -295,8 +319,14 @@ const resolveTableShape = async (
   identity: ITableIdentity,
   dataset: 'main_backup_files' | 'delta'
 ): Promise<{ glueColumns: Column[]; finalPartitionKeys: { name: string; type: string }[] }> => {
+  // Only the archival current-state Parquet carries native timestamps; the
+  // delta table is a fixed all-string schema and backup Parquet stays string.
+  const typing: MainColumnTyping =
+    identity.policyConfigType === 'archival' ? 'archival-parquet' : 'string';
   const columns =
-    dataset === 'delta' ? DELTA_TABLE_COLUMNS : await resolveMainTableColumns(destConfig, identity);
+    dataset === 'delta'
+      ? DELTA_TABLE_COLUMNS
+      : await resolveMainTableColumns(destConfig, identity, typing);
 
   // Both tables are always laid out on S3 as year=/month= partitions — see
   // buildCompressionRootKey / syncHudiTablePartitions.
