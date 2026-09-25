@@ -259,9 +259,6 @@ const searchArchivalRecords = async (
   // ask for it — the merge-across-configs sort below depends on it being
   // present on every row. applyFieldSelection trims it back out afterwards
   // if the caller didn't actually request it.
-  const selectClause = fieldsCheck.fields
-    ? [...new Set([...fieldsCheck.fields, 'CreatedDate'])].map((f) => `"${f}"`).join(', ')
-    : '*';
 console.log(configs,'selectClause')
   const perConfigResults = await Promise.all(
     configs.map(async (config) => {
@@ -271,24 +268,26 @@ console.log(configs,'selectClause')
       if (!(await tableExists(databaseName, hudiTable, region))) return [];
 
       const conditions: string[] = [];
-      if (params.startDate) conditions.push(`${CREATED_DATE_INSTANT} >= from_iso8601_timestamp('${params.startDate}')`);
-      if (params.endDate) conditions.push(`${CREATED_DATE_INSTANT} <= from_iso8601_timestamp('${params.endDate}')`);
+      // TEMP-GLUE-WORKAROUND: date window disabled, it reads CreatedDate.
+      // if (params.startDate) conditions.push(`${CREATED_DATE_INSTANT} >= from_iso8601_timestamp('${params.startDate}')`);
+      // if (params.endDate) conditions.push(`${CREATED_DATE_INSTANT} <= from_iso8601_timestamp('${params.endDate}')`);
       if (filterCheck.where) conditions.push(filterCheck.where);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
       
+      // TEMP-GLUE-WORKAROUND: only Id and Name are selected (no SELECT *, no
+      // datetime columns) while the Glue column types are being fixed.
       // Fetch one extra row past `limit` so hasMore can be determined without
       // a second COUNT query.
-      const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "CreatedDate" DESC OFFSET ${offset} LIMIT ${limit + 1}`;
+      const sql = `SELECT "Id", "Name" FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
       console.log(sql,'sql')
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
       return result.rows;
     })
   );
 
-  const merged = perConfigResults
-    .flat()
-    .sort((a, b) => (getField(b, 'CreatedDate') ?? '').localeCompare(getField(a, 'CreatedDate') ?? ''));
+  // TEMP-GLUE-WORKAROUND: was sorted by CreatedDate desc. Revert after Glue table fix.
+  const merged = perConfigResults.flat();
 
   const hasMore = merged.length > limit;
   const records = merged.slice(0, limit).map((row) => applyFieldSelection(row, fieldsCheck.fields));
