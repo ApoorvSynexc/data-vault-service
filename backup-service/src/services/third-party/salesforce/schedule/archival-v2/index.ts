@@ -87,7 +87,7 @@ const isDateLiteral = (value: string): boolean =>
 // with a message naming the actual keyword, instead of letting it through to
 // fail later with a parser error that points at an unrelated token.
 const TOP_LEVEL_CLAUSE_RE =
-  /\b(LIMIT|OFFSET|ORDER\s+BY|GROUP\s+BY|HAVING|USING\s+SCOPE|USER_MODE|SYSTEM_MODE|FOR\s+VIEW|FOR\s+REFERENCE)\b/i;
+  /\b(LIMIT|OFFSET|ORDER\s+BY|GROUP\s+BY|HAVING|USING\s+SCOPE|USER_MODE|SYSTEM_MODE|FOR\s+VIEW|FOR\s+REFERENCE|FOR\s+UPDATE|UPDATE\s+TRACKING|UPDATE\s+VIEWSTAT|SECURITY_ENFORCED)\b/i;
 const assertNoTopLevelClauses = (body: string): void => {
   // Drop quoted string literals first so a legitimate value like
   // "Notes__c LIKE '%offset%'" isn't mistaken for the clause keyword.
