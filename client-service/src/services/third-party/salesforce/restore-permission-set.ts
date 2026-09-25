@@ -1,6 +1,6 @@
 import { salesforceRequest, SalesforceTokens } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
-import { RESTORE_TRACKING_FIELDS } from './restore-fields';
+import { IRestoreTrackingField } from './restore-fields';
 
 // Label carries the '360 ...' branding; the API/developer name can't start
 // with a digit (Salesforce naming rule for any metadata fullName — the same
@@ -27,22 +27,26 @@ const fetchRestorePermissionSetId = async (
 };
 
 // The permissionset XML element behind each verb Salesforce names in a
-// dependency error ("... depends on permission(s): Read Account").
+// dependency error ("... depends on permission(s): Read Account"). Restore
+// only ever grants Read/Create/Edit (see RESTORE_OBJECT_PERMISSIONS) — Delete/
+// View All/Modify All are deliberately absent here, not just unused: a
+// dependency error demanding one of them has no entry to resolve to, so
+// deployWithDependencies's `element &&` filter drops it and the original
+// error surfaces to the caller instead of silently escalating privilege.
 const PERMISSION_ELEMENTS: Record<string, string> = {
   read: 'allowRead',
   create: 'allowCreate',
   edit: 'allowEdit',
-  delete: 'allowDelete',
-  'view all': 'viewAllRecords',
-  'modify all': 'modifyAllRecords',
 };
 
-const ALL_PERMISSION_ELEMENTS = ['allowCreate', 'allowDelete', 'allowEdit', 'allowRead', 'modifyAllRecords', 'viewAllRecords'];
-
-// What a restored object needs: upsert rows and read them back. No delete.
+// What a restored object needs: upsert rows and read them back. No delete,
+// no view-all/modify-all — every object in the permission set gets exactly
+// these three permissions, and objectPermissionsXml never emits any other
+// <objectPermissions> element.
 const RESTORE_OBJECT_PERMISSIONS = ['allowCreate', 'allowEdit', 'allowRead'];
 
-// object API name -> the permission elements set to true for it.
+// object API name -> the permission elements set to true for it. Always a
+// subset of RESTORE_OBJECT_PERMISSIONS.
 type ObjectPermissionMap = Map<string, Set<string>>;
 
 const objectPermissionsXml = (permissions: ObjectPermissionMap): string =>
@@ -51,7 +55,7 @@ const objectPermissionsXml = (permissions: ObjectPermissionMap): string =>
       ([name, granted]) =>
         `    <objectPermissions>\n` +
         `        <object>${name}</object>\n` +
-        ALL_PERMISSION_ELEMENTS.map(
+        RESTORE_OBJECT_PERMISSIONS.map(
           (element) => `        <${element}>${granted.has(element)}</${element}>\n`
         ).join('') +
         `    </objectPermissions>`
@@ -71,7 +75,7 @@ const objectPermissionsXml = (permissions: ObjectPermissionMap): string =>
 // (multiple deps comma-separated; multiple component failures ';'-separated
 // by deployMetadata).
 const DEPENDENCY_ERROR = /depends on permission\(s\):\s*([^;]+)/g;
-const DEPENDENCY_ENTRY = /^(read|create|edit|delete|view all|modify all)\s+(\S+)$/i;
+const DEPENDENCY_ENTRY = /^(read|create|edit)\s+(\S+)$/i;
 
 export const parseMissingPermissions = (errorMessage: string): { object: string; element: string }[] =>
   [...errorMessage.matchAll(DEPENDENCY_ERROR)].flatMap(([, list]) =>
@@ -82,10 +86,13 @@ export const parseMissingPermissions = (errorMessage: string): { object: string;
       .map(([, verb, object]) => ({ object, element: PERMISSION_ELEMENTS[verb.toLowerCase()] }))
   );
 
-const fieldPermissionsXml = (objectApiNames: string[]): string =>
-  objectApiNames
-    .flatMap((name) =>
-      RESTORE_TRACKING_FIELDS.map(
+// Field permissions have no "create" concept in Salesforce's metadata — only
+// readable/editable — so granting exactly those two is the whole of "read
+// and edit only" for a field.
+const fieldPermissionsXml = (newFieldsByObject: Map<string, IRestoreTrackingField[]>): string =>
+  [...newFieldsByObject]
+    .flatMap(([name, fields]) =>
+      fields.map(
         (field) =>
           `    <fieldPermissions>\n` +
           `        <field>${name}.${field.apiName}</field>\n` +
@@ -111,7 +118,7 @@ const fieldPermissionsXml = (objectApiNames: string[]): string =>
 const deployRestorePermissions = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  objectApiNames: string[],
+  newFieldsByObject: Map<string, IRestoreTrackingField[]>,
   permissions: ObjectPermissionMap
 ): Promise<void> => {
   const permissionSetXml =
@@ -119,7 +126,7 @@ const deployRestorePermissions = async (
     `<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
     `    <label>${RESTORE_PERMISSION_SET_LABEL}</label>\n` +
     `${objectPermissionsXml(permissions)}\n` +
-    `${fieldPermissionsXml(objectApiNames)}\n` +
+    `${fieldPermissionsXml(newFieldsByObject)}\n` +
     `</PermissionSet>`;
 
   await deployMetadata(instanceUrl, tokens, {
@@ -143,7 +150,8 @@ const MAX_DEPENDENCY_ATTEMPTS = 5;
 const deployWithDependencies = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
-  objectApiNames: string[]
+  objectApiNames: string[],
+  newFieldsByObject: Map<string, IRestoreTrackingField[]>
 ): Promise<void> => {
   const permissions: ObjectPermissionMap = new Map(
     objectApiNames.map((name) => [name, new Set(RESTORE_OBJECT_PERMISSIONS)])
@@ -151,7 +159,7 @@ const deployWithDependencies = async (
 
   for (let attempt = 0; attempt < MAX_DEPENDENCY_ATTEMPTS; attempt++) {
     try {
-      await deployRestorePermissions(instanceUrl, tokens, objectApiNames, permissions);
+      await deployRestorePermissions(instanceUrl, tokens, newFieldsByObject, permissions);
       return;
     } catch (error: any) {
       const missing = parseMissingPermissions(error?.message ?? String(error)).filter(
@@ -213,17 +221,25 @@ const assignPermissionSetToUser = async (
 // the whole deploy for every object in it, not just the missing one.
 // Parent objects Salesforce requires as dependencies (Account for Contract,
 // etc.) are added automatically, with only the permissions it demands.
+//
+// newFieldsByObject names, per object, exactly which tracking fields
+// salesforceFieldCreation found missing (and created) this run — the caller
+// (salesforceFieldsPermission) passes through ensureRestoreTrackingFields's
+// own return value. An object salesforceFieldCreation never reached (or
+// failed for) simply has no entry, so it gets object permissions only, never
+// a field-permission grant for a field that might not exist.
 export const provisionRestorePermissionSet = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   salesforceUserId: string,
-  objectApiNames: string[]
+  objectApiNames: string[],
+  newFieldsByObject: Map<string, IRestoreTrackingField[]>
 ): Promise<void> => {
   if (!objectApiNames.length) {
     return;
   }
 
-  await deployWithDependencies(instanceUrl, tokens, objectApiNames);
+  await deployWithDependencies(instanceUrl, tokens, objectApiNames, newFieldsByObject);
 
   const permissionSetId = await fetchRestorePermissionSetId(instanceUrl, tokens);
   if (!permissionSetId) {

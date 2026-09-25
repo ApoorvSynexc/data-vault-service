@@ -13,7 +13,7 @@ import { updateRestore, getRestoreById } from '../restore';
 import { httpRequest } from '../../utils/http-request';
 import { timer } from '../../utils/helper';
 import { SalesforceTokens } from '../third-party/salesforce';
-import { ensureRestoreTrackingFields } from '../third-party/salesforce/restore-fields';
+import { ensureRestoreTrackingFields, IRestoreTrackingField } from '../third-party/salesforce/restore-fields';
 import { provisionRestorePermissionSet } from '../third-party/salesforce/restore-permission-set';
 import { runBackupNow, getBackupJobById, isBackupCompleted, triggerBackupJob } from '../backup-job';
 import { runMetadataComparisonForConfig, hasMetadataChanged, IMetadataComparisonResult } from '../metadata-sync';
@@ -521,6 +521,10 @@ const failObjects = async (restoreJobId: string, objectNames: string[], status: 
 interface ArchivalFieldJobOutcome {
   updates: UpdateRestoreObjectParams[];
   succeededNames: string[];
+  // object API name -> tracking fields ensureRestoreTrackingFields found
+  // missing (and created) for it — see provisionRestorePermissionSet's own
+  // doc for why this can't be re-derived later via a fresh describe.
+  newFieldsByObject: Map<string, IRestoreTrackingField[]>;
 }
 
 const processArchivalFieldJobTree = async (
@@ -543,8 +547,9 @@ const processArchivalFieldJobTree = async (
       }
 
       try {
-        await ensureRestoreTrackingFields(instanceUrl, tokens, node.name);
+        const created = await ensureRestoreTrackingFields(instanceUrl, tokens, node.name);
         outcome.succeededNames.push(node.name);
+        outcome.newFieldsByObject.set(node.name, created);
         await processArchivalFieldJobTree(node.children ?? [], instanceUrl, tokens, null, outcome);
       } catch (error: any) {
         const message = error?.message ?? String(error);
@@ -614,14 +619,19 @@ const runRestoreFieldJob = async (
   };
 
   let fieldsCreatedObjectNames: string[];
+  // object API name -> tracking fields actually created for it this run —
+  // threaded into provisionRestorePermissionSet below so the permission set
+  // only ever grants field access to a field this restore just created.
+  let newFieldsByObject: Map<string, IRestoreTrackingField[]>;
 
   if (configType === 'ARCHIVAL') {
-    const outcome: ArchivalFieldJobOutcome = { updates: [], succeededNames: [] };
+    const outcome: ArchivalFieldJobOutcome = { updates: [], succeededNames: [], newFieldsByObject: new Map() };
     await processArchivalFieldJobTree(restorejob.destination.objects, instanceUrl, tokens, null, outcome);
     if (outcome.updates.length) {
       await updateRestoreJob({ restoreJobId: restorejob.restoreJobId, objects: outcome.updates });
     }
     fieldsCreatedObjectNames = outcome.succeededNames;
+    newFieldsByObject = outcome.newFieldsByObject;
   } else {
     const fieldResults = await Promise.allSettled(
       restorejob.destination.objects.map((object) =>
@@ -631,10 +641,12 @@ const runRestoreFieldJob = async (
 
     const succeededNames: string[] = [];
     const fieldFailures: UpdateRestoreObjectParams[] = [];
+    newFieldsByObject = new Map();
     fieldResults.forEach((result, index) => {
       const objectName = restorejob.destination.objects[index].name;
       if (result.status === 'fulfilled') {
         succeededNames.push(objectName);
+        newFieldsByObject.set(objectName, result.value);
         return;
       }
       const error: any = result.reason;
@@ -665,7 +677,7 @@ const runRestoreFieldJob = async (
   }
 
   try {
-    await provisionRestorePermissionSet(instanceUrl, tokens, salesforceUserId, fieldsCreatedObjectNames);
+    await provisionRestorePermissionSet(instanceUrl, tokens, salesforceUserId, fieldsCreatedObjectNames, newFieldsByObject);
   } catch (error: any) {
     const message = error?.message ?? String(error);
     logger.error(

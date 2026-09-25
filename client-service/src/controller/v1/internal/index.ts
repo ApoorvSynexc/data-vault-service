@@ -121,8 +121,8 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         const { triggerSource } = req.body;
 
         if(triggerSource?.name === 'CREATE_RESTORE') {
-          await salesforceFieldCreation({ restoreJobId: triggerSource.entityId });
-          await salesforceFieldsPermission({ restoreJobId: triggerSource.entityId });
+          const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: triggerSource.entityId });
+          await salesforceFieldsPermission({ restoreJobId: triggerSource.entityId, newFieldsByObject });
           await initalizeRestoreTransform(triggerSource.entityId);
         } else {
           await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });

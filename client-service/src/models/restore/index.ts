@@ -135,6 +135,11 @@ export interface IRestoreEdgeCases {
   recordTypeMissing?: IRestoreRecordTypeMissing;
   missingRequiredFieldValue?: IRestoreMissingRequiredFieldValue;
   includeChilds?: 'REQUIRED_CHILDRENS_ONLY' | 'SKIP_CHILDREN';
+  // Whether the restore should write the original CreatedDate/CreatedById/
+  // LastModifiedDate/LastModifiedById values back (requires the destination
+  // org's "Create Audit Fields" permission) or leave them to Salesforce's
+  // normal insert-time defaults.
+  includeAuditFields?: 'Include' | 'Skip';
 }
 
 export interface IRestoreMergeRuleField {
