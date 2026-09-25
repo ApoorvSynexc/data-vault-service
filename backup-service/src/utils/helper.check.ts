@@ -122,4 +122,16 @@ assert.strictEqual(formatValueByDataType('-$50.00', 'currency'), '-50.00');
 // Non-numeric types are untouched by the sanitizer — still quoted as before.
 assert.strictEqual(formatValueByDataType('Acme, Inc.', 'string'), `'Acme, Inc.'`);
 
+// ─── 6. formatValueByDataType('time') — normalized to Salesforce's HH:MM:SS.sssZ literal ─
+// A bare "HH:MM" (the common time-picker shape) gets seconds/millis/Z filled in.
+assert.strictEqual(formatValueByDataType('14:30', 'time'), '14:30:00.000Z');
+// A single-digit hour is padded.
+assert.strictEqual(formatValueByDataType('9:05', 'time'), '09:05:00.000Z');
+// "HH:MM:SS" gets millis/Z filled in.
+assert.strictEqual(formatValueByDataType('09:05:07', 'time'), '09:05:07.000Z');
+// Already-correct input round-trips unchanged.
+assert.strictEqual(formatValueByDataType('14:30:00.500Z', 'time'), '14:30:00.500Z');
+// A short millis fraction is padded out to 3 digits, not left short.
+assert.strictEqual(formatValueByDataType('14:30:00.5', 'time'), '14:30:00.500Z');
+
 console.log('helper.check: OK');
