@@ -193,13 +193,12 @@ const DATASET_S3_FOLDER: Record<'main_backup_files' | 'delta', string> = {
   delta: 'deltas',
 };
 
-// The delta dataset's root flips to the archival S3 prefix for an archival
-// config — that's where Java's ArchivalService actually writes the
-// schema-only delta Hudi table (PathUtils.archivalDeltaHudi, scoped by the
-// same backupConfigId Node passes as the Spark job's "jobId"). main_backup_files
-// stays on the literal 'backup' prefix regardless of policyConfigType — that's
-// ensureHudiCurrentStateTable's own, separate, pre-existing behavior, left
-// untouched here.
+// An archival config's data lives under the `archival/` S3 prefix: the
+// schema-only delta Hudi table (PathUtils.archivalDeltaHudi) and the
+// current-state table, which is written to `main_archival_files/` rather than
+// `main_backup_files/`. Both are scoped by the same backupConfigId Node passes
+// as the Spark job's "jobId". A backup config keeps the `backup/` prefix and
+// the original folder names.
 const buildCompressionRootKey = (
   crmName: string,
   crmId: string,
@@ -208,8 +207,11 @@ const buildCompressionRootKey = (
   dataset: 'main_backup_files' | 'delta',
   policyConfigType: 'backup' | 'archival' = 'backup'
 ): string => {
-  const root = dataset === 'delta' && policyConfigType === 'archival' ? 'archival' : 'backup';
-  return `${crmName}/${crmId}/${root}/${backupConfigId}/${DATASET_S3_FOLDER[dataset]}/${objectName}/`;
+  const isArchival = policyConfigType === 'archival';
+  const root = isArchival ? 'archival' : 'backup';
+  const folder =
+    dataset === 'main_backup_files' && isArchival ? 'main_archival_files' : DATASET_S3_FOLDER[dataset];
+  return `${crmName}/${crmId}/${root}/${backupConfigId}/${folder}/${objectName}/`;
 };
 
 export interface IEnsureCompressionTableParams {
@@ -336,8 +338,12 @@ const syncHudiTableSchema = async (
     cols.map((c) => `${c.Name}:${c.Type}`).join(',');
   const columnsMatch = signature(Table?.StorageDescriptor?.Columns) === signature(glueColumns);
   const hasProjection = Table?.Parameters?.['projection.enabled'] === 'true';
+  // Heals tables created before the archival root moved to `archival/…`: their
+  // stored Location still points at the empty `backup/…` folder.
+  const expectedLocation = `s3://${destConfig.bucketName}/${rootKey}`;
+  const locationMatches = Table?.StorageDescriptor?.Location === expectedLocation;
 
-  if (columnsMatch && hasProjection) {
+  if (columnsMatch && hasProjection && locationMatches) {
     return;
   }
 
@@ -350,7 +356,7 @@ const syncHudiTableSchema = async (
         StorageDescriptor: {
           ...PARQUET_STORAGE_DESCRIPTOR_BASE,
           Columns: glueColumns,
-          Location: Table?.StorageDescriptor?.Location ?? '',
+          Location: expectedLocation,
         },
         Parameters: {
           ...(Table?.Parameters ?? {}),
