@@ -562,7 +562,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
       status: objectFinalStatus,
       errors: storedErrors,
     },
-  });
+  }); 
 
   return objectFinalStatus;
 };
