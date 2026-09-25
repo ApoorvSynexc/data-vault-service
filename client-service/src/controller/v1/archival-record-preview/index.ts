@@ -126,6 +126,29 @@ const findParentEdge = (nodes: any[] | undefined, targetName: string): { parentN
   return null;
 };
 
+interface IRelatedObject {
+  objectName: string;
+  relationship: 'child' | 'parent';
+  fieldApiName: string;
+  records: Record<string, string>[];
+}
+
+const RELATED_LOOKUP_CONCURRENCY = 4;
+
+// Runs async tasks with at most `limit` in flight, preserving result order.
+const runWithConcurrency = async <T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> => {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+};
+
 /**
  * POST /archival-preview/salesforce/record-detail
  * Body: { orgId, objName, recordId, fields? }
@@ -168,36 +191,39 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
     if (!record) continue;
 
     const node = findObjectNode(config.objects, resolved.objName);
-    const relatedObjects: { objectName: string; relationship: 'child' | 'parent'; fieldApiName: string; records: Record<string, string>[] }[] = [];
-
-    for (const child of node?.children ?? []) {
-      if (!child?.name || !child?.fieldApiName) continue;
-      const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId);
-      if (childRecords.length) {
-        relatedObjects.push({
-          objectName: child.name,
-          relationship: 'child',
-          fieldApiName: child.fieldApiName,
-          records: childRecords.map((r) => applyFieldSelection(r, fieldsCheck.fields)),
-        });
-      }
-    }
+    const childLookups = (node?.children ?? [])
+      .filter((child: any) => child?.name && child?.fieldApiName)
+      .map((child: any) => async (): Promise<IRelatedObject | null> => {
+        const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId, fieldsCheck.fields);
+        return childRecords.length
+          ? {
+              objectName: child.name,
+              relationship: 'child',
+              fieldApiName: child.fieldApiName,
+              records: childRecords.map((r) => applyFieldSelection(r, fieldsCheck.fields)),
+            }
+          : null;
+      });
 
     const parentEdge = findParentEdge(config.objects, resolved.objName);
-    if (parentEdge) {
-      const parentId = getField(record, parentEdge.fieldApiName);
-      if (parentId) {
-        const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId);
-        if (parentRecord) {
-          relatedObjects.push({
+    const parentId = parentEdge ? getField(record, parentEdge.fieldApiName) : undefined;
+    const parentLookup = async (): Promise<IRelatedObject | null> => {
+      if (!parentEdge || !parentId) return null;
+      const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId, fieldsCheck.fields);
+      return parentRecord
+        ? {
             objectName: parentEdge.parentNode.name,
             relationship: 'parent',
             fieldApiName: parentEdge.fieldApiName,
             records: [applyFieldSelection(parentRecord, fieldsCheck.fields)],
-          });
-        }
-      }
-    }
+          }
+        : null;
+    };
+
+    // Children and parent are independent lookups — run them concurrently
+    // (bounded, so a wide object tree can't flood Athena's query queue).
+    const lookups = await runWithConcurrency([...childLookups, parentLookup], RELATED_LOOKUP_CONCURRENCY);
+    const relatedObjects = lookups.filter((r): r is IRelatedObject => r !== null);
 
     makeResponse(req, res, 200, true, 'fetch', {
       configId: config.backupConfigId,

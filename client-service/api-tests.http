@@ -13,7 +13,7 @@ Authorization: Bearer {{authToken}}
 {
  
   "orgId": "00Df600000ULYSBEA5",
-  "objName": "Account",
+  "objName": "lead",
 
 
   "limit": 50,
@@ -26,9 +26,9 @@ Content-Type: application/json
 Authorization: Bearer {{authToken}}
 
 {
-  "orgId": "00Dbm00000u7PhOEAU",
+  "orgId": "00Df600000ULYSBEA5",
   "objName": "Account",
-  "recordId": "001bm00002YUEh4AAH",
+  "recordId": "001f600000ehwT7AAI",
   "fields": ["Id", "Name"]
 }
 
