@@ -188,6 +188,28 @@ const CREATED_DATE_INSTANT =
   `TRY(from_iso8601_timestamp(CAST("CreatedDate" AS varchar))), ` +
   `TRY(from_unixtime(CAST(CAST("CreatedDate" AS varchar) AS bigint) / 1000, 'UTC')))`;
 
+// Athena has no SELECT * EXCEPT, so the column list is read from the catalog.
+// CreatedDate is left out because the Glue type (varchar) disagrees with the
+// Parquet type (timestamp) on some archival tables, which fails the whole query.
+const EXCLUDED_COLUMNS = new Set(['createddate']);
+
+const buildSelectClause = async (
+  hudiTable: string,
+  databaseName: string,
+  region: string,
+  outputLocation?: string
+): Promise<string> => {
+  const sql =
+    `SELECT column_name FROM information_schema.columns ` +
+    `WHERE table_schema = '${databaseName}' AND table_name = '${hudiTable}' ORDER BY ordinal_position`;
+  const result = await runAthenaQuery(sql, databaseName, region, outputLocation, 1000);
+  const columns = result.rows
+    .map((row) => row.column_name)
+    .filter((name): name is string => !!name && !EXCLUDED_COLUMNS.has(name.toLowerCase()))
+    .map((name) => `"${name.replace(/"/g, '""')}"`);
+  return columns.length ? columns.join(', ') : '"Id"';
+};
+
 const DEFAULT_SEARCH_LIMIT = 50;
 const MAX_SEARCH_LIMIT = 200;
 
@@ -279,7 +301,8 @@ console.log(configs,'selectClause')
       // datetime columns) while the Glue column types are being fixed.
       // Fetch one extra row past `limit` so hasMore can be determined without
       // a second COUNT query.
-      const sql = `SELECT "Id", "Name" FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
+      const selectClause = await buildSelectClause(hudiTable, databaseName, region, outputLocation);
+      const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
       console.log(sql,'sql')
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
       return result.rows;
@@ -320,7 +343,8 @@ const getArchivedRecordById = async (
 
   if (!(await tableExists(databaseName, hudiTable, region))) return null;
 
-  const sql = `SELECT * FROM "${hudiTable}" WHERE "Id" = '${recordId}' LIMIT 1`;
+  const selectClause = await buildSelectClause(hudiTable, databaseName, region, outputLocation);
+  const sql = `SELECT ${selectClause} FROM "${hudiTable}" WHERE "Id" = '${recordId}' LIMIT 1`;
   const result = await runAthenaQuery(sql, databaseName, region, outputLocation, 1);
   return result.rows[0] ?? null;
 };
