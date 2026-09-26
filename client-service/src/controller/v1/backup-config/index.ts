@@ -433,6 +433,7 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   }
 
   makeResponse(req, res, 201, true, 'create');
+  runMetadataComparisonForConfig(config);
   initalizePayloadTransform(config.backupConfigId).catch((err) => {
     logger.error('EMR job failed after response sent:', err?.message ?? err);
   });
