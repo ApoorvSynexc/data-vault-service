@@ -21,9 +21,9 @@ import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
 import { S3Config } from '../../utils/validate-aws-credentials';
 
-export { FilterError, buildAthenaFilterWhere } from './athena-filter';
+export { FilterError, buildAthenaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import { buildAthenaFilterWhere, buildDeltaFilterWhere } from './athena-filter';
+import { buildAthenaFilterWhere, buildDeltaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 import {
   pairedColumns,
   IPageKey,
@@ -39,6 +39,7 @@ import {
   buildFieldDeltaSql,
   buildHudiCountSql,
   buildDeltaCountSql,
+  buildValidateQuerySql,
   recordIdsWhere,
   validateColumns,
 } from './athena-fetch';
@@ -1147,6 +1148,107 @@ const resolveDryRunObjects = async (params: IDryRunParams): Promise<ICountTarget
   }
 };
 
+// ---------------------------------------------------------------------------
+// POST /retrieve/validate-query — SOQL-to-Athena filter validation
+// ---------------------------------------------------------------------------
+
+export interface IValidateQueryParams {
+  backupConfigId: string;
+  configType: ConfigType;
+  objectApiName: string;
+  // Same IRestoreFilters shape a restore's FILTER scope carries per object
+  // (selection.restoreScope.filters[].filter) — SOQL here, but AND/OR compile
+  // through the identical converter.
+  filter: IRestoreFilters;
+  userId: string;
+  // The authenticated caller, straight from req.user! — same two-field shape
+  // IFetchMissingFieldsParams already uses: userId for the ownership check
+  // above, user for the live describe call below (its crmCredential already
+  // resolves to whichever org the caller's session is connected to, same as
+  // retrieveMissingFields/retrieveRequiredFields/dryRunDiff).
+  user: IUser;
+}
+
+export type IValidateQueryOutcome =
+  | { ok: true; value: { matched: boolean } }
+  | { ok: false; error: 'not_exist' | 'crm_not_connected' };
+
+/**
+ * Validates one FILTER-scope condition by actually running it: converts it to
+ * an Athena WHERE clause (buildAthenaFilterWhere — the same converter
+ * dry-run/dry-run-diff use, so a query that validates here compiles
+ * identically wherever else it's used), then runs
+ * `SELECT Id FROM <object's Hudi table> WHERE <clause> LIMIT 1` against the
+ * object's real compressed data.
+ *
+ * Deliberately existence-only (LIMIT 1, Id-only projection) rather than a
+ * preview — this endpoint answers "is this query valid and does it match
+ * anything", not "show me the records". A field name that's structurally
+ * valid SOQL but doesn't exist on this object's actual schema surfaces here
+ * as a genuine Athena failure (COLUMN_NOT_FOUND) — buildAthenaFilterWhere's
+ * parse-time checks alone can't catch that, since they never see the real
+ * column set.
+ *
+ * A live Salesforce describe resolves each dotted SOQL field's real type, so
+ * an Address/Geolocation compound field (MailingAddress.City,
+ * Some_Location__c.Latitude) can be mapped to its real Hudi column instead of
+ * being rejected outright as a relationship traversal — see
+ * athena-filter.ts's FieldTypeResolver/mapCompoundSubField for the mapping
+ * rule and its own describe-backed re-validation.
+ *
+ * FilterError from buildAthenaFilterWhere propagates uncaught — the caller
+ * maps it to the same 400 dry-run's FILTER scope already uses for a bad
+ * filter.
+ *
+ * Returns not_exist when the config doesn't exist, isn't owned by the
+ * caller, or the object has no compressed Hudi table yet (nothing has been
+ * backed up for it, so there is nothing to validate against). Returns
+ * crm_not_connected when the caller has no usable Salesforce connection to
+ * describe the object with.
+ */
+const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidateQueryOutcome> => {
+  const config = await getBackupConfigById(params.backupConfigId);
+  if (!config || config.userId !== params.userId) return { ok: false, error: 'not_exist' };
+
+  if (!params.user.crmCredential || !params.user.crmProfile?.instanceUrl) {
+    return { ok: false, error: 'crm_not_connected' };
+  }
+
+  const described = await salesforceObjectDescribe({ user: params.user, objectName: params.objectApiName });
+  const fieldMetaByName = new Map<string, ISoqlFieldMeta>(
+    described.fields.map((f) => [f.name.toLowerCase(), { name: f.name, type: f.type }])
+  );
+  const resolver: FieldTypeResolver = {
+    resolve: (name) => fieldMetaByName.get(name.toLowerCase()),
+    // Real describe metadata, not a guessed naming convention — Salesforce's
+    // own compoundFieldName already links a compound field's flattened
+    // children back to it (e.g. "MailingCity".compoundFieldName ===
+    // "MailingAddress"), identically for a standard Address field and any
+    // custom Address/Geolocation field.
+    resolveCompoundSibling: (base, sub) => {
+      const baseLower = base.toLowerCase();
+      const subLower = sub.toLowerCase();
+      const sibling = described.fields.find(
+        (f) => f.compoundFieldName?.toLowerCase() === baseLower && f.name.toLowerCase().includes(subLower)
+      );
+      return sibling ? { name: sibling.name, type: sibling.type } : undefined;
+    },
+  };
+
+  // Thrown FilterError is intentionally not caught here — see doc above.
+  const whereBody = buildAthenaFilterWhere(params.filter, undefined, resolver);
+
+  const databaseName = toGlueId(params.backupConfigId);
+  const hudiTable = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}_hudi`;
+
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: false, error: 'not_exist' };
+
+  const result = await runAthenaQuery(buildValidateQuerySql(hudiTable, whereBody), databaseName, region, outputLocation, 1);
+
+  return { ok: true, value: { matched: result.rows.length > 0 } };
+};
+
 /**
  * Counts, per object and in total, how many records a restore would touch —
  * read-only, no CSV, no Hudi/delta write, no restore execution.
@@ -2015,4 +2117,5 @@ export {
   fetchPicklistValues,
   dryRunRestore,
   dryRunDiff,
+  validateSoqlQuery,
 };
