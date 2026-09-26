@@ -39,6 +39,7 @@
   "salesforce_admin_approval_required": "Your Salesforce admin needs to authorize this app for your user profile before you can connect",
   "not_found": "Record not found",
   "backup_config_not_found": "Backup configuration not found",
+  "backup_config_name_already_exist": "Backup configuration with this name already exists",
   "crm_not_found": "CRM not found",
   "destination_not_found": "Destination not found",
   "invalid_aws_credentials": "Invalid AWS credentials or bucket not accessible",
