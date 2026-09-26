@@ -111,6 +111,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       throw new Error(`Backup job ${backupJobId}: source credentials are missing`);
     }
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
+    console.log('source', source);
     // crmId is stored top-level on the job (createBackupJob strips it out of the
     // encrypted source), so restore it here — glue table/partition naming needs it.
     source.crmId = source.crmId ?? (job.crmId as string);
@@ -124,6 +125,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
     const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
 
     const handler = getCrmHandler(source.crmName);
+    console.log('handler', handler);
     await handler.runBackup(
       backupConfigId,
       backupJobId,
