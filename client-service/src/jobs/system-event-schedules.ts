@@ -70,7 +70,6 @@ export const registerSystemEventSchedules = async (): Promise<void> => {
                 scheduleExpression: job.scheduleExpression,
                 payload: { ...job.payload },
             });
-            logger.info(`[system-event-schedules] "${job.name}" created successfully.`);
         } catch (error) {
             logger.error(`[system-event-schedules] failed to register "${job.name}": `, error);
         }
