@@ -90,6 +90,7 @@
   "jobs_required": "jobs must be a non-empty array",
   "job_id_required": "Every job requires an id",
   "compression_status_update_failed": "Failed to update the compression status of the backup jobs",
+  "restore_trigger_failed": "Failed to trigger the restore on the backup service",
   "restore_not_draft": "Only restores in DRAFT status can be activated",
   "invalid_source": "source must be an object",
   "invalid_source_type": "source.type must be ENTIRE, PARTIAL, or CHANGED_BETWEEN",

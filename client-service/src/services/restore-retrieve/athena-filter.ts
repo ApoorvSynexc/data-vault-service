@@ -158,9 +158,53 @@ interface WhereNode {
 // query needs it.
 const UNSUPPORTED_LITERALS = new Set(['DATE_LITERAL', 'DATE_N_LITERAL', 'DATE', 'DATETIME']);
 
-const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr): string => {
-  const field = n.field ?? '';
-  if (field.includes('.')) throw new FilterError('soql_relationship_not_supported');
+// A field's canonical (describe-correct) name + Salesforce describe type,
+// keyed case-insensitively — built by the caller (validateSoqlQuery) from a
+// live describe response.
+export interface ISoqlFieldMeta {
+  name: string;
+  type: string;
+}
+
+// Real, describe-backed lookups the caller (validateSoqlQuery) builds from a
+// live Salesforce describe response — no compound-field naming convention is
+// hardcoded or guessed anywhere in this module. Optional everywhere below:
+// omitted, every existing caller (dry-run's FILTER scope, the delta path)
+// keeps today's exact behavior — any dotted field still rejects immediately.
+export interface FieldTypeResolver {
+  resolve: (fieldName: string) => ISoqlFieldMeta | undefined;
+  // Finds the compound sibling of `base` (a compound field's own API name,
+  // e.g. "MailingAddress") whose real field name contains `sub` as a
+  // substring (case-insensitive) — via Schema.compoundFieldName, the same
+  // link Salesforce's own describe uses to group a compound field's
+  // flattened children (e.g. "MailingCity".compoundFieldName ===
+  // "MailingAddress"). Substring, not endsWith: a standard sibling appends
+  // the sub-component directly ("MailingCity"), but a custom compound
+  // field's sibling wraps it ("Some_Location__Latitude__s") — safe either
+  // way since candidates are already narrowed to siblings of the same
+  // compound parent, a small, mutually-distinct set (Street/City/.../
+  // Latitude/Longitude/...).
+  resolveCompoundSibling: (base: string, sub: string) => ISoqlFieldMeta | undefined;
+}
+
+const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeResolver): string => {
+  let field = n.field ?? '';
+  if (field.includes('.')) {
+    const parts = field.split('.');
+    // More than one dot is always a multi-hop relationship traversal — never
+    // a compound sub-field access — rejected regardless of resolver.
+    if (parts.length !== 2) throw new FilterError('soql_relationship_not_supported');
+
+    const [base, sub] = parts;
+    const baseMeta = resolver?.resolve(base);
+    if (!baseMeta || (baseMeta.type !== 'address' && baseMeta.type !== 'location')) {
+      throw new FilterError('soql_relationship_not_supported');
+    }
+
+    const siblingMeta = resolver!.resolveCompoundSibling(baseMeta.name, sub);
+    if (!siblingMeta) throw new FilterError('soql_relationship_not_supported');
+    field = siblingMeta.name;
+  }
   if (n.valueQuery || n.literalType === 'SUBQUERY') throw new FilterError('soql_subquery_not_supported');
   if (n.literalType && UNSUPPORTED_LITERALS.has(n.literalType)) {
     throw new FilterError('soql_date_filter_not_supported');
@@ -175,11 +219,11 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr): string => {
   return `${open}${colExpr(field)} ${op} ${value}${close}`;
 };
 
-const renderSoqlWhere = (n: WhereNode | null | undefined, colExpr: ColExpr): string => {
+const renderSoqlWhere = (n: WhereNode | null | undefined, colExpr: ColExpr, resolveField?: FieldTypeResolver): string => {
   if (!n) return '';
-  if (n.field) return renderSoqlLeaf(n, colExpr);
-  const left = renderSoqlWhere(n.left, colExpr);
-  const right = renderSoqlWhere(n.right, colExpr);
+  if (n.field) return renderSoqlLeaf(n, colExpr, resolveField);
+  const left = renderSoqlWhere(n.left, colExpr, resolveField);
+  const right = renderSoqlWhere(n.right, colExpr, resolveField);
   if (!right) return left;
   // At a branch node the operator is the AND / OR connective.
   return `${left} ${n.operator} ${right}`;
@@ -194,7 +238,7 @@ const renderSoqlWhere = (n: WhereNode | null | undefined, colExpr: ColExpr): str
 // succeeds — caught before parsing instead, with the same clear rejection.
 const BARE_TIME_LITERAL_RE = /\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})?\b/;
 
-const buildSoqlWhere = (soqlQuery: string, colExpr: ColExpr): string | null => {
+const buildSoqlWhere = (soqlQuery: string, colExpr: ColExpr, resolveField?: FieldTypeResolver): string | null => {
   const trimmed = soqlQuery.trim();
   if (!trimmed) return null;
 
@@ -215,14 +259,22 @@ const buildSoqlWhere = (soqlQuery: string, colExpr: ColExpr): string | null => {
     throw new FilterError('invalid_soql');
   }
 
-  const body = renderSoqlWhere(ast.where as unknown as WhereNode, colExpr).trim();
+  const body = renderSoqlWhere(ast.where as unknown as WhereNode, colExpr, resolveField).trim();
   return body || null;
 };
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-export const buildAthenaFilterWhere = (filters: IRestoreFilters, colExpr: ColExpr = quoteIdentifier): string | null => {
-  if (filters.type === 'SOQL') return buildSoqlWhere(filters.soqlQuery ?? '', colExpr);
+// resolveField is optional and SOQL-only (the AND/OR structured branch never
+// carries a dotted field) — omitted, a dotted field always rejects exactly as
+// before. Only validateSoqlQuery (POST /retrieve/validate-query) builds and
+// passes a real resolver, from a live Salesforce describe.
+export const buildAthenaFilterWhere = (
+  filters: IRestoreFilters,
+  colExpr: ColExpr = quoteIdentifier,
+  resolveField?: FieldTypeResolver
+): string | null => {
+  if (filters.type === 'SOQL') return buildSoqlWhere(filters.soqlQuery ?? '', colExpr, resolveField);
   const joiner = filters.type === 'OR' ? ' OR ' : ' AND ';
   return buildStructuredWhere(filters.fields ?? [], joiner, colExpr);
 };
@@ -329,6 +381,70 @@ if (require.main === module) {
     `"Name" = 'Meeting at 10:30:00'`
   );
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'this is not soql !!' }), 'invalid_soql');
+
+  // ── Compound Address/Geolocation fields (resolver-gated) ─────────────────────
+  // Fixture mirrors what a real describe response's fields[] carries —
+  // compoundFieldName links a flat sibling back to its compound parent,
+  // exactly like Salesforce's own describe metadata (e.g. "MailingCity"
+  // .compoundFieldName === "MailingAddress").
+  interface IFixtureField { name: string; type: string; compoundFieldName: string | null; }
+  const fixtureFields: IFixtureField[] = [
+    { name: 'MailingAddress', type: 'address', compoundFieldName: null },
+    { name: 'MailingCity', type: 'string', compoundFieldName: 'MailingAddress' },
+    { name: 'MailingStreet', type: 'string', compoundFieldName: 'MailingAddress' },
+    { name: 'Some_Location__c', type: 'location', compoundFieldName: null },
+    { name: 'Some_Location__Latitude__s', type: 'double', compoundFieldName: 'Some_Location__c' },
+    { name: 'Some_Location__Longitude__s', type: 'double', compoundFieldName: 'Some_Location__c' },
+    { name: 'OwnerId', type: 'reference', compoundFieldName: null },
+  ];
+  const fixtureMetaByName = new Map(fixtureFields.map((f) => [f.name.toLowerCase(), { name: f.name, type: f.type }]));
+  const testResolver: FieldTypeResolver = {
+    resolve: (name) => fixtureMetaByName.get(name.toLowerCase()),
+    resolveCompoundSibling: (base, sub) => {
+      const subLower = sub.toLowerCase();
+      const match = fixtureFields.find(
+        (f) => f.compoundFieldName?.toLowerCase() === base.toLowerCase() && f.name.toLowerCase().includes(subLower)
+      );
+      return match ? { name: match.name, type: match.type } : undefined;
+    },
+  };
+
+  // A standard Address compound field resolves to its native flat sibling,
+  // found via compoundFieldName — no prefix convention hardcoded here.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "MailingAddress.City = 'Austin'" }, undefined, testResolver),
+    `"MailingCity" = 'Austin'`
+  );
+  // A custom Geolocation field resolves to its own real sibling the same way.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Some_Location__c.Latitude > 10' }, undefined, testResolver),
+    `"Some_Location__Latitude__s" > 10`
+  );
+  // Two dots is always a relationship traversal, never a compound sub-field —
+  // rejected regardless of resolver.
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Account.Owner.Name = 'x'" }, undefined, testResolver),
+    'soql_relationship_not_supported'
+  );
+  // One dot, but the base field isn't address/location-typed (a real
+  // relationship) — still rejected even with a resolver present.
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Owner.Name = 'x'" }, undefined, testResolver),
+    'soql_relationship_not_supported'
+  );
+  // One dot, address/location-typed base, but no real sibling ends with the
+  // requested sub-component — rejected, not emitted as SQL against a
+  // nonexistent column.
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "MailingAddress.NoSuchSubField = 'x'" }, undefined, testResolver),
+    'soql_relationship_not_supported'
+  );
+  // Omitting the resolver entirely preserves every existing assertion above
+  // unchanged — dry-run's FILTER scope and the delta path never pass one.
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "MailingAddress.City = 'Austin'" }),
+    'soql_relationship_not_supported'
+  );
 
   // Delta-table FILTER (buildDeltaFilterWhere): fields resolve through a
   // change_type-aware CASE over json_extract_scalar instead of a plain column.

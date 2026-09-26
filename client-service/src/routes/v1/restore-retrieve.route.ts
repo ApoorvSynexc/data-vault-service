@@ -28,6 +28,10 @@ import { createRestoreValidation, uploadSingleCsv, bulkCsvUploadRateLimit } from
  *                                         destination org's current version of that record
  *                                         ({changeRecord, salesforceRecord}). Capped per object;
  *                                         read-only, no restore is performed
+ * POST /retrieve/validate-query         — validates one object's SOQL FILTER condition by
+ *                                         converting it to an Athena WHERE clause and running it
+ *                                         (LIMIT 1) against that object's compressed Hudi table —
+ *                                         { matched: boolean }
  * GET  /                                — single restore/retrieve job (by backupJobId)
  * GET  /download-csv                    — for a completed restore job, returns presigned S3 URLs
  *                                         (one per part) so the client downloads the exported
@@ -65,6 +69,7 @@ router.post('/retrieve/required-fields', restoreRetrieveJobController.requiredFi
 router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
 router.post('/dry-run', restoreRetrieveJobController.dryRunHandler);
 router.post('/dry-run-diff', restoreRetrieveJobController.dryRunDiffHandler);
+router.post('/retrieve/validate-query', restoreRetrieveJobController.validateQueryHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 router.get('/download-csv', restoreRetrieveJobController.downloadCsvFile);
