@@ -512,50 +512,69 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
         // EMR receives the joined single-line string at submit time.
         const sparkSubmitParameters = [
             '--class com.example.Main',
+
+            // ============================================================
+            // Classpath
+            // ============================================================
             '--conf spark.driver.userClassPathFirst=true',
             '--conf spark.executor.userClassPathFirst=true',
 
+            // ============================================================
             // Driver
-            '--conf spark.driver.cores=2',
-            '--conf spark.driver.memory=8g',
-            '--conf spark.driver.memoryOverhead=2g',
+            // ============================================================
+            '--conf spark.driver.cores=4',
+            '--conf spark.driver.memory=12g',
+            '--conf spark.driver.memoryOverhead=4g',
             '--conf spark.driver.maxResultSize=2g',
-            '--conf spark.emr-serverless.driver.disk=20g',
+            '--conf spark.emr-serverless.driver.disk=50g',
 
-            // Executors — fixed at 4, dynamic allocation OFF. Every job requests the
-            // full 4 executors (4 cores / 16g / 20g disk each) up front and holds them
-            // for the run's duration; no ramp-up/ramp-down, no scaling between a min
-            // and a max. executor.instances is the sole executor-count control here —
-            // it's a no-op while dynamicAllocation.enabled=true (below), so it only
-            // takes effect once dynamic allocation is off.
+            // ============================================================
+            // Executors
+            // 4 executors × 4 cores = 16 concurrent task slots
+            // ============================================================
             '--conf spark.executor.cores=4',
             '--conf spark.executor.memory=16g',
-            '--conf spark.executor.memoryOverhead=3g',
-            '--conf spark.emr-serverless.executor.disk=20g',
+            '--conf spark.executor.memoryOverhead=5g',
+            '--conf spark.emr-serverless.executor.disk=50g',
             '--conf spark.executor.instances=4',
+
+            // Keep executor count fixed
             '--conf spark.dynamicAllocation.enabled=false',
 
-            // Memory
-            '--conf spark.memory.fraction=0.7',
+            // ============================================================
+            // Spark Memory
+            // ============================================================
+            '--conf spark.memory.fraction=0.6',
             '--conf spark.memory.storageFraction=0.3',
 
+            // ============================================================
             // Serialization
+            // ============================================================
             '--conf spark.serializer=org.apache.spark.serializer.KryoSerializer',
             '--conf spark.kryo.registrator=org.apache.spark.HoodieSparkKryoRegistrar',
             '--conf spark.kryoserializer.buffer.max=512m',
 
-            // S3A
+            // ============================================================
+            // S3A Connections
+            // ============================================================
             '--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
+
             '--conf spark.hadoop.fs.s3a.connection.maximum=200',
             '--conf spark.hadoop.fs.s3a.threads.max=64',
             '--conf spark.hadoop.fs.s3a.threads.keepalivetime=60',
+
             '--conf spark.hadoop.fs.s3a.connection.timeout=60000',
             '--conf spark.hadoop.fs.s3a.connection.establish.timeout=15000',
+
             '--conf spark.hadoop.fs.s3a.attempts.maximum=5',
             '--conf spark.hadoop.fs.s3a.retry.limit=5',
             '--conf spark.hadoop.fs.s3a.retry.throttle.limit=20',
+
             '--conf spark.hadoop.fs.s3a.paging.maximum=1000',
 
+            // ============================================================
+            // S3 Multipart Upload
+            // ============================================================
             '--conf spark.hadoop.fs.s3a.multipart.size=67108864',
             '--conf spark.hadoop.fs.s3a.block.size=67108864',
             '--conf spark.hadoop.fs.s3a.multipart.threshold=134217728',
@@ -566,15 +585,46 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
 
             '--conf spark.hadoop.fs.s3a.readahead.range=4194304',
 
+            // ============================================================
             // Network
+            // ============================================================
             '--conf spark.network.timeout=600s',
             '--conf spark.executor.heartbeatInterval=60s',
 
+            // ============================================================
             // Scheduler
+            // ============================================================
             '--conf spark.scheduler.mode=FAIR',
             '--conf spark.task.cpus=1',
             '--conf spark.locality.wait=0s',
             '--conf spark.speculation=false',
+
+            // ============================================================
+            // Shuffle
+            // ============================================================
+            '--conf spark.shuffle.service.enabled=false',
+            '--conf spark.sql.adaptive.enabled=true',
+            '--conf spark.sql.adaptive.coalescePartitions.enabled=true',
+            '--conf spark.sql.adaptive.skewJoin.enabled=true',
+
+            // ============================================================
+            // Shuffle partition sizing
+            // ============================================================
+            '--conf spark.sql.shuffle.partitions=128',
+
+            // ============================================================
+            // File partition sizing
+            // ============================================================
+            '--conf spark.sql.files.maxPartitionBytes=128m',
+            '--conf spark.sql.files.openCostInBytes=4m',
+
+            // ============================================================
+            // Hudi
+            // ============================================================
+            '--conf hoodie.embed.timeline.server=true',
+            '--conf hoodie.metadata.enable=true',
+            '--conf hoodie.metadata.index.column.stats.enable=false',
+
         ].join(' ');
 
         const command = new StartJobRunCommand({
