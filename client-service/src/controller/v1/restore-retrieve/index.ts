@@ -1152,7 +1152,7 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'fetch', fields);
 };
 
-const MAX_BULK_CSV_ROWS = 50000;
+const MAX_BULK_CSV_ROWS = 500000;
 const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const file = req.file;
   if (!file) {
