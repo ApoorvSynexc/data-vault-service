@@ -40,6 +40,45 @@ export const hasMetadataChanged = (result: IMetadataComparisonResult['result']):
   }
 };
 
+// Same per-metadataType branching as hasMetadataChanged, but reports *which*
+// operations occurred instead of just whether anything changed. Lets a caller
+// tell "only new fields/childs/picklist values/record types appeared"
+// (inserts only — nothing already-synced was touched) apart from a change
+// that also modified or removed something the restore/backup already relies on.
+export const getMetadataChangeOperations = (
+  result: IMetadataComparisonResult['result']
+): Array<'inserts' | 'updates' | 'deletes'> => {
+  const operations: Array<'inserts' | 'updates' | 'deletes'> = [];
+  if (!result) {
+    return operations;
+  }
+
+  switch (result.metadataType) {
+    case 'fields':
+      if (result.diff.addedFields.length) operations.push('inserts');
+      if (result.diff.modifiedFields.length) operations.push('updates');
+      if (result.diff.removedFields.length) operations.push('deletes');
+      break;
+    case 'childs':
+      if (result.diff.addedChilds.length) operations.push('inserts');
+      if (result.diff.modifiedChilds.length) operations.push('updates');
+      if (result.diff.removedChilds.length) operations.push('deletes');
+      break;
+    case 'picklist':
+      if (result.diff.some((field) => field.addedValues.length)) operations.push('inserts');
+      if (result.diff.some((field) => field.modifiedValues.length)) operations.push('updates');
+      if (result.diff.some((field) => field.removedValues.length)) operations.push('deletes');
+      break;
+    case 'recordTypes':
+      if (result.diff.addedRecordTypes.length) operations.push('inserts');
+      if (result.diff.modifiedRecordTypes.length) operations.push('updates');
+      if (result.diff.removedRecordTypes.length) operations.push('deletes');
+      break;
+  }
+
+  return operations;
+};
+
 // Compares live Salesforce metadata against the last stored schema for every
 // object on a config, across all 4 metadataTypes. Used by the EMR cron
 // (run-emr-job.ts) to decide whether a realtime config needs a schema-sync

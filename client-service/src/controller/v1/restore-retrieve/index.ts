@@ -41,7 +41,7 @@ import {
   validateSoqlQuery,
   getBackupConfigById,
   runMetadataComparisonForConfig,
-  hasMetadataChanged,
+  getMetadataChangeOperations,
   triggerBackupJob,
   initalizeRestoreTransform,
   getRestoreJobById,
@@ -1235,7 +1235,9 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
       if (backupConfig.schedule === 'REALTIME') {
         const result = await runMetadataComparisonForConfig(backupConfig);
         for (const { objectName, result: metadataResult } of result) {
-          if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+          const operations = getMetadataChangeOperations(metadataResult);
+          const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
+          if (requiresSchemaSync && !changedObjectNames.includes(objectName)) {
             changedObjectNames.push(objectName);
           }
         }
