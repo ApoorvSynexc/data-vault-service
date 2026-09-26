@@ -51,6 +51,23 @@ assert.deepStrictEqual(pickMainTableColumns(afterRemoval, key), [
   { name: 'Name', type: 'string' },
 ]);
 
+// ─── Salesforce datetime → Glue timestamp (matches native Parquet timestamps);
+// everything else, including a missing type, stays string ─────────────────────
+const typed = [
+  { context: [{ name: 'CreatedDate', type: 'datetime' }, { name: 'Name', type: 'string' }, { name: 'X' }] },
+];
+assert.deepStrictEqual(pickMainTableColumns(typed, key, 'archival-parquet'), [
+  { name: 'CreatedDate', type: 'timestamp' },
+  { name: 'Name', type: 'string' },
+  { name: 'X', type: 'string' },
+]);
+// Default / raw-CSV / backup typing must NEVER produce timestamp.
+assert.deepStrictEqual(pickMainTableColumns(typed, key), [
+  { name: 'CreatedDate', type: 'string' },
+  { name: 'Name', type: 'string' },
+  { name: 'X', type: 'string' },
+]);
+
 // ─── nothing stored yet → throw, never silently return an empty table ─────
 assert.throws(() => pickMainTableColumns([], key), /no stored field schema/);
 

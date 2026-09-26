@@ -161,7 +161,7 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
 // ---------------------------------------------------------------------------
 
 const initializeDatabase = async () => {
-  await Promise.all(TABLE_DEFINITIONS.map(ensureTable));
+  // await Promise.all(TABLE_DEFINITIONS.map(ensureTable));
   console.log(`DynamoDB ready (region: ${AWS_REGION})`);
   return docClient;
 };

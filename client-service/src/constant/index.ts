@@ -20,11 +20,23 @@ const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
 const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
 const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT; // optional: for DynamoDB Local
+
+// DynamoDB table names — every table this service reads/writes, kept together
+// regardless of which feature area owns it.
 const USER_TABLE = `${NODE_ENV_PREFIX}-${process.env.USER_TABLE || 'data-vault-users'}`;
 const SESSION_TABLE = `${NODE_ENV_PREFIX}-${process.env.SESSION_TABLE || 'data-vault-sessions'}`;
 const ROLE_TABLE = `${NODE_ENV_PREFIX}-${process.env.ROLE_TABLE || 'data-vault-roles'}`;
 const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters'}`;
 const COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.COUNTER_TABLE || 'data-vault-counters'}`;
+const OAUTH_STATE_TABLE = `${NODE_ENV_PREFIX}-${process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states'}`;
+const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
+const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
+const DESTINATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.DESTINATION_TABLE || 'data-vault-destinations'}`;
+const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
+const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
+const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
+const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
+const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
 
 // Event Bridge Scheduler Config
 const AWS_EVENT_DESTINATION_API_KEY = String(process.env.AWS_EVENT_DESTINATION_API_KEY);
@@ -103,12 +115,6 @@ const SALESFORCE_HANDLER_CLASS_NAME = String(
 const SALESFORCE_HANDLER_METHOD_NAME = String(
   process.env.SALESFORCE_HANDLER_METHOD_NAME || 'enqueueSync'
 ).trim();
-const OAUTH_STATE_TABLE = `${NODE_ENV_PREFIX}-${process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states'}`;
-const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
-const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
-const DESTINATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.DESTINATION_TABLE || 'data-vault-destinations'}`;
-const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
-const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
 
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
@@ -129,9 +135,6 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
-const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
-const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
-const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
 
 // S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
@@ -368,11 +371,22 @@ export {
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
   DYNAMODB_ENDPOINT,
+
+  // DynamoDB table names
   USER_TABLE,
   SESSION_TABLE,
   ROLE_TABLE,
   TABLE_COUNTER_TABLE,
   COUNTER_TABLE,
+  OAUTH_STATE_TABLE,
+  CRM_TABLE,
+  BACKUP_CONFIG_TABLE,
+  DESTINATION_TABLE,
+  RESTORE_TABLE,
+  RESTORE_JOB_TABLE,
+  BACKUP_JOB_TABLE,
+  SETTINGS_TABLE,
+  NOTIFICATION_TABLE,
 
   // AWS EventBridge Scheduler Config
   AWS_EVENT_DESTINATION_API_KEY,
@@ -414,12 +428,6 @@ export {
   SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL,
   SALESFORCE_HANDLER_CLASS_NAME,
   SALESFORCE_HANDLER_METHOD_NAME,
-  OAUTH_STATE_TABLE,
-  CRM_TABLE,
-  BACKUP_CONFIG_TABLE,
-  DESTINATION_TABLE,
-  RESTORE_TABLE,
-  RESTORE_JOB_TABLE,
   ENCRYPTION_KEY,
   SALESFORCE_ENCRYPTION_KEY,
 
@@ -430,9 +438,6 @@ export {
 
   // Services
   BACKUP_SERVICE,
-  BACKUP_JOB_TABLE,
-  SETTINGS_TABLE,
-  NOTIFICATION_TABLE,
   AWS_S3_LOGS_BUCKET,
 
   // 360 Data Craft payment/provisioning API
