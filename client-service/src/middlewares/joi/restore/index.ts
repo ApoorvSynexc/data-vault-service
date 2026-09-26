@@ -63,6 +63,7 @@ const changeSinceSchema = Joi.object({
 const bulkCsvIdsSchema = Joi.object({
   objectName: Joi.string().required(),
   ids: Joi.array().items(Joi.string()).min(1).required(),
+  csvFilePath: Joi.string().optional(),
   children: Joi.array().items(Joi.link('#bulkCsvIds')).optional(),
 }).id('bulkCsvIds');
 
