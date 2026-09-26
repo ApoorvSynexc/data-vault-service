@@ -299,11 +299,6 @@ const searchArchivalRecords = async (
 
   if (!filterCheck.ok) return { ok: false, error: filterCheck.error };
 
-  // limit/offset are interpolated straight into the SQL string below (Athena
-  // has no bind-parameter support for LIMIT/OFFSET either), so both are
-  // forced to safe, bounded integers here rather than trusted as numbers —
-  // a bad `limit`/`page` (string, NaN, negative) would otherwise land in the
-  // query as-is.
   const rawLimit = params.limit;
   if (rawLimit !== undefined && (typeof rawLimit !== 'number' || !Number.isInteger(rawLimit) || rawLimit < 1)) {
     return { ok: false, error: 'invalid_limit' };
@@ -349,7 +344,8 @@ console.log(configs,'selectClause')
       // Fetch one extra row past `limit` so hasMore can be determined without
       // a second COUNT query.
       const selectClause = await buildSelectClause(hudiTable, databaseName, region, fieldsCheck.fields);
-      const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
+      const sql = `SELECT * FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
+      // const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
       console.log(sql,'sql')
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
       return { rows: result.rows, missingFilterField: false };
