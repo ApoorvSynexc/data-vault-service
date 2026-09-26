@@ -103,6 +103,11 @@ const restorePermissions = [
         path: '/restore/download-csv',
         method: 'GET',
         permissions: ['restore.read']
+    },
+    {
+        path: '/restore/retrieve/validate-query',
+        method: 'GET',
+        permissions: ['restore.read']
     }
 ];
 

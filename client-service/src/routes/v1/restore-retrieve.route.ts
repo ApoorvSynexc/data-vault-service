@@ -66,10 +66,10 @@ router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecords
 router.post('/retrieve/fetch-missing-fields', restoreRetrieveJobController.fetchMissingFieldsHandler);
 router.post('/retrieve/fetch-missing-record-types', restoreRetrieveJobController.fetchMissingRecordTypesHandler);
 router.post('/retrieve/required-fields', restoreRetrieveJobController.requiredFieldsHandler);
+router.post('/retrieve/validate-query', restoreRetrieveJobController.validateQueryHandler);
 router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectFieldsHandler);
 router.post('/dry-run', restoreRetrieveJobController.dryRunHandler);
 router.post('/dry-run-diff', restoreRetrieveJobController.dryRunDiffHandler);
-router.post('/retrieve/validate-query', restoreRetrieveJobController.validateQueryHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
 router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 router.get('/download-csv', restoreRetrieveJobController.downloadCsvFile);
