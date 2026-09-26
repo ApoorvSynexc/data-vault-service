@@ -436,8 +436,14 @@ const buildDeletedDeltaBody = (deltaTable: string, p: IRetrieveSqlParams): strin
     `SELECT ${extracted}, 'INSERT' AS ${quoteCol(OP)} ` +
     `FROM (${newest}) t WHERE rn = 1 AND change_type = 'DELETE'`;
 
+  // Outer projection is explicit, not `SELECT *`: dv_created exists only to
+  // be filtered on below, and must not leak into the output — the Hudi half
+  // of buildHudiChangedWithDeletedSql's UNION ALL has no such column, and an
+  // extra one here is a column-count mismatch Athena rejects outright.
+  const outerCols = [...projectionColumns(p.columnNames).map(quoteCol), quoteCol(OP)].join(', ');
+
   return (
-    `SELECT * FROM (${snapshots}) w` +
+    `SELECT ${outerCols} FROM (${snapshots}) w` +
     whereClause(
       [
         windowed

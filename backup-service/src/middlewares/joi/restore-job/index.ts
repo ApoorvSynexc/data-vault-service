@@ -104,6 +104,12 @@ const edgeCasesSchema = Joi.object({
   parentMissing: Joi.string().allow('').optional(),
   recordTypeMissing: recordTypeMissingSchema.optional(),
   missingRequiredFieldValue: missingRequiredFieldValueSchema.optional(),
+  // Mirrors client-service's edgeCasesSchema (middlewares/joi/restore/index.ts)
+  // — client-service forwards its stored conflict.edgeCases as-is to POST
+  // /v1/restore, so an unknown key here 400s a restore that already validated
+  // fine on the client side.
+  includeChilds: Joi.string().valid('REQUIRED_CHILDRENS_ONLY', 'SKIP_CHILDREN').optional(),
+  includeAuditFields: Joi.string().valid('Include', 'Skip').optional(),
 });
 
 // NOTE: restoreMode only accepts OVERWRITE/APPEND_NEW here, while client-service's
