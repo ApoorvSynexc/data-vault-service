@@ -5,9 +5,9 @@ import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
 import { JOB_OBJECT_STATUS, STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
 import { flattenBackupObjects, wrapController } from '../../../utils/helper';
-import { decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
+import { decrypt, decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, toTreeSummary, filterObjectTree } from '../../../services';
+import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, toTreeSummary, filterObjectTree, getS3PrefixStats } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 import { sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
@@ -304,9 +304,35 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       }
     }
 
-    console.log(JSON.stringify({restore}));
     if(restore.destination.type === 'EXPORT'){
-      const objects = restoreJob.destination.objects.map(o => ({...o, status: STATUS.success}));
+      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+        'cipherText' in restoreJob.source.encryptedKeys
+          ? JSON.parse(decrypt(restoreJob.source.encryptedKeys))
+          : restoreJob.source.encryptedKeys;
+      const s3Config = {
+        ...sourceS3Credentials,
+        bucketName: restoreJob.source.bucketName,
+        region: restoreJob.source.region,
+      };
+
+      // Each object's CSVs live under `${csvFilePath}/<objectName>/csv` — count
+      // and total size of that folder are surfaced per object so the UI can
+      // show what the export actually produced.
+      const objects = await Promise.all(
+        restoreJob.destination.objects.map(async (o) => {
+          const path = `${restoreJob.source.csvFilePath}/${o.name}/csv`;
+          try {
+            const { count, sizeInBytes } = await getS3PrefixStats(s3Config, path);
+            return { ...o, status: STATUS.success, csvCount: count, sizeInBytes };
+          } catch (error: any) {
+            logger.error(
+              `[restore-export] failed to compute CSV stats | restoreJobId=${restoreConfigId} object=${o.name} err:${error?.message ?? error}`
+            );
+            return { ...o, status: STATUS.success };
+          }
+        })
+      );
+
         await Promise.all([
         updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.success, replaceObjects: objects }),
         updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.success }),
