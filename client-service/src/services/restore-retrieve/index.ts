@@ -39,6 +39,7 @@ import {
   buildFieldDeltaSql,
   buildHudiCountSql,
   buildDeltaCountSql,
+  buildValidateQuerySql,
   recordIdsWhere,
   validateColumns,
 } from './athena-fetch';
@@ -1147,6 +1148,67 @@ const resolveDryRunObjects = async (params: IDryRunParams): Promise<ICountTarget
   }
 };
 
+// ---------------------------------------------------------------------------
+// POST /retrieve/validate-query — SOQL-to-Athena filter validation
+// ---------------------------------------------------------------------------
+
+export interface IValidateQueryParams {
+  backupConfigId: string;
+  configType: ConfigType;
+  objectApiName: string;
+  // Same IRestoreFilters shape a restore's FILTER scope carries per object
+  // (selection.restoreScope.filters[].filter) — SOQL here, but AND/OR compile
+  // through the identical converter.
+  filter: IRestoreFilters;
+  userId: string;
+}
+
+export type IValidateQueryOutcome =
+  | { ok: true; value: { matched: boolean } }
+  | { ok: false; error: 'not_exist' };
+
+/**
+ * Validates one FILTER-scope condition by actually running it: converts it to
+ * an Athena WHERE clause (buildAthenaFilterWhere — the same converter
+ * dry-run/dry-run-diff use, so a query that validates here compiles
+ * identically wherever else it's used), then runs
+ * `SELECT Id FROM <object's Hudi table> WHERE <clause> LIMIT 1` against the
+ * object's real compressed data.
+ *
+ * Deliberately existence-only (LIMIT 1, Id-only projection) rather than a
+ * preview — this endpoint answers "is this query valid and does it match
+ * anything", not "show me the records". A field name that's structurally
+ * valid SOQL but doesn't exist on this object's actual schema surfaces here
+ * as a genuine Athena failure (COLUMN_NOT_FOUND) — buildAthenaFilterWhere's
+ * parse-time checks alone can't catch that, since they never see the real
+ * column set.
+ *
+ * FilterError from buildAthenaFilterWhere propagates uncaught — the caller
+ * maps it to the same 400 dry-run's FILTER scope already uses for a bad
+ * filter.
+ *
+ * Returns not_exist when the config doesn't exist, isn't owned by the
+ * caller, or the object has no compressed Hudi table yet (nothing has been
+ * backed up for it, so there is nothing to validate against).
+ */
+const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidateQueryOutcome> => {
+  const config = await getBackupConfigById(params.backupConfigId);
+  if (!config || config.userId !== params.userId) return { ok: false, error: 'not_exist' };
+
+  // Thrown FilterError is intentionally not caught here — see doc above.
+  const whereBody = buildAthenaFilterWhere(params.filter);
+
+  const databaseName = toGlueId(params.backupConfigId);
+  const hudiTable = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}_hudi`;
+
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: false, error: 'not_exist' };
+
+  const result = await runAthenaQuery(buildValidateQuerySql(hudiTable, whereBody), databaseName, region, outputLocation, 1);
+
+  return { ok: true, value: { matched: result.rows.length > 0 } };
+};
+
 /**
  * Counts, per object and in total, how many records a restore would touch —
  * read-only, no CSV, no Hudi/delta write, no restore execution.
@@ -2015,4 +2077,5 @@ export {
   fetchPicklistValues,
   dryRunRestore,
   dryRunDiff,
+  validateSoqlQuery,
 };

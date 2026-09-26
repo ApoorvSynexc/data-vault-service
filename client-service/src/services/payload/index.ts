@@ -602,7 +602,6 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             // ============================================================
             // Shuffle
             // ============================================================
-            '--conf spark.shuffle.service.enabled=false',
             '--conf spark.sql.adaptive.enabled=true',
             '--conf spark.sql.adaptive.coalescePartitions.enabled=true',
             '--conf spark.sql.adaptive.skewJoin.enabled=true',
