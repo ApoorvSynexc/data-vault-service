@@ -332,9 +332,8 @@ console.log(configs,'selectClause')
       }
 
       const conditions: string[] = [];
-      // TEMP-GLUE-WORKAROUND: date window disabled, it reads CreatedDate.
-      // if (params.startDate) conditions.push(`${CREATED_DATE_INSTANT} >= from_iso8601_timestamp('${params.startDate}')`);
-      // if (params.endDate) conditions.push(`${CREATED_DATE_INSTANT} <= from_iso8601_timestamp('${params.endDate}')`);
+      if (params.startDate) conditions.push(`${CREATED_DATE_INSTANT} >= from_iso8601_timestamp('${params.startDate}')`);
+      if (params.endDate) conditions.push(`${CREATED_DATE_INSTANT} <= from_iso8601_timestamp('${params.endDate}')`);
       if (filterCheck.where) conditions.push(filterCheck.where);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -414,6 +413,10 @@ const getArchivedRelatedRecords = async (
   const { region, outputLocation } = await buildArchivalOutputLocation(config);
 
   if (!(await tableExists(databaseName, hudiTable, region))) return [];
+
+  // A child table without the FK column would fail the whole Athena query — no row can match, so skip it.
+  const known = new Set((await getTableColumns(hudiTable, databaseName, region)).map((c) => c.toLowerCase()));
+  if (!known.has(fkField.toLowerCase())) return [];
 
   const selectClause = await buildSelectClause(hudiTable, databaseName, region, fields);
   const sql = `SELECT ${selectClause} FROM "${hudiTable}" WHERE "${fkField}" = '${fkValue}' LIMIT ${RELATED_RECORDS_LIMIT}`;
