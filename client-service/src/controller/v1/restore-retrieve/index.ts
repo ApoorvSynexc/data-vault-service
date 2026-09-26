@@ -59,6 +59,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { parseCsvRow } from '../../../utils/restore-csv-format';
 import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
+import dayjs from 'dayjs';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -1263,6 +1264,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           await initalizeRestoreTransform(restoreJob.restoreJobId);
         }
       } else {
+        console.log({ lastUpdatedAt: dayjs(backupConfig.lastSchemaSyncAt).toISOString() });
         await triggerBackupJob({
           user: backupConfigUser,
           config: backupConfig,
