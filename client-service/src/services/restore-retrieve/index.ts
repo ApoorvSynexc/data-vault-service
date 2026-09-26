@@ -1291,8 +1291,8 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
 // resolve — an ALL-scope restore spans every object at once. The response is
 // deliberately a SAMPLE: /dry-run remains the endpoint that answers "how many
 // records in total".
-export const DIFF_DEFAULT_LIMIT = 50;
-export const DIFF_MAX_LIMIT = 200;
+export const DIFF_DEFAULT_LIMIT = 20;
+export const DIFF_MAX_LIMIT = 20;
 
 export interface IDryRunDiffParams extends IDryRunParams {
   // The diff's second half is a live Salesforce read, so unlike the count-only
