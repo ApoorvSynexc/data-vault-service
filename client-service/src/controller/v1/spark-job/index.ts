@@ -312,7 +312,19 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
         updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.success }),
       ]);
     }else {
-      await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
+      try {
+        await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
+      } catch (error: any) {
+        const failureMessage = error?.message ?? String(error);
+        logger.error(
+          `[restore-csv] triggering backup-service restore failed | restoreJobId=${restoreConfigId} err:${failureMessage}`
+        );
+        await Promise.all([
+          updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage }),
+          updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
+        ]);
+        return makeResponse(req, res, 400, false, 'restore_trigger_failed');
+      }
     }
 
     return makeResponse(req, res, 200, true, 'update');
