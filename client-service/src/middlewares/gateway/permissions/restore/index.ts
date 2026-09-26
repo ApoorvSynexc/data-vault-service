@@ -106,7 +106,7 @@ const restorePermissions = [
     },
     {
         path: '/restore/retrieve/validate-query',
-        method: 'GET',
+        method: 'POST',
         permissions: ['restore.read']
     }
 ];
