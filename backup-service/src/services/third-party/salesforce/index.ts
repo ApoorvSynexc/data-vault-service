@@ -229,6 +229,7 @@ const salesforceHandler: ICrmBackupHandler = {
     }
 
     const backupConfig = await getBackupConfigById(backupConfigId);
+    console.log('backupConfig', backupConfig);
     if (backupConfig === null || backupConfig === undefined) {
       return;
     }
@@ -245,6 +246,7 @@ const salesforceHandler: ICrmBackupHandler = {
     );
 
     const objectNames = object.map((item) => item.name);
+    console.log('objectNames', objectNames);
     for (let i = 0; i < object.length; i += CONCURRENCY_LIMIT) {
       const batch = object.slice(i, i + CONCURRENCY_LIMIT);
       await Promise.allSettled(
