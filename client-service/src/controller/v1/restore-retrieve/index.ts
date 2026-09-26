@@ -38,6 +38,7 @@ import {
   IDryRunParams,
   DryRunSourceType,
   buildAthenaFilterWhere,
+  validateSoqlQuery,
   getBackupConfigById,
   runMetadataComparisonForConfig,
   hasMetadataChanged,
@@ -773,6 +774,89 @@ const dryRunDiffHandler = async (req: IRequest, res: IResponse): Promise<void> =
 };
 
 /**
+ * Parses the /retrieve/validate-query body: backupConfigId, configType,
+ * objectApiName, soqlQuery — the same per-object SOQL a restore's FILTER
+ * scope carries as selection.restoreScope.filters[].filter.soqlQuery (see
+ * validateFilterShape/VALID_FILTER_TYPES above).
+ */
+const parseValidateQueryParams = (
+  body: Record<string, unknown>,
+  userId: string
+):
+  | { ok: true; value: { backupConfigId: string; configType: ConfigType; objectApiName: string; filter: IRestoreFilters; userId: string } }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const { backupConfigId, configType, objectApiName, soqlQuery } = body;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
+  }
+  if (typeof configType !== 'string' || !VALID_CONFIG_TYPES.includes(configType as ConfigType)) {
+    return { ok: false, error: 'invalid_config_type' };
+  }
+  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
+    return { ok: false, error: 'object_api_name_required' };
+  }
+  if (typeof soqlQuery !== 'string' || !soqlQuery.trim()) {
+    return { ok: false, error: 'soql_query_required' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      backupConfigId: backupConfigId.trim(),
+      configType: configType as ConfigType,
+      objectApiName: objectApiName.trim(),
+      filter: { type: 'SOQL', soqlQuery: soqlQuery.trim() },
+      userId,
+    },
+  };
+};
+
+/**
+ * POST /retrieve/validate-query
+ * Body: { backupConfigId, configType, objectApiName, soqlQuery }
+ *
+ * Validates a restore FILTER scope's SOQL condition by actually running it:
+ * converts it to an Athena WHERE clause (buildAthenaFilterWhere — the same
+ * converter dry-run/dry-run-diff use for the FILTER scope), then runs
+ * `SELECT Id FROM <object's Hudi table> WHERE <clause> LIMIT 1` against the
+ * object's real compressed data — cheap enough to run while a user is still
+ * composing a query, but a real execution, so a field name that's
+ * structurally valid SOQL but doesn't exist on this object's actual schema
+ * fails here instead of silently passing.
+ *
+ * Response: { matched: boolean } — whether at least one record matches.
+ *
+ * Returns not_exist when the config doesn't exist, isn't owned by the
+ * caller, or the object has no compressed Hudi table yet.
+ */
+const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseValidateQueryParams(req.body as Record<string, unknown>, req.user!.userId);
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
+    return;
+  }
+
+  let result;
+  try {
+    result = await validateSoqlQuery(parsed.value);
+  } catch (e) {
+    if (e instanceof FilterError) {
+      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
+      return;
+    }
+    throw e;
+  }
+
+  if (!result.ok) {
+    makeResponse(req, res, 400, false, result.error);
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result.value);
+};
+
+/**
  * Parses the body fetchMissingFieldsHandler takes: backupConfigId,
  * objectApiName, configType, and an optional startDate/endDate window —
  * same shape and window semantics as parseMissingRecordTypesParams. A
@@ -1342,6 +1426,7 @@ export const restoreRetrieveJobController = wrapController({
   fetchObjectFieldsHandler,
   dryRunHandler,
   dryRunDiffHandler,
+  validateQueryHandler,
   activateRestoreHandler,
   getPicklistFieldValuesHandler,
   listRestoresHandler,

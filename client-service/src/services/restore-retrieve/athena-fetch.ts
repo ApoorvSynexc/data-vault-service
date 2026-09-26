@@ -655,6 +655,22 @@ export const buildDeltaCountSql = (
     'WHERE'
   );
 
+// =============================================================================
+// Query validation — POST /retrieve/validate-query
+// =============================================================================
+
+/**
+ * Cheapest real probe of a FILTER-scope condition (SOQL or structured AND/OR,
+ * via athena-filter's buildAthenaFilterWhere) against an object's actual Hudi
+ * table: LIMIT 1, no ordering, no column projection beyond Id. Existence is
+ * all that's being confirmed — a field name that's structurally valid SOQL
+ * but doesn't exist on this object's real schema surfaces here as a genuine
+ * Athena failure (COLUMN_NOT_FOUND) rather than a false positive the parser
+ * alone can't catch.
+ */
+export const buildValidateQuerySql = (hudiTable: string, whereBody?: string | null): string =>
+  `SELECT "Id" FROM "${hudiTable}"` + whereClause([whereBody], 'WHERE') + ` LIMIT 1`;
+
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npx ts-node src/services/restore-retrieve/athena-fetch.ts
 if (require.main === module) {
@@ -872,6 +888,18 @@ if (require.main === module) {
     buildDeltaCountSql('t_delta', { startDate: START, endDate: END }),
     buildDeltaCountSql('t_delta', { startDate: START, endDate: END, scopeWhere: null }),
     'omitted scopeWhere reads exactly as before'
+  );
+
+  // ── Query validation ────────────────────────────────────────────────────────
+  assert.strictEqual(buildValidateQuerySql('t_hudi'), `SELECT "Id" FROM "t_hudi" LIMIT 1`);
+  assert.strictEqual(
+    buildValidateQuerySql('t_hudi', `"Name" = 'Acme'`),
+    `SELECT "Id" FROM "t_hudi" WHERE ("Name" = 'Acme') LIMIT 1`
+  );
+  assert.strictEqual(
+    buildValidateQuerySql('t_hudi', null),
+    buildValidateQuerySql('t_hudi'),
+    'no filter → no WHERE, same as omitted'
   );
 
   console.log('athena-fetch self-check passed');
