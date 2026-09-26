@@ -920,10 +920,14 @@ const missingFieldFromChangeData = (changeData: any): IMissingField | null => {
  *   ENTIRE archival (configType ARCHIVAL) — union of the unbounded FIELD
  *   delta scan (archival's schema-only delta table, once Glue registers it —
  *   see ensureDeltaTable/policyConfigType) and the S3 main field-schema
- *   snapshot compared against a live describe (diffSchemas) — the delta
- *   history only carries what a Spark run actually flagged, so the S3
- *   snapshot catches anything from before schema-delta tracking existed for
- *   this config.
+ *   snapshot compared against a live describe (diffSchemas).
+ *
+ *   The S3 snapshot-vs-live comparison runs for BACKUP too, not just
+ *   ARCHIVAL: the delta history only carries what a Spark run actually
+ *   flagged, so a field dropped from Salesforce before schema-delta tracking
+ *   existed for this config (or between compression runs) would otherwise
+ *   never surface. Any stored field missing from the live describe is
+ *   flagged regardless of config type.
  *
  * Every candidate is re-checked against a live describe before being
  * reported — a field a delta once flagged deleted but that's back today
@@ -935,7 +939,7 @@ const missingFieldFromChangeData = (changeData: any): IMissingField | null => {
 const retrieveMissingFields = async (
   params: IFetchMissingFieldsParams
 ): Promise<IFetchMissingFieldsResult | null> => {
-  const { backupConfigId, objectApiName, configType, userId, user, startDate, endDate } = params;
+  const { backupConfigId, objectApiName, userId, user, startDate, endDate } = params;
 
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) return null;
@@ -967,17 +971,17 @@ const retrieveMissingFields = async (
     }
   }
 
-  let storedFields: ISalesforceFieldSnapshot[] | null = null;
-  if (configType === 'ARCHIVAL') {
-    const stored = await fetchObjectFields({ objectApiName, backupConfigId, userId });
-    storedFields = stored.ok ? latestStoredFields(stored.schema) : null;
-  }
+  const stored = await fetchObjectFields({ objectApiName, backupConfigId, userId });
+  const storedFields: ISalesforceFieldSnapshot[] | null = stored.ok ? latestStoredFields(stored.schema) : null;
 
   if (candidates.size === 0 && !storedFields) return { hasMissingFields: false, missingFields: [] };
 
   const described = await salesforceObjectDescribe({ user, objectName: objectApiName });
   const liveFields = described.fields.filter(isQueryableField).map(toFieldSnapshot);
   const liveNames = new Set(liveFields.map((f) => f.name));
+
+  console.log(`[fetch-missing-fields] S3 stored fields | configId=${backupConfigId} object=${objectApiName}`, JSON.stringify(storedFields));
+  console.log(`[fetch-missing-fields] Salesforce live fields | configId=${backupConfigId} object=${objectApiName}`, JSON.stringify(liveFields));
 
   if (storedFields) {
     const { removedFields } = diffSchemas(storedFields, liveFields);
