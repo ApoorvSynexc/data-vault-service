@@ -720,7 +720,7 @@ const dryRunHandler = async (req: IRequest, res: IResponse): Promise<void> => {
  *   source: { type: 'ENTIRE' | 'CHANGED_BETWEEN', startDate?, endDate? }
  *   selection: { restoreScope: IRestoreScope }
  *       (type: ALL | OBJECT | FIELD | FILTER | RECORD | BULK_CSV | DELETED_ONLY)
- *   limit?: number   (records per object; default 50, max 200)
+ *   limit?: number   (records per object; default 20, max 20)
  * }
  *
  * The record-level counterpart to /dry-run: instead of counting what a restore
