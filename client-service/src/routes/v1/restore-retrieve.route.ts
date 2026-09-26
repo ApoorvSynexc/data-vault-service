@@ -46,7 +46,7 @@ const router = Router();
 
 router.post('/', createRestoreValidation, restoreRetrieveJobController.createRestoreHandler2);
 router.post(
-  '/bulk-csv/parse',
+  '/bulk-csv/upload',
   bulkCsvUploadRateLimit,
   uploadSingleCsv('file'),
   restoreRetrieveJobController.parseBulkCsvIdsHandler
