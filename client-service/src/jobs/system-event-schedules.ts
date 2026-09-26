@@ -16,6 +16,7 @@ interface ISystemScheduleJob {
     payload: ISystemSchedulePayload;
 }
 
+console.log("isProduction ", NODE_ENV === "production");
 const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
     {
         name: "datavault-daily-system-job-3am",
