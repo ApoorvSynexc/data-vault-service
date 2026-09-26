@@ -116,6 +116,7 @@ export interface ISalesforceFieldSnapshot {
   relationshipName: string | null;
   relationshipOrder: number | null;
   restrictedDelete: boolean;
+  nillable: boolean;
   type: string;
 }
 
@@ -129,6 +130,7 @@ const toFieldSnapshot = (field: ISalesforceFieldDescribe): ISalesforceFieldSnaps
   relationshipOrder: field.relationshipOrder,
   restrictedDelete: field.restrictedDelete,
   type: field.type,
+  nillable: field.nillable,
 });
 
 export interface ISchemaFieldChange {
