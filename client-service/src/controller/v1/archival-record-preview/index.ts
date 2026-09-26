@@ -220,7 +220,11 @@ const loadRecordDetail = async (
     const childLookups = (includeRelated ? node?.children ?? [] : [])
       .filter((child: any) => child?.name && child?.fieldApiName)
       .map((child: any) => async (): Promise<IRelatedObject | null> => {
-        const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId, fieldsCheck.fields);
+        // One broken child table must not fail the whole detail response.
+        const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId, fieldsCheck.fields).catch((err) => {
+          console.error(`[archival-preview] related lookup failed for ${child.name}:`, err);
+          return [];
+        });
         return childRecords.length
           ? {
               objectName: child.name,
@@ -253,7 +257,10 @@ const loadRecordDetail = async (
     const parentId = parentEdge ? getField(record, parentEdge.fieldApiName) : undefined;
     const parentLookup = async (): Promise<IRelatedObject | null> => {
       if (!parentEdge || !parentId) return null;
-      const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId, fieldsCheck.fields);
+      const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId, fieldsCheck.fields).catch((err) => {
+        console.error(`[archival-preview] parent lookup failed for ${parentEdge.parentNode.name}:`, err);
+        return null;
+      });
       return parentRecord
         ? {
             objectName: parentEdge.parentNode.name,
