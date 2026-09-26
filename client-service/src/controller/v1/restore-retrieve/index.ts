@@ -1212,20 +1212,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  const changedObjectNames: string[] = [];
-  if (backupConfig.type === 'NORMAL') {
-    const result = await runMetadataComparisonForConfig(backupConfig);
-    for (const { objectName, result: metadataResult } of result) {
-      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-        changedObjectNames.push(objectName);
-      }
-    }
-
-    if (changedObjectNames.length > 0) {
-      await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId);
-    }
-  }
-
+  await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId);
   const isDraft = body.status === VISIBILITY_STATUS.draft;
   const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? VISIBILITY_STATUS.draft : STATUS.pending };
   const created = await createRestore(payload);
@@ -1242,17 +1229,36 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   // Step 1: compare metadata comparison
-  // const changedObjectNames: string[] = [];
+  const changedObjectNames: string[] = [];
   try {
     if (backupConfig.type === 'NORMAL') {
-      // const result = await runMetadataComparisonForConfig(backupConfig);
-      // for (const { objectName, result: metadataResult } of result) {
-      //   if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-      //     changedObjectNames.push(objectName);
-      //   }
-      // }
+      if (backupConfig.schedule === 'REALTIME') {
+        const result = await runMetadataComparisonForConfig(backupConfig);
+        for (const { objectName, result: metadataResult } of result) {
+          if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+            changedObjectNames.push(objectName);
+          }
+        }
 
-      if (changedObjectNames.length) {
+        if (changedObjectNames.length) {
+          await triggerBackupJob({
+            user: backupConfigUser,
+            config: backupConfig,
+            type: 'backup',
+            lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+            schemaSync: true,
+            triggerSource: {
+              name: "CREATE_RESTORE",
+              entityId: restoreJob.restoreJobId,
+            },
+            ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
+          });
+        } else {
+          const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
+          await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
+          await initalizeRestoreTransform(restoreJob.restoreJobId);
+        }
+      } else {
         await triggerBackupJob({
           user: backupConfigUser,
           config: backupConfig,
@@ -1265,10 +1271,6 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           },
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
-      } else {
-        const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
-        await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
-        await initalizeRestoreTransform(restoreJob.restoreJobId);
       }
     } else {
       const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
