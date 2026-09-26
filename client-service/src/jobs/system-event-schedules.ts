@@ -6,6 +6,7 @@ export interface ISystemSchedulePayload {
     isRunEmr: boolean;
     isSyncPayment: boolean;
     isLogsArchive: boolean;
+    isSyncSalesforceRefreshToken: boolean;
 }
 
 interface ISystemScheduleJob {
@@ -23,6 +24,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
             isRunEmr: true,
             isSyncPayment: true,
             isLogsArchive: true,
+            isSyncSalesforceRefreshToken: true,
         },
     },
     {
@@ -33,6 +35,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
             isRunEmr: true,
             isSyncPayment: false,
             isLogsArchive: false,
+            isSyncSalesforceRefreshToken: false,
         },
     },
     {
@@ -43,6 +46,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
             isRunEmr: true,
             isSyncPayment: false,
             isLogsArchive: false,
+            isSyncSalesforceRefreshToken: false,
         },
     },
 ];

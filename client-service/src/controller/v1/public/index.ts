@@ -28,6 +28,7 @@ import { ISystemSchedulePayload } from '../../../jobs/system-event-schedules';
 import { runEmrJob } from '../../../jobs/run-emr-job';
 import { runPaymentSyncJob } from '../../../jobs/payement-sync';
 import { runLogsArchive } from '../../../jobs/logs-archive-cron';
+import { runSyncSalesforceRefreshTokenJob } from '../../../jobs/sync-salesforce-refresh-token';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -162,7 +163,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
 
     const { purpose } = event.detail as { purpose?: string };
     if (purpose && purpose === 'DAILY_MAINTENANCE') {
-      const { isRunEmr, isSyncPayment, isLogsArchive } = event.detail as ISystemSchedulePayload;
+      const { isRunEmr, isSyncPayment, isLogsArchive, isSyncSalesforceRefreshToken } = event.detail as ISystemSchedulePayload;
 
       if (isRunEmr) {
         await runEmrJob();
@@ -173,6 +174,10 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
       if (isLogsArchive) {
         await runLogsArchive();
       }
+      if (isSyncSalesforceRefreshToken) {
+        await runSyncSalesforceRefreshTokenJob();
+      }
+      return makeResponse(req, res, 200, true, 'fetch');
     } else {
       const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
       const config = await getBackupConfigById(backupConfigId);
