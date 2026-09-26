@@ -166,7 +166,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                     buildScheduleInput(
                         buildArchivalObjectScheduleName(scheduledObject.id),
                         scheduledObject.scheduleConfig!,
-                        { backupConfigId: config.backupConfigId, userId: config.userId, id: scheduledObject.id }
+                        { purpose: 'BACKUP_JOB', backupConfigId: config.backupConfigId, userId: config.userId, id: scheduledObject.id }
                     )
                 );
             }
@@ -312,7 +312,7 @@ const updateArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
                 const scheduleInput = buildScheduleInput(
                     buildArchivalObjectScheduleName(scheduledObject.id),
                     scheduledObject.scheduleConfig!,
-                    { backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id }
+                    { purpose: 'BACKUP_JOB', backupConfigId: updated.backupConfigId, userId: updated.userId, id: scheduledObject.id }
                 );
 
                 if (isActivatingDraft) {

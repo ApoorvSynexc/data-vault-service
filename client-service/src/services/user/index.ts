@@ -380,6 +380,50 @@ const getUsersByCrmId = async (crmId: string): Promise<IUser[]> => {
   return (result.Items ?? []) as IUser[];
 };
 
+// ---------------------------------------------------------------------------
+// Scans USER_TABLE page by page, invoking onPage for each page of users that
+// have a Salesforce credential to refresh. Mirrors crm/index.ts's
+// getCrmsInBatches so cron jobs can stream the whole table without loading
+// it into memory at once.
+// ---------------------------------------------------------------------------
+const getUsersInBatches = async (
+  onPage: (users: IUser[]) => Promise<void>,
+  filters?: { status?: string },
+  limit: number = 100
+): Promise<void> => {
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  const filterExpressions: string[] = ['attribute_exists(crmCredential)'];
+  const expressionAttributeNames: Record<string, string> = {};
+  const expressionAttributeValues: Record<string, any> = {};
+
+  if (filters?.status) {
+    filterExpressions.push('#status = :status');
+    expressionAttributeNames['#status'] = 'status';
+    expressionAttributeValues[':status'] = filters.status;
+  }
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: USER_TABLE,
+        Limit: limit,
+        FilterExpression: filterExpressions.join(' AND '),
+        ...(Object.keys(expressionAttributeNames).length && { ExpressionAttributeNames: expressionAttributeNames }),
+        ...(Object.keys(expressionAttributeValues).length && { ExpressionAttributeValues: expressionAttributeValues }),
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const users = (result.Items as IUser[] | undefined) ?? [];
+    if (users.length) {
+      await onPage(users);
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+};
+
 const deleteUser = async (userId: string): Promise<boolean> => {
   const existing = await getUser({ userId });
   if (!existing) {
@@ -396,4 +440,4 @@ const deleteUser = async (userId: string): Promise<boolean> => {
   return true;
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, deleteUser, getDecryptedCrmCredential };
+export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, getUsersInBatches, deleteUser, getDecryptedCrmCredential };

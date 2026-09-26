@@ -1,12 +1,12 @@
 import { createAwsEventScheduler, getAwsEventSchedule } from "../services/third-party/event-bridge";
 import { logger } from "../middlewares";
 
-interface ISystemSchedulePayload {
+export interface ISystemSchedulePayload {
     purpose: string;
     isRunEmr: boolean;
     isSyncPayment: boolean;
     isLogsArchive: boolean;
-    isObjectSync: boolean;
+    isSyncSalesforceRefreshToken: boolean;
 }
 
 interface ISystemScheduleJob {
@@ -20,33 +20,33 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
         name: "datavault-daily-system-job-3am",
         scheduleExpression: "cron(0 3 * * ? *)",
         payload: {
-            purpose: "DAILY_MAINTENANCE_SYNC_3AM",
+            purpose: "DAILY_MAINTENANCE",
             isRunEmr: true,
             isSyncPayment: true,
             isLogsArchive: true,
-            isObjectSync: true,
+            isSyncSalesforceRefreshToken: true,
         },
     },
     {
         name: "datavault-daily-system-job-11am",
         scheduleExpression: "cron(0 11 * * ? *)",
         payload: {
-            purpose: "DAILY_EMR_SYNC_11AM",
+            purpose: "DAILY_MAINTENANCE",
             isRunEmr: true,
             isSyncPayment: false,
             isLogsArchive: false,
-            isObjectSync: false,
+            isSyncSalesforceRefreshToken: false,
         },
     },
     {
         name: "datavault-daily-system-job-7pm",
         scheduleExpression: "cron(0 19 * * ? *)",
         payload: {
-            purpose: "DAILY_EMR_SYNC_7PM",
+            purpose: "DAILY_MAINTENANCE",
             isRunEmr: true,
             isSyncPayment: false,
             isLogsArchive: false,
-            isObjectSync: false,
+            isSyncSalesforceRefreshToken: false,
         },
     },
 ];
@@ -69,6 +69,7 @@ export const registerSystemEventSchedules = async (): Promise<void> => {
                 scheduleExpression: job.scheduleExpression,
                 payload: { ...job.payload },
             });
+            logger.info(`[system-event-schedules] "${job.name}" created successfully.`);
         } catch (error) {
             logger.error(`[system-event-schedules] failed to register "${job.name}": `, error);
         }

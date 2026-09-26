@@ -9,7 +9,6 @@ import {
 } from '../services';
 import { logger } from '../middlewares';
 import { filtereObjects } from '../utils/helper';
-import { IBackupConfig } from '../models';
 
 const runScheduledIncrementalBackups = async (): Promise<void> => {
   const tickStartMs = Date.now();
