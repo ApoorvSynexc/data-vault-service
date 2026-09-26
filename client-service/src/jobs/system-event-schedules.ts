@@ -1,12 +1,13 @@
 import { createAwsEventScheduler, getAwsEventSchedule } from "../services/third-party/event-bridge";
 import { logger } from "../middlewares";
+import { NODE_ENV } from "../constant";
 
 export interface ISystemSchedulePayload {
     purpose: string;
-    isRunEmr: boolean;
-    isSyncPayment: boolean;
-    isLogsArchive: boolean;
-    isSyncSalesforceRefreshToken: boolean;
+    isRunEmr?: boolean;
+    isSyncPayment?: boolean;
+    isLogsArchive?: boolean;
+    isSyncSalesforceRefreshToken?: boolean;
 }
 
 interface ISystemScheduleJob {
@@ -15,13 +16,14 @@ interface ISystemScheduleJob {
     payload: ISystemSchedulePayload;
 }
 
+console.log("isProduction ", NODE_ENV === "production");
 const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
     {
         name: "datavault-daily-system-job-3am",
         scheduleExpression: "cron(0 3 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
-            isRunEmr: true,
+            isRunEmr:true,
             isSyncPayment: true,
             isLogsArchive: true,
             isSyncSalesforceRefreshToken: true,
@@ -32,7 +34,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
         scheduleExpression: "cron(0 11 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
-            isRunEmr: true,
+            isRunEmr: NODE_ENV === "production" ? true : false,
             isSyncPayment: false,
             isLogsArchive: false,
             isSyncSalesforceRefreshToken: false,
@@ -43,7 +45,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
         scheduleExpression: "cron(0 19 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
-            isRunEmr: true,
+            isRunEmr: NODE_ENV === "production" ? true : false,
             isSyncPayment: false,
             isLogsArchive: false,
             isSyncSalesforceRefreshToken: false,
@@ -69,7 +71,6 @@ export const registerSystemEventSchedules = async (): Promise<void> => {
                 scheduleExpression: job.scheduleExpression,
                 payload: { ...job.payload },
             });
-            logger.info(`[system-event-schedules] "${job.name}" created successfully.`);
         } catch (error) {
             logger.error(`[system-event-schedules] failed to register "${job.name}": `, error);
         }
