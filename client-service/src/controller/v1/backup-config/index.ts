@@ -5,6 +5,7 @@ import {
   createBackupConfig,
   getBackupConfigById,
   getBackupConfigBySlug,
+  getBackupConfigByName,
   getBackupConfigsByUser,
   getBackupConfigsWithPagination,
   updateBackupConfig,
@@ -57,6 +58,14 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   if (!isOwner) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
+  }
+
+  if (req.body.name) {
+    const existing = await getBackupConfigByName({ userId, name: req.body.name.trim(), type: 'NORMAL' });
+    if (existing) {
+      makeResponse(req, res, 400, false, 'backup_config_name_already_exist');
+      return;
+    }
   }
 
   const config = await createBackupConfig({
