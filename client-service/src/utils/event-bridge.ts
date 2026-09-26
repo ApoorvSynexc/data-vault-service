@@ -197,6 +197,7 @@ const buildScheduleInput = (name: string, scheduleConfig: IScheduleConfig, paylo
 
 const buildEventScheduleInput = (config: IBackupConfig) =>
   buildScheduleInput(buildBackupScheduleName(config.backupConfigId), config.scheduleConfig!, {
+    purpose: 'BACKUP_JOB',
     backupConfigId: config.backupConfigId,
     userId: config.userId,
   });

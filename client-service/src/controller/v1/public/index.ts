@@ -24,6 +24,10 @@ import {
 import { logger } from '../../../middlewares';
 import { DecryptedSalesforceRequest } from '../../../middlewares/salesforce';
 import { checkSalesforceApiLimitUsage, createPaymentAccount, decryptPayload, getUser, setupPayment, testDecrypt, triggerBackupJob } from '../../../services';
+import { ISystemSchedulePayload } from '../../../jobs/system-event-schedules';
+import { runEmrJob } from '../../../jobs/run-emr-job';
+import { runPaymentSyncJob } from '../../../jobs/payement-sync';
+import { runLogsArchive } from '../../../jobs/logs-archive-cron';
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -156,50 +160,62 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
       return makeResponse(req, res, 401, false, 'unauthorized');
     }
 
-    const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
-    const config = await getBackupConfigById(backupConfigId);
-    if (!config) {
-      logger.warn(`[EVENT BRIDGE] Backup config not found for backupConfigId: ${backupConfigId} — skipping`);
-      return makeResponse(req, res, 400, false, 'not_exist');
-    }
+    const { purpose } = event.detail as { purpose?: string };
+    if (purpose && purpose === 'DAILY_MAINTENANCE') {
+      const { isRunEmr, isSyncPayment, isLogsArchive } = event.detail as ISystemSchedulePayload;
 
-    if (config.status === VISIBILITY_STATUS.paused) {
-      logger.info('Backup config is paused, skipping event');
-      return makeResponse(req, res, 200, true, 'fetch');
-    }
-
-    const user = await getUser({ userId });
-    if (!user) {
-      return makeResponse(req, res, 400, false, 'not_exist');
-    }
-
-    // A manually invoked run-now marks the next automatic fire to be skipped —
-    // on backup-config that flag lives on the config, on archival it lives on the
-    // specific object whose schedule fired. Consume it (reset to skip:false) and
-    // no-op this invocation instead of running the job twice.
-    const targetObject = objectId ? config.objects?.find((obj) => obj.id === objectId) : undefined;
-    const shouldSkip = objectId ? targetObject?.upcomingJob?.skip : config.upcomingJob?.skip;
-
-    if (shouldSkip) {
-      if (objectId) {
-        const updatedObjects = (config.objects ?? []).map((obj) =>
-          obj.id === objectId ? { ...obj, upcomingJob: { skip: false } } : obj
-        );
-        await updateBackupConfig(config.backupConfigId, { objects: updatedObjects });
-      } else {
-        await updateBackupConfig(config.backupConfigId, { upcomingJob: { skip: false } });
+      if (isRunEmr) {
+        await runEmrJob();
       }
-      logger.info(`Skipped EventBridge-triggered run — already invoked manually | backupConfigId=${backupConfigId}${objectId ? ` objectId=${objectId}` : ''}`);
-      makeResponse(req, res, 200, true, 'fetch');
-      return;
+      if (isSyncPayment) {
+        await runPaymentSyncJob();
+      }
+      if (isLogsArchive) {
+        await runLogsArchive();
+      }
+    } else {
+      const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
+      const config = await getBackupConfigById(backupConfigId);
+      if (!config) {
+        logger.warn(`[EVENT BRIDGE] Backup config not found for backupConfigId: ${backupConfigId} — skipping`);
+        return makeResponse(req, res, 400, false, 'not_exist');
+      }
+
+      if (config.status === VISIBILITY_STATUS.paused) {
+        logger.info('Backup config is paused, skipping event');
+        return makeResponse(req, res, 200, true, 'fetch');
+      }
+
+      const user = await getUser({ userId });
+      if (!user) {
+        return makeResponse(req, res, 400, false, 'not_exist');
+      }
+
+      const targetObject = objectId ? config.objects?.find((obj) => obj.id === objectId) : undefined;
+      const shouldSkip = objectId ? targetObject?.upcomingJob?.skip : config.upcomingJob?.skip;
+
+      if (shouldSkip) {
+        if (objectId) {
+          const updatedObjects = (config.objects ?? []).map((obj) =>
+            obj.id === objectId ? { ...obj, upcomingJob: { skip: false } } : obj
+          );
+          await updateBackupConfig(config.backupConfigId, { objects: updatedObjects });
+        } else {
+          await updateBackupConfig(config.backupConfigId, { upcomingJob: { skip: false } });
+        }
+        logger.info(`Skipped EventBridge-triggered run — already invoked manually | backupConfigId=${backupConfigId}${objectId ? ` objectId=${objectId}` : ''}`);
+        makeResponse(req, res, 200, true, 'fetch');
+        return;
+      }
+
+      try {
+        await checkSalesforceApiLimitUsage(user.userId, config.crmId);
+        await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
+      } catch (error) {
+        logger.error('Salesforce API limit check failed: ', error);
+      }
     }
 
-    try {
-      await checkSalesforceApiLimitUsage(user.userId, config.crmId);
-      await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
-    } catch (error) {
-      logger.error('Salesforce API limit check failed: ', error);
-    }
 
     makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
