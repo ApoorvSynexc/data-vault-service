@@ -839,7 +839,7 @@ const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void
 
   let result;
   try {
-    result = await validateSoqlQuery(parsed.value);
+    result = await validateSoqlQuery({ ...parsed.value, user: req.user! });
   } catch (e) {
     if (e instanceof FilterError) {
       makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
