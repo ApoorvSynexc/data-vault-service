@@ -1356,9 +1356,17 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const restoreJobs = await getRestoreJobsByRestoreId(restoreId);
+  const [restoreJobs, restore] = await Promise.all([
+    getRestoreJobsByRestoreId(restoreId),
+    getRestoreById(restoreId),
+  ]);
   const restoreJob = restoreJobs[0];
-  makeResponse(req, res, 200, true, 'fetch', { ...restoreJob, destination: { ...restoreJob.destination, encryptedTokens: undefined }, source: undefined });
+  makeResponse(req, res, 200, true, 'fetch', {
+    ...restoreJob,
+    name: restore?.jobDetail?.name,
+    destination: { ...restoreJob.destination, encryptedTokens: undefined },
+    source: undefined,
+  });
 };
 
 const getRestoreJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
