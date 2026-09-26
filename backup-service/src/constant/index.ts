@@ -20,14 +20,18 @@ const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
 const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
 const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
-const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
-const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
-const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
-const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
-const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters'}`;
-const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
-const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
-const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
+
+// DynamoDB table names — every table this service reads/writes, kept together
+// regardless of which feature area owns it. Mirrors client-service's own
+// grouping of the same constant list.
+const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-craft-backup-configs'}`;
+const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-craft-backup-jobs'}`;
+const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-craft-restores'}`;
+const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-craft-restore-jobs'}`;
+const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABLE || 'data-craft-table-counters'}`;
+const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-craft-crms'}`;
+const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-craft-settings'}`;
+const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-craft-notifications'}`;
 
 // AWS Glue / Athena
 // Dedicated IAM credentials scoped to Glue (separate from the default AWS creds).
@@ -214,11 +218,7 @@ export {
   AWS_SECRET_ACCESS_KEY,
   DYNAMODB_ENDPOINT,
 
-  // AWS Glue / Athena
-  AWS_GLUE_ACCESS_KEY,
-  AWS_GLUE_SECRET_KEY,
-  AWS_ACCESS_KEY,
-  AWS_SECRET_KEY,
+  // DynamoDB table names
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
   RESTORE_TABLE,
@@ -227,6 +227,12 @@ export {
   CRM_TABLE,
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
+
+  // AWS Glue / Athena
+  AWS_GLUE_ACCESS_KEY,
+  AWS_GLUE_SECRET_KEY,
+  AWS_ACCESS_KEY,
+  AWS_SECRET_KEY,
 
   // Salesforce Config
   SALESFORCE_CLIENT_ID,

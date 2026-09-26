@@ -11,11 +11,8 @@ Content-Type: application/json
 Authorization: Bearer {{authToken}}
 
 {
- 
-  "orgId": "00Df600000ULYSBEA5",
+  "orgId": "00DC4000004gT87MAE",
   "objName": "Account",
-
-
   "limit": 50,
   "page": 1
 }
@@ -26,11 +23,9 @@ Content-Type: application/json
 Authorization: Bearer {{authToken}}
 
 {
-  "orgId": "00Dbm00000u7PhOEAU",
-  "objName": "Account",
-  "recordId": "001bm00002YUEh4AAH",
+  "orgId": "00DC4000004gT87MAE",
+  "objName": "Contact",
+  "recordId": "003C400000Xb7kIIAR",
   "fields": ["Id", "Name"]
 }
-
-
 
