@@ -1,12 +1,13 @@
 import { createAwsEventScheduler, getAwsEventSchedule } from "../services/third-party/event-bridge";
 import { logger } from "../middlewares";
+import { NODE_ENV } from "../constant";
 
 export interface ISystemSchedulePayload {
     purpose: string;
-    isRunEmr: boolean;
-    isSyncPayment: boolean;
-    isLogsArchive: boolean;
-    isSyncSalesforceRefreshToken: boolean;
+    isRunEmr?: boolean;
+    isSyncPayment?: boolean;
+    isLogsArchive?: boolean;
+    isSyncSalesforceRefreshToken?: boolean;
 }
 
 interface ISystemScheduleJob {
@@ -21,7 +22,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
         scheduleExpression: "cron(0 3 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
-            isRunEmr: true,
+            isRunEmr:true,
             isSyncPayment: true,
             isLogsArchive: true,
             isSyncSalesforceRefreshToken: true,
@@ -32,7 +33,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
         scheduleExpression: "cron(0 11 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
-            isRunEmr: true,
+            isRunEmr: NODE_ENV === "production" ? true : false,
             isSyncPayment: false,
             isLogsArchive: false,
             isSyncSalesforceRefreshToken: false,
@@ -43,7 +44,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
         scheduleExpression: "cron(0 19 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
-            isRunEmr: true,
+            isRunEmr: NODE_ENV === "production" ? true : false,
             isSyncPayment: false,
             isLogsArchive: false,
             isSyncSalesforceRefreshToken: false,
