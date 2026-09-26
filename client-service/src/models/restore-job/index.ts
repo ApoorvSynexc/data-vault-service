@@ -23,6 +23,10 @@ export interface IRestoreJobObject {
   processedRecordCount?: number;
   failedRecordCount?: number;
   errorMessage?: string;
+  // EXPORT restores only — count/total size of the CSV files written under
+  // this object's `${source.csvFilePath}/${name}/csv` folder.
+  csvCount?: number;
+  sizeInBytes?: number;
   children?: IRestoreJobObject[];
 }
 
