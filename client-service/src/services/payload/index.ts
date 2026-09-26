@@ -520,25 +520,47 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
             '--conf spark.executor.userClassPathFirst=true',
 
             // ============================================================
-            // Driver
+            // Driver / Executor sizing — pinned to EXACTLY match this
+            // application's pre-initialized capacity (1 driver + 2 executors,
+            // 4 vCPU / 16 GB / 20 GB disk each), deliberately, not left to
+            // EMR Serverless's own built-in defaults.
+            //
+            // This application's maximumCapacity is 12 vCPU total, and its
+            // initialCapacity (1 driver + 2 executors x 4 vCPU) already
+            // consumes all 12 — there is zero CPU headroom for anything
+            // beyond exactly that many workers. Two things rule out leaving
+            // this unset:
+            //   - EMR Serverless's own built-in default worker size (4 vCPU /
+            //     14 GB) doesn't exactly match this app's pre-initialized
+            //     16 GB workers, so an unsized job isn't guaranteed to land
+            //     on the warm pool rather than requesting a differently-sized
+            //     one.
+            //   - spark.dynamicAllocation.enabled defaults to true, which
+            //     would let Spark ask for a 3rd executor under load — with
+            //     zero headroom that fails the job outright ("Worker could
+            //     not be allocated as the application has exceeded
+            //     maximumCapacity"), not a graceful cap.
+            // Pinning cores/instances to exactly 1 driver + 2 executors keeps
+            // the total request at exactly 12 vCPU, never more, and disabling
+            // dynamic allocation means Spark never tries to ask for a 3rd.
+            // Memory is set comfortably under each worker's 16 GB (driver/
+            // executor memory + overhead), leaving margin below the physical
+            // worker size; the 150 GB/200 GB memory/disk ceilings have ample
+            // headroom regardless, so CPU is the only truly hard constraint.
             // ============================================================
             '--conf spark.driver.cores=4',
-            '--conf spark.driver.memory=12g',
-            '--conf spark.driver.memoryOverhead=4g',
+            '--conf spark.driver.memory=13g',
+            '--conf spark.driver.memoryOverhead=2g',
             '--conf spark.driver.maxResultSize=2g',
-            '--conf spark.emr-serverless.driver.disk=50g',
+            '--conf spark.emr-serverless.driver.disk=20g',
 
-            // ============================================================
-            // Executors
-            // 4 executors × 4 cores = 16 concurrent task slots
-            // ============================================================
             '--conf spark.executor.cores=4',
-            '--conf spark.executor.memory=16g',
-            '--conf spark.executor.memoryOverhead=5g',
-            '--conf spark.emr-serverless.executor.disk=50g',
-            '--conf spark.executor.instances=4',
+            '--conf spark.executor.memory=13g',
+            '--conf spark.executor.memoryOverhead=2g',
+            '--conf spark.emr-serverless.executor.disk=20g',
+            '--conf spark.executor.instances=2',
 
-            // Keep executor count fixed
+            // Fixed at exactly the pre-initialized executor count — see above.
             '--conf spark.dynamicAllocation.enabled=false',
 
             // ============================================================
