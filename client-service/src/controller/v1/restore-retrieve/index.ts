@@ -841,6 +841,7 @@ const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void
   try {
     result = await validateSoqlQuery({ ...parsed.value, user: req.user! });
   } catch (e) {
+    console.error('validateQueryHandler error', e);
     if (e instanceof FilterError) {
       makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
       return;
@@ -849,6 +850,7 @@ const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 
   if (!result.ok) {
+    console.error('validateQueryHandler result error', result.error);
     makeResponse(req, res, 400, false, result.error);
     return;
   }
