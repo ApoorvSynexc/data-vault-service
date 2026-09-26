@@ -73,7 +73,7 @@ const attachArchivalStatsToRows = async (documents: any[]): Promise<void> => {
 };
 
 const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { pagination, limit, cursor, name } = req.query as Record<string, string>;
+    const { pagination, limit, cursor, name, destinationId } = req.query as Record<string, string>;
     const crmId = req.user?.crmId;
     const userId = req.user!.userId;
 
@@ -88,6 +88,7 @@ const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promis
                 ...(search && search.length > 0 && { search }),
                 ...(status && { status }),
                 ...(backupStatus && { backupStatus }),
+                ...(destinationId && { destinationId }),
             },
             { limit: limitNum, cursor }
         );
