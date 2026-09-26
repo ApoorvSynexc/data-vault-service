@@ -6,9 +6,17 @@ import { timer } from '../utils/helper';
 import { logger } from '../middlewares';
 import { NODE_ENV } from '../constant';
 import { runPaymentSyncJob } from './payement-sync';
+import { registerSystemEventSchedules } from './system-event-schedules';
 
 export const startCron = () => {
     // startBackupConfigCron();
+
+    // Fire-and-forget: registration failures are logged, not thrown — a
+    // schedule that fails to register on this boot gets retried on the next
+    // one, it should never block server startup.
+    // registerSystemEventSchedules().catch((error) =>
+    //     logger.error('[CRON] failed to register system EventBridge schedules: ', error)
+    // );
 
 
 
