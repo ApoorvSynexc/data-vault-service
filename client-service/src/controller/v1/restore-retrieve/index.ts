@@ -41,7 +41,7 @@ import {
   validateSoqlQuery,
   getBackupConfigById,
   runMetadataComparisonForConfig,
-  hasMetadataChanged,
+  getMetadataChangeOperations,
   triggerBackupJob,
   initalizeRestoreTransform,
   getRestoreJobById,
@@ -59,6 +59,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { parseCsvRow } from '../../../utils/restore-csv-format';
 import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
+import dayjs from 'dayjs';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -1155,7 +1156,7 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'fetch', fields);
 };
 
-const MAX_BULK_CSV_ROWS = 50000;
+const MAX_BULK_CSV_ROWS = 500000;
 const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const file = req.file;
   if (!file) {
@@ -1217,20 +1218,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  const changedObjectNames: string[] = [];
-  if (backupConfig.type === 'NORMAL') {
-    const result = await runMetadataComparisonForConfig(backupConfig);
-    for (const { objectName, result: metadataResult } of result) {
-      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-        changedObjectNames.push(objectName);
-      }
-    }
-
-    if (changedObjectNames.length > 0) {
-      await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId);
-    }
-  }
-
+  await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId);
   const isDraft = body.status === VISIBILITY_STATUS.draft;
   const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? VISIBILITY_STATUS.draft : STATUS.pending };
   const created = await createRestore(payload);
@@ -1247,17 +1235,39 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   // Step 1: compare metadata comparison
-  // const changedObjectNames: string[] = [];
+  const changedObjectNames: string[] = [];
   try {
     if (backupConfig.type === 'NORMAL') {
-      // const result = await runMetadataComparisonForConfig(backupConfig);
-      // for (const { objectName, result: metadataResult } of result) {
-      //   if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-      //     changedObjectNames.push(objectName);
-      //   }
-      // }
+      if (backupConfig.schedule === 'REALTIME') {
+        const result = await runMetadataComparisonForConfig(backupConfig);
+        for (const { objectName, result: metadataResult } of result) {
+          const operations = getMetadataChangeOperations(metadataResult);
+          const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
+          if (requiresSchemaSync && !changedObjectNames.includes(objectName)) {
+            changedObjectNames.push(objectName);
+          }
+        }
 
-      if (changedObjectNames.length) {
+        if (changedObjectNames.length) {
+          await triggerBackupJob({
+            user: backupConfigUser,
+            config: backupConfig,
+            type: 'backup',
+            lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+            schemaSync: true,
+            triggerSource: {
+              name: "CREATE_RESTORE",
+              entityId: restoreJob.restoreJobId,
+            },
+            ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
+          });
+        } else {
+          const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
+          await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
+          await initalizeRestoreTransform(restoreJob.restoreJobId);
+        }
+      } else {
+        console.log({ lastUpdatedAt: dayjs(backupConfig.lastSchemaSyncAt).toISOString() });
         await triggerBackupJob({
           user: backupConfigUser,
           config: backupConfig,
@@ -1270,10 +1280,6 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           },
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
-      } else {
-        const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
-        await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
-        await initalizeRestoreTransform(restoreJob.restoreJobId);
       }
     } else {
       const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });

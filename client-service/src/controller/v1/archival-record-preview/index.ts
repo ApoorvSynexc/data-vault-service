@@ -4,10 +4,8 @@ import {
   resolveArchivalConfigsForObject,
   searchArchivalRecords,
   applyFieldSelection,
-  getField,
   validateFields,
   getArchivedRecordById,
-  getArchivedRelatedRecords,
   type IArchivalFilters,
 } from '../../../services/archival-record-preview';
 import { toIsoDateString, IsoDateString } from '../../../utils/iso-date';
@@ -128,26 +126,9 @@ const findParentEdge = (nodes: any[] | undefined, targetName: string): { parentN
 
 interface IRelatedObject {
   objectName: string;
-  relationship: 'child' | 'parent';
+  relationship: 'child';
   fieldApiName: string;
-  records: Record<string, string>[];
 }
-
-const RELATED_LOOKUP_CONCURRENCY = 4;
-
-// Runs async tasks with at most `limit` in flight, preserving result order.
-const runWithConcurrency = async <T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> => {
-  const results: T[] = new Array(tasks.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < tasks.length) {
-      const i = next++;
-      results[i] = await tasks[i]();
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
-  return results;
-};
 
 // Concurrent callers with the same key share one in-flight load; a finished
 // result is reused for `ttlMs`. Rejections are never cached, so a failed load
@@ -194,7 +175,7 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
   // Same record asked again (client/gateway retry, double click) shares the
   // running Athena work or a just-finished result instead of re-querying —
   // every uncached lookup is billed and queues behind other queries.
-  // Each related object costs its own Athena query (~3s each), so callers that
+  // includeRelated lists the child objects (no records, no extra queries); callers that
   // only need the record itself can opt out with includeRelated:false.
   const includeRelated = rest.includeRelated !== false;
   const cacheKey = JSON.stringify([orgId, resolved.objName, recordId, fieldsCheck.fields, includeRelated]);
@@ -206,6 +187,9 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
   makeResponse(req, res, 200, true, 'fetch', payload);
 };
 
+// The record is one Athena query. With includeRelated, its child objects are
+// only listed from the config tree (name + FK field) — their records are not
+// fetched, so no Athena query per child.
 const loadRecordDetail = async (
   configs: IBackupConfig[],
   objName: string,
@@ -213,66 +197,21 @@ const loadRecordDetail = async (
   fields: string[] | null,
   includeRelated = true
 ): Promise<Record<string, unknown> | null> => {
-  const resolved = { objName, configs };
-  const fieldsCheck = { fields };
-  for (const config of resolved.configs) {
-    const node = findObjectNode(config.objects, resolved.objName);
-    const childLookups = (includeRelated ? node?.children ?? [] : [])
+  for (const config of configs) {
+    const record = await getArchivedRecordById(config, objName, recordId);
+    if (!record) continue;
+
+    const children = includeRelated ? findObjectNode(config.objects, objName)?.children ?? [] : [];
+    const relatedObjects: IRelatedObject[] = children
       .filter((child: any) => child?.name && child?.fieldApiName)
-      .map((child: any) => async (): Promise<IRelatedObject | null> => {
-        const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId, fieldsCheck.fields);
-        return childRecords.length
-          ? {
-              objectName: child.name,
-              relationship: 'child',
-              fieldApiName: child.fieldApiName,
-              records: childRecords.map((r) => applyFieldSelection(r, fieldsCheck.fields)),
-            }
-          : null;
-      });
-
-    // Children only need recordId, not the fetched record, so they start together
-    // with the record's own query — one Athena round-trip (~3s) less per request.
-    // Only the parent lookup has to wait for the record (it needs the FK value).
-    const childrenPromise = runWithConcurrency(childLookups, RELATED_LOOKUP_CONCURRENCY);
-    const settleChildren = (): Promise<unknown> => childrenPromise.catch(() => undefined);
-
-    let record: Record<string, string> | null;
-    try {
-      record = await getArchivedRecordById(config, resolved.objName, recordId);
-    } catch (err) {
-      await settleChildren();
-      throw err;
-    }
-    if (!record) {
-      await settleChildren();
-      continue;
-    }
-
-    const parentEdge = includeRelated ? findParentEdge(config.objects, resolved.objName) : null;
-    const parentId = parentEdge ? getField(record, parentEdge.fieldApiName) : undefined;
-    const parentLookup = async (): Promise<IRelatedObject | null> => {
-      if (!parentEdge || !parentId) return null;
-      const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId, fieldsCheck.fields);
-      return parentRecord
-        ? {
-            objectName: parentEdge.parentNode.name,
-            relationship: 'parent',
-            fieldApiName: parentEdge.fieldApiName,
-            records: [applyFieldSelection(parentRecord, fieldsCheck.fields)],
-          }
-        : null;
-    };
-
-    const [childResults, parentResult] = await Promise.all([childrenPromise, parentLookup()]);
-    const relatedObjects = [...childResults, parentResult].filter((r): r is IRelatedObject => r !== null);
+      .map((child: any) => ({ objectName: child.name, relationship: 'child', fieldApiName: child.fieldApiName }));
 
     return {
       configId: config.backupConfigId,
       policyName: config.name,
-      objName: resolved.objName,
+      objName,
       recordId,
-      record: applyFieldSelection(record, fieldsCheck.fields),
+      record: applyFieldSelection(record, fields),
       relatedObjects,
     };
   }
