@@ -825,10 +825,13 @@ const parseValidateQueryParams = (
  * structurally valid SOQL but doesn't exist on this object's actual schema
  * fails here instead of silently passing.
  *
- * Response: { matched: boolean } — whether at least one record matches.
+ * Response: { matched: boolean } — whether at least one record matches. When
+ * the object has no compressed Hudi table yet, matched is false rather than
+ * an error — the filter is still validated, there's just nothing to run it
+ * against.
  *
- * Returns not_exist when the config doesn't exist, isn't owned by the
- * caller, or the object has no compressed Hudi table yet.
+ * Returns not_exist when the config doesn't exist or isn't owned by the
+ * caller.
  */
 const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const parsed = parseValidateQueryParams(req.body as Record<string, unknown>, req.user!.userId);

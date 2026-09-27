@@ -1204,11 +1204,12 @@ export type IValidateQueryOutcome =
  * maps it to the same 400 dry-run's FILTER scope already uses for a bad
  * filter.
  *
- * Returns not_exist when the config doesn't exist, isn't owned by the
- * caller, or the object has no compressed Hudi table yet (nothing has been
- * backed up for it, so there is nothing to validate against). Returns
- * crm_not_connected when the caller has no usable Salesforce connection to
- * describe the object with.
+ * Returns not_exist when the config doesn't exist or isn't owned by the
+ * caller. Returns crm_not_connected when the caller has no usable Salesforce
+ * connection to describe the object with. When the object has no compressed
+ * Hudi table yet (nothing backed up for it), the filter is still validated
+ * above but the Athena query is skipped — there's nothing to run it against,
+ * so this reports matched: false rather than an error.
  */
 const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidateQueryOutcome> => {
   const config = await getBackupConfigById(params.backupConfigId);
@@ -1246,7 +1247,10 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
   const hudiTable = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}_hudi`;
 
   const { region, outputLocation } = await buildRetrieveOutputLocation(config);
-  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: false, error: 'not_exist' };
+  // No compressed Hudi table yet (nothing backed up for this object) — the
+  // filter itself is already validated above, there's just nothing to run it
+  // against, so this is "no matches" rather than an error.
+  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: true, value: { matched: false } };
 
   const result = await runAthenaQuery(buildValidateQuerySql(hudiTable, whereBody), databaseName, region, outputLocation, 1);
 
