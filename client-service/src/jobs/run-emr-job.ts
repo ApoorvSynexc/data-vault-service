@@ -23,13 +23,6 @@ const runEmrJob = async () => {
             // Check realtime configs for metadata comparison
             if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
               const changedObjectNames: string[] = [];
-              // salesforceMetadataHandler swallows its own errors and resolves
-              // `undefined` instead of rethrowing (e.g. an expired Salesforce
-              // session) — hasMetadataChanged(undefined) is false, which would
-              // otherwise look identical to "genuinely unchanged" and let this
-              // config fall through to a normal EMR trigger while also stamping
-              // lastSchemaSyncAt, even though the schema was never actually
-              // verified. Track that case explicitly and skip this config instead.
               let hasComparisonError = false;
               const result = await runMetadataComparisonForConfig(config);
               for (const { objectName, result: metadataResult } of result) {
