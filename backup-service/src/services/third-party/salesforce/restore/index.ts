@@ -156,7 +156,10 @@ const submitIngestChunk = async (
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
 
-  if (type === 'RESTORE' && processed - failed > 0) {
+  // ponytail: update has no pre-change snapshot to roll back to (only ids are
+  // captured), so it can't safely produce a rollback artifact — revisit if
+  // update rollback becomes a real requirement.
+  if (type === 'RESTORE' && operation === 'insert' && processed - failed > 0) {
     const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, job.id);
     const idsOnlyCsv = extractSuccessfulIdsCsv(successfulCsv);
     await uploadToS3(
@@ -192,7 +195,7 @@ const restoreObjectData = async (
 ): Promise<string[]> => {
   let csvFilePath = baseCsvFilePath;
   if (type === 'RESTORE') {
-    csvFilePath = `${baseCsvFilePath}/${objectName}/csv`;
+    csvFilePath = `${baseCsvFilePath}/${objectName}/csv/${operation}`;
   }
   const keys = await listS3Objects(s3Config, `${csvFilePath}`);
 
@@ -366,24 +369,24 @@ export const runSalesforceRestore = async (
     backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
   };
 
-  // const path = `${sourceS3Credentials.csvFilePath}/${object.name}/csv`;
-  // console.log(JSON.stringify({ path }));
+  for (const operation of ['insert', 'update'] as const) {
+    await restoreObjectData(
+      restoreJobId,
+      s3Config,
+      sourceS3Credentials.csvFilePath,
+      object.name,
+      destinationSalesforceCredentials.instanceUrl,
+      tokens,
+      operation,
+      externalIdFieldName,
+      'RESTORE'
+    );
 
-  await restoreObjectData(
-    restoreJobId,
-    s3Config,
-    sourceS3Credentials.csvFilePath,
-    object.name,
-    destinationSalesforceCredentials.instanceUrl,
-    tokens,
-    'upsert',
-    externalIdFieldName,
-    'RESTORE'
-  );
+    logger.info(
+      `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`
+    );
+  }
 
-  logger.info(
-    `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${'upsert'}`
-  );
   return STATUS.success;
 };
 
