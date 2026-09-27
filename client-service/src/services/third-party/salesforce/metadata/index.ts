@@ -456,19 +456,16 @@ export interface IInactiveOwnerIdsResult {
 // direct field on User, so includeManagers is answered by the same query.
 export const getInactiveOwnerIds = async ({ user, includeManagers }: { user: IUser; includeManagers?: boolean }): Promise<IInactiveOwnerIdsResult> => {
     const crm = await getCrmById(user.crmId!);
-    console.log('getInactiveOwnerIds', { user, includeManagers, crm });
     if (!crm) {
         throw new Error('CRM not found');
     }
 
     const instanceUrl = user.crmProfile?.instanceUrl;
-    console.log('getInactiveOwnerIds', { instanceUrl });
     if (!instanceUrl) {
         throw new Error('Instance URL not found');
     }
 
     const { access_token, refresh_token } = getDecryptedCrmCredential(user) ?? {};
-    console.log('getInactiveOwnerIds', { access_token, refresh_token });
     const tokens = {
         accessToken: access_token,
         refreshToken: refresh_token,
