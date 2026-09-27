@@ -161,6 +161,8 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
       return makeResponse(req, res, 401, false, 'unauthorized');
     }
 
+    makeResponse(req, res, 200, true, 'fetch')
+
     const { purpose } = event.detail as { purpose?: string };
     if (purpose && purpose === 'DAILY_MAINTENANCE') {
       const { isRunEmr, isSyncPayment, isLogsArchive, isSyncSalesforceRefreshToken } = event.detail as ISystemSchedulePayload;
@@ -177,23 +179,23 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
       if (isSyncSalesforceRefreshToken) {
         await runSyncSalesforceRefreshTokenJob();
       }
-      return makeResponse(req, res, 200, true, 'fetch');
+      return;
     } else {
       const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
       const config = await getBackupConfigById(backupConfigId);
       if (!config) {
         logger.warn(`[EVENT BRIDGE] Backup config not found for backupConfigId: ${backupConfigId} — skipping`);
-        return makeResponse(req, res, 400, false, 'not_exist');
+        return;
       }
 
       if (config.status === VISIBILITY_STATUS.paused) {
         logger.info('Backup config is paused, skipping event');
-        return makeResponse(req, res, 200, true, 'fetch');
+        return;
       }
 
       const user = await getUser({ userId });
       if (!user) {
-        return makeResponse(req, res, 400, false, 'not_exist');
+        return
       }
 
       const targetObject = objectId ? config.objects?.find((obj) => obj.id === objectId) : undefined;
@@ -209,7 +211,6 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
           await updateBackupConfig(config.backupConfigId, { upcomingJob: { skip: false } });
         }
         logger.info(`Skipped EventBridge-triggered run — already invoked manually | backupConfigId=${backupConfigId}${objectId ? ` objectId=${objectId}` : ''}`);
-        makeResponse(req, res, 200, true, 'fetch');
         return;
       }
 
@@ -222,10 +223,10 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     }
 
 
-    return makeResponse(req, res, 200, true, 'fetch');
+    return;
   } catch (error) {
     logger.error('Event bridge trigger error: ', error);
-    return makeResponse(req, res, 200, true, 'fetch');
+    return;
   }
 };
 
