@@ -432,11 +432,12 @@ const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promis
  * salesforceObjectDescribe is the same describe call the crm-metadata Fields API
  * (getSalesforceFields) is built on, so describe-level behavior stays identical.
  * Narrows the result to just the field API names Spark can write during a restore:
- * fields with updateable = true, minus every standard system/audit field (see
- * SALESFORCE_SYSTEM_FIELDS — describe's updateable flag alone isn't a safe system-field
- * check, since some orgs report CreatedDate/CreatedById/etc as updateable via API),
- * plus Id unconditionally (it's the match/upsert key, itself a system field and never
- * itself updateable).
+ * fields with updateable = true, minus formula/roll-up summary fields (calculated —
+ * computed by Salesforce, never actually writable regardless of what updateable
+ * reports) and every standard system/audit field (see SALESFORCE_SYSTEM_FIELDS —
+ * describe's updateable flag alone isn't a safe system-field check, since some orgs
+ * report CreatedDate/CreatedById/etc as updateable via API), plus Id unconditionally
+ * (it's the match/upsert key, itself a system field and never itself updateable).
  */
 const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreConfigId, objectApiName } = req.query;
@@ -475,6 +476,7 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
     .filter(
       (field) =>
         (field.updateable || field.createable) &&
+        !field.calculated &&
         !SALESFORCE_SYSTEM_FIELDS.includes(field.name) &&
         !excludedFieldNames.includes(field.name)
     )
