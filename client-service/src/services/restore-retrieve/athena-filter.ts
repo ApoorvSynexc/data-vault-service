@@ -306,7 +306,7 @@ export const DELTA_CHANGE_DATA_ALIAS = 'dv_change_data';
 const deltaFieldExpr: ColExpr = (name) => {
   const hudiCol = quoteIdentifier(name); // validates; throws FilterError before name is interpolated below
   const del = `json_extract_scalar("${DELTA_CHANGE_DATA_ALIAS}", '$["${name}"]')`;
-  const upd = `json_extract_scalar("${DELTA_CHANGE_DATA_ALIAS}", '$["${name}"]."new"')`;
+  const upd = `json_extract_scalar("${DELTA_CHANGE_DATA_ALIAS}", '$["${name}"]["new"]')`;
   return (
     `CASE WHEN "${DELTA_CHANGE_TYPE_ALIAS}" = 'DELETE' THEN ${del} ` +
     `ELSE COALESCE(${upd}, CAST(${hudiCol} AS varchar)) END`
@@ -465,13 +465,13 @@ if (require.main === module) {
   // an UPDATE event's payload didn't carry this field.
   assert.strictEqual(
     buildDeltaFilterWhere({ type: 'AND', fields: [{ name: 'Amount', dataType: 'number', operator: '>=', value: '100' }] }),
-    `CASE WHEN "dv_change_type" = 'DELETE' THEN json_extract_scalar("dv_change_data", '$["Amount"]') ELSE COALESCE(json_extract_scalar("dv_change_data", '$["Amount"]."new"'), CAST("Amount" AS varchar)) END >= 100`
+    `CASE WHEN "dv_change_type" = 'DELETE' THEN json_extract_scalar("dv_change_data", '$["Amount"]') ELSE COALESCE(json_extract_scalar("dv_change_data", '$["Amount"]["new"]'), CAST("Amount" AS varchar)) END >= 100`
   );
   // Same operator/value/AND-OR handling as the Hudi path — only the column
   // expression differs.
   assert.strictEqual(
     buildDeltaFilterWhere({ type: 'OR', fields: [{ name: 'Stage', dataType: 'string', operator: 'LIKE', value: 'Won' }] }),
-    `CASE WHEN "dv_change_type" = 'DELETE' THEN json_extract_scalar("dv_change_data", '$["Stage"]') ELSE COALESCE(json_extract_scalar("dv_change_data", '$["Stage"]."new"'), CAST("Stage" AS varchar)) END LIKE '%Won%'`
+    `CASE WHEN "dv_change_type" = 'DELETE' THEN json_extract_scalar("dv_change_data", '$["Stage"]') ELSE COALESCE(json_extract_scalar("dv_change_data", '$["Stage"]["new"]'), CAST("Stage" AS varchar)) END LIKE '%Won%'`
   );
   // Injection defence still fires through the delta path.
   expectError(
