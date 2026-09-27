@@ -222,9 +222,10 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     }
 
 
-    makeResponse(req, res, 200, true, 'fetch');
+    return makeResponse(req, res, 200, true, 'fetch');
   } catch (error) {
     logger.error('Event bridge trigger error: ', error);
+    return makeResponse(req, res, 200, true, 'fetch');
   }
 };
 
