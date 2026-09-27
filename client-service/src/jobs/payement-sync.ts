@@ -4,7 +4,7 @@ import { decrypt, EncryptedPayload } from "../utils/encryption";
 
 const runPaymentSyncJob = async () => {
     try {
-        getCrmsInBatches(async (crms) => {
+        await getCrmsInBatches(async (crms) => {
             for (const crm of crms) {
                 const user = await getUser({ userId: crm.userId });
                 if (!user || !crm.paymentToken) continue;
