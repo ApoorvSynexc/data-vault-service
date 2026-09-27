@@ -23,7 +23,7 @@ import { S3Config } from '../../utils/validate-aws-credentials';
 
 export { FilterError, buildAthenaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import { buildAthenaFilterWhere, buildDeltaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
+import { buildAthenaFilterWhere, buildDeltaFilterWhere, DELTA_RECORD_ID_ALIAS, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 import {
   pairedColumns,
   IPageKey,
@@ -39,6 +39,7 @@ import {
   buildFieldDeltaSql,
   buildHudiCountSql,
   buildDeltaCountSql,
+  buildDeltaScanWhere,
   buildValidateQuerySql,
   recordIdsWhere,
   validateColumns,
@@ -1276,13 +1277,12 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
  *                   delta table.
  * CHANGED_BETWEEN — total/UPDATE/DELETE counts of DISTINCT records
  *                   (is_schema_change excluded) whose change_time falls in
- *                   [startDate, endDate], each collapsed to its merged state
- *                   before counting — see buildDeltaCountSql — narrowed the
+ *                   [startDate, endDate] — deduped to one row per record
+ *                   before counting, see buildDeltaCountSql — narrowed the
  *                   same way by RECORD/BULK_CSV/FILTER (FILTER compiled
- *                   through buildDeltaFilterWhere instead — see its own doc
- *                   comment for how it resolves a field against that merged
- *                   state). DELETED_ONLY reports only the DELETE half of that
- *                   count.
+ *                   through buildDeltaFilterWhere instead, matching each
+ *                   record's PRE-WINDOW value — see its own doc comment).
+ *                   DELETED_ONLY reports only the DELETE half of that count.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
@@ -1351,9 +1351,16 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
     targets.map(async (t): Promise<IDryRunObjectCount> => {
       try {
         const scopeWhere = t.recordIds
-          ? recordIdsWhere(t.recordIds, 'record_id')
+          ? recordIdsWhere(t.recordIds, `"${DELTA_RECORD_ID_ALIAS}"`)
           : t.filter
-            ? buildDeltaFilterWhere(t.filter)
+            ? buildDeltaFilterWhere(t.filter, {
+                deltaTable: `${tableFor(t.objectApiName)}_delta`,
+                scanWhere: buildDeltaScanWhere({
+                  startDate: params.startDate!,
+                  endDate: params.endDate!,
+                  deltaPartition,
+                }),
+              })
             : null;
         const counts = await runDeltaCount(
           databaseName,
