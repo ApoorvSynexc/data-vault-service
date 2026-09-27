@@ -279,25 +279,38 @@ export const buildAthenaFilterWhere = (
   return buildStructuredWhere(filters.fields ?? [], joiner, colExpr);
 };
 
+// Column aliases buildDeltaCountSql (athena-fetch.ts) flattens change_type/
+// change_data into after LEFT JOINing each record's current Hudi row onto its
+// deduped-latest delta event — dv_-prefixed the same way dv_operation/
+// dv_created are, since that join also flattens in every real Hudi column
+// (h.*) alongside these, and an object field literally named "change_type"/
+// "change_data" would otherwise collide.
+export const DELTA_CHANGE_TYPE_ALIAS = 'dv_change_type';
+export const DELTA_CHANGE_DATA_ALIAS = 'dv_change_data';
+
 /**
  * Delta-table column resolver for FILTER-scope conditions under
- * CHANGED_BETWEEN: change_data is JSON, not flat columns, and its shape
- * depends on change_type — a DELETE row is a flat snapshot
- * ({"Field": value}), an UPDATE row nests {"Field": {"old":..., "new":...}}
- * per changed field only.
+ * CHANGED_BETWEEN, evaluated against each record's MERGED state — see
+ * buildDeltaCountSql, the only caller: it collapses every delta event a
+ * record had inside the window down to its last one, then LEFT JOINs that
+ * record's current Hudi row onto it before this resolver ever runs.
  *
- * ponytail: matches only deltas whose payload actually names the field — an
- * UPDATE delta that didn't touch this field has no value here to compare, so
- * it's excluded even if the record's current (untouched) state would match.
- * Upgrade path: LEFT JOIN the object's _hudi table and COALESCE onto its
- * current value for fields absent from change_data, if a delta filter needs
- * full correctness.
+ * change_data is JSON, not flat columns, and its shape depends on
+ * change_type — a DELETE row is a flat snapshot ({"Field": value}), already
+ * the record's complete last state, so it needs no fallback. An UPDATE row
+ * nests {"Field": {"old":..., "new":...}} per changed field only — a field
+ * that particular (already-latest) event didn't touch has no value there,
+ * so it falls back to the joined Hudi row's current value instead of being
+ * treated as non-matching.
  */
 const deltaFieldExpr: ColExpr = (name) => {
-  quoteIdentifier(name); // validates; throws FilterError before name is interpolated below
-  const del = `json_extract_scalar(change_data, '$["${name}"]')`;
-  const upd = `json_extract_scalar(change_data, '$["${name}"]."new"')`;
-  return `CASE WHEN change_type = 'DELETE' THEN ${del} ELSE ${upd} END`;
+  const hudiCol = quoteIdentifier(name); // validates; throws FilterError before name is interpolated below
+  const del = `json_extract_scalar("${DELTA_CHANGE_DATA_ALIAS}", '$["${name}"]')`;
+  const upd = `json_extract_scalar("${DELTA_CHANGE_DATA_ALIAS}", '$["${name}"]."new"')`;
+  return (
+    `CASE WHEN "${DELTA_CHANGE_TYPE_ALIAS}" = 'DELETE' THEN ${del} ` +
+    `ELSE COALESCE(${upd}, CAST(${hudiCol} AS varchar)) END`
+  );
 };
 
 export const buildDeltaFilterWhere = (filters: IRestoreFilters): string | null =>
@@ -447,16 +460,18 @@ if (require.main === module) {
   );
 
   // Delta-table FILTER (buildDeltaFilterWhere): fields resolve through a
-  // change_type-aware CASE over json_extract_scalar instead of a plain column.
+  // change_type-aware CASE over json_extract_scalar, falling back to the
+  // joined Hudi column (buildDeltaCountSql flattens it in unqualified) when
+  // an UPDATE event's payload didn't carry this field.
   assert.strictEqual(
     buildDeltaFilterWhere({ type: 'AND', fields: [{ name: 'Amount', dataType: 'number', operator: '>=', value: '100' }] }),
-    `CASE WHEN change_type = 'DELETE' THEN json_extract_scalar(change_data, '$["Amount"]') ELSE json_extract_scalar(change_data, '$["Amount"]."new"') END >= 100`
+    `CASE WHEN "dv_change_type" = 'DELETE' THEN json_extract_scalar("dv_change_data", '$["Amount"]') ELSE COALESCE(json_extract_scalar("dv_change_data", '$["Amount"]."new"'), CAST("Amount" AS varchar)) END >= 100`
   );
   // Same operator/value/AND-OR handling as the Hudi path — only the column
   // expression differs.
   assert.strictEqual(
     buildDeltaFilterWhere({ type: 'OR', fields: [{ name: 'Stage', dataType: 'string', operator: 'LIKE', value: 'Won' }] }),
-    `CASE WHEN change_type = 'DELETE' THEN json_extract_scalar(change_data, '$["Stage"]') ELSE json_extract_scalar(change_data, '$["Stage"]."new"') END LIKE '%Won%'`
+    `CASE WHEN "dv_change_type" = 'DELETE' THEN json_extract_scalar("dv_change_data", '$["Stage"]') ELSE COALESCE(json_extract_scalar("dv_change_data", '$["Stage"]."new"'), CAST("Stage" AS varchar)) END LIKE '%Won%'`
   );
   // Injection defence still fires through the delta path.
   expectError(

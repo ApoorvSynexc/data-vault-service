@@ -3,7 +3,7 @@
 // same directive restore-reconstruct.ts carries for the same reason.
 /// <reference types="node" />
 
-import { FilterError } from './athena-filter';
+import { FilterError, DELTA_CHANGE_TYPE_ALIAS, DELTA_CHANGE_DATA_ALIAS } from './athena-filter';
 
 /**
  * Athena SQL builders for the fetch-records flow. Pure string builders — no I/O —
@@ -630,30 +630,58 @@ export const buildHudiCountSql = (hudiTable: string, whereBody?: string | null):
   `SELECT COUNT(*) AS cnt FROM "${hudiTable}"` + whereClause([whereBody], 'WHERE');
 
 /**
- * CHANGE_BETWEEN: total/UPDATE/DELETE counts out of the delta table's
- * record-level rows (is_schema_change excluded via RECORD_ROWS_ONLY) whose
- * change_time falls in [startDate, endDate].
+ * CHANGE_BETWEEN: total/UPDATE/DELETE counts of DISTINCT records whose
+ * MERGED state — collapsing every delta event a record had inside
+ * [startDate, endDate] down to its last one (ROW_NUMBER, newest change_time
+ * first), then LEFT JOINing that record's current Hudi row onto it — matches
+ * scopeWhere. Counting distinct records instead of raw delta rows, and
+ * filtering the merged/deduped state instead of each event individually, is
+ * what makes this agree with what a restore of the window would actually
+ * touch: a record that changed twice in the window is one match, not two,
+ * and a filter on a field an UPDATE event didn't itself touch still sees
+ * that field's real (joined-in) current value.
  *
- * `scopeWhere` narrows WHICH delta rows match — an Id list (RECORD / BULK_CSV,
- * via recordIdsWhere(ids, 'record_id')) or FILTER-scope field conditions (via
- * athena-filter's buildDeltaFilterWhere, which extracts each field out of
- * change_data since it is JSON, not flat columns — see that function's own
- * ponytail note for what it does and doesn't match). Object/field scope
- * (which objects to count) applies via which table this runs against, same as
+ * The dedup (`rn = 1`) happens against the delta table alone, before the
+ * Hudi join — both tables carry their own year/month partition columns, so
+ * joining first would make `deltaPartition`'s unqualified `year`/`month`
+ * ambiguous.
+ *
+ * `scopeWhere` narrows WHICH merged records match — an Id list (RECORD /
+ * BULK_CSV, via recordIdsWhere(ids, 'record_id')) or FILTER-scope field
+ * conditions (via athena-filter's buildDeltaFilterWhere, which resolves each
+ * field through the DELTA_CHANGE_TYPE_ALIAS/DELTA_CHANGE_DATA_ALIAS columns
+ * this query flattens change_type/change_data into, plus the joined Hudi
+ * columns — see that function's own doc comment). Object/field scope (which
+ * objects to count) applies via which tables this runs against, same as
  * before.
  */
 export const buildDeltaCountSql = (
   deltaTable: string,
+  hudiTable: string,
   p: { startDate: string; endDate: string; deltaPartition?: string | null; scopeWhere?: string | null }
-): string =>
-  `SELECT COUNT(*) AS total_cnt, ` +
-  `SUM(CASE WHEN change_type = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
-  `SUM(CASE WHEN change_type = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt ` +
-  `FROM "${deltaTable}"` +
-  whereClause(
-    [RECORD_ROWS_ONLY, inWindow('change_time', p.startDate, p.endDate), p.deltaPartition, p.scopeWhere],
-    'WHERE'
+): string => {
+  const ranked =
+    `SELECT record_id, change_type, change_data, ` +
+    `ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn ` +
+    `FROM "${deltaTable}"` +
+    whereClause(
+      [RECORD_ROWS_ONLY, inWindow('change_time', p.startDate, p.endDate), p.deltaPartition],
+      'WHERE'
+    );
+  const latest = `SELECT record_id, change_type, change_data FROM (${ranked}) t WHERE rn = 1`;
+  const merged =
+    `SELECT d.record_id, d.change_type AS ${quoteCol(DELTA_CHANGE_TYPE_ALIAS)}, ` +
+    `d.change_data AS ${quoteCol(DELTA_CHANGE_DATA_ALIAS)}, h.* ` +
+    `FROM (${latest}) d LEFT JOIN "${hudiTable}" h ON h.${quoteCol(ID)} = d.record_id`;
+
+  return (
+    `SELECT COUNT(*) AS total_cnt, ` +
+    `SUM(CASE WHEN ${quoteCol(DELTA_CHANGE_TYPE_ALIAS)} = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
+    `SUM(CASE WHEN ${quoteCol(DELTA_CHANGE_TYPE_ALIAS)} = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt ` +
+    `FROM (${merged}) x` +
+    whereClause([p.scopeWhere], 'WHERE')
   );
+};
 
 // =============================================================================
 // Query validation — POST /retrieve/validate-query
@@ -863,30 +891,40 @@ if (require.main === module) {
     buildHudiCountSql('t_hudi', `"Name" = 'Acme'`),
     `SELECT COUNT(*) AS cnt FROM "t_hudi" WHERE ("Name" = 'Acme')`
   );
-  const deltaCount = buildDeltaCountSql('t_delta', { startDate: START, endDate: END, deltaPartition: prune });
+  const deltaCount = buildDeltaCountSql('t_delta', 't_hudi', { startDate: START, endDate: END, deltaPartition: prune });
   assert.ok(deltaCount.startsWith(
-    `SELECT COUNT(*) AS total_cnt, SUM(CASE WHEN change_type = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
-    `SUM(CASE WHEN change_type = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt FROM "t_delta"`
+    `SELECT COUNT(*) AS total_cnt, SUM(CASE WHEN "dv_change_type" = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
+    `SUM(CASE WHEN "dv_change_type" = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt FROM (`
   ));
   assert.ok(deltaCount.includes('(NOT COALESCE(is_schema_change, false))'), 'schema-change deltas excluded');
   assert.ok(deltaCount.includes(prune), 'prunes to the window’s months like every other delta scan');
-  assert.ok(!deltaCount.includes('ORDER BY') && !deltaCount.includes('LIMIT'), 'a count has no paging');
+  assert.ok(
+    deltaCount.includes(`ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY change_time DESC) AS rn`),
+    'dedups each record down to its latest event in the window before anything else runs'
+  );
+  assert.ok(deltaCount.includes(`) t WHERE rn = 1`), 'only the latest event per record survives the dedup');
+  assert.ok(
+    deltaCount.includes(`LEFT JOIN "t_hudi" h ON h."Id" = d.record_id`),
+    'joins the record’s current Hudi row so an UPDATE event’s untouched fields can fall back to it'
+  );
+  assert.ok(!deltaCount.includes('LIMIT'), 'a count has no paging');
   assert.ok(
     deltaCount.includes(`from_iso8601_timestamp('${START}')`) && deltaCount.includes(`from_iso8601_timestamp('${END}')`),
     'window is parsed, not string-compared'
   );
-  const deltaCountNoPrune = buildDeltaCountSql('t_delta', { startDate: START, endDate: END });
+  const deltaCountNoPrune = buildDeltaCountSql('t_delta', 't_hudi', { startDate: START, endDate: END });
   assert.ok(!deltaCountNoPrune.includes('year >'), 'no deltaPartition passed → no partition prune');
-  // scopeWhere (RECORD/BULK_CSV/FILTER) binds alongside the window/partition.
-  const deltaCountScoped = buildDeltaCountSql('t_delta', {
+  // scopeWhere (RECORD/BULK_CSV/FILTER) binds in the OUTER query — over the
+  // deduped, Hudi-joined merged state, not the raw per-event delta rows.
+  const deltaCountScoped = buildDeltaCountSql('t_delta', 't_hudi', {
     startDate: START,
     endDate: END,
     scopeWhere: recordIdsWhere(['001A'], 'record_id')!,
   });
-  assert.ok(deltaCountScoped.includes(`(record_id IN ('001A'))`));
+  assert.ok(deltaCountScoped.endsWith(`) x WHERE (record_id IN ('001A'))`), 'scopeWhere binds outermost, after dedup+join');
   assert.strictEqual(
-    buildDeltaCountSql('t_delta', { startDate: START, endDate: END }),
-    buildDeltaCountSql('t_delta', { startDate: START, endDate: END, scopeWhere: null }),
+    buildDeltaCountSql('t_delta', 't_hudi', { startDate: START, endDate: END }),
+    buildDeltaCountSql('t_delta', 't_hudi', { startDate: START, endDate: END, scopeWhere: null }),
     'omitted scopeWhere reads exactly as before'
   );
 

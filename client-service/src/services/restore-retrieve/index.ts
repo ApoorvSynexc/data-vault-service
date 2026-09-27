@@ -1274,13 +1274,15 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
  *                   Hudi data only. Archival configs are ENTIRE-only (see
  *                   parseDryRunParams) since archival has no record-level
  *                   delta table.
- * CHANGED_BETWEEN — total/UPDATE/DELETE counts out of the delta table's
- *                   record-level rows (is_schema_change excluded) whose
- *                   change_time falls in [startDate, endDate], narrowed the
+ * CHANGED_BETWEEN — total/UPDATE/DELETE counts of DISTINCT records
+ *                   (is_schema_change excluded) whose change_time falls in
+ *                   [startDate, endDate], each collapsed to its merged state
+ *                   before counting — see buildDeltaCountSql — narrowed the
  *                   same way by RECORD/BULK_CSV/FILTER (FILTER compiled
- *                   through buildDeltaFilterWhere instead — see its own
- *                   ponytail note for what it does and doesn't match).
- *                   DELETED_ONLY reports only the DELETE half of that count.
+ *                   through buildDeltaFilterWhere instead — see its own doc
+ *                   comment for how it resolves a field against that merged
+ *                   state). DELETED_ONLY reports only the DELETE half of that
+ *                   count.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
  */
@@ -1356,7 +1358,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
         const counts = await runDeltaCount(
           databaseName,
           `${tableFor(t.objectApiName)}_delta`,
-          buildDeltaCountSql(`${tableFor(t.objectApiName)}_delta`, {
+          buildDeltaCountSql(`${tableFor(t.objectApiName)}_delta`, `${tableFor(t.objectApiName)}_hudi`, {
             startDate: params.startDate!,
             endDate: params.endDate!,
             deltaPartition,
