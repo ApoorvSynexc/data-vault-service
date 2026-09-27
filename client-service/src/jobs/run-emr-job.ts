@@ -3,6 +3,7 @@ import { getBackupConfigsInBatches, getUser, initalizePayloadTransform, triggerB
 import { STATUS } from '../constant';
 import { IUser } from "../models";
 import { syncObjects } from "./sync-objects";
+// import { syncObjects } from "./sync-objects";
 
 const runEmrJob = async () => {
   try {
@@ -12,30 +13,59 @@ const runEmrJob = async () => {
           const config = configs[index];
           let user: IUser | null = null;
 
-          // Fire-and-forget: not awaited, self-catching (see
-          // cleanupStaleRetrieveObjects), so it can never delay or fail EMR
-          // triggering for this config or any other in the batch.
-          void cleanupStaleRetrieveObjects(config);
+          try {
+            void cleanupStaleRetrieveObjects(config);
 
-          if ([STATUS.pending].includes(config.backupStatus ?? '')) {
-            continue;
-          }
+            if ([STATUS.pending].includes(config.backupStatus ?? '')) {
+              continue;
+            }
 
-          // Check realtime configs for metadata comparison
-          if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
-            const changedObjectNames: string[] = [];
-            try {
+            // Check realtime configs for metadata comparison
+            if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
+              const changedObjectNames: string[] = [];
+              let hasComparisonError = false;
               const result = await runMetadataComparisonForConfig(config);
               for (const { objectName, result: metadataResult } of result) {
+                if (!metadataResult) {
+                  hasComparisonError = true;
+                  continue;
+                }
                 if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
                   changedObjectNames.push(objectName);
                 }
               }
-            } catch (error) {
-              logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
-            }
 
-            if (changedObjectNames.length) {
+              if (hasComparisonError) {
+                logger.warn(
+                  `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
+                );
+                continue;
+              }
+
+              if (changedObjectNames.length) {
+                user = await getUser({ userId: config.userId });
+                if (!user) {
+                  logger.warn(
+                    `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+                  );
+                  continue;
+                }
+
+                await checkSalesforceApiLimitUsage(user.userId, config.crmId);
+                await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
+              } else {
+                await initalizePayloadTransform(config.backupConfigId);
+                await updateBackupConfig(config.backupConfigId, { lastSchemaSyncAt: new Date().toISOString() });
+              }
+            } else {
+              await initalizePayloadTransform(config.backupConfigId);
+            }
+          } catch (error) {
+            logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+          }
+
+          try {
+            if (!user) {
               user = await getUser({ userId: config.userId });
               if (!user) {
                 logger.warn(
@@ -43,29 +73,10 @@ const runEmrJob = async () => {
                 );
                 continue;
               }
-
-              try {
-                await checkSalesforceApiLimitUsage(user.userId, config.crmId);
-                await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
-              } catch (error) {
-                logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
-              }
-
-            } else {
-              await initalizePayloadTransform(config.backupConfigId);
-              await updateBackupConfig(config.backupConfigId, { lastSchemaSyncAt: new Date().toISOString() });
             }
-          }
-          // Other config hit EMR
-          else {
-            await initalizePayloadTransform(config.backupConfigId);
-          }
-
-          if (!user) {
-            user = await getUser({ userId: config.userId });
-            if (user) {
-              await syncObjects({ backupConfig: config, user });
-            }
+            await syncObjects({ backupConfig: config, user });
+          } catch (error) {
+            logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
           }
         }
       },

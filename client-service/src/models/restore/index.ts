@@ -33,6 +33,7 @@ export interface IRestoreChangeSince {
 export interface IRestoreBulkCsvIds {
   objectName: string;
   ids: string[];
+  csvFilePath?: string;
   children?: IRestoreBulkCsvIds[];
 }
 
