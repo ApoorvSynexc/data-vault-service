@@ -166,19 +166,19 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
     const { purpose } = event.detail as { purpose?: string };
     if (purpose && purpose === 'DAILY_MAINTENANCE') {
       const { isRunEmr, isSyncPayment, isLogsArchive, isSyncSalesforceRefreshToken } = event.detail as ISystemSchedulePayload;
-
-      if (isRunEmr) {
-        await runEmrJob();
-      }
-      if (isSyncPayment) {
-        await runPaymentSyncJob();
-      }
-      if (isLogsArchive) {
-        await runLogsArchive();
-      }
-      if (isSyncSalesforceRefreshToken) {
-        await runSyncSalesforceRefreshTokenJob();
-      }
+      logger.info('DAILY_MAINTENANCE is hitting', { isRunEmr, isSyncPayment, isLogsArchive, isSyncSalesforceRefreshToken })
+      // if (isRunEmr) {
+      //   await runEmrJob();
+      // }
+      // if (isSyncPayment) {
+      //   await runPaymentSyncJob();
+      // }
+      // if (isLogsArchive) {
+      //   await runLogsArchive();
+      // }
+      // if (isSyncSalesforceRefreshToken) {
+      //   await runSyncSalesforceRefreshTokenJob();
+      // }
       return;
     } else {
       const { backupConfigId, userId, id: objectId } = event.detail as { backupConfigId: string, userId: string, id?: string };
