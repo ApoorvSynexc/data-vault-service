@@ -28,9 +28,9 @@ export const salesforceMetadataHandler = async (
 ) => {
     const { metadataType, backupConfigId, backupJobId, objectName } = params;
     try {
-        logger.info(
-            `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
-        );
+        // logger.info(
+        //     `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
+        // );
 
         const backupConfig = await getBackupConfigById(backupConfigId);
         if (!backupConfig) {
