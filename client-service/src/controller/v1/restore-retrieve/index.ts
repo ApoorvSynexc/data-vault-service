@@ -43,7 +43,6 @@ import {
   runMetadataComparisonForConfig,
   getMetadataChangeOperations,
   triggerBackupJob,
-  initalizeRestoreTransform,
   getRestoreJobById,
   updateRestoreJob,
   listS3Objects,
@@ -59,7 +58,7 @@ import { IBackupJob, IRestoreScope, IRestoreFilters, IS3Config } from '../../../
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { parseCsvRow } from '../../../utils/restore-csv-format';
-import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
+import { createRollbackService, runRestoreFieldSetupAndTransform } from '../../../services/third-party/salesforce/restore';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -1265,9 +1264,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
             ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
           });
         } else {
-          const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
-          await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
-          await initalizeRestoreTransform(restoreJob.restoreJobId);
+          await runRestoreFieldSetupAndTransform(restoreJob.restoreJobId);
         }
       } else {
         await triggerBackupJob({
@@ -1284,9 +1281,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
         });
       }
     } else {
-      const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
-      await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
-      await initalizeRestoreTransform(restoreJob.restoreJobId);
+      await runRestoreFieldSetupAndTransform(restoreJob.restoreJobId);
     }
   } catch (error) {
     logger.error(`[Restore creation handler] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);

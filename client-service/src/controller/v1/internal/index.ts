@@ -7,7 +7,6 @@ import {
   initalizePayloadTransform,
   getDecryptedCrmCredential,
   updateUser,
-  initalizeRestoreTransform,
 } from '../../../services';
 import { STATUS, VISIBILITY_STATUS } from '../../../constant';
 import {
@@ -16,7 +15,7 @@ import {
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
 import { encrypt } from '../../../utils/encryption';
-import { salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
+import { runRestoreFieldSetupAndTransform } from '../../../services/third-party/salesforce/restore';
 import { logger } from '../../../middlewares';
 
 const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -121,9 +120,7 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
         const { triggerSource } = req.body;
 
         if(triggerSource?.name === 'CREATE_RESTORE') {
-          const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: triggerSource.entityId });
-          await salesforceFieldsPermission({ restoreJobId: triggerSource.entityId, newFieldsByObject });
-          await initalizeRestoreTransform(triggerSource.entityId);
+          await runRestoreFieldSetupAndTransform(triggerSource.entityId);
         } else {
           await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
         }
