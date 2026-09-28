@@ -64,19 +64,21 @@ const runEmrJob = async () => {
             logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
           }
 
-          try {
-            if (!user) {
-              user = await getUser({ userId: config.userId });
+          if (config.dataset === 'ENTIRE') {
+            try {
               if (!user) {
-                logger.warn(
-                  `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
-                );
-                continue;
+                user = await getUser({ userId: config.userId });
+                if (!user) {
+                  logger.warn(
+                    `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+                  );
+                  continue;
+                }
               }
+              await syncObjects({ backupConfig: config, user });
+            } catch (error) {
+              logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
             }
-            await syncObjects({ backupConfig: config, user });
-          } catch (error) {
-            logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
           }
         }
       },
