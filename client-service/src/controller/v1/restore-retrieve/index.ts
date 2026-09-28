@@ -1382,9 +1382,14 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
     name: restore?.jobDetail?.name,
     destination: { ...restoreJob.destination, encryptedTokens: undefined },
     source: {
-      backupConfig
-    },
-    restore
+      backupConfig: {
+        name: backupConfig?.name,
+        type: backupConfig?.type,
+        dataset: backupConfig?.dataset,
+        schedule: backupConfig?.schedule,
+        createdAt: backupConfig?.createdAt,
+      }
+    }
   });
 };
 
