@@ -49,6 +49,7 @@ import {
   listS3Objects,
   getPresignedDownloadUrl,
   checkSalesforceApiLimitUsage,
+  getCrmById,
 } from '../../../services';
 import { BACKUP_JOB_TABLE, STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -59,7 +60,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { parseCsvRow } from '../../../utils/restore-csv-format';
 import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
-import dayjs from 'dayjs';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -845,7 +845,6 @@ const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void
   try {
     result = await validateSoqlQuery({ ...parsed.value, user: req.user! });
   } catch (e) {
-    console.error('validateQueryHandler error', e);
     if (e instanceof FilterError) {
       makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
       return;
@@ -854,7 +853,6 @@ const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 
   if (!result.ok) {
-    console.error('validateQueryHandler result error', result.error);
     makeResponse(req, res, 400, false, result.error);
     return;
   }
@@ -1176,6 +1174,11 @@ const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<vo
     return makeResponse(req, res, 400, false, 'backup_config_not_found');
   }
 
+  const crm = await getCrmById(backupConfig.crmId);
+  if (!crm) {
+    return makeResponse(req, res, 400, false, 'crm_not_found');
+  }
+
   const destination = await getDestinationById(backupConfig.destinationId);
   if (!destination) {
     return makeResponse(req, res, 400, false, 'destination_not_found');
@@ -1202,7 +1205,7 @@ const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<vo
   }
 
   const s3Config = getDecryptedDestinationConfig(destination) as IS3Config;
-  const s3Key = `bulk-csv-ids/${req.user!.userId}/${uuidv4()}.csv`;
+  const s3Key = `${crm.crmName}/${crm.crmId}/bulk-csv-ids/${req.user!.userId}/${uuidv4()}.csv`;
   await uploadToS3(s3Config, s3Key, file.buffer);
 
   makeResponse(req, res, 200, true, 'fetch', { objectName, s3Key });
@@ -1267,7 +1270,6 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           await initalizeRestoreTransform(restoreJob.restoreJobId);
         }
       } else {
-        console.log({ lastUpdatedAt: dayjs(backupConfig.lastSchemaSyncAt).toISOString() });
         await triggerBackupJob({
           user: backupConfigUser,
           config: backupConfig,
