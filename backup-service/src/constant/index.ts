@@ -3,25 +3,10 @@ const PORT = Number(process.env.PORT) || 3000;
 const NODE_ENV = String(process.env.NODE_ENV);
 const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 
-// Email branding/contact info — shared across services/common/email.
-// Mirrors client-service's own copy of these constants (the two services
-// don't share a package). No real values existed anywhere in the service
-// before this; update the defaults (or set the env vars) with real values
-// before these templates go out to real users.
-const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || 'DataVault');
-const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@datavault.io');
-const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'no-reply@datavault.io');
-// Base URL for CTA links (e.g. "View backup job") — the user-facing
-// dashboard, not this service's own host.
-const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.datavault.io');
-
-// SMTP transport for actually sending the templates below (services/common/email).
-// Gmail (and most providers) requires the authenticated account and the
-// envelope/display "from" to be the same mailbox unless a Send As alias is
-// configured — EMAIL_FROM_ADDRESS above is used as the display name's address
-// only when it matches that constraint; sendMail always authenticates as
-// EMAIL_SMTP_USER. No default on either — intentionally required at deploy
-// time, never checked into source.
+const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || 'DataCraft');
+const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com');
+const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
+const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
 const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
 const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
 
