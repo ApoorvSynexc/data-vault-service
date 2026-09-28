@@ -1384,6 +1384,7 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
     source: {
       backupConfig
     },
+    restore
   });
 };
 
