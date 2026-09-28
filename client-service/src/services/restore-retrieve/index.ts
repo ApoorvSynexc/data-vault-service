@@ -23,7 +23,7 @@ import { S3Config } from '../../utils/validate-aws-credentials';
 
 export { FilterError, buildAthenaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import { buildAthenaFilterWhere, buildDeltaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
+import { buildAthenaFilterWhere, buildDeltaFilterWhere, DELTA_RECORD_ID_ALIAS, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 import {
   pairedColumns,
   IPageKey,
@@ -39,6 +39,7 @@ import {
   buildFieldDeltaSql,
   buildHudiCountSql,
   buildDeltaCountSql,
+  buildDeltaScanWhere,
   buildValidateQuerySql,
   recordIdsWhere,
   validateColumns,
@@ -1204,11 +1205,12 @@ export type IValidateQueryOutcome =
  * maps it to the same 400 dry-run's FILTER scope already uses for a bad
  * filter.
  *
- * Returns not_exist when the config doesn't exist, isn't owned by the
- * caller, or the object has no compressed Hudi table yet (nothing has been
- * backed up for it, so there is nothing to validate against). Returns
- * crm_not_connected when the caller has no usable Salesforce connection to
- * describe the object with.
+ * Returns not_exist when the config doesn't exist or isn't owned by the
+ * caller. Returns crm_not_connected when the caller has no usable Salesforce
+ * connection to describe the object with. When the object has no compressed
+ * Hudi table yet (nothing backed up for it), the filter is still validated
+ * above but the Athena query is skipped — there's nothing to run it against,
+ * so this reports matched: false rather than an error.
  */
 const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidateQueryOutcome> => {
   const config = await getBackupConfigById(params.backupConfigId);
@@ -1246,7 +1248,10 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
   const hudiTable = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}_hudi`;
 
   const { region, outputLocation } = await buildRetrieveOutputLocation(config);
-  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: false, error: 'not_exist' };
+  // No compressed Hudi table yet (nothing backed up for this object) — the
+  // filter itself is already validated above, there's just nothing to run it
+  // against, so this is "no matches" rather than an error.
+  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: true, value: { matched: false } };
 
   const result = await runAthenaQuery(buildValidateQuerySql(hudiTable, whereBody), databaseName, region, outputLocation, 1);
 
@@ -1270,12 +1275,13 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
  *                   Hudi data only. Archival configs are ENTIRE-only (see
  *                   parseDryRunParams) since archival has no record-level
  *                   delta table.
- * CHANGED_BETWEEN — total/UPDATE/DELETE counts out of the delta table's
- *                   record-level rows (is_schema_change excluded) whose
- *                   change_time falls in [startDate, endDate], narrowed the
+ * CHANGED_BETWEEN — total/UPDATE/DELETE counts of DISTINCT records
+ *                   (is_schema_change excluded) whose change_time falls in
+ *                   [startDate, endDate] — deduped to one row per record
+ *                   before counting, see buildDeltaCountSql — narrowed the
  *                   same way by RECORD/BULK_CSV/FILTER (FILTER compiled
- *                   through buildDeltaFilterWhere instead — see its own
- *                   ponytail note for what it does and doesn't match).
+ *                   through buildDeltaFilterWhere instead, matching each
+ *                   record's PRE-WINDOW value — see its own doc comment).
  *                   DELETED_ONLY reports only the DELETE half of that count.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
@@ -1345,14 +1351,21 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
     targets.map(async (t): Promise<IDryRunObjectCount> => {
       try {
         const scopeWhere = t.recordIds
-          ? recordIdsWhere(t.recordIds, 'record_id')
+          ? recordIdsWhere(t.recordIds, `"${DELTA_RECORD_ID_ALIAS}"`)
           : t.filter
-            ? buildDeltaFilterWhere(t.filter)
+            ? buildDeltaFilterWhere(t.filter, {
+                deltaTable: `${tableFor(t.objectApiName)}_delta`,
+                scanWhere: buildDeltaScanWhere({
+                  startDate: params.startDate!,
+                  endDate: params.endDate!,
+                  deltaPartition,
+                }),
+              })
             : null;
         const counts = await runDeltaCount(
           databaseName,
           `${tableFor(t.objectApiName)}_delta`,
-          buildDeltaCountSql(`${tableFor(t.objectApiName)}_delta`, {
+          buildDeltaCountSql(`${tableFor(t.objectApiName)}_delta`, `${tableFor(t.objectApiName)}_hudi`, {
             startDate: params.startDate!,
             endDate: params.endDate!,
             deltaPartition,

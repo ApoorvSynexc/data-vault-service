@@ -279,29 +279,71 @@ export const buildAthenaFilterWhere = (
   return buildStructuredWhere(filters.fields ?? [], joiner, colExpr);
 };
 
+// Column aliases buildDeltaCountSql (athena-fetch.ts) flattens change_type/
+// record_id into after LEFT JOINing each record's current Hudi row onto its
+// deduped-latest delta event — dv_-prefixed the same way dv_operation/
+// dv_created are, since that join also flattens in every real Hudi column
+// (h.*) alongside these, and an object field literally named "change_type"/
+// "record_id" would otherwise collide. DELTA_RECORD_ID_ALIAS in particular is
+// what a correlated subquery below binds back to — bare "record_id" would
+// instead shadow onto the subquery's OWN record_id column, silently breaking
+// the correlation.
+export const DELTA_CHANGE_TYPE_ALIAS = 'dv_change_type';
+export const DELTA_RECORD_ID_ALIAS = 'dv_record_id';
+
+// Context buildDeltaFieldExpr needs to build its per-field correlated
+// subquery — passed in rather than re-derived, so the window/partition
+// predicate this scans by is always the exact one buildDeltaCountSql's own
+// record-level dedup already scans by (buildDeltaScanWhere in athena-fetch.ts
+// builds both).
+export interface IDeltaFilterContext {
+  deltaTable: string;
+  scanWhere: string;
+}
+
 /**
  * Delta-table column resolver for FILTER-scope conditions under
- * CHANGED_BETWEEN: change_data is JSON, not flat columns, and its shape
- * depends on change_type — a DELETE row is a flat snapshot
- * ({"Field": value}), an UPDATE row nests {"Field": {"old":..., "new":...}}
- * per changed field only.
+ * CHANGED_BETWEEN, matching each record's PRE-WINDOW value — the value a
+ * field held immediately before this window's changes, i.e. what a restore
+ * of this window actually reverts a matching record back to.
  *
- * ponytail: matches only deltas whose payload actually names the field — an
- * UPDATE delta that didn't touch this field has no value here to compare, so
- * it's excluded even if the record's current (untouched) state would match.
- * Upgrade path: LEFT JOIN the object's _hudi table and COALESCE onto its
- * current value for fields absent from change_data, if a delta filter needs
- * full correctness.
+ * Correlated per referenced field, not a single record-level dedup: two
+ * fields on the same record can have been touched by two different,
+ * non-overlapping events inside the window, so there is no single "the"
+ * earliest row the way buildDeltaCountSql's classification has a single
+ * "the latest row" — each field needs its own earliest touching event.
+ *
+ *   1. Find this record's chronologically FIRST in-window event that names
+ *      this field — an UPDATE's {"old":...,"new":...} entry, or (a DELETE
+ *      snapshot being flat, not nested) the DELETE's own value. Either way,
+ *      being the first touching event means the field had not yet changed
+ *      at that point, so that value IS the pre-window one.
+ *   2. A field no in-window event touched at all didn't change in the
+ *      window, so its pre-window value equals its current one — falls back
+ *      to the joined Hudi row.
+ *
+ * A record whose pre-window value for this field predates the window
+ * entirely (never touched before OR during it) AND has no Hudi row to fall
+ * back to (deleted within the window) resolves to SQL NULL — a non-match,
+ * rather than a guess. Reaching further back than the window for a deleted
+ * record's field history isn't attempted.
  */
-const deltaFieldExpr: ColExpr = (name) => {
-  quoteIdentifier(name); // validates; throws FilterError before name is interpolated below
-  const del = `json_extract_scalar(change_data, '$["${name}"]')`;
-  const upd = `json_extract_scalar(change_data, '$["${name}"]."new"')`;
-  return `CASE WHEN change_type = 'DELETE' THEN ${del} ELSE ${upd} END`;
+const buildDeltaFieldExpr = (ctx: IDeltaFilterContext): ColExpr => (name) => {
+  const hudiCol = quoteIdentifier(name); // validates; throws FilterError before name is interpolated below
+  const touchesField =
+    `(change_type = 'DELETE' AND json_extract_scalar(change_data, '$["${name}"]') IS NOT NULL) OR ` +
+    `(change_type <> 'DELETE' AND json_extract_scalar(change_data, '$["${name}"]["old"]') IS NOT NULL)`;
+  const priorValue =
+    `SELECT CASE WHEN change_type = 'DELETE' ` +
+    `THEN json_extract_scalar(change_data, '$["${name}"]') ` +
+    `ELSE json_extract_scalar(change_data, '$["${name}"]["old"]') END ` +
+    `FROM "${ctx.deltaTable}" WHERE record_id = "${DELTA_RECORD_ID_ALIAS}" AND ${ctx.scanWhere} ` +
+    `AND (${touchesField}) ORDER BY change_time ASC LIMIT 1`;
+  return `COALESCE((${priorValue}), CAST(${hudiCol} AS varchar))`;
 };
 
-export const buildDeltaFilterWhere = (filters: IRestoreFilters): string | null =>
-  buildAthenaFilterWhere(filters, deltaFieldExpr);
+export const buildDeltaFilterWhere = (filters: IRestoreFilters, ctx: IDeltaFilterContext): string | null =>
+  buildAthenaFilterWhere(filters, buildDeltaFieldExpr(ctx));
 
 // ── Self-check ────────────────────────────────────────────────────────────────
 // Run: npx ts-node src/services/restore-retrieve/athena-filter.ts
@@ -447,20 +489,45 @@ if (require.main === module) {
   );
 
   // Delta-table FILTER (buildDeltaFilterWhere): fields resolve through a
-  // change_type-aware CASE over json_extract_scalar instead of a plain column.
-  assert.strictEqual(
-    buildDeltaFilterWhere({ type: 'AND', fields: [{ name: 'Amount', dataType: 'number', operator: '>=', value: '100' }] }),
-    `CASE WHEN change_type = 'DELETE' THEN json_extract_scalar(change_data, '$["Amount"]') ELSE json_extract_scalar(change_data, '$["Amount"]."new"') END >= 100`
+  // per-field correlated subquery for the record's PRE-WINDOW value — its
+  // earliest in-window touching event's OLD value, falling back to the
+  // joined Hudi column when no in-window event touched this field at all.
+  const deltaCtx = { deltaTable: 't_delta', scanWhere: 'SCAN_WHERE' };
+  const amountDelta = buildDeltaFilterWhere(
+    { type: 'AND', fields: [{ name: 'Amount', dataType: 'number', operator: '>=', value: '100' }] },
+    deltaCtx
+  )!;
+  assert.ok(
+    amountDelta.startsWith(`COALESCE((SELECT CASE WHEN change_type = 'DELETE'`),
+    'DELETE\'s flat snapshot is read directly, no nested old/new'
+  );
+  assert.ok(
+    amountDelta.includes(`ELSE json_extract_scalar(change_data, '$["Amount"]["old"]') END`),
+    'non-DELETE branch reads the OLD side of the change, not NEW'
+  );
+  assert.ok(
+    amountDelta.includes(`FROM "t_delta" WHERE record_id = "dv_record_id" AND SCAN_WHERE`),
+    'correlates to the outer record via the dv_-aliased id, scanning the same window/partition predicate the count query uses'
+  );
+  assert.ok(
+    amountDelta.includes(`ORDER BY change_time ASC LIMIT 1`),
+    'takes the EARLIEST touching event, not the latest — a later event\'s OLD is only an intermediate value, not the true pre-window one'
+  );
+  assert.ok(
+    amountDelta.endsWith(`CAST("Amount" AS varchar)) >= 100`),
+    'falls back to the joined Hudi column when untouched; operator/value binds outside the COALESCE'
   );
   // Same operator/value/AND-OR handling as the Hudi path — only the column
   // expression differs.
-  assert.strictEqual(
-    buildDeltaFilterWhere({ type: 'OR', fields: [{ name: 'Stage', dataType: 'string', operator: 'LIKE', value: 'Won' }] }),
-    `CASE WHEN change_type = 'DELETE' THEN json_extract_scalar(change_data, '$["Stage"]') ELSE json_extract_scalar(change_data, '$["Stage"]."new"') END LIKE '%Won%'`
+  assert.ok(
+    buildDeltaFilterWhere(
+      { type: 'OR', fields: [{ name: 'Stage', dataType: 'string', operator: 'LIKE', value: 'Won' }] },
+      deltaCtx
+    )!.includes(`$["Stage"]["old"]`)
   );
   // Injection defence still fires through the delta path.
   expectError(
-    () => buildDeltaFilterWhere({ type: 'AND', fields: [{ name: 'Name; DROP', dataType: 'string', operator: '=', value: 'x' }] }),
+    () => buildDeltaFilterWhere({ type: 'AND', fields: [{ name: 'Name; DROP', dataType: 'string', operator: '=', value: 'x' }] }, deltaCtx),
     'invalid_filter_field'
   );
   // Omitted colExpr on buildAthenaFilterWhere still defaults to the Hudi path.
