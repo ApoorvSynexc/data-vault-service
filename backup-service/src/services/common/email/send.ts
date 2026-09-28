@@ -4,7 +4,7 @@ import { buildBackupJobFailureEmail, IBackupJobFailureEmailParams } from './back
 import { buildArchivalJobFailureEmail, IArchivalJobFailureEmailParams } from './archival-job-failure';
 import { buildRestoreCompleteEmail, IRestoreCompleteEmailParams } from './restore-complete';
 import { buildRestoreFailureEmail, IRestoreFailureEmailParams } from './restore-failure';
-import { buildRestoreFileDownloadEmail, IRestoreFileDownloadEmailParams } from './restore-file-download';
+import { buildRollbackFailureEmail, IRollbackFailureEmailParams } from './rollback-failure';
 
 // Discriminated union keyed on EMAIL_TEMPLATE — picking a template fixes
 // which `params` shape TypeScript will accept, so callers can't hand a
@@ -14,7 +14,7 @@ export type SendEmailPayload =
   | { template: typeof EMAIL_TEMPLATE.archivalJobFailure; params: IArchivalJobFailureEmailParams }
   | { template: typeof EMAIL_TEMPLATE.restoreComplete; params: IRestoreCompleteEmailParams }
   | { template: typeof EMAIL_TEMPLATE.restoreFailure; params: IRestoreFailureEmailParams }
-  | { template: typeof EMAIL_TEMPLATE.restoreFileDownload; params: IRestoreFileDownloadEmailParams };
+  | { template: typeof EMAIL_TEMPLATE.rollbackFailure; params: IRollbackFailureEmailParams };
 
 const buildEmail = (payload: SendEmailPayload) => {
   switch (payload.template) {
@@ -26,8 +26,8 @@ const buildEmail = (payload: SendEmailPayload) => {
       return buildRestoreCompleteEmail(payload.params);
     case EMAIL_TEMPLATE.restoreFailure:
       return buildRestoreFailureEmail(payload.params);
-    case EMAIL_TEMPLATE.restoreFileDownload:
-      return buildRestoreFileDownloadEmail(payload.params);
+    case EMAIL_TEMPLATE.rollbackFailure:
+      return buildRollbackFailureEmail(payload.params);
     default: {
       // Exhaustiveness check — a new EMAIL_TEMPLATE member without a
       // matching case here fails the build instead of silently no-op-ing.

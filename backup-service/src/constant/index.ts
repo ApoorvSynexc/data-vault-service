@@ -95,7 +95,7 @@ const EMAIL_TEMPLATE = {
   archivalJobFailure: 'ARCHIVAL_JOB_FAILURE',
   restoreComplete: 'RESTORE_COMPLETE',
   restoreFailure: 'RESTORE_FAILURE',
-  restoreFileDownload: 'RESTORE_FILE_DOWNLOAD',
+  rollbackFailure: 'ROLLBACK_FAILURE',
 } as const;
 
 // Config lifecycle/visibility — backup-config, archival-config (same table),

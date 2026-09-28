@@ -7,6 +7,7 @@ import {
   IDestinationConfig,
   IRestoreConflict,
   IRestoreJobDestination,
+  IRestoreJobObject,
   IRestoreJobSource,
   IRestoreObjectHierarchyNode,
   IRestoreObjectHierarchyTreeNode,
@@ -30,6 +31,15 @@ import dayjs from 'dayjs';
 
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
+
+// Total records actually restored, for the restore-complete email — sums
+// processedRecordCount across the whole tree, not just root objects.
+const sumProcessedRecords = (objects: IRestoreJobObject[]): number =>
+  objects.reduce(
+    (sum, obj) =>
+      sum + (obj.processedRecordCount ?? 0) + (obj.children ? sumProcessedRecords(obj.children) : 0),
+    0
+  );
 
 const exportObjectToDestination = async (
   backupConfig: IBackupConfig,
@@ -555,11 +565,12 @@ const salesforceHandler: ICrmBackupHandler = {
         replaceObjects: updatedObjects,
       });
 
-      if (failedObjects.length) {
-        const restore = await getRestoreById(restoreId);
-        if (restore) {
+      const restore = await getRestoreById(restoreId);
+      if (restore) {
+        const configLabel = restore.jobDetail?.name ?? restoreId;
+
+        if (failedObjects.length) {
           const objectNames = failedObjects.map((obj) => obj.name).join(', ');
-          const configLabel = restore.jobDetail?.name ?? restoreId;
 
           await notifyJobOutcome({
             jobId: restoreJobId,
@@ -588,6 +599,32 @@ const salesforceHandler: ICrmBackupHandler = {
 
           logger.info(
             `Restore job notify to user, restoreJobId=${restoreJobId}, restoreId=${restoreId}, failedObjects=${failedObjects.length}`
+          );
+        } else {
+          await notifyJobOutcome({
+            jobId: restoreJobId,
+            notification: {
+              userId: restore.userId,
+              crmId: destination.crmId,
+              title: 'Restore complete',
+              body: `Your restore "${configLabel}" completed successfully.`,
+              targetScreen: 'restore',
+              targetId: restoreId,
+            },
+            email: {
+              template: EMAIL_TEMPLATE.restoreComplete,
+              params: {
+                restoreConfigId: restoreId,
+                restoreConfigName: configLabel,
+                backupConfigName: configLabel,
+                restoreJobId,
+                totalRecordCount: sumProcessedRecords(updatedObjects),
+              },
+            },
+          });
+
+          logger.info(
+            `Restore job notify to user, restoreJobId=${restoreJobId}, restoreId=${restoreId}, completed`
           );
         }
       }
@@ -696,7 +733,7 @@ const salesforceHandler: ICrmBackupHandler = {
               targetId: restoreId,
             },
             email: {
-              template: EMAIL_TEMPLATE.restoreFailure,
+              template: EMAIL_TEMPLATE.rollbackFailure,
               params: {
                 restoreConfigId: restoreId,
                 restoreConfigName: configLabel,
