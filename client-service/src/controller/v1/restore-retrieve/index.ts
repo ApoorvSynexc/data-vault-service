@@ -60,7 +60,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { parseCsvRow } from '../../../utils/restore-csv-format';
 import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
-import dayjs from 'dayjs';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
 
@@ -846,7 +845,6 @@ const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void
   try {
     result = await validateSoqlQuery({ ...parsed.value, user: req.user! });
   } catch (e) {
-    console.error('validateQueryHandler error', e);
     if (e instanceof FilterError) {
       makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
       return;
@@ -855,7 +853,6 @@ const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void
   }
 
   if (!result.ok) {
-    console.error('validateQueryHandler result error', result.error);
     makeResponse(req, res, 400, false, result.error);
     return;
   }
@@ -1273,7 +1270,6 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           await initalizeRestoreTransform(restoreJob.restoreJobId);
         }
       } else {
-        console.log({ lastUpdatedAt: dayjs(backupConfig.lastSchemaSyncAt).toISOString() });
         await triggerBackupJob({
           user: backupConfigUser,
           config: backupConfig,
