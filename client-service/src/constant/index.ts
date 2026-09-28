@@ -59,6 +59,19 @@ const AWS_EMR_S3_FILE_PATH = String(process.env.AWS_EMR_S3_FILE_PATH);
 // already uses) so it can send it back on every callback.
 const SPARK_JOB_API_KEY = String(process.env.SPARK_JOB_API_KEY);
 
+// Full spark-submit --conf string submitEMR sends on every job (services/payload/index.ts).
+// Env-overridable so capacity/tuning changes (e.g. this app's pre-initialized
+// worker sizes) are an env change, not a code deploy — the default below is
+// just the last known-good baseline for this app's 1 driver + 2 executor,
+// 4 vCPU/16 GB/20 GB-disk pre-initialized capacity (12 vCPU maximumCapacity,
+// already fully consumed — see the driver/executor sizing comments here).
+const AWS_EMR_SPARK_SUBMIT_PARAMETERS = String(process.env.AWS_EMR_SPARK_SUBMIT_PARAMETERS);
+
+// Where submitEMR points EMR's managed S3 log delivery (monitoringConfiguration
+// .s3MonitoringConfiguration.logUri) — env-overridable per environment instead
+// of hardcoded to one bucket.
+const AWS_EMR_LOGS_S3_URI = String(process.env.AWS_EMR_LOGS_S3_URI || 's3://qa-data-vault-logs');
+
 // AWS Athena
 // IAM Role ARN that Athena assumes when reading from client S3 buckets.
 // The client's bucket policy must grant this ARN s3:GetObject + s3:ListBucket.
@@ -402,6 +415,8 @@ export {
   AWS_EMR_ENCRYPTION_KEY,
   SPARK_JOB_API_KEY,
   AWS_EMR_S3_FILE_PATH,
+  AWS_EMR_SPARK_SUBMIT_PARAMETERS,
+  AWS_EMR_LOGS_S3_URI,
 
   // AWS Athena
   AWS_ATHENA_ROLE_ARN,
