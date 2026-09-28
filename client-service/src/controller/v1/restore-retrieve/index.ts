@@ -1368,12 +1368,23 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
     getRestoreJobsByRestoreId(restoreId),
     getRestoreById(restoreId),
   ]);
+
+  const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
+
   const restoreJob = restoreJobs[0];
   makeResponse(req, res, 200, true, 'fetch', {
     ...restoreJob,
     name: restore?.jobDetail?.name,
     destination: { ...restoreJob.destination, encryptedTokens: undefined },
-    source: undefined,
+    source: {
+      backupConfig: {
+        name: backupConfig?.name,
+        type: backupConfig?.type,
+        dataset: backupConfig?.dataset,
+        schedule: backupConfig?.schedule,
+        createdAt: backupConfig?.createdAt,
+      }
+    }
   });
 };
 
