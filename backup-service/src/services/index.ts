@@ -6,3 +6,4 @@ export * from './restore-job';
 export * from './schema';
 export * from './settings';
 export * from './notification';
+export * from './user';
