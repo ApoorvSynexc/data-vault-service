@@ -526,12 +526,12 @@ const salesforceHandler: ICrmBackupHandler = {
 
       const freshJob = await getRestoreJobById(restoreJobId);
       const failedObjects = (freshJob?.destination.objects ?? []).filter(
-        (obj) => obj.status === STATUS.failed
+        (obj) => obj.status === JOB_OBJECT_STATUS.restoreFailed
       );
 
       const updatedObjects = (freshJob?.destination.objects ?? []).map((obj) => {
         if (obj.status === JOB_OBJECT_STATUS.restoreInProgress) {
-          return { ...obj, status: STATUS.success };
+          return { ...obj, status: JOB_OBJECT_STATUS.restoreCompleted };
         }
         return obj;
       });
@@ -652,7 +652,7 @@ const salesforceHandler: ICrmBackupHandler = {
 
       const freshJob = await getRestoreJobById(restoreJobId);
       const failedObjects = (freshJob?.destination.objects ?? []).filter(
-        (obj) => obj.status === STATUS.failed
+        (obj) => obj.status === JOB_OBJECT_STATUS.rollbackFailed
       );
 
       if (failedObjects.length) {

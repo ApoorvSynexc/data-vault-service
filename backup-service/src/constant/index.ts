@@ -104,24 +104,31 @@ const STATUS = {
 // compression phases. Mirrors client-service's own copy of this constant.
 const JOB_OBJECT_STATUS = {
   created: 'CREATED',
+
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   transferInProgress: 'TRANSFER_IN_PROGRESS',
   uploadCompleted: 'UPLOAD_COMPLETED',
+
   deletionInProgress: 'DELETION_IN_PROGRESS',
   deletionCompleted: 'DELETION_COMPLETED',
-  // Delete phase failed before any records were processed (job-level / infrastructure error)
   deletionJobFailed: 'DELETION_JOB_FAILED',
-  // Delete job succeeded but some individual records were rejected by Salesforce
   deletionRecordsFailed: 'DELETION_RECORDS_FAILED',
+
+  restoreCsvCreating: 'CSV_CREATING',
+  restoreIngestInProgress: 'INGEST_IN_PROGRESS',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
+  restoreCompleted: 'RESTORE_COMPLETED',
+  restoreFailed: 'RESTORE_FAILED',
+
   rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
   rollbackCompleted: 'ROLLBACK_COMPLETED',
+  rollbackFailed: 'ROLLBACK_FAILED',
+
   compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
   compressed: 'COMPRESSED',
   compressionFailed: 'COMPRESSION_JOB_FAILED',
-  restoreCsvCreating: 'CSV_CREATING',
-  restoreIngestInProgress: 'INGEST_IN_PROGRESS',
+  
   failed: 'FAILED',
 };
 
