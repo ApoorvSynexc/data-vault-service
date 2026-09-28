@@ -42,6 +42,7 @@ export const buildBackupJobFailureEmail = (
       heading: 'Backup job failed',
       ctaLabel: 'View backup job',
       ctaUrl: `${EMAIL_APP_URL}/backup-configs/${backupConfigId}/jobs/${backupJobId}`,
+      accent: 'danger',
     }),
   };
 };

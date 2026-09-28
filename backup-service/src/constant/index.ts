@@ -3,7 +3,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const NODE_ENV = String(process.env.NODE_ENV);
 const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 
-// Email branding/contact info — shared across services/common/email-templates.
+// Email branding/contact info — shared across services/common/email.
 // Mirrors client-service's own copy of these constants (the two services
 // don't share a package). No real values existed anywhere in the service
 // before this; update the defaults (or set the env vars) with real values
@@ -14,6 +14,16 @@ const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'no-reply@da
 // Base URL for CTA links (e.g. "View backup job") — the user-facing
 // dashboard, not this service's own host.
 const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.datavault.io');
+
+// SMTP transport for actually sending the templates below (services/common/email).
+// Gmail (and most providers) requires the authenticated account and the
+// envelope/display "from" to be the same mailbox unless a Send As alias is
+// configured — EMAIL_FROM_ADDRESS above is used as the display name's address
+// only when it matches that constraint; sendMail always authenticates as
+// EMAIL_SMTP_USER. No default on either — intentionally required at deploy
+// time, never checked into source.
+const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
+const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
@@ -71,6 +81,21 @@ const JOB_TYPE = {
   bulk: 'BULK',
   realtime: 'REALTIME',
 };
+
+// Every transactional email template services/common/email can render/send —
+// sendEmail(to, { template: EMAIL_TEMPLATE.x, params }) switches on this to
+// pick the right builder + params type. `as const` (unlike every other enum
+// in this file) is required here: send.ts's SendEmailPayload discriminated
+// union needs each member to be its own literal type, not the plain `string`
+// every other member of this object would otherwise widen to, or TypeScript
+// can't narrow `params` per-template and the switch loses type safety.
+const EMAIL_TEMPLATE = {
+  backupJobFailure: 'BACKUP_JOB_FAILURE',
+  archivalJobFailure: 'ARCHIVAL_JOB_FAILURE',
+  restoreComplete: 'RESTORE_COMPLETE',
+  restoreFailure: 'RESTORE_FAILURE',
+  restoreFileDownload: 'RESTORE_FILE_DOWNLOAD',
+} as const;
 
 // Config lifecycle/visibility — backup-config, archival-config (same table),
 // restore's initial draft state. Mirrors client-service's own copy of this
@@ -218,6 +243,8 @@ export {
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
   EMAIL_APP_URL,
+  EMAIL_SMTP_USER,
+  EMAIL_SMTP_APP_PASSWORD,
 
   // Aws Config
   AWS_REGION,
@@ -257,6 +284,7 @@ export {
   STATUS,
   JOB_TYPE,
   JOB_OBJECT_STATUS,
+  EMAIL_TEMPLATE,
   DESTINATION_TYPE,
   CRM_NAME,
   CONDITION_TYPE,

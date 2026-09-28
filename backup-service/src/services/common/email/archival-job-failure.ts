@@ -43,6 +43,7 @@ export const buildArchivalJobFailureEmail = (
       heading: 'Archival job failed',
       ctaLabel: 'View archival job',
       ctaUrl: `${EMAIL_APP_URL}/backup-configs/${backupConfigId}/jobs/${backupJobId}`,
+      accent: 'danger',
     }),
   };
 };
