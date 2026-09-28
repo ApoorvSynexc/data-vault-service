@@ -131,17 +131,17 @@ export const picklistHandler = async (
                     fieldApiName: result.fieldApiName,
                 });
 
-                logger.info(
-                    `Picklist values change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, fieldApiName=${result.fieldApiName}, added=${result.addedValues.length}, removed=${result.removedValues.length}, modified=${result.modifiedValues.length}`
-                );
+                // logger.info(
+                //     `Picklist values change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, fieldApiName=${result.fieldApiName}, added=${result.addedValues.length}, removed=${result.removedValues.length}, modified=${result.modifiedValues.length}`
+                // );
 
                 return uploadToS3(destConfig, s3Key, buffer);
             })
         );
 
-        logger.info(
-            `Object picklist comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, fieldsCompared=${results.length}, fieldsChanged=${changedResults.length}`
-        );
+        // logger.info(
+        //     `Object picklist comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, fieldsCompared=${results.length}, fieldsChanged=${changedResults.length}`
+        // );
 
         return results;
     } catch (error: any) {

@@ -24,7 +24,9 @@ export interface IMetadataComparisonResult {
 // Each metadataType wraps a differently-shaped diff (schemaChanged/childsChanged/
 // recordTypesChanged on a single object, valuesChanged per-field on an array for
 // picklist) — narrow on metadataType to read the right flag for each.
-export const hasMetadataChanged = (result: IMetadataComparisonResult['result']): boolean => {
+export const hasMetadataChanged = (
+  result: IMetadataComparisonResult['result']
+): result is NonNullable<IMetadataComparisonResult['result']> => {
   if (!result) {
     return false;
   }
@@ -116,7 +118,7 @@ export const runMetadataComparisonForConfig = async (
 
   const backupJobId = uuidv4();
 
-  return Promise.all(
+  const results = await Promise.all(
     objects.flatMap((object) =>
       METADATA_TYPES.map(async (metadataType) => ({
         objectName: object.name,
@@ -136,4 +138,23 @@ export const runMetadataComparisonForConfig = async (
       }))
     )
   );
+
+  const logPrefix = `[metadata comparison] config=${config.backupConfigId} backupJobId=${backupJobId}`;
+  const changed = results.filter(
+    (entry): entry is typeof entry & { result: NonNullable<IMetadataComparisonResult['result']> } =>
+      hasMetadataChanged(entry.result)
+  );
+
+  if (!changed.length) {
+    logger.info(`${logPrefix} | NO_CHANGE across ${objects.length} objects`);
+  } else {
+    changed.forEach((entry) => {
+      const operations = getMetadataChangeOperations(entry.result).join(',') || 'none';
+      logger.info(
+        `${logPrefix} | CHANGED metadataType=${entry.result.metadataType} objectName=${entry.objectName} operations=${operations}`
+      );
+    });
+  }
+
+  return results;
 };
