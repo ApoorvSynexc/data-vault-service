@@ -1,5 +1,5 @@
 import { logger } from '../../../../middlewares/logger';
-import { STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
+import { STATUS, JOB_OBJECT_STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3, uploadToS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
@@ -205,10 +205,7 @@ const restoreObjectData = async (
       objectName,
       processedRecordCount: 0,
       failedRecordCount: 0,
-      // Cast needed: updateRestoreObject's status param is still the narrow
-      // 'FAILED' | 'SUCCESS' literal union (left as-is, out of scope) while
-      // STATUS's members are typed as plain string.
-      status: STATUS.success as 'SUCCESS',
+      status: type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted,
     });
 
     console.log(`[Restore] No backed-up data found for object ${objectName} under ${csvFilePath}`);
@@ -254,9 +251,9 @@ const restoreObjectData = async (
       objectName,
       processedRecordCount: job.processed,
       failedRecordCount: job.failed,
-      // Same cast as above — updateRestoreObject's status param type is
-      // intentionally left as its own narrow literal union.
-      status: job.failed ? (STATUS.failed as 'FAILED') : (STATUS.success as 'SUCCESS'),
+      status: job.failed
+        ? (type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreFailed : JOB_OBJECT_STATUS.rollbackFailed)
+        : (type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted),
       errors: job.errors.length ? job.errors : undefined,
     });
     logger.info(
