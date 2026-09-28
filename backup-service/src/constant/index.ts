@@ -42,6 +42,7 @@ const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABL
 const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
+const USER_TABLE = `${NODE_ENV_PREFIX}-${process.env.USER_TABLE || 'data-vault-users'}`;
 
 // AWS Glue / Athena
 // Dedicated IAM credentials scoped to Glue (separate from the default AWS creds).
@@ -261,6 +262,7 @@ export {
   CRM_TABLE,
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
+  USER_TABLE,
 
   // AWS Glue / Athena
   AWS_GLUE_ACCESS_KEY,

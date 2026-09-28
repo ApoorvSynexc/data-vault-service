@@ -1,4 +1,4 @@
-import { STATUS, JOB_OBJECT_STATUS } from '../../../constant';
+import { STATUS, JOB_OBJECT_STATUS, EMAIL_TEMPLATE } from '../../../constant';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../../middlewares/logger';
 import {
@@ -16,7 +16,6 @@ import {
 import { ICrmBackupHandler } from '../types';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getBackupJob, updateJobStatus } from '../../backup-job';
-import { createNotification } from '../../notification';
 import { getRestoreById } from '../../restore';
 import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
 
@@ -26,6 +25,7 @@ import { runSalesforceRestore, runSalesforceRollback } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
 import { buildParentToChildHierarchy, recursivelyFlatten, reverseHierarchy } from '../../../utils/helper';
+import { notifyJobOutcome } from '../../../utils/notification';
 import dayjs from 'dayjs';
 
 const CONCURRENCY_LIMIT = 6;
@@ -312,8 +312,9 @@ const salesforceHandler: ICrmBackupHandler = {
       const objectNames = failedObjects.map((obj) => obj.name).join(', ');
       const configLabel = backupConfig.name ?? backupConfigId;
 
-      try {
-        await createNotification({
+      await notifyJobOutcome({
+        jobId: backupJobId,
+        notification: {
           userId: backupConfig.userId,
           crmId: backupConfig.crmId,
           title:
@@ -323,12 +324,18 @@ const salesforceHandler: ICrmBackupHandler = {
           body: `Your backup "${configLabel}" finished, but ${objectNames} could not be backed up. Please check the logs for more details.`,
           targetScreen: 'backup-config',
           targetId: backupConfigId,
-        });
-      } catch (err: any) {
-        logger.error(
-          `Failed to notify user about failed objects | backupJobId:${backupJobId} err:${err?.message ?? err}`
-        );
-      }
+        },
+        email: {
+          template: EMAIL_TEMPLATE.backupJobFailure,
+          params: {
+            backupConfigId,
+            backupConfigName: configLabel,
+            crmName,
+            backupJobId,
+            failedObjects: failedObjects.map((obj) => obj.name),
+          },
+        },
+      });
 
       logger.info(
         `Backup job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`
@@ -436,8 +443,9 @@ const salesforceHandler: ICrmBackupHandler = {
       const objectNames = failedObjects.map((obj) => obj.name).join(', ');
       const configLabel = backupConfig.name ?? backupConfigId;
 
-      try {
-        await createNotification({
+      await notifyJobOutcome({
+        jobId: backupJobId,
+        notification: {
           userId: backupConfig.userId,
           crmId: backupConfig.crmId,
           title:
@@ -447,12 +455,18 @@ const salesforceHandler: ICrmBackupHandler = {
           body: `Your archival "${configLabel}" finished, but ${objectNames} could not be archived. Please check the logs for more details.`,
           targetScreen: 'archival-config',
           targetId: backupConfigId,
-        });
-      } catch (err: any) {
-        logger.error(
-          `Failed to notify user about failed objects | backupJobId:${backupJobId} err:${err?.message ?? err}`
-        );
-      }
+        },
+        email: {
+          template: EMAIL_TEMPLATE.archivalJobFailure,
+          params: {
+            backupConfigId,
+            backupConfigName: configLabel,
+            crmName: source.crmName,
+            backupJobId,
+            failedObjects: failedObjects.map((obj) => obj.name),
+          },
+        },
+      });
 
       logger.info(
         `Archival job notify to user, backupJobId=${backupJobId}, backupConfigId=${backupConfigId}, failedObjects=${failedObjects.length}`
@@ -547,8 +561,9 @@ const salesforceHandler: ICrmBackupHandler = {
           const objectNames = failedObjects.map((obj) => obj.name).join(', ');
           const configLabel = restore.jobDetail?.name ?? restoreId;
 
-          try {
-            await createNotification({
+          await notifyJobOutcome({
+            jobId: restoreJobId,
+            notification: {
               userId: restore.userId,
               crmId: destination.crmId,
               title:
@@ -558,12 +573,18 @@ const salesforceHandler: ICrmBackupHandler = {
               body: `Your restore "${configLabel}" finished, but ${objectNames} could not be restored. Please check the logs for more details.`,
               targetScreen: 'restore',
               targetId: restoreId,
-            });
-          } catch (err: any) {
-            logger.error(
-              `Failed to notify user about failed objects | restoreJobId:${restoreJobId} err:${err?.message ?? err}`
-            );
-          }
+            },
+            email: {
+              template: EMAIL_TEMPLATE.restoreFailure,
+              params: {
+                restoreConfigId: restoreId,
+                restoreConfigName: configLabel,
+                backupConfigName: configLabel,
+                restoreJobId,
+                errorMessage: `${objectNames} could not be restored.`,
+              },
+            },
+          });
 
           logger.info(
             `Restore job notify to user, restoreJobId=${restoreJobId}, restoreId=${restoreId}, failedObjects=${failedObjects.length}`
@@ -661,8 +682,9 @@ const salesforceHandler: ICrmBackupHandler = {
           const objectNames = failedObjects.map((obj) => obj.name).join(', ');
           const configLabel = restore.jobDetail?.name ?? restoreId;
 
-          try {
-            await createNotification({
+          await notifyJobOutcome({
+            jobId: restoreJobId,
+            notification: {
               userId: restore.userId,
               crmId: destination.crmId,
               title:
@@ -672,12 +694,18 @@ const salesforceHandler: ICrmBackupHandler = {
               body: `Your rollback "${configLabel}" finished, but ${objectNames} could not be rollback. Please check the logs for more details.`,
               targetScreen: 'rollback',
               targetId: restoreId,
-            });
-          } catch (err: any) {
-            logger.error(
-              `Failed to notify user about failed objects | restoreJobId:${restoreJobId} err:${err?.message ?? err}`
-            );
-          }
+            },
+            email: {
+              template: EMAIL_TEMPLATE.restoreFailure,
+              params: {
+                restoreConfigId: restoreId,
+                restoreConfigName: configLabel,
+                backupConfigName: configLabel,
+                restoreJobId,
+                errorMessage: `${objectNames} could not be rolled back.`,
+              },
+            },
+          });
 
           logger.info(
             `Rollback job notify to user, restoreJobId=${restoreJobId}, restoreId=${restoreId}, failedObjects=${failedObjects.length}`
