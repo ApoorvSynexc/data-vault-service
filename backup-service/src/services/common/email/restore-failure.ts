@@ -1,43 +1,45 @@
 import { EMAIL_APP_URL } from '../../../constant';
 import { IEmailTemplate, renderEmail } from './render';
 
-// Fires when a restore job completes successfully — see the restore
-// success/failure branch in services/common/runner.ts.
-export interface IRestoreCompleteEmailParams {
+// Fires when a restore job fails — see the restore success/failure branch in
+// services/common/runner.ts, and per-object status in
+// services/third-party/salesforce/restore/index.ts.
+export interface IRestoreFailureEmailParams {
   recipientName?: string;
   restoreConfigId: string;
   restoreConfigName?: string;
   backupConfigName: string;
   restoreJobId: string;
-  totalRecordCount?: number;
+  errorMessage?: string;
 }
 
-export const buildRestoreCompleteEmail = (params: IRestoreCompleteEmailParams): IEmailTemplate => {
+export const buildRestoreFailureEmail = (params: IRestoreFailureEmailParams): IEmailTemplate => {
   const {
     recipientName,
     restoreConfigId,
     restoreConfigName,
     backupConfigName,
     restoreJobId,
-    totalRecordCount,
+    errorMessage,
   } = params;
   const label = restoreConfigName ?? backupConfigName;
 
   return {
-    subject: `Restore complete: ${label}`,
+    subject: `Restore failed for ${label}`,
     html: renderEmail({
-      contentTemplate: 'restore-complete',
+      contentTemplate: 'restore-failure',
       locals: {
         recipientName: recipientName ?? 'there',
         label,
         backupConfigName,
         restoreJobId,
-        totalRecordCount,
+        errorMessage,
       },
-      preheader: `Restore complete for ${label}`,
-      heading: 'Restore complete',
-      ctaLabel: 'View restore details',
+      preheader: `Restore failed for ${label}`,
+      heading: 'Restore failed',
+      ctaLabel: 'View restore job',
       ctaUrl: `${EMAIL_APP_URL}/restores/${restoreConfigId}/jobs/${restoreJobId}`,
+      accent: 'danger',
     }),
   };
 };

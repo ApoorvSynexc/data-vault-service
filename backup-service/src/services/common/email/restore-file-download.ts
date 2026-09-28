@@ -44,6 +44,7 @@ export const buildRestoreFileDownloadEmail = (
       heading: `Your ${fileFormat} export is ready`,
       ctaLabel: `Download ${fileFormat}`,
       ctaUrl: downloadUrl,
+      accent: 'info',
     }),
   };
 };

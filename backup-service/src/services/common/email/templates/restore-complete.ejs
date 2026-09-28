@@ -1,0 +1,15 @@
+<p style="margin:0 0 8px;">Hi <%= recipientName %>,</p>
+<p style="margin:0 0 20px;">Your restore <strong style="color:#0f172a;"><%= label %></strong>, sourced from backup <strong style="color:#0f172a;"><%= backupConfigName %></strong>, has completed successfully.</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;<% if (typeof totalRecordCount === 'number') { %>border-bottom:1px solid #e2e8f0;<% } %>">Restore job ID</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;<% if (typeof totalRecordCount === 'number') { %>border-bottom:1px solid #e2e8f0;<% } %>"><%= restoreJobId %></td>
+  </tr>
+  <% if (typeof totalRecordCount === 'number') { %>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;">Records restored</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;"><%= totalRecordCount.toLocaleString() %></td>
+  </tr>
+  <% } %>
+</table>

@@ -4,3 +4,4 @@ export * from './archival-job-failure';
 export * from './restore-failure';
 export * from './restore-complete';
 export * from './restore-file-download';
+export * from './send';
