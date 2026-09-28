@@ -313,6 +313,7 @@ const checkSalesforceApiLimitUsage = async (
     throw new Error(`Salesforce API limit exceeded (${percentageUsed}%)`);
   }
 
+  console.log({ max, remaining, used, percentageUsed, thresholdPercentage });
   return { max, remaining, used, percentageUsed };
 };
 
