@@ -114,7 +114,9 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
   };
   const expressionValues: Record<string, any> = { ':updatedAt': now };
 
-  if (status !== undefined) {
+  // A restore can now write this object's status twice (once per insert/update
+  // operation) — don't let a later SUCCESS overwrite an earlier FAILED.
+  if (status !== undefined && !(status === 'SUCCESS' && currentObject.status === 'FAILED')) {
     setParts.push(`#destination.#objects[${objectIndex}].#status = :status`);
     expressionNames['#status'] = 'status';
     expressionValues[':status'] = status;
