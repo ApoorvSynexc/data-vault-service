@@ -4,7 +4,6 @@ import { NODE_ENV } from "../constant";
 
 export interface ISystemSchedulePayload {
     purpose: string;
-    isRunEmr?: boolean;
     isSyncPayment?: boolean;
     isLogsArchive?: boolean;
     isSyncSalesforceRefreshToken?: boolean;
@@ -22,34 +21,25 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
         scheduleExpression: "cron(0 3 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
-            isRunEmr:true,
             isSyncPayment: true,
             isLogsArchive: true,
             isSyncSalesforceRefreshToken: true,
         },
     },
-    {
-        name: "datavault-daily-system-job-11am",
-        scheduleExpression: "cron(0 11 * * ? *)",
-        payload: {
-            purpose: "DAILY_MAINTENANCE",
-            isRunEmr: NODE_ENV === "production" ? true : false,
-            isSyncPayment: false,
-            isLogsArchive: false,
-            isSyncSalesforceRefreshToken: false,
-        },
-    },
-    {
-        name: "datavault-daily-system-job-7pm",
-        scheduleExpression: "cron(0 19 * * ? *)",
-        payload: {
-            purpose: "DAILY_MAINTENANCE",
-            isRunEmr: NODE_ENV === "production" ? true : false,
-            isSyncPayment: false,
-            isLogsArchive: false,
-            isSyncSalesforceRefreshToken: false,
-        },
-    },
+    // {
+    //     name: "datavault-daily-system-job-11am",
+    //     scheduleExpression: "cron(0 11 * * ? *)",
+    //     payload: {
+    //         purpose: "RUN_EMR",
+    //     },
+    // },
+    // {
+    //     name: "datavault-daily-system-job-7pm",
+    //     scheduleExpression: "cron(0 19 * * ? *)",
+    //     payload: {
+    //         purpose: "RUN_EMR",
+    //     },
+    // },
 ];
 
 // Ensures every entry in SYSTEM_EVENT_SCHEDULES exists on EventBridge
