@@ -17,10 +17,17 @@ export const notifyJobOutcome = async (params: {
 
   const user = email ? await getUser(notification.userId).catch(() => null) : null;
   const recipientEmail = user?.crmProfile?.email;
+  // crmProfile.firstName, not the account's own firstName — matches whose
+  // mailbox recipientEmail actually is (the connected Salesforce user's).
+  const recipientName = user?.crmProfile?.firstName;
+  const emailWithRecipient: SendEmailPayload | undefined = email && {
+    ...email,
+    params: { ...email.params, recipientName: email.params.recipientName ?? recipientName },
+  } as SendEmailPayload;
 
   const [notificationResult, emailResult] = await Promise.allSettled([
     createNotification(notification),
-    recipientEmail && email ? sendEmail(recipientEmail, email) : Promise.resolve(undefined),
+    recipientEmail && emailWithRecipient ? sendEmail(recipientEmail, emailWithRecipient) : Promise.resolve(undefined),
   ]);
 
   if (notificationResult.status === 'rejected') {

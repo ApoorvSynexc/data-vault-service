@@ -3,8 +3,16 @@
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
   <tr>
-    <td style="padding:13px 18px;font-size:13px;color:#64748b;">Restore job ID</td>
-    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;"><%= restoreJobId %></td>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Restore job ID</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= restoreJobId %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Started</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= startedAt %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;">Objects in this restore</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;"><%= totalObjectCount %></td>
   </tr>
 </table>
 

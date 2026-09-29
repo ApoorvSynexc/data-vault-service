@@ -151,6 +151,16 @@ const CRM_NAME = {
   salesforce: 'salesforce',
 };
 
+const BACKUP_TYPE = {
+  normal: 'NORMAL',
+  archival: 'ARCHIVAL',
+};
+
+const DATASET = {
+  entire: 'ENTIRE',
+  partial: 'PARTIAL',
+};
+
 const CONDITION_TYPE = {
   and: 'AND',
   or: 'OR',
@@ -272,6 +282,8 @@ export {
   JOB_TYPE,
   JOB_OBJECT_STATUS,
   EMAIL_TEMPLATE,
+  BACKUP_TYPE,
+  DATASET,
   DESTINATION_TYPE,
   CRM_NAME,
   CONDITION_TYPE,

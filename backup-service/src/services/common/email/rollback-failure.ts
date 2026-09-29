@@ -1,5 +1,5 @@
 import { EMAIL_APP_URL } from '../../../constant';
-import { IEmailTemplate, renderEmail } from './render';
+import { IEmailTemplate, renderEmail, formatEmailDate } from './render';
 
 // Fires when a rollback job fails — see the rollback success/failure branch
 // in services/common/runner.ts, and per-object status in
@@ -10,6 +10,8 @@ export interface IRollbackFailureEmailParams {
   restoreConfigName?: string;
   backupConfigName: string;
   restoreJobId: string;
+  createdAt: string;
+  totalObjectCount: number;
   errorMessage?: string;
 }
 
@@ -20,6 +22,8 @@ export const buildRollbackFailureEmail = (params: IRollbackFailureEmailParams): 
     restoreConfigName,
     backupConfigName,
     restoreJobId,
+    createdAt,
+    totalObjectCount,
     errorMessage,
   } = params;
   const label = restoreConfigName ?? backupConfigName;
@@ -33,6 +37,8 @@ export const buildRollbackFailureEmail = (params: IRollbackFailureEmailParams): 
         label,
         backupConfigName,
         restoreJobId,
+        startedAt: formatEmailDate(createdAt),
+        totalObjectCount,
         errorMessage,
       },
       preheader: `Rollback failed for ${label}`,

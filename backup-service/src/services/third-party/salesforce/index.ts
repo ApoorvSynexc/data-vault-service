@@ -1,4 +1,4 @@
-import { STATUS, JOB_OBJECT_STATUS, EMAIL_TEMPLATE } from '../../../constant';
+import { STATUS, JOB_OBJECT_STATUS, EMAIL_TEMPLATE, BACKUP_TYPE } from '../../../constant';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../../middlewares/logger';
 import {
@@ -38,6 +38,24 @@ const sumProcessedRecords = (objects: IRestoreJobObject[]): number =>
   objects.reduce(
     (sum, obj) =>
       sum + (obj.processedRecordCount ?? 0) + (obj.children ? sumProcessedRecords(obj.children) : 0),
+    0
+  );
+
+// How many distinct objects (root + nested) a restore/rollback job actually
+// touched — for the "Objects" line in the restore/rollback email templates.
+const countObjectsRecursively = (objects: { children?: unknown[] }[]): number =>
+  objects.reduce(
+    (count, obj) =>
+      count + 1 + (obj.children ? countObjectsRecursively(obj.children as { children?: unknown[] }[]) : 0),
+    0
+  );
+
+// Total records backed up/archived across the whole object tree, for the
+// backup/archival-job-failure emails.
+const sumBackupRecordCount = (objects: IBackupObject[]): number =>
+  objects.reduce(
+    (sum, obj) =>
+      sum + (obj.completedRecordCount ?? 0) + (obj.children ? sumBackupRecordCount(obj.children) : 0),
     0
   );
 
@@ -342,6 +360,12 @@ const salesforceHandler: ICrmBackupHandler = {
             backupConfigName: configLabel,
             crmName,
             backupJobId,
+            configType: backupConfig.type as typeof BACKUP_TYPE.normal | typeof BACKUP_TYPE.archival,
+            dataset: backupConfig.dataset,
+            jobType: completedJob?.jobType ?? 'BULK',
+            createdAt: completedJob?.createdAt ?? dayjs().toISOString(),
+            totalObjectCount: countObjectsRecursively(latestObjects),
+            totalRecordCount: sumBackupRecordCount(latestObjects),
             failedObjects: failedObjects.map((obj) => obj.name),
           },
         },
@@ -473,6 +497,12 @@ const salesforceHandler: ICrmBackupHandler = {
             backupConfigName: configLabel,
             crmName: source.crmName,
             backupJobId,
+            configType: backupConfig.type as typeof BACKUP_TYPE.normal | typeof BACKUP_TYPE.archival,
+            dataset: backupConfig.dataset,
+            jobType: freshJob?.jobType ?? 'BULK',
+            createdAt: freshJob?.createdAt ?? dayjs().toISOString(),
+            totalObjectCount: countObjectsRecursively(latestObjects),
+            totalRecordCount: sumBackupRecordCount(latestObjects),
             failedObjects: failedObjects.map((obj) => obj.name),
           },
         },
@@ -592,6 +622,8 @@ const salesforceHandler: ICrmBackupHandler = {
                 restoreConfigName: configLabel,
                 backupConfigName: configLabel,
                 restoreJobId,
+                createdAt: restore.createdAt,
+                totalObjectCount: countObjectsRecursively(updatedObjects),
                 errorMessage: `${objectNames} could not be restored.`,
               },
             },
@@ -618,6 +650,8 @@ const salesforceHandler: ICrmBackupHandler = {
                 restoreConfigName: configLabel,
                 backupConfigName: configLabel,
                 restoreJobId,
+                createdAt: restore.createdAt,
+                totalObjectCount: countObjectsRecursively(updatedObjects),
                 totalRecordCount: sumProcessedRecords(updatedObjects),
               },
             },
@@ -739,6 +773,8 @@ const salesforceHandler: ICrmBackupHandler = {
                 restoreConfigName: configLabel,
                 backupConfigName: configLabel,
                 restoreJobId,
+                createdAt: restore.createdAt,
+                totalObjectCount: countObjectsRecursively(freshJob?.destination.objects ?? []),
                 errorMessage: `${objectNames} could not be rolled back.`,
               },
             },
