@@ -265,13 +265,12 @@ const STATUS = {
   failed: 'FAILED',
   partialFailure: 'PARTIAL_FAILURE',
   cancelled: 'CANCELLED',
+ 
+  compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
+  compressed: 'COMPRESSED',
+  compressionFailed: 'COMPRESSION_JOB_FAILED',
 };
 // Per-object/per-item progress inside a job's object[]/objects[] array —
-// backup/archival object lifecycle, restore/rollback per-object phases, and
-// compression phases (written to a backupJob's objects[] entry, or overwrites
-// the job's own `status` field once compression starts — see the model
-// comment on IBackupJob.status for that known one-way-door quirk, unchanged
-// by this consolidation). Mirrors backup-service's own copy of this constant.
 const JOB_OBJECT_STATUS = {
   created: 'CREATED',
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
@@ -288,9 +287,6 @@ const JOB_OBJECT_STATUS = {
   rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
   rollbackCompleted: 'ROLLBACK_COMPLETED',
   rollbackFailed: 'ROLLBACK_FAILED',
-  compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
-  compressed: 'COMPRESSED',
-  compressionFailed: 'COMPRESSION_JOB_FAILED',
   restoreCsvCreating: 'CSV_CREATING',
   restoreIngestInProgress: 'INGEST_IN_PROGRESS',
   failed: 'FAILED',
