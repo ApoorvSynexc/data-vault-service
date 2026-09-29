@@ -151,7 +151,7 @@ const submitIngestChunk = async (
   const failed = status.numberRecordsFailed ?? 0;
 
   let errors: string[] = [];
-  if (failed > 0 || status.state === 'Failed') {
+  if (failed > 0 || status.state === 'Failed' || status.state === 'Aborted') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
     errors = parseFirstNErrors(failedCsv, MAX_STORED_ERRORS_COUNT);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
