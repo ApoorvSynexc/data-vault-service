@@ -257,7 +257,6 @@ const salesforceHandler: ICrmBackupHandler = {
     }
 
     const backupConfig = await getBackupConfigById(backupConfigId);
-    console.log('backupConfig', backupConfig);
     if (backupConfig === null || backupConfig === undefined) {
       return;
     }
