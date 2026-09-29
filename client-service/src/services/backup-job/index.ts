@@ -272,9 +272,7 @@ const runBackupNow = async (params: { user?: IUser; config: IBackupConfig }): Pr
 // `status`, so without this the stats readers below would stop counting compressed jobs.
 // Note: a job that FAILED its backup and was then compressed also lands here — the
 // original outcome is no longer on the record to distinguish it.
-const isBackupCompleted = (status: string): boolean =>
-  status === STATUS.success ||
-  [STATUS.compressionInProgress, STATUS.compressed, STATUS.compressionFailed].includes(status);
+const isBackupCompleted = (status: string): boolean => [STATUS.success, STATUS.compressed].includes(status);
 
 // Single writer for the compression lifecycle. The condition is what makes an unknown
 // or foreign backupJobId fail loudly: UpdateCommand upserts by default, so without it a
