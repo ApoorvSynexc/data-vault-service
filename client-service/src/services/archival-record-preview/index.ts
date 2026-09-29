@@ -4,6 +4,7 @@ import { AWS_REGION, BACKUP_CONFIG_TABLE, BACKUP_TYPE } from '../../constant';
 import { IBackupConfig, ICrm } from '../../models';
 import { getCrmByOrgId, getCrmById } from '../crm';
 import { readSchemaFile } from '../schema';
+import { logger } from '../../middlewares';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery } from '../third-party/athena/query';
 import { tableExists, getTableAllColumnNames } from '../third-party/athena/glue';
@@ -48,12 +49,16 @@ const hudiTableFor = (config: IBackupConfig, objectApiName: string): { databaseN
 // selections, not nested children, so a config archiving a child object
 // (e.g. Contact under Account) would never match on that field — the tree
 // itself is the accurate source, so this walks it directly instead.
-const treeHasObject = (nodes: any[] | undefined, targetName: string): boolean => {
+// Names are matched case-insensitively ("product2" finds "Product2"), and the
+// tree's own spelling is returned so callers use the object's real API name.
+const findObjectNameInTree = (nodes: any[] | undefined, targetName: string): string | null => {
+  const target = targetName.toLowerCase();
   for (const node of nodes ?? []) {
-    if (node?.name === targetName) return true;
-    if (treeHasObject(node?.children, targetName)) return true;
+    if (typeof node?.name === 'string' && node.name.toLowerCase() === target) return node.name;
+    const nested = findObjectNameInTree(node?.children, targetName);
+    if (nested) return nested;
   }
-  return false;
+  return null;
 };
 
 // A Salesforce org Id has two spellings — 15 chars (case-sensitive) and 18
@@ -93,13 +98,16 @@ const salesforceIdSpellings = (orgId: string): string[] => {
 const resolveArchivalConfigsForObject = async (
   orgId: string,
   objName: string
-): Promise<{ crm: ICrm; configs: IBackupConfig[] } | null> => {
+): Promise<{ crm: ICrm; configs: IBackupConfig[]; objName: string } | null> => {
   let crm: ICrm | null = null;
   for (const candidate of salesforceIdSpellings(orgId)) {
     crm = await getCrmByOrgId(candidate);
     if (crm) break;
   }
-  if (!crm) return null;
+  if (!crm) {
+    logger.info(`[archival-preview] resolve | no crm for orgId:${orgId} tried:${salesforceIdSpellings(orgId).join(',')}`);
+    return null;
+  }
 
   const result = await docClient.send(
     new QueryCommand({
@@ -115,8 +123,15 @@ const resolveArchivalConfigsForObject = async (
     })
   );
   const allConfigs = (result.Items as IBackupConfig[] | undefined) ?? [];
-  const configs = allConfigs.filter((config) => treeHasObject(config.objects as any[], objName));
-  return { crm, configs };
+  const configs = allConfigs.filter((config) => findObjectNameInTree(config.objects as any[], objName));
+  const canonicalObjName = findObjectNameInTree(configs[0]?.objects as any[], objName) ?? objName;
+  // Says which lookup step came up empty when a caller reports "not found":
+  // crm (org id spelling), archival configs at all, or configs covering objName.
+  logger.info(
+    `[archival-preview] resolve | orgId:${orgId} crmId:${crm.crmId} crmOrganizationId:${crm.organizationId} ` +
+    `archivalConfigs:${allConfigs.length} coveringObject(${objName}):${configs.length}`
+  );
+  return { crm, configs, objName: canonicalObjName };
 };
 
 // ---------------------------------------------------------------------------
@@ -136,9 +151,9 @@ const escapeSqlValue = (value: string): string => `'${value.replace(/'/g, "''")}
 // triples: { "Status": "Active" } means Status = 'Active'; a key suffixed
 // "_ne" means NOT_EQUALS — { "Email_ne": "x@y.com" } means Email <> 'x@y.com'.
 // One key per field, ANDed together. The reserved key "OR" holds a nested
-// object of the same shape whose conditions are ORed with each other; that
-// group is then ANDed with the rest — { "Status": "Active", "OR": { "Id": "x",
-// "Name": "y" } } means Status = 'Active' AND (Id = 'x' OR Name = 'y').
+// object of the same shape; when it is present, the top-level conditions and
+// the OR group's conditions are all ORed — { "OwnerId": "o", "OR": { "Id": "x",
+// "Name": "y" } } means OwnerId = 'o' OR Id = 'x' OR Name = 'y'.
 const NOT_EQUAL_SUFFIX = '_ne';
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const OR_KEY = 'OR';
@@ -243,7 +258,9 @@ const validateAndBuildFilters = (filters: unknown): IValidateFiltersResult => {
   // An empty OR would silently mean "no filter" — almost certainly a caller mistake.
   if (!orResult.conditions.length) return { ok: false, error: 'invalid_filters' };
 
-  return { ok: true, and: andResult.conditions, or: orResult.conditions };
+  // With an "OR" key present, the top-level conditions and the OR group's conditions
+  // are all alternatives: a row matching any one of them is returned.
+  return { ok: true, and: [], or: [...andResult.conditions, ...orResult.conditions] };
 };
 
 const validateFields = (fields: unknown): { ok: true; fields: string[] | null } | { ok: false } => {
