@@ -39,7 +39,8 @@ const resolveOrgAndConfigs = async (
     return null;
   }
 
-  return { objName, configs: resolved.configs };
+  // The config tree's own spelling of the object ("Product2" for "product2").
+  return { objName: resolved.objName, configs: resolved.configs };
 };
 
 /**
@@ -53,9 +54,10 @@ const resolveOrgAndConfigs = async (
  * column is returned. `filters` is a plain object, one key per field, ANDed
  * together — e.g. { "Status": "Active", "Email_ne": "x@y.com" } means
  * Status = 'Active' AND Email <> 'x@y.com' (a "_ne" suffix on the key means
- * NOT_EQUALS; a plain key means EQUALS). A nested "OR" object ORs its own
- * conditions and ANDs that group with the rest — e.g. { "OR": { "Id": "001…",
- * "Name": "sfd" } } means Id = '001…' OR Name = 'sfd'. `page` is 1-based,
+ * NOT_EQUALS; a plain key means EQUALS). When a nested "OR" object is present,
+ * the top-level conditions and the OR group's are all ORed — e.g.
+ * { "OwnerId": "005…", "OR": { "Id": "001…", "Name": "sfd" } } means
+ * OwnerId = '005…' OR Id = '001…' OR Name = 'sfd'. `page` is 1-based,
  * defaults to 1.
  * `dateFilters` ranges any datetime column, time included:
  * { "LastModifiedDate": { "from": "2026-07-03T11:00:00Z", "to": "2026-07-03" } }.
