@@ -6,15 +6,18 @@ import { getRestoreById } from "../../../restore";
 import { getRestoreJobById, updateRestoreJob } from "../../../restore-job";
 import { initalizeRestoreTransform } from "../../../payload";
 import { getDecryptedCrmCredential, getUser } from "../../../user";
-import { ensureRestoreTrackingFields, IRestoreTrackingField } from "../restore-fields";
+import { ensureRestoreTrackingFields, RESTORE_TRACKING_FIELDS, IRestoreTrackingField } from "../restore-fields";
 import { provisionRestorePermissionSet } from "../restore-permission-set";
 
-// object API name -> the tracking fields ensureRestoreTrackingFields found
-// missing (and created) for it this run. Handed to salesforceFieldsPermission
-// so the permission set only ever grants access to a field this restore
-// actually created — a fresh describe at permission-grant time can't answer
-// that, since by then creation has already happened and every tracking field
-// looks pre-existing.
+// object API name -> the tracking fields to grant field-level permission for.
+// Set to the FULL RESTORE_TRACKING_FIELDS list for every object that resolved
+// without throwing — ensureRestoreTrackingFields never resolves unless all 3
+// fields genuinely exist on the object afterward (pre-existing or just
+// created), so "resolved" already means "grant permission for all 3," not
+// just whichever subset happened to be newly created this particular run.
+// An object salesforceFieldCreation never reached (or failed for) simply has
+// no entry, so it gets object permissions only, never a field-permission
+// grant for a field that might not exist.
 export type NewFieldsByObject = Map<string, IRestoreTrackingField[]>;
 
 export const salesforceFieldCreation = async (params: { restoreJobId: string }): Promise<NewFieldsByObject> => {
@@ -59,12 +62,12 @@ export const salesforceFieldCreation = async (params: { restoreJobId: string }):
         for (let index = 0; index < objects.length; index++) {
             const object = objects[index];
             try {
-                const created = await ensureRestoreTrackingFields(
+                await ensureRestoreTrackingFields(
                     user?.crmProfile?.instanceUrl,
                     credentials,
                     object.name
                 );
-                newFieldsByObject.set(object.name, created);
+                newFieldsByObject.set(object.name, RESTORE_TRACKING_FIELDS);
                 logger.info(`[salesforce-field-creation] restoreJobId=${restoreJobId} object=${object.name} done`);
             } catch (error) {
                 logger.error(`[salesforce-field-creation] restoreJobId=${restoreJobId} object=${object.name} err:${error}`);
