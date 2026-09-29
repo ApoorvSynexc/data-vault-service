@@ -5,13 +5,10 @@ const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
 // Email branding/contact info — shared across services/common/email.
-// No real values existed anywhere in the service before this; update the
-// defaults (or set the env vars) with real values before these templates go
-// out to real users.
-const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || 'DataVault');
-const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@datavault.io');
-const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'no-reply@datavault.io');
-const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.datavault.io');
+const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || '360 DataCraft');
+const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com');
+const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
+const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
 const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
 const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
 
