@@ -81,7 +81,7 @@ const updateRestoreJobStatus = async (params: UpdateRestoreJobStatusParams): Pro
 interface UpdateRestoreObjectParams {
   restoreJobId: string;
   objectName: string;
-  status?: 'FAILED' | 'SUCCESS';
+  status?: string;
   processedRecordCount?: number;
   failedRecordCount?: number;
   errorMessage?: string;

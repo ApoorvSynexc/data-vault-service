@@ -8,7 +8,7 @@ import { INotification } from '../../models';
 // — only the write path is ported here. Reading/updating/listing notifications
 // stays owned by client-service's notification API; backup-service only needs
 // to create rows (e.g. on a backup job outcome), never read them back.
-interface CreateNotificationParams {
+export interface CreateNotificationParams {
   userId: string;
   crmId: string;
   title: string;

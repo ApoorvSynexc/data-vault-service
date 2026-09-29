@@ -3,17 +3,12 @@ const PORT = Number(process.env.PORT) || 3000;
 const NODE_ENV = String(process.env.NODE_ENV);
 const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 
-// Email branding/contact info — shared across services/common/email-templates.
-// Mirrors client-service's own copy of these constants (the two services
-// don't share a package). No real values existed anywhere in the service
-// before this; update the defaults (or set the env vars) with real values
-// before these templates go out to real users.
-const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || 'DataVault');
-const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@datavault.io');
-const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'no-reply@datavault.io');
-// Base URL for CTA links (e.g. "View backup job") — the user-facing
-// dashboard, not this service's own host.
-const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.datavault.io');
+const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || '360 DataCraft');
+const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com');
+const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
+const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
+const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
+const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
@@ -32,6 +27,7 @@ const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABL
 const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
+const USER_TABLE = `${NODE_ENV_PREFIX}-${process.env.USER_TABLE || 'data-vault-users'}`;
 
 // AWS Glue / Athena
 // Dedicated IAM credentials scoped to Glue (separate from the default AWS creds).
@@ -72,6 +68,21 @@ const JOB_TYPE = {
   realtime: 'REALTIME',
 };
 
+// Every transactional email template services/common/email can render/send —
+// sendEmail(to, { template: EMAIL_TEMPLATE.x, params }) switches on this to
+// pick the right builder + params type. `as const` (unlike every other enum
+// in this file) is required here: send.ts's SendEmailPayload discriminated
+// union needs each member to be its own literal type, not the plain `string`
+// every other member of this object would otherwise widen to, or TypeScript
+// can't narrow `params` per-template and the switch loses type safety.
+const EMAIL_TEMPLATE = {
+  backupJobFailure: 'BACKUP_JOB_FAILURE',
+  archivalJobFailure: 'ARCHIVAL_JOB_FAILURE',
+  restoreComplete: 'RESTORE_COMPLETE',
+  restoreFailure: 'RESTORE_FAILURE',
+  rollbackFailure: 'ROLLBACK_FAILURE',
+} as const;
+
 // Config lifecycle/visibility — backup-config, archival-config (same table),
 // restore's initial draft state. Mirrors client-service's own copy of this
 // constant (the two services don't share a package).
@@ -104,24 +115,31 @@ const STATUS = {
 // compression phases. Mirrors client-service's own copy of this constant.
 const JOB_OBJECT_STATUS = {
   created: 'CREATED',
+
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
   bulkQueryCompleted: 'BULK_QUERY_COMPLETED',
   transferInProgress: 'TRANSFER_IN_PROGRESS',
   uploadCompleted: 'UPLOAD_COMPLETED',
+
   deletionInProgress: 'DELETION_IN_PROGRESS',
   deletionCompleted: 'DELETION_COMPLETED',
-  // Delete phase failed before any records were processed (job-level / infrastructure error)
   deletionJobFailed: 'DELETION_JOB_FAILED',
-  // Delete job succeeded but some individual records were rejected by Salesforce
   deletionRecordsFailed: 'DELETION_RECORDS_FAILED',
+
+  restoreCsvCreating: 'CSV_CREATING',
+  restoreIngestInProgress: 'INGEST_IN_PROGRESS',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
+  restoreCompleted: 'RESTORE_COMPLETED',
+  restoreFailed: 'RESTORE_FAILED',
+
   rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
   rollbackCompleted: 'ROLLBACK_COMPLETED',
+  rollbackFailed: 'ROLLBACK_FAILED',
+
   compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
   compressed: 'COMPRESSED',
   compressionFailed: 'COMPRESSION_JOB_FAILED',
-  restoreCsvCreating: 'CSV_CREATING',
-  restoreIngestInProgress: 'INGEST_IN_PROGRESS',
+  
   failed: 'FAILED',
 };
 
@@ -131,6 +149,16 @@ const DESTINATION_TYPE = {
 
 const CRM_NAME = {
   salesforce: 'salesforce',
+};
+
+const BACKUP_TYPE = {
+  normal: 'NORMAL',
+  archival: 'ARCHIVAL',
+};
+
+const DATASET = {
+  entire: 'ENTIRE',
+  partial: 'PARTIAL',
 };
 
 const CONDITION_TYPE = {
@@ -211,6 +239,8 @@ export {
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
   EMAIL_APP_URL,
+  EMAIL_SMTP_USER,
+  EMAIL_SMTP_APP_PASSWORD,
 
   // Aws Config
   AWS_REGION,
@@ -227,6 +257,7 @@ export {
   CRM_TABLE,
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
+  USER_TABLE,
 
   // AWS Glue / Athena
   AWS_GLUE_ACCESS_KEY,
@@ -250,6 +281,9 @@ export {
   STATUS,
   JOB_TYPE,
   JOB_OBJECT_STATUS,
+  EMAIL_TEMPLATE,
+  BACKUP_TYPE,
+  DATASET,
   DESTINATION_TYPE,
   CRM_NAME,
   CONDITION_TYPE,

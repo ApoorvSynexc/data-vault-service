@@ -1,0 +1,27 @@
+<p style="margin:0 0 8px;">Hi <%= recipientName %>,</p>
+<p style="margin:0 0 20px;">Your restore <strong style="color:#0f172a;"><%= label %></strong>, sourced from backup <strong style="color:#0f172a;"><%= backupConfigName %></strong>, has failed.</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Restore job ID</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= restoreJobId %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Started</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= startedAt %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;">Objects in this restore</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;"><%= totalObjectCount %></td>
+  </tr>
+</table>
+
+<% if (errorMessage) { %>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;">
+  <tr>
+    <td style="padding:13px 16px;font-size:13px;line-height:1.5;color:#b91c1c;background-color:#fef2f2;border:1px solid #fecaca;border-radius:8px;"><%= errorMessage %></td>
+  </tr>
+</table>
+<% } %>
+
+<p style="margin:20px 0 0;">No changes were made to your CRM. You can retry the restore from your dashboard, or reach out if this keeps happening.</p>
