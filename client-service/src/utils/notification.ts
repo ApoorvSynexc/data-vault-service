@@ -28,10 +28,17 @@ export const notifyUserOutcome = async (params: {
 
   const user = email ? await getUser({ userId: notification.userId }).catch(() => null) : null;
   const recipientEmail = user?.contactEmail ?? user?.contact?.email;
+  // The account's own firstName — matches whose mailbox recipientEmail
+  // actually is (the account owner's, not the connected Salesforce user's).
+  const recipientName = user?.firstName;
+  const emailWithRecipient: SendEmailPayload | undefined = email && {
+    ...email,
+    params: { ...email.params, recipientName: email.params.recipientName ?? recipientName },
+  };
 
   const [notificationResult, emailResult] = await Promise.allSettled([
     createNotification(notification),
-    recipientEmail && email ? sendEmail(recipientEmail, email) : Promise.resolve(undefined),
+    recipientEmail && emailWithRecipient ? sendEmail(recipientEmail, emailWithRecipient) : Promise.resolve(undefined),
   ]);
 
   if (notificationResult.status === 'rejected') {

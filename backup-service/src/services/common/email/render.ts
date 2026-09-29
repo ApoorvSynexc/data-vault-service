@@ -26,6 +26,13 @@ export const EMAIL_ACCENT = {
 
 export type EmailAccentKey = keyof typeof EMAIL_ACCENT;
 
+// Shared date formatting for every template that shows a "started"/"created"
+// timestamp — one fixed format (UTC, no viewer-timezone guessing since this
+// renders server-side with no request context) rather than each builder
+// hand-rolling its own.
+export const formatEmailDate = (iso: string): string =>
+  new Date(iso).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }) + ' UTC';
+
 interface IRenderEmailParams {
   // Filename (no extension) under ./templates — the small partial with this
   // email's own copy, e.g. 'backup-job-failure'.

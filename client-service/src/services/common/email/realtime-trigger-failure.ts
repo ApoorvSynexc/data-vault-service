@@ -1,5 +1,5 @@
 import { EMAIL_APP_URL } from '../../../constant';
-import { IEmailTemplate, renderEmail } from './render';
+import { IEmailTemplate, renderEmail, formatEmailDate } from './render';
 
 // Fires when a real-time trigger operation fails for an object — see
 // services/third-party/salesforce/trigger.ts's realTimeTriggerManagement,
@@ -14,6 +14,12 @@ export interface IRealtimeTriggerFailureEmailParams {
   crmName: string;
   backupConfigId: string;
   backupConfigName: string;
+  // When the backup config itself was created — context for "how long has
+  // this real-time backup been running", not when this failure happened.
+  configCreatedAt: string;
+  // How many objects this real-time backup config tracks in total, so a
+  // single-object failure reads in context ("1 of 6 objects"), not in isolation.
+  totalObjectCount: number;
   objectApiName: string;
   errorMessage: string;
   actionLabel: RealtimeTriggerAction;
@@ -26,6 +32,8 @@ export const buildRealtimeTriggerFailureEmail = (params: IRealtimeTriggerFailure
     crmName,
     backupConfigId,
     backupConfigName,
+    configCreatedAt,
+    totalObjectCount,
     objectApiName,
     errorMessage,
     actionLabel,
@@ -40,6 +48,8 @@ export const buildRealtimeTriggerFailureEmail = (params: IRealtimeTriggerFailure
         recipientName: recipientName ?? 'there',
         crmName,
         backupConfigName,
+        configCreatedAt: formatEmailDate(configCreatedAt),
+        totalObjectCount,
         objectApiName,
         errorMessage,
         actionLabel,
