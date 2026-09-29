@@ -68,9 +68,7 @@ const searchArchivalRecordsHandler = async (req: IRequest, res: IResponse): Prom
   const { objName, fields, startDate, endDate, dateFilters, limit, page, cursor, ...body } = (req.body ?? {}) as Record<string, unknown>;
   const orgId = body.orgId ?? body.organizationId;
   const filters = body.filters ?? body.filter;
-console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, fields=${JSON.stringify(fields)}, startDate=${startDate}, endDate=${endDate}, filters=${JSON.stringify(filters)}, limit=${limit}, page=${page}`);
   const resolved = await resolveOrgAndConfigs(req, res, orgId, objName);
-  console.log('resolve', resolved);
   if (!resolved) return;
 
   let start: IsoDateString | undefined;
@@ -100,7 +98,6 @@ console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, 
     page: page as number | undefined,
     cursor: cursor as string | undefined,
   });
-console.log('searched', searched);
   if (!searched.ok) {
     return makeResponse(req, res, 400, false, searched.error as Parameters<typeof makeResponse>[4]);
   }
