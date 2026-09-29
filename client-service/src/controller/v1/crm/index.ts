@@ -13,13 +13,8 @@ import {
   updateUser,
   getUsersByContactEmail,
   getUser,
-  getDecryptedCrmCredential,
 } from '../../../services';
-import {
-  refreashSalesforceToken,
-  SalesforceAuthExpiredError,
-  SalesforceEnvironment,
-} from '../../../services/third-party/salesforce';
+import { SalesforceEnvironment } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
 import { encrypt } from '../../../utils/encryption';
 
@@ -207,37 +202,6 @@ const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void
   makeResponse(req, res, 200, true, 'update');
 };
 
-const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  const { crmId } = req.query;
-
-  if (!crmId) {
-    makeResponse(req, res, 400, false, 'crm_id_required');
-    return;
-  }
-
-  if (!user) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  const crm = await getCrmById(String(crmId));
-  if (!crm) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  const tokens = getDecryptedCrmCredential(user) ?? {};
-  let refreshed: any;
-  try {
-    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);
-  } catch {
-    throw new SalesforceAuthExpiredError();
-  }
-
-  makeResponse(req, res, 200, true, 'update', refreshed);
-};
-
 const updateCrmHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { crmId, ...body } = req.body;
 
@@ -286,7 +250,6 @@ export const crmController = wrapController({
   crmCodeHanlder,
   crmListHandler,
   crmDisconnectHandler,
-  crmRefreshTokenHandler,
   updateCrmHandler,
   crmDeleteHandler,
 });

@@ -16,8 +16,6 @@ import {
     deleteBackupJobsByConfig,
     computeArchivalJobStats,
     triggerArchivalBackupJob,
-    getBackupJobById,
-    getDecryptedDestinationConfig,
     createAwsEventScheduler,
     updateAwsEventSchedule,
     deleteAwsEventScheduler,
@@ -27,29 +25,8 @@ import { filtereObjects, isOwner, wrapController } from "../../../utils/helper";
 import { buildArchivalObjectScheduleName, buildScheduleInput, computeNextScheduledRun } from "../../../utils/event-bridge";
 import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dryrun-v2/types";
-import { listS3Keys, getS3Text } from "../../../utils/validate-aws-credentials";
-import { previewRecords } from "../../../services/third-party/salesforce/dryrun-v2/preview-records";
 import { validateSoql } from "../../../services/third-party/salesforce/dryrun-v2/validate-soql";
 import { generateSoqlQueries } from "../../../services/third-party/salesforce/dryrun-v2/soql-generation";
-
-interface ObjectRecordsBody {
-    id: string;
-    name: string;
-    fieldNames: string[]
-    soql: string
-}
-
-const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { name, fieldNames, soql } = req.body as ObjectRecordsBody;
-
-    const user = req.user;
-    if (!user) {
-        return makeResponse(req, res, 400, false, 'not_exist');
-    }
-
-    const result = await previewRecords({ user, objectName: name, fieldNames, soql, limit: 50 });
-    makeResponse(req, res, 200, true, 'fetch', result);
-};
 
 const attachArchivalStatsToRows = async (documents: any[]): Promise<void> => {
     await Promise.all(
@@ -482,100 +459,8 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
     makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
-const PAGE_SIZE = 10;
-const BATCH_SIZE = 200; // records per S3 file
-
-const getRecordErrorsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-    const { backupJobId, objectId, page } = req.query as Record<string, string>;
-    if (!backupJobId || !objectId) {
-        makeResponse(req, res, 400, false, 'params_required');
-        return;
-    }
-
-    const pageNum = Math.max(1, parseInt(page ?? '1', 10));
-
-    const job = await getBackupJobById(backupJobId);
-    if (!job || job.userId !== req.user!.userId) {
-        makeResponse(req, res, 400, false, 'not_exist');
-        return;
-    }
-
-    // Find the target object (flat search — objects can be nested in children[])
-    const findObject = (items: any[]): any => {
-        for (const obj of items) {
-            if (obj.id === objectId) return obj;
-            if (obj.children?.length) {
-                const found = findObject(obj.children);
-                if (found) return found;
-            }
-        }
-        return null;
-    };
-
-    const targetObj = findObject(job.object ?? []);
-    if (!targetObj?.recordErrorsS3Prefix) {
-        makeResponse(req, res, 200, true, 'fetch', { records: [], totalRecords: 0, totalPages: 0, page: pageNum });
-        return;
-    }
-
-    const config = await getBackupConfigById(job.backupConfigId);
-    if (!config?.destinationId) {
-        makeResponse(req, res, 500, false, 'destination_config_unavailable');
-        return;
-    }
-    const destination = await getDestinationById(config.destinationId);
-    if (!destination) {
-        makeResponse(req, res, 500, false, 'destination_config_unavailable');
-        return;
-    }
-    const destConfig = getDecryptedDestinationConfig(destination);
-
-    const s3Cfg = {
-        bucketName: destConfig.bucketName,
-        region: destConfig.region,
-        accessKeyId: destConfig.accessKeyId,
-        secretAccessKey: destConfig.secretAccessKey,
-    };
-
-    const prefix = targetObj.recordErrorsS3Prefix;
-    const allKeys = await listS3Keys(s3Cfg, prefix);
-
-    const globalOffset = (pageNum - 1) * PAGE_SIZE;
-    const fileIdx = Math.floor(globalOffset / BATCH_SIZE);
-
-    if (fileIdx >= allKeys.length) {
-        makeResponse(req, res, 200, true, 'fetch', { records: [], totalRecords: allKeys.length * BATCH_SIZE, totalPages: Math.ceil((allKeys.length * BATCH_SIZE) / PAGE_SIZE), page: pageNum });
-        return;
-    }
-
-    const fileText = await getS3Text(s3Cfg, allKeys[fileIdx]);
-    const rows = fileText.split('\n').filter(l => l.trim());
-    // rows[0] is the CSV header (recordId,error)
-    const dataRows = rows.slice(1);
-
-    const inFileOffset = globalOffset % BATCH_SIZE;
-    const pageSlice = dataRows.slice(inFileOffset, inFileOffset + PAGE_SIZE);
-
-    const records = pageSlice.map(row => {
-        const commaIdx = row.indexOf(',');
-        if (commaIdx === -1) return { recordId: row, error: '' };
-        const recordId = row.slice(0, commaIdx);
-        let error = row.slice(commaIdx + 1);
-        try { error = JSON.parse(error); } catch { /* leave as-is */ }
-        return { recordId, error };
-    });
-
-    const isLastFile = fileIdx === allKeys.length - 1;
-    const totalRecords = isLastFile
-        ? fileIdx * BATCH_SIZE + dataRows.length
-        : allKeys.length * BATCH_SIZE; // upper-bound until last page is visited
-    const totalPages = Math.ceil(totalRecords / PAGE_SIZE);
-
-    makeResponse(req, res, 200, true, 'fetch', { records, totalRecords, totalPages, page: pageNum });
-};
 
 export const archivalConfigController = wrapController({
-    getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,
     getArchivalConfigHandler,
@@ -585,5 +470,4 @@ export const archivalConfigController = wrapController({
     getArchivalJobStatsHandler,
     dryRunArchivalHandler,
     validateSoqlArchivalHandler,
-    getRecordErrorsHandler,
 });
