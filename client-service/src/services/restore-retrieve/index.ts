@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, AWS_REGION } from '../../constant';
-import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
+import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser, IS3Config } from '../../models';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { logger } from '../../middlewares/logger';
 import { getCrmById } from '../crm';
@@ -19,7 +19,6 @@ import { tableExists } from '../third-party/athena/glue';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
-import { S3Config } from '../../utils/validate-aws-credentials';
 
 export { FilterError, buildAthenaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 export { validateColumns } from './athena-fetch';
@@ -229,7 +228,7 @@ const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthe
   const destination = await getDestinationById(config.destinationId);
   if (!destination) return { region: AWS_REGION };
 
-  const { bucketName, region } = getDecryptedDestinationConfig(destination) as S3Config;
+  const { bucketName, region } = getDecryptedDestinationConfig(destination) as IS3Config;
   return {
     region: region || AWS_REGION,
     outputLocation: bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined,
@@ -242,7 +241,7 @@ export const cleanupStaleRetrieveObjects = async (config: IBackupConfig): Promis
     const destination = await getDestinationById(config.destinationId);
     if (!destination) return;
 
-    const s3Config = getDecryptedDestinationConfig(destination) as S3Config;
+    const s3Config = getDecryptedDestinationConfig(destination) as IS3Config;
     if (!s3Config.bucketName) return;
 
     const prefix = `salesforce/${config.crmId}/retrieve/`;
@@ -1839,7 +1838,7 @@ export type FetchObjectFieldsResult =
 const resolveSchemaS3 = async (
   backupConfigId: string,
   userId: string
-): Promise<{ destConfig: S3Config; keyParams: ISchemaS3KeyParams } | null> => {
+): Promise<{ destConfig: IS3Config; keyParams: ISchemaS3KeyParams } | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) {
     return null;
@@ -1855,7 +1854,7 @@ const resolveSchemaS3 = async (
     return null;
   }
 
-  const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
+  const destConfig = getDecryptedDestinationConfig(destination) as IS3Config;
   return {
     destConfig,
     keyParams: {

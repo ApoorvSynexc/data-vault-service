@@ -1,14 +1,13 @@
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { AWS_REGION, BACKUP_CONFIG_TABLE, BACKUP_TYPE } from '../../constant';
-import { IBackupConfig, ICrm } from '../../models';
+import { IBackupConfig, ICrm, IS3Config } from '../../models';
 import { getCrmByOrgId, getCrmById } from '../crm';
 import { readSchemaFile } from '../schema';
 import { logger } from '../../middlewares';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { runAthenaQuery } from '../third-party/athena/query';
 import { tableExists, getTableAllColumnNames } from '../third-party/athena/glue';
-import { S3Config } from '../../utils/validate-aws-credentials';
 import { IsoDateString, toIsoDateString } from '../../utils/iso-date';
 
 // Self-contained copies of restore-retrieve/index.ts's private naming/region
@@ -26,7 +25,7 @@ const buildArchivalOutputLocation = async (config: IBackupConfig): Promise<IAthe
   const destination = await getDestinationById(config.destinationId);
   if (!destination) return { region: AWS_REGION };
 
-  const { bucketName, region } = getDecryptedDestinationConfig(destination) as S3Config;
+  const { bucketName, region } = getDecryptedDestinationConfig(destination) as IS3Config;
   return {
     region: region || AWS_REGION,
     outputLocation: bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined,
@@ -337,7 +336,7 @@ const loadSchemaFieldNames = async (config: IBackupConfig, objectApiName: string
   const [crm, destination] = await Promise.all([getCrmById(config.crmId), getDestinationById(config.destinationId)]);
   if (!crm || !destination) return null;
 
-  const schema = await readSchemaFile(getDecryptedDestinationConfig(destination) as S3Config, {
+  const schema = await readSchemaFile(getDecryptedDestinationConfig(destination) as IS3Config, {
     crmId: crm.crmId,
     crmName: crm.crmName,
     backupConfigId: config.backupConfigId,
