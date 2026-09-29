@@ -11,6 +11,7 @@ import {
   pollBulkJobUntilDone,
   getFailedResults,
   getSuccessfulResults,
+  BulkJobState,
 } from './bulk';
 
 interface RunSalesforceRestorePayload {
@@ -130,7 +131,7 @@ const submitIngestChunk = async (
   s3Config: IDestinationConfig,
   successfulResultsPath: string,
   type: 'RESTORE' | 'ROLLBACK'
-): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
+): Promise<{ processed: number; failed: number; jobId: string; errors: string[]; status: BulkJobState }> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({
     instanceUrl,
@@ -172,6 +173,7 @@ const submitIngestChunk = async (
   return {
     jobId: job.id,
     processed,
+    status: status.state,
     failed,
     errors,
   };
@@ -246,12 +248,13 @@ const restoreObjectData = async (
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
     // chunk rather than once at the very end of the object.
+    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed;
     await updateRestoreObject({
       restoreJobId,
       objectName,
       processedRecordCount: job.processed,
       failedRecordCount: job.failed,
-      status: job.failed
+      status: jobFailed
         ? (type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreFailed : JOB_OBJECT_STATUS.rollbackFailed)
         : (type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted),
       errors: job.errors.length ? job.errors : undefined,
