@@ -13,7 +13,7 @@ import { updateRestore, getRestoreById } from '../restore';
 import { httpRequest } from '../../utils/http-request';
 import { timer } from '../../utils/helper';
 import { SalesforceTokens } from '../third-party/salesforce';
-import { ensureRestoreTrackingFields, IRestoreTrackingField } from '../third-party/salesforce/restore-fields';
+import { ensureRestoreTrackingFields, RESTORE_TRACKING_FIELDS, IRestoreTrackingField } from '../third-party/salesforce/restore-fields';
 import { provisionRestorePermissionSet } from '../third-party/salesforce/restore-permission-set';
 import { runBackupNow, getBackupJobById, isBackupCompleted, triggerBackupJob } from '../backup-job';
 import { runMetadataComparisonForConfig, hasMetadataChanged, IMetadataComparisonResult } from '../metadata-sync';
@@ -521,9 +521,9 @@ const failObjects = async (restoreJobId: string, objectNames: string[], status: 
 interface ArchivalFieldJobOutcome {
   updates: UpdateRestoreObjectParams[];
   succeededNames: string[];
-  // object API name -> tracking fields ensureRestoreTrackingFields found
-  // missing (and created) for it — see provisionRestorePermissionSet's own
-  // doc for why this can't be re-derived later via a fresh describe.
+  // object API name -> tracking fields to grant field-level permission for —
+  // the full RESTORE_TRACKING_FIELDS list for every object field creation
+  // resolved for (see provisionRestorePermissionSet's own doc for why).
   newFieldsByObject: Map<string, IRestoreTrackingField[]>;
 }
 
@@ -547,9 +547,15 @@ const processArchivalFieldJobTree = async (
       }
 
       try {
-        const created = await ensureRestoreTrackingFields(instanceUrl, tokens, node.name);
+        await ensureRestoreTrackingFields(instanceUrl, tokens, node.name);
         outcome.succeededNames.push(node.name);
-        outcome.newFieldsByObject.set(node.name, created);
+        // Full RESTORE_TRACKING_FIELDS list, not just whichever subset was
+        // newly created this run — ensureRestoreTrackingFields never resolves
+        // unless all 3 exist on the object afterward (pre-existing or just
+        // created), so field-level permission must be (re-)granted for all 3
+        // every time, or a repeat restore silently stops granting FLS on a
+        // field that already existed. See field-creation.ts's identical fix.
+        outcome.newFieldsByObject.set(node.name, RESTORE_TRACKING_FIELDS);
         await processArchivalFieldJobTree(node.children ?? [], instanceUrl, tokens, null, outcome);
       } catch (error: any) {
         const message = error?.message ?? String(error);
@@ -619,9 +625,11 @@ const runRestoreFieldJob = async (
   };
 
   let fieldsCreatedObjectNames: string[];
-  // object API name -> tracking fields actually created for it this run —
-  // threaded into provisionRestorePermissionSet below so the permission set
-  // only ever grants field access to a field this restore just created.
+  // object API name -> tracking fields to grant field-level permission for —
+  // threaded into provisionRestorePermissionSet below. The full
+  // RESTORE_TRACKING_FIELDS list for every object field creation resolved
+  // for, whether the fields were pre-existing or newly created this run —
+  // see the ARCHIVAL branch's comment for why "resolved" is what matters.
   let newFieldsByObject: Map<string, IRestoreTrackingField[]>;
 
   if (configType === 'ARCHIVAL') {
@@ -646,7 +654,9 @@ const runRestoreFieldJob = async (
       const objectName = restorejob.destination.objects[index].name;
       if (result.status === 'fulfilled') {
         succeededNames.push(objectName);
-        newFieldsByObject.set(objectName, result.value);
+        // Full RESTORE_TRACKING_FIELDS list, not just whichever subset was
+        // newly created this run — see the ARCHIVAL branch above for why.
+        newFieldsByObject.set(objectName, RESTORE_TRACKING_FIELDS);
         return;
       }
       const error: any = result.reason;

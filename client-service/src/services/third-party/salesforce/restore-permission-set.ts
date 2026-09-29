@@ -222,12 +222,14 @@ const assignPermissionSetToUser = async (
 // Parent objects Salesforce requires as dependencies (Account for Contract,
 // etc.) are added automatically, with only the permissions it demands.
 //
-// newFieldsByObject names, per object, exactly which tracking fields
-// salesforceFieldCreation found missing (and created) this run — the caller
-// (salesforceFieldsPermission) passes through ensureRestoreTrackingFields's
-// own return value. An object salesforceFieldCreation never reached (or
-// failed for) simply has no entry, so it gets object permissions only, never
-// a field-permission grant for a field that might not exist.
+// newFieldsByObject names, per object, the tracking fields to grant field-
+// level permission for — the full RESTORE_TRACKING_FIELDS list for every
+// object salesforceFieldCreation successfully resolved (whether the fields
+// were pre-existing or newly created this run; ensureRestoreTrackingFields
+// guarantees all 3 exist either way). An object salesforceFieldCreation
+// never reached (or failed for) simply has no entry, so it gets object
+// permissions only, never a field-permission grant for a field that might
+// not exist.
 export const provisionRestorePermissionSet = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
