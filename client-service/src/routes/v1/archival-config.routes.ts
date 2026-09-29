@@ -4,7 +4,6 @@ import { createArchivalConfigValidation, dryRunArchivalValidation, validateSoqlA
 
 const router = Router();
 
-router.post('/object-records', archivalConfigController.getObjectRecordsHanlder);
 // router.get('/get-picklist-field-values', archivalConfigController.getPicklistFieldValuesHandler);
 
 router.get('/list', archivalConfigController.listArchivalConfigsHandler);
@@ -16,6 +15,5 @@ router.get('/run-now', archivalConfigController.runNowArchivalConfigHandler);
 router.post('/dry-run', dryRunArchivalValidation, archivalConfigController.dryRunArchivalHandler);
 router.post('/validate-soql', validateSoqlArchivalValidation, archivalConfigController.validateSoqlArchivalHandler);
 router.post('/', createArchivalConfigValidation, archivalConfigController.createArchivalConfigHandler);
-router.get('/record-errors', archivalConfigController.getRecordErrorsHandler);
 
 export const archivalRouter = router;

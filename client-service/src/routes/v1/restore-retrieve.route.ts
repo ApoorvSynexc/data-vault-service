@@ -5,9 +5,7 @@ import { createRestoreValidation, uploadSingleCsv, bulkCsvUploadRateLimit } from
 /**
  * Restore & Retrieve routes — all require authentication (applied at the parent router level).
  *
- * GET  /list                            — paginated list of restore/retrieve jobs (by config or user)
  * GET  /get-objectlist-by-configid      — object list selected on a single backup config
- * GET  /fetch-change-between-backup-jobs — backupJobIds of a config that started inside a time window
  * POST /retrieve/fetch-records          — records for one object out of the compressed Hudi/Delta
  *                                         tables: ENTIRE, or CHANGED_BETWEEN a date window, each row
  *                                         tagged with the OPERATION a restore would perform
@@ -32,7 +30,6 @@ import { createRestoreValidation, uploadSingleCsv, bulkCsvUploadRateLimit } from
  *                                         converting it to an Athena WHERE clause and running it
  *                                         (LIMIT 1) against that object's compressed Hudi table —
  *                                         { matched: boolean }
- * GET  /                                — single restore/retrieve job (by backupJobId)
  * GET  /download-csv                    — for a completed restore job, returns presigned S3 URLs
  *                                         (one per part) so the client downloads the exported
  *                                         CSV(s) for one object directly from S3
@@ -51,17 +48,11 @@ router.post(
   uploadSingleCsv('file'),
   restoreRetrieveJobController.parseBulkCsvIdsHandler
 );
-router.post('/activate', restoreRetrieveJobController.activateRestoreHandler);
 router.get('/config/list', restoreRetrieveJobController.listRestoresHandler);
 router.get('/job', restoreRetrieveJobController.getRestoreJobHandler);
 router.put('/job/rollback', restoreRetrieveJobController.createRollbackHandler);
 router.get('/job/stats', restoreRetrieveJobController.getRestoreJobStatsHandler);
-router.get('/list', restoreRetrieveJobController.listRestoreRetrieveJobsHandler);
 router.get('/get-objectlist-by-configid', restoreRetrieveJobController.getObjectListByConfigIdHandler);
-router.get(
-  '/fetch-change-between-backup-jobs',
-  restoreRetrieveJobController.fetchChangeBetweenBackupJobsHandler
-);
 router.post('/retrieve/fetch-records', restoreRetrieveJobController.fetchRecordsHandler);
 router.post('/retrieve/fetch-missing-fields', restoreRetrieveJobController.fetchMissingFieldsHandler);
 router.post('/retrieve/fetch-missing-record-types', restoreRetrieveJobController.fetchMissingRecordTypesHandler);
@@ -71,7 +62,6 @@ router.get('/fetch-object-fields', restoreRetrieveJobController.fetchObjectField
 router.post('/dry-run', restoreRetrieveJobController.dryRunHandler);
 router.post('/dry-run-diff', restoreRetrieveJobController.dryRunDiffHandler);
 router.get('/get-picklist-field-values', restoreRetrieveJobController.getPicklistFieldValuesHandler);
-router.get('/restore', restoreRetrieveJobController.getRestoreRetrieveJobHandler);
 router.get('/download-csv', restoreRetrieveJobController.downloadCsvFile);
 
 export const restoreRetrieveRouter = router;

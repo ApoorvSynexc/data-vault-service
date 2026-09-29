@@ -1,17 +1,9 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
-  getRestoreRetrieveJobById,
-  getRestoreRetrieveJobsByConfig,
-  getRestoreRetrieveJobsByUser,
-  getBackupJobIdsChangedBetween,
-  CHANGED_BETWEEN_JOBS_LIMIT,
-  CHANGED_BETWEEN_JOBS_MAX_LIMIT,
   retrieveRecords,
   fetchObjectFields,
-  getTableCounter,
   ConfigType,
   createRestore,
-  updateRestore,
   getRestoreById,
   IRetrieveRecordsParams,
   RetrieveType,
@@ -20,7 +12,6 @@ import {
   OPERATION_FIELD,
   fetchPicklistValues,
   createRestoreJob,
-  tiggerRestoreJob,
   getRestoresWithPagination,
   getRestoreJobsByRestoreId,
   computeRestoreJobStats,
@@ -50,63 +41,17 @@ import {
   checkSalesforceApiLimitUsage,
   getCrmById,
 } from '../../../services';
-import { BACKUP_JOB_TABLE, STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
+import { STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
-import { IBackupJob, IRestoreScope, IRestoreFilters, IS3Config } from '../../../models';
+import { IRestoreScope, IRestoreFilters, IS3Config } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { parseCsvRow } from '../../../utils/restore-csv-format';
 import { createRollbackService, runRestoreFieldSetupAndTransform } from '../../../services/third-party/salesforce/restore';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
-
-// Strips encrypted fields before sending a job to the client.
-// source and destination contain ciphertext — exposing them would leak encrypted credentials.
-const sanitize = ({ source, destination, ...rest }: IBackupJob) => ({
-  ...rest,
-  destination: { type: destination.type },
-});
-
-/**
- * GET /list?backupConfigId=&limit=&cursor=&status=
- * Lists restore/retrieve jobs with cursor-based pagination.
- * When backupConfigId is provided, scopes results to that config.
- * When omitted, returns all jobs across all configs for the authenticated user.
- */
-const listRestoreRetrieveJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, limit, cursor, status } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
-  const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
-
-  if (backupConfigId) {
-    const [{ items, nextCursor }, counter] = await Promise.all([
-      getRestoreRetrieveJobsByConfig(backupConfigId, { limit: limitNum, cursor, status }),
-      getTableCounter(BACKUP_JOB_TABLE, backupConfigId),
-    ]);
-
-    makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
-      limit: limitNum,
-      nextCursor,
-      totalRecords: counter?.count ?? 0,
-      totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
-    });
-    return;
-  }
-
-  const [{ items, nextCursor }, counter] = await Promise.all([
-    getRestoreRetrieveJobsByUser(userId, { limit: limitNum, cursor, status }),
-    getTableCounter(BACKUP_JOB_TABLE, userId),
-  ]);
-
-  makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
-    limit: limitNum,
-    nextCursor,
-    totalRecords: counter?.count ?? 0,
-    totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
-  });
-};
 
 /**
  * GET /get-picklist-field-values?backupConfigId=&objectApiName=&fieldApiName=
@@ -139,30 +84,6 @@ const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Pro
   }
 
   makeResponse(req, res, 200, true, 'fetch', fields);
-};
-
-/**
- * GET /?backupJobId=
- * Returns a single restore/retrieve job, sanitized to remove encrypted fields.
- * isOwner returns false for null jobs, so a missing job and a foreign job both return not_exist
- * — intentionally avoids leaking whether a given ID exists.
- */
-const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupJobId } = req.query;
-
-  if (!backupJobId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const job = await getRestoreRetrieveJobById(String(backupJobId));
-
-  if (!isOwner(job, req.user!.userId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', sanitize(job!));
 };
 
 /**
@@ -201,82 +122,6 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   }
 
   makeResponse(req, res, 200, true, 'fetch', config);
-};
-
-/**
- * GET /fetch-change-between-backup-jobs?backupConfigId=&startTime=&endTime=&limit=&cursor=
- *
- * Backup job ids for the config whose run started inside the window, newest
- * first — the job list to hand to /retrieve/fetch-records as
- * source.backupJobIds under a CHANGED_BETWEEN request.
- *
- * The window applies to when a job STARTED (startedAt), not when it was
- * created: a job created earlier but resumed inside the window recorded its
- * changes inside the window.
- *
- * Paginated with the same limit/cursor contract as the other list endpoints. A
- * page can come back shorter than `limit` and still carry a nextCursor — the
- * window filter is applied after the index read — so follow nextCursor rather
- * than a short page to decide when the list ends.
- *
- * Returns not_exist when the config doesn't exist or isn't owned by the caller
- * — same collapsing as the handlers above, which avoids confirming that another
- * user's config id exists.
- */
-const fetchChangeBetweenBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, startTime, endTime, limit, cursor } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
-  const limitNum = Math.min(
-    Math.max(1, parseInt(limit ?? String(CHANGED_BETWEEN_JOBS_LIMIT), 10) || CHANGED_BETWEEN_JOBS_LIMIT),
-    CHANGED_BETWEEN_JOBS_MAX_LIMIT
-  );
-
-  if (!backupConfigId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  if (!startTime || !endTime) {
-    makeResponse(req, res, 400, false, 'params_required');
-    return;
-  }
-
-  // Stored timestamps are ISO UTC and DynamoDB range-compares them as plain
-  // strings, so the window is canonicalised before it can be compared. `endTime`
-  // is resolved as an upper bound, which makes a date-only window inclusive of
-  // its final day — the same reading /fetch-records gives source.endDate, so a
-  // window picked here means the same thing when its job ids are passed on.
-  const from = toIsoDateString(startTime, 'start');
-  const to = toIsoDateString(endTime, 'end');
-
-  if (!from || !to) {
-    makeResponse(req, res, 400, false, 'invalid_time_format');
-    return;
-  }
-
-  if (from > to) {
-    makeResponse(req, res, 400, false, 'invalid_time_range');
-    return;
-  }
-
-  const result = await getBackupJobIdsChangedBetween({
-    backupConfigId,
-    startTime: from,
-    endTime: to,
-    userId,
-    limit: limitNum,
-    ...(cursor ? { cursor } : {}),
-  });
-
-  if (!result) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', result.backupJobIds, {
-    limit: limitNum,
-    ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
-  });
 };
 
 // De-duplicated, trimmed, non-empty strings. Returns null when the input is not
@@ -1301,38 +1146,6 @@ const createRollbackHandler = async (req: IRequest, res: IResponse): Promise<voi
   await createRollbackService(restoreJob);
 };
 
-const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { restoreId } = req.body as Record<string, string>;
-  const userId = req.user!.userId;
-
-  if (!restoreId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const restore = await getRestoreById(restoreId);
-  if (!isOwner(restore, userId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  if (restore!.status !== VISIBILITY_STATUS.draft) {
-    makeResponse(req, res, 400, false, 'restore_not_draft');
-    return;
-  }
-
-  await updateRestore({ restoreId, status: STATUS.pending });
-  const restoreJob = await createRestoreJob({ ...restore!, status: STATUS.pending });
-
-  makeResponse(req, res, 200, true, 'update');
-
-  tiggerRestoreJob(restoreJob).catch((error) => {
-    logger.error(
-      `[restore] restore workflow failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
-    );
-  });
-};
-
 const listRestoresHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { limit, cursor } = req.query as Record<string, string>;
   const userId = req.user!.userId;
@@ -1446,10 +1259,7 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
 }
 
 export const restoreRetrieveJobController = wrapController({
-  listRestoreRetrieveJobsHandler,
-  getRestoreRetrieveJobHandler,
   getObjectListByConfigIdHandler,
-  fetchChangeBetweenBackupJobsHandler,
   fetchRecordsHandler,
   fetchMissingFieldsHandler,
   fetchMissingRecordTypesHandler,
@@ -1458,7 +1268,6 @@ export const restoreRetrieveJobController = wrapController({
   dryRunHandler,
   dryRunDiffHandler,
   validateQueryHandler,
-  activateRestoreHandler,
   getPicklistFieldValuesHandler,
   listRestoresHandler,
   getRestoreJobHandler,
