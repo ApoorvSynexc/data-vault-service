@@ -613,12 +613,10 @@ const searchArchivalRecords = async (
   // Id is always fetched, even when the caller's `fields` doesn't ask for it —
   // the merge sort and nextCursor below need it on every row.
   // applyFieldSelection trims it back out afterwards if it wasn't requested.
-console.log(configs,'selectClause')
   const perConfigResults = await Promise.all(
     configs.map(async (config) => {
       const prepStartedAt = Date.now();
       const { databaseName, hudiTable } = hudiTableFor(config, params.objectApiName);
-      console.log(databaseName,'uuu hudi table ', hudiTable)
       const { region, outputLocation } = await buildArchivalOutputLocation(config);
       if (!(await tableExists(databaseName, hudiTable, region))) return { rows: [], missingFilterField: false };
 
@@ -640,7 +638,6 @@ console.log(configs,'selectClause')
       // a second COUNT query.
       const offsetClause = offset > 0 ? ` OFFSET ${offset}` : '';
       const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id"${offsetClause} LIMIT ${limit + 1}`;
-      console.log(sql,'sql')
       const athenaStartedAt = Date.now();
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
       // prepMs = Dynamo/Glue/S3 work before the query; athenaMs = submit + poll + fetch.
