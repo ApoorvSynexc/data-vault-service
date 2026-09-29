@@ -44,7 +44,7 @@ const resolveOrgAndConfigs = async (
 
 /**
  * POST /archival-preview/salesforce/preview
- * Body: { orgId, objName, fields?, startDate?, endDate?, filters?, limit?, page? }
+ * Body: { orgId (or organizationId), objName, fields?, startDate?, endDate?, filters?, limit?, page? }
  *
  * Only orgId + objName are required — everything else is optional.
  * Searches every archival config covering objName in this org and merges the
@@ -61,7 +61,9 @@ const resolveOrgAndConfigs = async (
  * { "LastModifiedDate": { "from": "2026-07-03T11:00:00Z", "to": "2026-07-03" } }.
  */
 const searchArchivalRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { orgId, objName, fields, startDate, endDate, filters, dateFilters, limit, page } = (req.body ?? {}) as Record<string, unknown>;
+  const { objName, fields, startDate, endDate, dateFilters, limit, page, ...body } = (req.body ?? {}) as Record<string, unknown>;
+  const orgId = body.orgId ?? body.organizationId;
+  const filters = body.filters ?? body.filter;
 console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, fields=${JSON.stringify(fields)}, startDate=${startDate}, endDate=${endDate}, filters=${JSON.stringify(filters)}, limit=${limit}, page=${page}`);
   const resolved = await resolveOrgAndConfigs(req, res, orgId, objName);
   console.log('resolve', resolved);
@@ -167,7 +169,8 @@ const createSharedLoadCache = <T>(ttlMs: number, maxEntries: number) => {
 const recordDetailCache = createSharedLoadCache<Record<string, unknown> | null>(60_000, 500);
 
 const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { orgId, objName, fields, ...rest } = (req.body ?? {}) as Record<string, unknown>;
+  const { objName, fields, ...rest } = (req.body ?? {}) as Record<string, unknown>;
+  const orgId = rest.orgId ?? rest.organizationId;
   const recordId = rest.recordId ?? rest.Id ?? rest.id;
   if (typeof recordId !== 'string' || !recordId) {
     return makeResponse(req, res, 400, false, 'params_required');
@@ -182,7 +185,7 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
   }
 
   // Optional extra conditions the record must also satisfy (same shape as the search API).
-  const criteriaCheck = compileArchivalCriteria(rest.filters, rest.dateFilters);
+  const criteriaCheck = compileArchivalCriteria(rest.filters ?? rest.filter, rest.dateFilters);
   if (!criteriaCheck.ok) {
     return makeResponse(req, res, 400, false, criteriaCheck.error as Parameters<typeof makeResponse>[4]);
   }
