@@ -56,6 +56,33 @@ const treeHasObject = (nodes: any[] | undefined, targetName: string): boolean =>
   return false;
 };
 
+// A Salesforce org Id has two spellings — 15 chars (case-sensitive) and 18
+// chars (the same 15 plus a 3-char case checksum) — and callers send either,
+// while the crm row stores one. The 18-char suffix is derived from the 15: each
+// 5-char chunk becomes a 5-bit number (bit i set when char i is uppercase),
+// mapped onto A-Z0-5. The exact spelling is tried first.
+const CHECKSUM_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+
+const toEighteenCharId = (fifteen: string): string => {
+  let suffix = '';
+  for (let chunk = 0; chunk < 3; chunk++) {
+    let bits = 0;
+    for (let i = 0; i < 5; i++) {
+      const char = fifteen[chunk * 5 + i];
+      if (char >= 'A' && char <= 'Z') bits |= 1 << i;
+    }
+    suffix += CHECKSUM_ALPHABET[bits];
+  }
+  return fifteen + suffix;
+};
+
+const salesforceIdSpellings = (orgId: string): string[] => {
+  const id = orgId.trim();
+  if (/^[A-Za-z0-9]{15}$/.test(id)) return [...new Set([orgId, id, toEighteenCharId(id)])];
+  if (/^[A-Za-z0-9]{18}$/.test(id)) return [...new Set([orgId, id, id.slice(0, 15)])];
+  return [orgId];
+};
+
 /**
  * Every ARCHIVAL config in this org that covers objName, plus the resolved
  * crm. Null when the org itself doesn't exist — a distinct case from "org
@@ -67,7 +94,11 @@ const resolveArchivalConfigsForObject = async (
   orgId: string,
   objName: string
 ): Promise<{ crm: ICrm; configs: IBackupConfig[] } | null> => {
-  const crm = await getCrmByOrgId(orgId);
+  let crm: ICrm | null = null;
+  for (const candidate of salesforceIdSpellings(orgId)) {
+    crm = await getCrmByOrgId(candidate);
+    if (crm) break;
+  }
   if (!crm) return null;
 
   const result = await docClient.send(
