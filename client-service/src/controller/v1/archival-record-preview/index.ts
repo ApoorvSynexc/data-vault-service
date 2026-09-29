@@ -45,7 +45,7 @@ const resolveOrgAndConfigs = async (
 
 /**
  * POST /archival-preview/salesforce/preview
- * Body: { orgId (or organizationId), objName, fields?, startDate?, endDate?, filters?, limit?, page? }
+ * Body: { orgId (or organizationId), objName, fields?, startDate?, endDate?, filters?, limit?, page?, cursor? }
  *
  * Only orgId + objName are required — everything else is optional.
  * Searches every archival config covering objName in this org and merges the
@@ -58,12 +58,14 @@ const resolveOrgAndConfigs = async (
  * the top-level conditions and the OR group's are all ORed — e.g.
  * { "OwnerId": "005…", "OR": { "Id": "001…", "Name": "sfd" } } means
  * OwnerId = '005…' OR Id = '001…' OR Name = 'sfd'. `page` is 1-based,
- * defaults to 1.
+ * defaults to 1. Prefer `cursor` (the previous response's `nextCursor`, the
+ * last Id of that page): it fetches the next rows directly instead of
+ * skipping earlier ones, so later pages are as fast as the first.
  * `dateFilters` ranges any datetime column, time included:
  * { "LastModifiedDate": { "from": "2026-07-03T11:00:00Z", "to": "2026-07-03" } }.
  */
 const searchArchivalRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { objName, fields, startDate, endDate, dateFilters, limit, page, ...body } = (req.body ?? {}) as Record<string, unknown>;
+  const { objName, fields, startDate, endDate, dateFilters, limit, page, cursor, ...body } = (req.body ?? {}) as Record<string, unknown>;
   const orgId = body.orgId ?? body.organizationId;
   const filters = body.filters ?? body.filter;
 console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, fields=${JSON.stringify(fields)}, startDate=${startDate}, endDate=${endDate}, filters=${JSON.stringify(filters)}, limit=${limit}, page=${page}`);
@@ -96,14 +98,15 @@ console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, 
     dateFilters: dateFilters as IArchivalDateFilters | undefined,
     limit: limit as number | undefined,
     page: page as number | undefined,
+    cursor: cursor as string | undefined,
   });
 console.log('searched', searched);
   if (!searched.ok) {
     return makeResponse(req, res, 400, false, searched.error as Parameters<typeof makeResponse>[4]);
   }
 
-  const { records, hasMore, page: currentPage } = searched.result;
-  makeResponse(req, res, 200, true, 'fetch', records, { hasMore, page: currentPage });
+  const { records, hasMore, page: currentPage, nextCursor } = searched.result;
+  makeResponse(req, res, 200, true, 'fetch', records, { hasMore, page: currentPage, nextCursor });
 };
 
 // Depth-first search over a config's object tree (root objects + nested
