@@ -6,7 +6,10 @@ import {
   applyFieldSelection,
   validateFields,
   getArchivedRecordById,
+  compileArchivalCriteria,
+  type IArchivalCriteria,
   type IArchivalFilters,
+  type IArchivalDateFilters,
 } from '../../../services/archival-record-preview';
 import { toIsoDateString, IsoDateString } from '../../../utils/iso-date';
 import { wrapArchivalPreviewController } from '../../../middlewares/archival-record-preview';
@@ -50,10 +53,15 @@ const resolveOrgAndConfigs = async (
  * column is returned. `filters` is a plain object, one key per field, ANDed
  * together — e.g. { "Status": "Active", "Email_ne": "x@y.com" } means
  * Status = 'Active' AND Email <> 'x@y.com' (a "_ne" suffix on the key means
- * NOT_EQUALS; a plain key means EQUALS). `page` is 1-based, defaults to 1.
+ * NOT_EQUALS; a plain key means EQUALS). A nested "OR" object ORs its own
+ * conditions and ANDs that group with the rest — e.g. { "OR": { "Id": "001…",
+ * "Name": "sfd" } } means Id = '001…' OR Name = 'sfd'. `page` is 1-based,
+ * defaults to 1.
+ * `dateFilters` ranges any datetime column, time included:
+ * { "LastModifiedDate": { "from": "2026-07-03T11:00:00Z", "to": "2026-07-03" } }.
  */
 const searchArchivalRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { orgId, objName, fields, startDate, endDate, filters, limit, page } = (req.body ?? {}) as Record<string, unknown>;
+  const { orgId, objName, fields, startDate, endDate, filters, dateFilters, limit, page } = (req.body ?? {}) as Record<string, unknown>;
 console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, fields=${JSON.stringify(fields)}, startDate=${startDate}, endDate=${endDate}, filters=${JSON.stringify(filters)}, limit=${limit}, page=${page}`);
   const resolved = await resolveOrgAndConfigs(req, res, orgId, objName);
   console.log('resolve', resolved);
@@ -81,6 +89,7 @@ console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, 
     startDate: start,
     endDate: end,
     filters: filters as IArchivalFilters | undefined,
+    dateFilters: dateFilters as IArchivalDateFilters | undefined,
     limit: limit as number | undefined,
     page: page as number | undefined,
   });
@@ -172,15 +181,21 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
     return makeResponse(req, res, 400, false, 'invalid_fields' as Parameters<typeof makeResponse>[4]);
   }
 
+  // Optional extra conditions the record must also satisfy (same shape as the search API).
+  const criteriaCheck = compileArchivalCriteria(rest.filters, rest.dateFilters);
+  if (!criteriaCheck.ok) {
+    return makeResponse(req, res, 400, false, criteriaCheck.error as Parameters<typeof makeResponse>[4]);
+  }
+
   // Same record asked again (client/gateway retry, double click) shares the
   // running Athena work or a just-finished result instead of re-querying —
   // every uncached lookup is billed and queues behind other queries.
   // includeRelated lists the child objects (no records, no extra queries); callers that
   // only need the record itself can opt out with includeRelated:false.
   const includeRelated = rest.includeRelated !== false;
-  const cacheKey = JSON.stringify([orgId, resolved.objName, recordId, fieldsCheck.fields, includeRelated]);
+  const cacheKey = JSON.stringify([orgId, resolved.objName, recordId, fieldsCheck.fields, includeRelated, criteriaCheck.criteria]);
   const payload = await recordDetailCache.get(cacheKey, () =>
-    loadRecordDetail(resolved.configs, resolved.objName, recordId, fieldsCheck.fields, includeRelated)
+    loadRecordDetail(resolved.configs, resolved.objName, recordId, fieldsCheck.fields, includeRelated, criteriaCheck.criteria)
   );
 
   if (!payload) return makeResponse(req, res, 400, false, 'not_exist');
@@ -195,10 +210,11 @@ const loadRecordDetail = async (
   objName: string,
   recordId: string,
   fields: string[] | null,
-  includeRelated = true
+  includeRelated = true,
+  criteria?: IArchivalCriteria
 ): Promise<Record<string, unknown> | null> => {
   for (const config of configs) {
-    const record = await getArchivedRecordById(config, objName, recordId);
+    const record = await getArchivedRecordById(config, objName, recordId, null, [], criteria);
     if (!record) continue;
 
     const children = includeRelated ? findObjectNode(config.objects, objName)?.children ?? [] : [];
