@@ -50,17 +50,17 @@ assert.deepStrictEqual(processObjectOperations([jobA, jobB]), {
 // "now actively running" value, it stays PENDING for its entire in-flight duration.
 assert.strictEqual(isCompressible(job('j', STATUS.success)), true);
 assert.strictEqual(isCompressible(job('j', STATUS.partialFailure)), true);
-assert.strictEqual(isCompressible(job('j', JOB_OBJECT_STATUS.compressionFailed)), true);
-assert.strictEqual(isCompressible(job('j', JOB_OBJECT_STATUS.compressed)), false);
-assert.strictEqual(isCompressible(job('j', JOB_OBJECT_STATUS.compressionInProgress)), false);
+assert.strictEqual(isCompressible(job('j', STATUS.compressionFailed)), true);
+assert.strictEqual(isCompressible(job('j', STATUS.compressed)), false);
+assert.strictEqual(isCompressible(job('j', STATUS.compressionInProgress)), false);
 assert.strictEqual(isCompressible(job('j', STATUS.pending)), false);
 assert.strictEqual(isCompressible(job('j', STATUS.failed)), false);
 
 // ─── 3. Compression statuses still count as a completed backup ────────────────
 assert.strictEqual(isBackupCompleted(STATUS.success), true);
-assert.strictEqual(isBackupCompleted(JOB_OBJECT_STATUS.compressionInProgress), true);
-assert.strictEqual(isBackupCompleted(JOB_OBJECT_STATUS.compressed), true);
-assert.strictEqual(isBackupCompleted(JOB_OBJECT_STATUS.compressionFailed), true);
+assert.strictEqual(isBackupCompleted(STATUS.compressionInProgress), true);
+assert.strictEqual(isBackupCompleted(STATUS.compressed), true);
+assert.strictEqual(isBackupCompleted(STATUS.compressionFailed), true);
 assert.strictEqual(isBackupCompleted(STATUS.pending), false);
 assert.strictEqual(isBackupCompleted(STATUS.failed), false);
 

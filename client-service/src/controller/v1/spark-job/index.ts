@@ -90,7 +90,7 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
   const jobIds = Object.keys(built.details.objectOperations);
   const { failed } = await setCompressionStatusBulk({
     backupConfigId,
-    jobs: jobIds.map((backupJobId) => ({ backupJobId, status: JOB_OBJECT_STATUS.compressionInProgress })),
+    jobs: jobIds.map((backupJobId) => ({ backupJobId, status: STATUS.compressionInProgress })),
   });
 
   if (failed.length) {
@@ -98,7 +98,7 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
     return makeResponse(req, res, 400, false, 'compression_status_update_failed');
   }
 
-  logger.info(`[COMPRESSION] build-payload complete | configId=${backupConfigId} jobs=${jobIds.length} status=${JOB_OBJECT_STATUS.compressionInProgress}`);
+  logger.info(`[COMPRESSION] build-payload complete | configId=${backupConfigId} jobs=${jobIds.length} status=${STATUS.compressionInProgress}`);
 
   return sendSparkPayload(res, built);
 };
@@ -173,7 +173,7 @@ const applyCompressionStatus = async (
     return makeResponse(req, res, 400, false, 'backup_config_not_found');
   }
 
-  const status = success ? JOB_OBJECT_STATUS.compressed : JOB_OBJECT_STATUS.compressionFailed;
+  const status = success ? STATUS.compressed : STATUS.compressionFailed;
   logger.info(`[COMPRESSION] applying ${status} to ${backupJobIds.length} job(s) | configId=${backupConfigId}`);
 
   const { updated, failed } = await setCompressionStatusBulk({
