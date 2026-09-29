@@ -194,8 +194,11 @@ const buildConditions = (
     // CAST to varchar: the column's Athena type isn't guaranteed (a boolean/number
     // column compared to a quoted literal fails the whole query). "_ne" also keeps
     // NULL rows — SQL's `NULL <> 'x'` is NULL, which would silently drop them.
-    const column = `CAST("${field}" AS varchar)`;
-    const exact = `${column} = ${escapeSqlValue(value)}`;
+    // Text matching is case-insensitive: both sides are lower-cased, so
+    // "sunny kumar" finds "Sunny Kumar".
+    const column = `LOWER(CAST("${field}" AS varchar))`;
+    const lowered = `LOWER(${escapeSqlValue(value)})`;
+    const exact = `${column} = ${lowered}`;
 
     // A date-only value ("2026-07-03") on a datetime column can never equal a
     // stored "2026-07-03 11:52:47.000" as text, so it means that whole (UTC)
@@ -214,7 +217,7 @@ const buildConditions = (
       sql: isNotEqual
         ? dayStart
           ? `("${field}" IS NULL OR NOT COALESCE(${equals}, false))`
-          : `("${field}" IS NULL OR ${column} <> ${escapeSqlValue(value)})`
+          : `("${field}" IS NULL OR ${column} <> ${lowered})`
         : equals,
       negated: isNotEqual,
     });
@@ -610,12 +613,10 @@ const searchArchivalRecords = async (
   // Id is always fetched, even when the caller's `fields` doesn't ask for it —
   // the merge sort and nextCursor below need it on every row.
   // applyFieldSelection trims it back out afterwards if it wasn't requested.
-console.log(configs,'selectClause')
   const perConfigResults = await Promise.all(
     configs.map(async (config) => {
       const prepStartedAt = Date.now();
       const { databaseName, hudiTable } = hudiTableFor(config, params.objectApiName);
-      console.log(databaseName,'uuu hudi table ', hudiTable)
       const { region, outputLocation } = await buildArchivalOutputLocation(config);
       if (!(await tableExists(databaseName, hudiTable, region))) return { rows: [], missingFilterField: false };
 
@@ -637,7 +638,6 @@ console.log(configs,'selectClause')
       // a second COUNT query.
       const offsetClause = offset > 0 ? ` OFFSET ${offset}` : '';
       const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id"${offsetClause} LIMIT ${limit + 1}`;
-      console.log(sql,'sql')
       const athenaStartedAt = Date.now();
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
       // prepMs = Dynamo/Glue/S3 work before the query; athenaMs = submit + poll + fetch.
