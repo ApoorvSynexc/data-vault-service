@@ -1369,6 +1369,10 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
     getRestoreById(restoreId),
   ]);
 
+  if (!isOwner(restore, req.user!.userId)) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
   const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
 
   const restoreJob = restoreJobs[0];
