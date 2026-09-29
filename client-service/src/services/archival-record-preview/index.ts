@@ -535,8 +535,13 @@ export interface IArchivalSearchParams {
   filters?: IArchivalFilters;
   dateFilters?: IArchivalDateFilters;
   limit?: number;
-  // 1-based. Page 1 (or omitted) is the first page.
+  // 1-based. Page 1 (or omitted) is the first page. Uses OFFSET, so deep pages
+  // get slower — prefer `cursor`.
   page?: number;
+  // `nextCursor` from the previous response (the last Id of that page). Reads
+  // the rows after it directly (`"Id" > cursor`), so every page costs the same.
+  // Takes precedence over `page`.
+  cursor?: string;
 }
 
 export type ArchivalSearchError =
@@ -546,24 +551,32 @@ export type ArchivalSearchError =
   | 'unknown_filter_field'
   | 'invalid_fields'
   | 'invalid_limit'
-  | 'invalid_page';
+  | 'invalid_page'
+  | 'invalid_cursor';
 
 export interface IArchivalSearchResult {
   records: Record<string, string>[];
   hasMore: boolean;
   page: number;
+  // Last Id of this page; present only when hasMore.
+  nextCursor?: string;
 }
 
 /**
  * Queries every config's Hudi table for objectApiName, merges the rows, and
- * returns one page. Each config is queried with the same LIMIT+OFFSET (one
- * per config, not a single global offset split across them) — exact for the
- * common case of one archival config per object; when more than one config
- * covers the same object, a page can occasionally include more or fewer rows
- * than `limit` right at a page boundary. Acceptable for a preview/search
- * feature; the Restore flow's own paginated reconstruction (retrieveRecords
- * in restore-retrieve/index.ts) is the place exact cross-source pagination
- * already lives, and this deliberately doesn't reimplement it.
+ * returns one page, ordered by Id.
+ *
+ * With a `cursor` (the previous page's last Id) every config is asked for
+ * `"Id" > cursor ORDER BY "Id" LIMIT limit+1`: Athena keeps just a top-N, skips
+ * nothing, and the merged page is exact even across several configs (the
+ * smallest `limit` Ids overall are always within each config's own smallest).
+ *
+ * The legacy `page` path uses LIMIT+OFFSET per config (not a single global
+ * offset split across them) — exact for one archival config per object; with
+ * several, a page can occasionally hold more or fewer rows than `limit` at a
+ * page boundary, and deep pages cost more since Athena must sort and discard
+ * every earlier row. The Restore flow's paginated reconstruction (retrieveRecords
+ * in restore-retrieve/index.ts) is where exact cross-source pagination lives.
  */
 const searchArchivalRecords = async (
   configs: IBackupConfig[],
@@ -587,15 +600,20 @@ const searchArchivalRecords = async (
     return { ok: false, error: 'invalid_page' };
   }
   const page = rawPage ?? 1;
-  const offset = (page - 1) * limit;
 
-  // CreatedDate is always fetched, even when the caller's `fields` doesn't
-  // ask for it — the merge-across-configs sort below depends on it being
-  // present on every row. applyFieldSelection trims it back out afterwards
-  // if the caller didn't actually request it.
+  const cursor = params.cursor;
+  if (cursor !== undefined && (typeof cursor !== 'string' || !RECORD_ID_RE.test(cursor))) {
+    return { ok: false, error: 'invalid_cursor' };
+  }
+  const offset = cursor ? 0 : (page - 1) * limit;
+
+  // Id is always fetched, even when the caller's `fields` doesn't ask for it —
+  // the merge sort and nextCursor below need it on every row.
+  // applyFieldSelection trims it back out afterwards if it wasn't requested.
 console.log(configs,'selectClause')
   const perConfigResults = await Promise.all(
     configs.map(async (config) => {
+      const prepStartedAt = Date.now();
       const { databaseName, hudiTable } = hudiTableFor(config, params.objectApiName);
       console.log(databaseName,'uuu hudi table ', hudiTable)
       const { region, outputLocation } = await buildArchivalOutputLocation(config);
@@ -603,11 +621,12 @@ console.log(configs,'selectClause')
 
       const [table, selectClause] = await Promise.all([
         buildTableConditions(criteria, hudiTable, databaseName, region),
-        buildSelectClause(config, params.objectApiName, region, fieldsCheck.fields),
+        buildSelectClause(config, params.objectApiName, region, fieldsCheck.fields, ['Id']),
       ]);
       if (table.missing) return { rows: [], missingFilterField: true };
 
       const conditions: string[] = [];
+      if (cursor) conditions.push(`"Id" > ${escapeSqlValue(cursor)}`);
       const createdInstant = datetimeInstant('CreatedDate');
       if (params.startDate) conditions.push(`${createdInstant} >= from_iso8601_timestamp('${params.startDate}')`);
       if (params.endDate) conditions.push(`${createdInstant} <= from_iso8601_timestamp('${params.endDate}')`);
@@ -616,9 +635,17 @@ console.log(configs,'selectClause')
 
       // Fetch one extra row past `limit` so hasMore can be determined without
       // a second COUNT query.
-      const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id" OFFSET ${offset} LIMIT ${limit + 1}`;
+      const offsetClause = offset > 0 ? ` OFFSET ${offset}` : '';
+      const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id"${offsetClause} LIMIT ${limit + 1}`;
       console.log(sql,'sql')
+      const athenaStartedAt = Date.now();
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
+      // prepMs = Dynamo/Glue/S3 work before the query; athenaMs = submit + poll + fetch.
+      // Compare with the "[athena] query stats" line (queue/planning/engine ms) to see where time goes.
+      logger.info(
+        `[archival-search] timing | table:${hudiTable} prepMs:${athenaStartedAt - prepStartedAt} ` +
+        `athenaMs:${Date.now() - athenaStartedAt} rows:${result.rows.length}`
+      );
       return { rows: result.rows, missingFilterField: false };
     })
   );
@@ -630,14 +657,18 @@ console.log(configs,'selectClause')
   }
 
   // TEMP-GLUE-WORKAROUND: was sorted by CreatedDate desc. Revert after Glue table fix.
-  const merged = perConfigResults.flatMap((r) => r.rows);
+  // Sorted by Id (each config's rows already are) so the page is the smallest
+  // Ids overall. Salesforce Ids are ASCII, so this matches Athena's ordering.
+  const merged = perConfigResults.flatMap((r) => r.rows).sort((a, b) => (a.Id < b.Id ? -1 : a.Id > b.Id ? 1 : 0));
 
   const hasMore = merged.length > limit;
-  const records = merged.slice(0, limit).map((row) => applyFieldSelection(row, fieldsCheck.fields));
+  const pageRows = merged.slice(0, limit);
+  const nextCursor = hasMore ? pageRows[pageRows.length - 1]?.Id : undefined;
+  const records = pageRows.map((row) => applyFieldSelection(row, fieldsCheck.fields));
 
   return {
     ok: true,
-    result: { records, hasMore, page },
+    result: { records, hasMore, page, ...(nextCursor && { nextCursor }) },
   };
 };
 

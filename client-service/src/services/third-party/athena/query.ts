@@ -26,18 +26,19 @@ const getAthenaClient = (region: string): AthenaClient => {
 };
 
 // Adaptive polling: wait POLL_FIRST_MS before the first status check, then
-// poll on a 250ms→2s backoff ladder. These compressed Hudi/delta tables are
+// poll on a 250ms→500ms backoff ladder. The cap stays low because a check that
+// lands up to POLL_MAX_MS after the query finished is dead time added to every
+// request (at a 2s cap, a 5s query was only noticed at ~6s). These compressed Hudi/delta tables are
 // small and partition-pruned, so queries routinely finish under 1s — a 2s
 // first-wait was pure dead time on the common case. 400ms still avoids
 // hammering GetQueryExecution; slower queries just climb the backoff ladder.
 const POLL_FIRST_MS = 400;
 const POLL_INITIAL_MS = 250;
-const POLL_MAX_MS = 2000;
+const POLL_MAX_MS = 500;
 
 // Maximum total time to wait for a query to finish before giving up (ms).
 // Bulk-restore scans (delta chain over hundreds of jobs) can legitimately run
-// past a minute; polling backs off to 2s so the extra headroom costs nothing
-// when queries are fast.
+// past a minute; the extra headroom costs nothing when queries are fast.
 const QUERY_TIMEOUT_MS = 300_000;
 
 const TERMINAL_STATES = new Set<QueryExecutionState>([
