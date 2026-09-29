@@ -3,13 +3,16 @@ import { salesforceRequest, SalesforceTokens, SalesforceAuthExpiredError } from 
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
 import { listMetadataSoap, readMetadataSoap } from './metadata-listing';
 import { logger } from '../../../middlewares';
+import { SALESFORCE_ECA_API_NAME } from '../../../constant';
 
 // Packaged API/developer name of the ECA shipped with the managed package
 // (force-app/internal/360DV/externalClientApps/Data_Vault_Connected_App.eca-meta.xml).
 // Every target org is a Subscriber org with the package installed under
 // SALESFORCE_NAMESPACE, so this always comes back namespace-prefixed (e.g.
-// SYX_DVV__Data_Vault_Connected_App) — see resolveEcaDeveloperName().
-export const ECA_API_NAME = 'Data_Vault_Connected_App';
+// SYX_DVV__Data_Vault_Connected_App) — see resolveEcaDeveloperName(). Sourced
+// from SALESFORCE_ECA_API_NAME (env-overridable, defaults to today's value) —
+// only override it in lockstep with a matching managed-package release.
+export const ECA_API_NAME = SALESFORCE_ECA_API_NAME;
 // Display-only now — no longer used to look up the ECA (see resolveEcaDeveloperName).
 export const ECA_APP_LABEL = '360 Data Vault';
 

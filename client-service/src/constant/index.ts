@@ -100,6 +100,12 @@ const SALESFORCE_NAMESPACE = String(process.env.SALESFORCE_NAMESPACE || '').trim
 // Metadata API version for all metadata deploy/describe calls (permission sets,
 // triggers, external client apps, etc.) — see services/third-party/salesforce/metadata-api.ts.
 const SALESFORCE_METADATA_API_VERSION = String(process.env.SALESFORCE_METADATA_API_VERSION || '66.0').trim();
+// Packaged API/developer name of the ECA (External Client App) shipped with
+// the managed package (force-app/internal/360DV/externalClientApps/*.eca-meta.xml)
+// — see services/third-party/salesforce/eca-permission-set.ts's ECA_API_NAME.
+// Changing this without a matching change in the managed package breaks ECA
+// discovery in every already-installed subscriber org.
+const SALESFORCE_ECA_API_NAME = String(process.env.SALESFORCE_ECA_API_NAME || 'Data_Vault_Connected_App').trim();
 // Apex classes shipped with the managed package that must have Apex Class access
 // granted on the real-time trigger permission set — see trigger.ts's setupPermissionSet.
 // Comma-separated so ops can extend it without a code change.
@@ -448,6 +454,7 @@ export {
   SALESFORCE_LOGIN_REDIRECT_URI,
   SALESFORCE_NAMESPACE,
   SALESFORCE_METADATA_API_VERSION,
+  SALESFORCE_ECA_API_NAME,
   SALESFORCE_PERMISSION_SET_APEX_CLASSES,
   SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL,
   SALESFORCE_HANDLER_CLASS_NAME,
