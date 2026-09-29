@@ -2,10 +2,7 @@ import bcrypt from 'bcrypt';
 import { SESSION_STATUS, VISIBILITY_STATUS, USER_TABLE } from '../../../constant';
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
-  getTableCounter,
   getSession,
-  getUsers,
-  getUsersWithPagination,
   updateSession,
   updateUser,
   getRole,
@@ -79,56 +76,11 @@ const deleteProfileHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'delete');
 };
 
-const usersHandler = async (req: IRequest, res: IResponse) => {
-  const { pagination, limit, search } = req.query as Record<string, string>;
-
-  const searchFilter: Record<string, any> = {};
-  if (search) {
-    searchFilter.search = search;
-  }
-
-  if (pagination === 'true') {
-    const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
-    const { cursor } = req.query as Record<string, string>;
-
-    const [{ documents, nextCursor }, counter] = await Promise.all([
-      getUsersWithPagination(searchFilter, {}, { limit: limitNum, cursor }),
-      getTableCounter(USER_TABLE, 'GLOBAL'),
-    ]);
-
-    return makeResponse(
-      req,
-      res,
-      200,
-      true,
-      'fetch',
-      documents.map((u) => ({ ...u, password: undefined })),
-      {
-        limit: limitNum,
-        nextCursor,
-        totalRecords: counter?.count ?? 0,
-        totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
-      }
-    );
-  }
-
-  const documents = await getUsers(searchFilter);
-  makeResponse(
-    req,
-    res,
-    200,
-    true,
-    'fetch',
-    documents.map((u) => ({ ...u, password: undefined }))
-  );
-};
-
 export const userController = wrapController({
   myProfileHandler,
   logoutHandler,
   changePasswordHandler,
   updateProfileHandler,
   deleteProfileHandler,
-  usersHandler,
   permissionHandler
 });

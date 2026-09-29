@@ -185,14 +185,25 @@ const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { userId } = req.query;
   if (!userId) {
     makeResponse(req, res, 400, false, 'id_required');
     return;
   }
 
-  await updateUser({ userId: String(userId) }, { isCrmConnected: false });
+  if (!user?.contactEmail) {
+    makeResponse(req, res, 400, false, 'unauthorized');
+    return;
+  }
 
+  const disconnectUserExist = await getUser({ userId: String(userId) });
+  if (!disconnectUserExist?.contactEmail || disconnectUserExist.contactEmail !== user.contactEmail) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
+  await updateUser({ userId: String(userId) }, { isCrmConnected: false });
   makeResponse(req, res, 200, true, 'update');
 };
 
