@@ -1,0 +1,53 @@
+<p style="margin:0 0 8px;">Hi <%= recipientName %>,</p>
+<p style="margin:0 0 20px;">Your archival job for <strong style="color:#0f172a;"><%= backupConfigName %></strong> on the <strong style="color:#0f172a;"><%= crmName %></strong> org has failed.</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Job ID</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= backupJobId %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Type</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= configTypeLabel %></td>
+  </tr>
+  <% if (datasetLabel) { %>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Dataset</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= datasetLabel %></td>
+  </tr>
+  <% } %>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Trigger</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= triggerLabel %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Started</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= startedAt %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Objects</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= totalObjectCount %></td>
+  </tr>
+  <% if (typeof totalRecordCount === 'number') { %>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;<% if (failedObjects && failedObjects.length) { %>border-bottom:1px solid #e2e8f0;<% } %>">Records archived</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;<% if (failedObjects && failedObjects.length) { %>border-bottom:1px solid #e2e8f0;<% } %>"><%= totalRecordCount.toLocaleString() %></td>
+  </tr>
+  <% } %>
+  <% if (failedObjects && failedObjects.length) { %>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;vertical-align:top;">Affected objects</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;"><%= failedObjects.join(', ') %></td>
+  </tr>
+  <% } %>
+</table>
+
+<% if (errorMessage) { %>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;">
+  <tr>
+    <td style="padding:13px 16px;font-size:13px;line-height:1.5;color:#b91c1c;background-color:#fef2f2;border:1px solid #fecaca;border-radius:8px;"><%= errorMessage %></td>
+  </tr>
+</table>
+<% } %>
+
+<p style="margin:20px 0 0;">Records that were already archived successfully are unaffected. You can retry the failed objects from your dashboard, or reach out if this keeps happening.</p>

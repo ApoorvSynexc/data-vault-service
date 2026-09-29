@@ -1,5 +1,5 @@
 import { EMAIL_APP_URL } from '../../../constant';
-import { IEmailTemplate, renderEmail } from './render';
+import { IEmailTemplate, renderEmail, formatEmailDate } from './render';
 
 // Fires when a restore job completes successfully — see the restore
 // success/failure branch in services/common/runner.ts.
@@ -9,6 +9,8 @@ export interface IRestoreCompleteEmailParams {
   restoreConfigName?: string;
   backupConfigName: string;
   restoreJobId: string;
+  createdAt: string;
+  totalObjectCount: number;
   totalRecordCount?: number;
 }
 
@@ -19,6 +21,8 @@ export const buildRestoreCompleteEmail = (params: IRestoreCompleteEmailParams): 
     restoreConfigName,
     backupConfigName,
     restoreJobId,
+    createdAt,
+    totalObjectCount,
     totalRecordCount,
   } = params;
   const label = restoreConfigName ?? backupConfigName;
@@ -32,12 +36,15 @@ export const buildRestoreCompleteEmail = (params: IRestoreCompleteEmailParams): 
         label,
         backupConfigName,
         restoreJobId,
+        startedAt: formatEmailDate(createdAt),
+        totalObjectCount,
         totalRecordCount,
       },
       preheader: `Restore complete for ${label}`,
       heading: 'Restore complete',
       ctaLabel: 'View restore details',
       ctaUrl: `${EMAIL_APP_URL}/restores/${restoreConfigId}/jobs/${restoreJobId}`,
+      accent: 'success',
     }),
   };
 };

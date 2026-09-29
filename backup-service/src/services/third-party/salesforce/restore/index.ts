@@ -1,5 +1,5 @@
 import { logger } from '../../../../middlewares/logger';
-import { STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
+import { STATUS, JOB_OBJECT_STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3, uploadToS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
@@ -11,6 +11,7 @@ import {
   pollBulkJobUntilDone,
   getFailedResults,
   getSuccessfulResults,
+  BulkJobState,
 } from './bulk';
 
 interface RunSalesforceRestorePayload {
@@ -130,7 +131,7 @@ const submitIngestChunk = async (
   s3Config: IDestinationConfig,
   successfulResultsPath: string,
   type: 'RESTORE' | 'ROLLBACK'
-): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
+): Promise<{ processed: number; failed: number; jobId: string; errors: string[]; status: BulkJobState }> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({
     instanceUrl,
@@ -150,7 +151,7 @@ const submitIngestChunk = async (
   const failed = status.numberRecordsFailed ?? 0;
 
   let errors: string[] = [];
-  if (failed > 0 || status.state === 'Failed') {
+  if (failed > 0 || status.state === 'Failed' || status.state === 'Aborted') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
     errors = parseFirstNErrors(failedCsv, MAX_STORED_ERRORS_COUNT);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
@@ -172,6 +173,7 @@ const submitIngestChunk = async (
   return {
     jobId: job.id,
     processed,
+    status: status.state,
     failed,
     errors,
   };
@@ -205,10 +207,7 @@ const restoreObjectData = async (
       objectName,
       processedRecordCount: 0,
       failedRecordCount: 0,
-      // Cast needed: updateRestoreObject's status param is still the narrow
-      // 'FAILED' | 'SUCCESS' literal union (left as-is, out of scope) while
-      // STATUS's members are typed as plain string.
-      status: STATUS.success as 'SUCCESS',
+      status: type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted,
     });
 
     console.log(`[Restore] No backed-up data found for object ${objectName} under ${csvFilePath}`);
@@ -249,14 +248,15 @@ const restoreObjectData = async (
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
     // chunk rather than once at the very end of the object.
+    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed;
     await updateRestoreObject({
       restoreJobId,
       objectName,
       processedRecordCount: job.processed,
       failedRecordCount: job.failed,
-      // Same cast as above — updateRestoreObject's status param type is
-      // intentionally left as its own narrow literal union.
-      status: job.failed ? (STATUS.failed as 'FAILED') : (STATUS.success as 'SUCCESS'),
+      status: jobFailed
+        ? (type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreFailed : JOB_OBJECT_STATUS.rollbackFailed)
+        : (type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted),
       errors: job.errors.length ? job.errors : undefined,
     });
     logger.info(
