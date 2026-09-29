@@ -659,11 +659,13 @@ console.log(configs,'selectClause')
   // TEMP-GLUE-WORKAROUND: was sorted by CreatedDate desc. Revert after Glue table fix.
   // Sorted by Id (each config's rows already are) so the page is the smallest
   // Ids overall. Salesforce Ids are ASCII, so this matches Athena's ordering.
-  const merged = perConfigResults.flatMap((r) => r.rows).sort((a, b) => (a.Id < b.Id ? -1 : a.Id > b.Id ? 1 : 0));
+  // Athena returns column names as Glue spells them (lower-case), hence getField.
+  const idOf = (row: Record<string, string>): string => getField(row, 'Id') ?? '';
+  const merged = perConfigResults.flatMap((r) => r.rows).sort((a, b) => (idOf(a) < idOf(b) ? -1 : idOf(a) > idOf(b) ? 1 : 0));
 
   const hasMore = merged.length > limit;
   const pageRows = merged.slice(0, limit);
-  const nextCursor = hasMore ? pageRows[pageRows.length - 1]?.Id : undefined;
+  const nextCursor = hasMore ? idOf(pageRows[pageRows.length - 1]) : undefined;
   const records = pageRows.map((row) => applyFieldSelection(row, fieldsCheck.fields));
 
   return {
