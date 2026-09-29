@@ -206,7 +206,7 @@ const escapeSOQLString = (str: string): string => {
 };
 
 // Escapes a value for safe interpolation into template-literal HTML — used
-// by the email templates (services/common/email-templates) for any dynamic
+// by the email templates (services/common/email) for any dynamic
 // string they render (object/config names, error messages) that can
 // originate from user input, guarding against HTML/script injection.
 const escapeHtml = (value: string): string =>

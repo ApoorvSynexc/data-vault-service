@@ -15,8 +15,11 @@ import {
   SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL,
   SALESFORCE_HANDLER_CLASS_NAME,
   SALESFORCE_HANDLER_METHOD_NAME,
+  EMAIL_TEMPLATE,
 } from '../../../constant';
 import { logger } from '../../../middlewares';
+import { notifyUserOutcome } from '../../../utils/notification';
+import { RealtimeTriggerAction } from '../../common/email';
 
 const HANDLER_CLASS_NAME = SALESFORCE_HANDLER_CLASS_NAME;
 
@@ -1305,6 +1308,60 @@ const deleteTriggers = async (
 // ---------------------------------------------------------------------------
 type TriggerOperation = 'create' | 'activate' | 'inactivate' | 'delete';
 
+const FAILED_TRIGGER_STATUSES = new Set(['FAILED', 'DELETE_FAILED', 'INACTIVATE_FAILED']);
+const ACTION_LABEL_BY_OPERATION: Record<TriggerOperation, RealtimeTriggerAction> = {
+  create: 'setup',
+  activate: 'activation',
+  inactivate: 'deactivation',
+  delete: 'removal',
+};
+
+const notifyTriggerFailures = async (
+  operation: TriggerOperation,
+  config: IBackupConfig,
+  crmName: string,
+  results: ITriggerResult[]
+): Promise<void> => {
+  const failed = results.filter(
+    (result) => FAILED_TRIGGER_STATUSES.has(result.status) || result.permissionSetStatus === 'FAILED'
+  );
+  if (!failed.length) {
+    return;
+  }
+
+  const actionLabel = ACTION_LABEL_BY_OPERATION[operation];
+  const configLabel = config.name ?? config.backupConfigId;
+
+  await Promise.allSettled(
+    failed.map((result) => {
+      const errorMessage = result.error ?? result.permissionSetError ?? 'Unknown error';
+      return notifyUserOutcome({
+        eventId: `${config.backupConfigId}:${result.objectApiName}`,
+        notification: {
+          userId: config.userId,
+          crmId: config.crmId,
+          title: `Real-time trigger ${actionLabel} failed for ${result.objectApiName}`,
+          body: `We couldn't complete the ${actionLabel} of the real-time trigger for "${result.objectApiName}" on backup configuration "${configLabel}". ${errorMessage}`.trim(),
+          targetScreen: 'backup-config',
+          targetId: config.backupConfigId,
+        },
+        email: {
+          template: EMAIL_TEMPLATE.realtimeTriggerFailure,
+          params: {
+            crmName,
+            backupConfigId: config.backupConfigId,
+            backupConfigName: configLabel,
+            objectApiName: result.objectApiName,
+            errorMessage,
+            actionLabel,
+            needsRecoveryRecordId: result.needsRecoveryRecordId,
+          },
+        },
+      });
+    })
+  );
+};
+
 const realTimeTriggerManagement = async (
   operation: TriggerOperation,
   config: IBackupConfig
@@ -1333,20 +1390,29 @@ const realTimeTriggerManagement = async (
 
     const objectApiNames = config.objectNames;
 
+    let results: ITriggerResult[];
     if (operation === 'create') {
-      return createTriggers(instanceUrl, tokens, objectApiNames);
+      results = await createTriggers(instanceUrl, tokens, objectApiNames);
+    } else if (operation === 'activate') {
+      results = await toggleTriggerStatus(instanceUrl, tokens, config, 'Active');
+    } else if (operation === 'inactivate') {
+      results = await toggleTriggerStatus(instanceUrl, tokens, config, 'Inactive');
+    } else if (operation === 'delete') {
+      results = await deleteTriggers(instanceUrl, tokens, config);
+    } else {
+      throw new Error(`invalid_operation:${operation}`);
     }
-    if (operation === 'activate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Active'); }
-    if (operation === 'inactivate') { return toggleTriggerStatus(instanceUrl, tokens, config, 'Inactive'); }
-    if (operation === 'delete') { return deleteTriggers(instanceUrl, tokens, config); }
-    throw new Error(`invalid_operation:${operation}`);
+
+    notifyTriggerFailures(operation, config, crm.crmName, results).catch(logger.error);
+    return results;
   } catch (error) {
     logger.error(`Error during trigger ${operation}: ${error}`);
-    return [{
+    const results: ITriggerResult[] = [{
       objectApiName: 'N/A',
       status: 'FAILED',
       error: error instanceof Error ? error.message : String(error),
     }];
+    return results;
   }
 };
 

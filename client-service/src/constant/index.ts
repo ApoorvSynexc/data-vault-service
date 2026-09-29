@@ -4,16 +4,16 @@ const NODE_ENV_URL = String(process.env.NODE_ENV_URL);
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
-// Email branding/contact info — shared across services/common/email-templates.
+// Email branding/contact info — shared across services/common/email.
 // No real values existed anywhere in the service before this; update the
 // defaults (or set the env vars) with real values before these templates go
 // out to real users.
 const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || 'DataVault');
 const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@datavault.io');
 const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'no-reply@datavault.io');
-// Base URL for CTA links (e.g. "View backup configuration") — the
-// user-facing dashboard, not this API's own host.
 const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.datavault.io');
+const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
+const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
@@ -224,6 +224,17 @@ const FILTER_OPERATOR = {
   excludes: 'EXCLUDES',
 };
 
+// Every transactional email template services/common/email can render/send —
+// sendEmail(to, { template: EMAIL_TEMPLATE.x, params }) switches on this to
+// pick the right builder + params type. `as const` (unlike every other enum
+// in this file) is required here: send.ts's SendEmailPayload discriminated
+// union needs each member to be its own literal type, not the plain `string`
+// every other member of this object would otherwise widen to, or TypeScript
+// can't narrow `params` per-template and the switch loses type safety.
+const EMAIL_TEMPLATE = {
+  realtimeTriggerFailure: 'REALTIME_TRIGGER_FAILURE',
+} as const;
+
 // Config lifecycle/visibility — backup-config, archival-config (same table),
 // restore's initial draft state, plus user/crm/destination/settings (unrelated
 // entities that happen to share this same shape). Mirrors backup-service's own
@@ -381,6 +392,8 @@ export {
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
   EMAIL_APP_URL,
+  EMAIL_SMTP_USER,
+  EMAIL_SMTP_APP_PASSWORD,
 
   // AWS / DynamoDB Config
   AWS_REGION,
@@ -465,6 +478,7 @@ export {
   PAYMENT_SECRET_KEY,
 
   // Enums
+  EMAIL_TEMPLATE,
   VISIBILITY_STATUS,
   NOTIFICATION_STATUS,
   AUTH_PROVIDER,
