@@ -194,8 +194,11 @@ const buildConditions = (
     // CAST to varchar: the column's Athena type isn't guaranteed (a boolean/number
     // column compared to a quoted literal fails the whole query). "_ne" also keeps
     // NULL rows — SQL's `NULL <> 'x'` is NULL, which would silently drop them.
-    const column = `CAST("${field}" AS varchar)`;
-    const exact = `${column} = ${escapeSqlValue(value)}`;
+    // Text matching is case-insensitive: both sides are lower-cased, so
+    // "sunny kumar" finds "Sunny Kumar".
+    const column = `LOWER(CAST("${field}" AS varchar))`;
+    const lowered = `LOWER(${escapeSqlValue(value)})`;
+    const exact = `${column} = ${lowered}`;
 
     // A date-only value ("2026-07-03") on a datetime column can never equal a
     // stored "2026-07-03 11:52:47.000" as text, so it means that whole (UTC)
@@ -214,7 +217,7 @@ const buildConditions = (
       sql: isNotEqual
         ? dayStart
           ? `("${field}" IS NULL OR NOT COALESCE(${equals}, false))`
-          : `("${field}" IS NULL OR ${column} <> ${escapeSqlValue(value)})`
+          : `("${field}" IS NULL OR ${column} <> ${lowered})`
         : equals,
       negated: isNotEqual,
     });
