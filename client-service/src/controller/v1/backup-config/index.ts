@@ -438,10 +438,44 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   }
 
   makeResponse(req, res, 201, true, 'create');
-  runMetadataComparisonForConfig(config);
-  initalizePayloadTransform(config.backupConfigId).catch((err) => {
-    logger.error('EMR job failed after response sent:', err?.message ?? err);
-  });
+
+  let hasComparisonError = false;
+  let user;
+  const changedObjectNames: string[] = [];
+  if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
+    const result = await runMetadataComparisonForConfig(config);
+    for (const { objectName, result: metadataResult } of result) {
+      if (!metadataResult) {
+        hasComparisonError = true;
+        continue;
+      }
+      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+        changedObjectNames.push(objectName);
+      }
+    }
+
+    if (hasComparisonError) {
+      logger.warn(
+        `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
+      );
+      return;
+    }
+
+    if (changedObjectNames.length) {
+      user = await getUser({ userId: config.userId });
+      if (!user) {
+        logger.warn(
+          `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+        );
+        return;
+      }
+      await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
+    }
+  } else {
+    initalizePayloadTransform(config.backupConfigId).catch((err) => {
+      logger.error('EMR job failed after response sent:', err?.message ?? err);
+    });
+  }
 };
 
 const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -462,15 +496,8 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
     return;
   }
 
-  const changedObjectNames: any = [];
-  const result = await runMetadataComparisonForConfig(config);
-  for (const { objectName, result: metadataResult } of result) {
-    if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-      changedObjectNames.push(objectName);
-    }
-  }
-  makeResponse(req, res, 201, true, 'create', result);
-  if(config.dataset === 'ENTIRE'){
+  makeResponse(req, res, 201, true, 'create');
+  if (config.dataset === 'ENTIRE') {
     await syncObjects({ backupConfig: config, user: backupCreatedUser });
   }
 };
