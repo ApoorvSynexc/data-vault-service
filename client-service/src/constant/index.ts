@@ -106,6 +106,18 @@ const SALESFORCE_METADATA_API_VERSION = String(process.env.SALESFORCE_METADATA_A
 // Changing this without a matching change in the managed package breaks ECA
 // discovery in every already-installed subscriber org.
 const SALESFORCE_ECA_API_NAME = String(process.env.SALESFORCE_ECA_API_NAME || 'Data_Vault_Connected_App').trim();
+// Standard objects Salesforce's "Create Audit Fields" feature actually supports
+// (plus every custom object, which Spark treats as always-on — see the Spark
+// restore job's own handling). Setting CreatedById/CreatedDate/LastModifiedById/
+// LastModifiedDate on insert for any OTHER standard object always fails with
+// INVALID_FIELD_FOR_INSERT_UPDATE, regardless of permissions — a platform
+// restriction, not a config gap. Comma-separated string, forwarded to EMR/Spark
+// as-is (see services/payload/index.ts's submitEMR) so Spark can decide
+// per-object whether to keep or strip those four columns before restore ingest.
+const SALESFORCE_AUDIT_ENABLE_OBJECTS = String(
+  process.env.SALESFORCE_AUDIT_ENABLE_OBJECTS ||
+  'Account,ArticleVersion,Attachment,CampaignMember,Case,CaseComment,Contact,ContentVersion,Contract,Event,Idea,IdeaComment,Lead,Opportunity,Question,Task,Vote'
+).trim();
 // Apex classes shipped with the managed package that must have Apex Class access
 // granted on the real-time trigger permission set — see trigger.ts's setupPermissionSet.
 // Comma-separated so ops can extend it without a code change.
@@ -459,6 +471,7 @@ export {
   SALESFORCE_NAMESPACE,
   SALESFORCE_METADATA_API_VERSION,
   SALESFORCE_ECA_API_NAME,
+  SALESFORCE_AUDIT_ENABLE_OBJECTS,
   SALESFORCE_PERMISSION_SET_APEX_CLASSES,
   SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL,
   SALESFORCE_HANDLER_CLASS_NAME,
