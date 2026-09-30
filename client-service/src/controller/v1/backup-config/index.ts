@@ -432,10 +432,6 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
     return;
   }
 
-  // Same dedup guard triggerBackupJob/triggerArchivalBackupJob already apply —
-  // without it, repeated triggers (retries, re-tests) stack concurrent EMR
-  // Serverless applications on top of each other, each demanding its own
-  // driver+executor vCPU allocation.
   if (await hasActiveBackupJob(config.backupConfigId)) {
     makeResponse(req, res, 400, false, 'job_already_invoked');
     return;

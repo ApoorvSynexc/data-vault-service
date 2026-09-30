@@ -117,11 +117,6 @@ const MONTH_INDEX: Record<string, number> = {
   JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11,
 };
 
-// MONTHLY's AWS trigger already fires every month on monthDate (cron()'s own
-// month field is `*` — unlike WEEKLY, there's no AWS-side limitation forcing a
-// coarser trigger), so this just mirrors isScheduledForToday's selectedMonths
-// filter to find the earliest matching month at/after `reference`, keeping the
-// existing no-selectedMonths behavior (every month) when none are configured.
 const nextMonthlyOccurrence = (
   day: number,
   startTime: string | undefined,
