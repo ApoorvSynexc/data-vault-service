@@ -690,7 +690,7 @@ export interface IFetchMissingFieldsParams {
 export interface IMissingField {
   apiName: string;
   label: string;
-  type: string;
+  dataType: string;
 }
 
 export interface IFetchMissingFieldsResult {
@@ -723,7 +723,7 @@ const latestStoredRecordTypes = (schema: unknown): ISalesforceRecordTypeInfo[] |
 const missingFieldFromChangeData = (changeData: any): IMissingField | null => {
   const apiName = changeData?.apiName ?? changeData?.name;
   if (!apiName) return null;
-  return { apiName, label: changeData.label, type: changeData.dataType ?? changeData.type };
+  return { apiName, label: changeData.label, dataType: changeData.dataType ?? changeData.type };
 };
 
 /**
@@ -808,7 +808,7 @@ const retrieveMissingFields = async (
     const { removedFields } = diffSchemas(storedFields, liveFields);
     for (const field of storedFields) {
       if (removedFields.includes(field.name) && !candidates.has(field.name)) {
-        candidates.set(field.name, { apiName: field.name, label: field.label, type: field.type });
+        candidates.set(field.name, { apiName: field.name, label: field.label, dataType: field.type });
       }
     }
   }
