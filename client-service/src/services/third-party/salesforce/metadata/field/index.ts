@@ -180,7 +180,9 @@ export const schemaHandler = async (
                 metadataType: 'fields',
             });
 
-            await uploadToS3(destConfig, s3Key, buffer);
+            if (params.isUpdateSchemaOnS3 !== false) {
+                await uploadToS3(destConfig, s3Key, buffer);
+            }
 
             // logger.info(
             //     `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedFields.length}, removed=${diff.removedFields.length}, modified=${diff.modifiedFields.length}`

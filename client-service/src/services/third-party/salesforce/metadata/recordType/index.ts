@@ -135,7 +135,9 @@ export const recordTypeHandler = async (
                 metadataType: 'recordTypes',
             });
 
-            await uploadToS3(destConfig, s3Key, buffer);
+            if (params.isUpdateSchemaOnS3 !== false) {
+                await uploadToS3(destConfig, s3Key, buffer);
+            }
         }
 
         // logger.info(

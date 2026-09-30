@@ -135,7 +135,7 @@ export const picklistHandler = async (
                 //     `Picklist values change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, fieldApiName=${result.fieldApiName}, added=${result.addedValues.length}, removed=${result.removedValues.length}, modified=${result.modifiedValues.length}`
                 // );
 
-                return uploadToS3(destConfig, s3Key, buffer);
+                return params.isUpdateSchemaOnS3 !== false ? uploadToS3(destConfig, s3Key, buffer) : Promise.resolve();
             })
         );
 

@@ -93,7 +93,8 @@ export const getMetadataChangeOperations = (
 // given (objectName, metadataType) pair came back as `undefined` instead of a
 // real diff.
 export const runMetadataComparisonForConfig = async (
-  config: IBackupConfig
+  config: IBackupConfig,
+  isUpdateSchemaOnS3: boolean = true
 ): Promise<IMetadataComparisonResult[]> => {
   const objects = config.objects ?? [];
   if (!objects.length) {
@@ -132,6 +133,7 @@ export const runMetadataComparisonForConfig = async (
             objectName: object.name,
             backupJobId,
             isInitialBackup: false,
+            isUpdateSchemaOnS3,
           },
           user
         ),

@@ -25,7 +25,7 @@ const runEmrJob = async () => {
             if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
               const changedObjectNames: string[] = [];
               let hasComparisonError = false;
-              const result = await runMetadataComparisonForConfig(config);
+              const result = await runMetadataComparisonForConfig(config, false);
               for (const { objectName, result: metadataResult } of result) {
                 if (!metadataResult) {
                   hasComparisonError = true;
