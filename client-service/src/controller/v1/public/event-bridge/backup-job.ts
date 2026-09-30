@@ -1,6 +1,7 @@
 import { VISIBILITY_STATUS } from "../../../../constant";
 import { logger } from "../../../../middlewares";
 import { checkSalesforceApiLimitUsage, getBackupConfigById, getUser, triggerBackupJob, updateBackupConfig } from "../../../../services";
+import { isScheduledForToday } from "../../../../utils/event-bridge";
 
 const backupJob = async (params: { backupConfigId: string, userId: string, id?: string }) => {
     try {
@@ -16,12 +17,18 @@ const backupJob = async (params: { backupConfigId: string, userId: string, id?: 
             return;
         }
 
+        const targetObject = objectId ? config.objects?.find((obj) => obj.id === objectId) : undefined;
+        const scheduleConfig = objectId ? targetObject?.scheduleConfig : config.scheduleConfig;
+        if (scheduleConfig && !isScheduledForToday(scheduleConfig)) {
+            logger.info(`[EVENT BRIDGE] Skipping — today is not a scheduled weekday | backupConfigId=${backupConfigId}${objectId ? ` objectId=${objectId}` : ''}`);
+            return;
+        }
+
         const user = await getUser({ userId });
         if (!user) {
             return
         }
 
-        const targetObject = objectId ? config.objects?.find((obj) => obj.id === objectId) : undefined;
         const shouldSkip = objectId ? targetObject?.upcomingJob?.skip : config.upcomingJob?.skip;
 
         if (shouldSkip) {

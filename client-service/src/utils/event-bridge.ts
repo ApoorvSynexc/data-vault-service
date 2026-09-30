@@ -23,7 +23,7 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   switch (s.frequency) {
     case 'HOURLY': return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
     case 'DAILY': return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
-    case 'WEEKLY': return `rate(${s.interval * 7} days)`;
+    case 'WEEKLY': return `rate(1 day)`;
     case 'MONTHLY': {
       const [hour, minute] = (s.startTime ?? '00:00').split(':');
       return `cron(${minute} ${hour} ${s.monthDate ?? 1} * ? *)`;
@@ -40,8 +40,9 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
       switch (s.customFrequency) {
         case 'DAILY':
           return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
+        // Same daily-trigger-plus-webhook-filter approach as native WEEKLY above.
         case 'WEEKLY':
-          return `rate(${s.interval * 7} days)`;
+          return `rate(1 day)`;
         case 'MONTHLY': {
           // Same limitation as native MONTHLY above: AWS cron() has no "every N
           // months" step syntax, so interval > 1 isn't honored here — it fires
@@ -90,6 +91,28 @@ const nextRateOccurrence = (
   return new Date(anchor.valueOf() + steps * stepMs);
 };
 
+const DAY_INDEX: Record<string, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+const nextWeeklyOccurrence = (
+  weekDays: string[],
+  startTime: string | undefined,
+  now: dayjs.Dayjs,
+  anchor: dayjs.Dayjs | null
+): Date => {
+  const [hour, minute] = (startTime ?? '00:00').split(':').map(Number);
+  const dayIndices = weekDays.map((d) => DAY_INDEX[d]).filter((d) => d !== undefined);
+  const reference = anchor && anchor.isAfter(now) ? anchor : now;
+
+  // At most 7 distinct days-of-week exist, so a matching candidate is always
+  // found within one week of `reference` — the +1 is just headroom, never hit.
+  for (let i = 0; i < 8; i++) {
+    const candidate = reference.add(i, 'day').hour(hour).minute(minute).second(0).millisecond(0);
+    if (dayIndices.includes(candidate.day()) && candidate.isAfter(now)) {
+      return candidate.toDate();
+    }
+  }
+  return reference.toDate();
+};
+
 const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = new Date()): Date => {
   const s = scheduleConfig.scheduling;
   const tz = scheduleConfig.timeZone || 'UTC';
@@ -111,7 +134,9 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
     case 'DAILY':
       return nextRateOccurrence(anchor, now, s.interval || 1, 'day');
     case 'WEEKLY':
-      return nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
+      return s.weekDays?.length
+        ? nextWeeklyOccurrence(s.weekDays, s.startTime, now, anchor)
+        : nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
     case 'MONTHLY': {
       const day = s.monthDate ?? 1;
       const [hour, minute] = (s.startTime ?? '00:00').split(':').map(Number);
@@ -134,7 +159,9 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
         case 'DAILY':
           return nextRateOccurrence(anchor, now, s.interval || 1, 'day');
         case 'WEEKLY':
-          return nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
+          return s.weekDays?.length
+            ? nextWeeklyOccurrence(s.weekDays, s.startTime, now, anchor)
+            : nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
         case 'MONTHLY': {
           const day = anchor?.date() ?? dayjs.tz(s.startDate, tz).date();
           const [hour, minute] = (s.startTime ?? '00:00').split(':').map(Number);
@@ -202,6 +229,20 @@ const buildEventScheduleInput = (config: IBackupConfig) =>
     userId: config.userId,
   });
 
+const isWeeklyFrequency = (s: IScheduleConfig['scheduling']): boolean =>
+  s?.frequency === DURATION_TYPE.weekly || (s?.frequency === 'CUSTOM' && s?.customFrequency === DURATION_TYPE.weekly);
+
+const isScheduledForToday = (scheduleConfig: IScheduleConfig, from: Date = new Date()): boolean => {
+  const s = scheduleConfig.scheduling;
+  if (!isWeeklyFrequency(s) || !s?.weekDays?.length) {
+    return true;
+  }
+
+  const tz = scheduleConfig.timeZone || 'UTC';
+  const today = dayjs.tz(from, tz).format('ddd').toUpperCase();
+  return s.weekDays.includes(today);
+};
+
 export {
   toAwsCronExpression,
   computeNextScheduledRun,
@@ -210,4 +251,5 @@ export {
   buildArchivalObjectScheduleName,
   buildScheduleInput,
   buildEventScheduleInput,
+  isScheduledForToday,
 };
