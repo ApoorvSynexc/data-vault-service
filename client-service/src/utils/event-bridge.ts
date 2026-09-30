@@ -23,7 +23,7 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
   switch (s.frequency) {
     case 'HOURLY': return `rate(${s.interval} hour${s.interval > 1 ? 's' : ''})`;
     case 'DAILY': return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
-    case 'WEEKLY': return `rate(${s.interval * 7} days)`;
+    case 'WEEKLY': return `rate(1 day)`;
     case 'MONTHLY': {
       const [hour, minute] = (s.startTime ?? '00:00').split(':');
       return `cron(${minute} ${hour} ${s.monthDate ?? 1} * ? *)`;
@@ -40,8 +40,9 @@ const toAwsCronExpression = (scheduleConfig: IScheduleConfig): string => {
       switch (s.customFrequency) {
         case 'DAILY':
           return `rate(${s.interval} day${s.interval > 1 ? 's' : ''})`;
+        // Same daily-trigger-plus-webhook-filter approach as native WEEKLY above.
         case 'WEEKLY':
-          return `rate(${s.interval * 7} days)`;
+          return `rate(1 day)`;
         case 'MONTHLY': {
           // Same limitation as native MONTHLY above: AWS cron() has no "every N
           // months" step syntax, so interval > 1 isn't honored here — it fires
@@ -90,6 +91,63 @@ const nextRateOccurrence = (
   return new Date(anchor.valueOf() + steps * stepMs);
 };
 
+const DAY_INDEX: Record<string, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+const nextWeeklyOccurrence = (
+  weekDays: string[],
+  startTime: string | undefined,
+  now: dayjs.Dayjs,
+  anchor: dayjs.Dayjs | null
+): Date => {
+  const [hour, minute] = (startTime ?? '00:00').split(':').map(Number);
+  const dayIndices = weekDays.map((d) => DAY_INDEX[d]).filter((d) => d !== undefined);
+  const reference = anchor && anchor.isAfter(now) ? anchor : now;
+
+  // At most 7 distinct days-of-week exist, so a matching candidate is always
+  // found within one week of `reference` — the +1 is just headroom, never hit.
+  for (let i = 0; i < 8; i++) {
+    const candidate = reference.add(i, 'day').hour(hour).minute(minute).second(0).millisecond(0);
+    if (dayIndices.includes(candidate.day()) && candidate.isAfter(now)) {
+      return candidate.toDate();
+    }
+  }
+  return reference.toDate();
+};
+
+const MONTH_INDEX: Record<string, number> = {
+  JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11,
+};
+
+const nextMonthlyOccurrence = (
+  day: number,
+  startTime: string | undefined,
+  selectedMonths: string[] | undefined,
+  now: dayjs.Dayjs,
+  anchor: dayjs.Dayjs | null
+): Date => {
+  const [hour, minute] = (startTime ?? '00:00').split(':').map(Number);
+  const reference = anchor && anchor.isAfter(now) ? anchor : now;
+
+  let next = reference.date(day).hour(hour).minute(minute).second(0).millisecond(0);
+  if (!next.isAfter(reference)) {
+    next = next.add(1, 'month');
+  }
+
+  const monthIndices = selectedMonths?.length ? selectedMonths.map((m) => MONTH_INDEX[m]).filter((m) => m !== undefined) : null;
+  if (!monthIndices) {
+    return next.toDate();
+  }
+
+  // At most 12 distinct months exist, so a matching one is always found within
+  // one year — the +1 is just headroom, never hit.
+  for (let i = 0; i < 13; i++) {
+    if (monthIndices.includes(next.month())) {
+      return next.toDate();
+    }
+    next = next.add(1, 'month');
+  }
+  return next.toDate();
+};
+
 const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = new Date()): Date => {
   const s = scheduleConfig.scheduling;
   const tz = scheduleConfig.timeZone || 'UTC';
@@ -111,18 +169,12 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
     case 'DAILY':
       return nextRateOccurrence(anchor, now, s.interval || 1, 'day');
     case 'WEEKLY':
-      return nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
+      return s.weekDays?.length
+        ? nextWeeklyOccurrence(s.weekDays, s.startTime, now, anchor)
+        : nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
     case 'MONTHLY': {
       const day = s.monthDate ?? 1;
-      const [hour, minute] = (s.startTime ?? '00:00').split(':').map(Number);
-      // Once AWS's StartDate gates the schedule, no occurrence can land before it —
-      // anchor the search there when it's still ahead of `now`.
-      const reference = anchor && anchor.isAfter(now) ? anchor : now;
-      let next = reference.date(day).hour(hour).minute(minute).second(0).millisecond(0);
-      if (!next.isAfter(reference)) {
-        next = next.add(1, 'month');
-      }
-      return next.toDate();
+      return nextMonthlyOccurrence(day, s.startTime, s.selectedMonths, now, anchor);
     }
     case 'CUSTOM': {
       if (!s.startDate) {
@@ -134,16 +186,12 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
         case 'DAILY':
           return nextRateOccurrence(anchor, now, s.interval || 1, 'day');
         case 'WEEKLY':
-          return nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
+          return s.weekDays?.length
+            ? nextWeeklyOccurrence(s.weekDays, s.startTime, now, anchor)
+            : nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
         case 'MONTHLY': {
           const day = anchor?.date() ?? dayjs.tz(s.startDate, tz).date();
-          const [hour, minute] = (s.startTime ?? '00:00').split(':').map(Number);
-          const reference = anchor && anchor.isAfter(now) ? anchor : now;
-          let next = reference.date(day).hour(hour).minute(minute).second(0).millisecond(0);
-          if (!next.isAfter(reference)) {
-            next = next.add(1, 'month');
-          }
-          return next.toDate();
+          return nextMonthlyOccurrence(day, s.startTime, s.selectedMonths, now, anchor);
         }
         default:
           throw new Error(`Unsupported customFrequency: ${s.customFrequency}`);
@@ -202,6 +250,37 @@ const buildEventScheduleInput = (config: IBackupConfig) =>
     userId: config.userId,
   });
 
+const isWeeklyFrequency = (s: IScheduleConfig['scheduling']): boolean =>
+  s?.frequency === DURATION_TYPE.weekly || (s?.frequency === 'CUSTOM' && s?.customFrequency === DURATION_TYPE.weekly);
+
+const isMonthlyFrequency = (s: IScheduleConfig['scheduling']): boolean =>
+  s?.frequency === DURATION_TYPE.monthly || (s?.frequency === 'CUSTOM' && s?.customFrequency === DURATION_TYPE.monthly);
+
+// Two independent gates, both fail-open when their selector is empty/not set —
+// a WEEKLY schedule with no weekDays or a MONTHLY one with no selectedMonths
+// runs on every trigger, same as before either field existed.
+const isScheduledForToday = (scheduleConfig: IScheduleConfig, from: Date = new Date()): boolean => {
+  const s = scheduleConfig.scheduling;
+  const tz = scheduleConfig.timeZone || 'UTC';
+  const now = dayjs.tz(from, tz);
+
+  if (isWeeklyFrequency(s) && s?.weekDays?.length) {
+    const today = now.format('ddd').toUpperCase();
+    if (!s.weekDays.includes(today)) {
+      return false;
+    }
+  }
+
+  if (isMonthlyFrequency(s) && s?.selectedMonths?.length) {
+    const thisMonth = now.format('MMM').toUpperCase();
+    if (!s.selectedMonths.includes(thisMonth)) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
 export {
   toAwsCronExpression,
   computeNextScheduledRun,
@@ -210,4 +289,5 @@ export {
   buildArchivalObjectScheduleName,
   buildScheduleInput,
   buildEventScheduleInput,
+  isScheduledForToday,
 };
