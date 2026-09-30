@@ -6,7 +6,6 @@ import {
 } from '@aws-sdk/client-s3';
 import { KMSClient, GetKeyPolicyCommand, PutKeyPolicyCommand } from '@aws-sdk/client-kms';
 import { AWS_ATHENA_ROLE_ARN } from '../../../constant';
-import { logger } from '../../../middlewares';
 import { IS3Config } from '../../../models';
 
 // SID stamped on our statement so we can detect and skip re-adding it.
@@ -119,7 +118,7 @@ const findAthenaStatement = (policy: BucketPolicy): any | undefined =>
 const isUpToDate = (statement: any | undefined): boolean =>
   Boolean(statement) && REQUIRED_ATHENA_ACTIONS.every((action) => statement.Action?.includes(action));
 
-const withRetries = async (label: string, fn: (attempt: number) => Promise<void>): Promise<void> => {
+const withRetries = async (fn: (attempt: number) => Promise<void>): Promise<void> => {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= POLICY_UPDATE_MAX_RETRIES; attempt++) {
@@ -128,7 +127,6 @@ const withRetries = async (label: string, fn: (attempt: number) => Promise<void>
       return;
     } catch (err: any) {
       lastError = err;
-      logger.warn(`[athena] ${label} attempt ${attempt}/${POLICY_UPDATE_MAX_RETRIES} failed | err:${err?.message ?? err}`);
 
       if (attempt < POLICY_UPDATE_MAX_RETRIES) {
         await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
@@ -188,11 +186,10 @@ export const grantAthenaRoleS3Access = async (creds: IS3Config): Promise<void> =
 
   const s3 = new S3Client({ region, credentials });
 
-  await withRetries(`S3 policy update | bucket:${bucketName}`, async () => {
+  await withRetries(async () => {
     const currentPolicy = await fetchCurrentPolicy(s3, bucketName);
 
     if (isUpToDate(findAthenaStatement(currentPolicy))) {
-      logger.info(`[athena] Athena role already has S3 access | bucket:${bucketName}`);
       return;
     }
 
@@ -211,8 +208,6 @@ export const grantAthenaRoleS3Access = async (creds: IS3Config): Promise<void> =
         ConfirmRemoveSelfBucketAccess: false,
       })
     );
-
-    logger.info(`[athena] granted Athena role S3 access | bucket:${bucketName}`);
   });
 
   const keyId = await resolveBucketKmsKeyId(s3, bucketName);
@@ -222,11 +217,10 @@ export const grantAthenaRoleS3Access = async (creds: IS3Config): Promise<void> =
 
   const kms = new KMSClient({ region, credentials });
 
-  await withRetries(`KMS key policy update | key:${keyId}`, async () => {
+  await withRetries(async () => {
     const currentKeyPolicy = await fetchCurrentKeyPolicy(kms, keyId);
 
     if (isKmsUpToDate(findAthenaKmsStatement(currentKeyPolicy))) {
-      logger.info(`[athena] Athena role already has KMS access | key:${keyId}`);
       return;
     }
 
@@ -243,7 +237,5 @@ export const grantAthenaRoleS3Access = async (creds: IS3Config): Promise<void> =
         Policy: JSON.stringify(updatedKeyPolicy),
       })
     );
-
-    logger.info(`[athena] granted Athena role KMS access | key:${keyId}`);
   });
 };

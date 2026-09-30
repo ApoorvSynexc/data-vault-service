@@ -640,7 +640,6 @@ const searchArchivalRecords = async (
       const athenaStartedAt = Date.now();
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
       // prepMs = Dynamo/Glue/S3 work before the query; athenaMs = submit + poll + fetch.
-      // Compare with the "[athena] query stats" line (queue/planning/engine ms) to see where time goes.
       logger.info(
         `[archival-search] timing | table:${hudiTable} prepMs:${athenaStartedAt - prepStartedAt} ` +
         `athenaMs:${Date.now() - athenaStartedAt} rows:${result.rows.length}`
