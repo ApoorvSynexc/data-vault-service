@@ -4,7 +4,7 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig, getBackupJobsByConfigAndStatuses } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, STATUS, JOB_OBJECT_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL, SPARK_JOB_API_KEY, AWS_EMR_SPARK_SUBMIT_PARAMETERS, AWS_EMR_LOGS_S3_URI } from '../../constant';
+import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, STATUS, JOB_OBJECT_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL, SPARK_JOB_API_KEY, AWS_EMR_SPARK_SUBMIT_PARAMETERS, AWS_EMR_LOGS_S3_URI, SALESFORCE_AUDIT_ENABLE_OBJECTS } from '../../constant';
 import { logger } from '../../middlewares';
 import { IAwsCredentials, IBackupConfig, IBackupJob, IObject, IObjectRelationshipNode, IRestoreScope, IRestoreSource } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
@@ -536,6 +536,13 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                             "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DSPARK_JOB_API_KEY=${SPARK_JOB_API_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
                             "spark.executorEnv.NODE_SERVER_URL": NODE_ENV_URL,
                             "spark.emr-serverless.driverEnv.NODE_SERVER_URL": NODE_ENV_URL,
+                            // Comma-separated standard-object allowlist for Salesforce's
+                            // "Create Audit Fields" feature — see constant/index.ts's
+                            // SALESFORCE_AUDIT_ENABLE_OBJECTS. Spark uses this to decide,
+                            // per object, whether to keep or strip CreatedById/CreatedDate/
+                            // LastModifiedById/LastModifiedDate before a restore insert.
+                            "spark.executorEnv.SALESFORCE_AUDIT_ENABLE_OBJECTS": SALESFORCE_AUDIT_ENABLE_OBJECTS,
+                            "spark.emr-serverless.driverEnv.SALESFORCE_AUDIT_ENABLE_OBJECTS": SALESFORCE_AUDIT_ENABLE_OBJECTS,
                         },
                     },
                 ],
