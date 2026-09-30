@@ -443,7 +443,7 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   let user;
   const changedObjectNames: string[] = [];
   if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
-    const result = await runMetadataComparisonForConfig(config);
+    const result = await runMetadataComparisonForConfig(config, false);
     for (const { objectName, result: metadataResult } of result) {
       if (!metadataResult) {
         hasComparisonError = true;
