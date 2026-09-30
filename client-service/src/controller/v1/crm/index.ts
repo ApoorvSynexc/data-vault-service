@@ -13,13 +13,8 @@ import {
   updateUser,
   getUsersByContactEmail,
   getUser,
-  getDecryptedCrmCredential,
 } from '../../../services';
-import {
-  refreashSalesforceToken,
-  SalesforceAuthExpiredError,
-  SalesforceEnvironment,
-} from '../../../services/third-party/salesforce';
+import { SalesforceEnvironment } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
 import { encrypt } from '../../../utils/encryption';
 
@@ -185,46 +180,26 @@ const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
 };
 
 const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const user = req.user;
   const { userId } = req.query;
   if (!userId) {
     makeResponse(req, res, 400, false, 'id_required');
     return;
   }
 
+  if (!user?.contactEmail) {
+    makeResponse(req, res, 400, false, 'unauthorized');
+    return;
+  }
+
+  const disconnectUserExist = await getUser({ userId: String(userId) });
+  if (!disconnectUserExist?.contactEmail || disconnectUserExist.contactEmail !== user.contactEmail) {
+    makeResponse(req, res, 400, false, 'not_exist');
+    return;
+  }
+
   await updateUser({ userId: String(userId) }, { isCrmConnected: false });
-
   makeResponse(req, res, 200, true, 'update');
-};
-
-const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const user = req.user;
-  const { crmId } = req.query;
-
-  if (!crmId) {
-    makeResponse(req, res, 400, false, 'crm_id_required');
-    return;
-  }
-
-  if (!user) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  const crm = await getCrmById(String(crmId));
-  if (!crm) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  const tokens = getDecryptedCrmCredential(user) ?? {};
-  let refreshed: any;
-  try {
-    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);
-  } catch {
-    throw new SalesforceAuthExpiredError();
-  }
-
-  makeResponse(req, res, 200, true, 'update', refreshed);
 };
 
 const updateCrmHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -275,7 +250,6 @@ export const crmController = wrapController({
   crmCodeHanlder,
   crmListHandler,
   crmDisconnectHandler,
-  crmRefreshTokenHandler,
   updateCrmHandler,
   crmDeleteHandler,
 });

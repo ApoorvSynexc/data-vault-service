@@ -272,9 +272,7 @@ const runBackupNow = async (params: { user?: IUser; config: IBackupConfig }): Pr
 // `status`, so without this the stats readers below would stop counting compressed jobs.
 // Note: a job that FAILED its backup and was then compressed also lands here — the
 // original outcome is no longer on the record to distinguish it.
-const isBackupCompleted = (status: string): boolean =>
-  status === STATUS.success ||
-  [JOB_OBJECT_STATUS.compressionInProgress, JOB_OBJECT_STATUS.compressed, JOB_OBJECT_STATUS.compressionFailed].includes(status);
+const isBackupCompleted = (status: string): boolean => [STATUS.success, STATUS.compressed].includes(status);
 
 // Single writer for the compression lifecycle. The condition is what makes an unknown
 // or foreign backupJobId fail loudly: UpdateCommand upserts by default, so without it a
@@ -627,7 +625,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
         }
       } else if (job.status === STATUS.pending) {
         runningCount++;
-      } else if (job.status === STATUS.failed || job.status === JOB_OBJECT_STATUS.compressionFailed) {
+      } else if (job.status === STATUS.failed || job.status === STATUS.partialFailure || job.status === STATUS.compressionFailed) {
         failedCount++;
       }
     }
@@ -788,6 +786,10 @@ interface IBackupJobOverview {
   pendingStatus: number;
   successStatus: number;
   failedStatus: number;
+  partialFailureStatus: number;
+  compressionInProgressStatus: number;
+  compressedStatus: number;
+  compressionFailedStatus: number;
 }
 
 // Dashboard overview for a user's backup jobs of one type (NORMAL/backup or
@@ -802,6 +804,10 @@ const getBackupJobOverview = async (
     pendingStatus: 0,
     successStatus: 0,
     failedStatus: 0,
+    partialFailureStatus: 0,
+    compressionInProgressStatus: 0,
+    compressedStatus: 0,
+    compressionFailedStatus: 0,
   };
 
   let lastEvaluatedKey: Record<string, any> | undefined;
@@ -826,8 +832,16 @@ const getBackupJobOverview = async (
         overview.pendingStatus += 1;
       } else if (item.status === STATUS.success) {
         overview.successStatus += 1;
-      } else if (item.status === STATUS.failed || item.status === STATUS.partialFailure) {
+      } else if (item.status === STATUS.failed) {
         overview.failedStatus += 1;
+      } else if (item.status === STATUS.partialFailure) {
+        overview.partialFailureStatus += 1;
+      } else if (item.status === STATUS.compressionInProgress) {
+        overview.compressionInProgressStatus += 1;
+      } else if (item.status === STATUS.compressed) {
+        overview.compressedStatus += 1;
+      } else if (item.status === STATUS.compressionFailed) {
+        overview.compressionFailedStatus += 1;
       }
     }
 

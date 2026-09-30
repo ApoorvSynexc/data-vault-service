@@ -220,27 +220,6 @@ const queryByContact = async (
   return (result.Items ?? []) as IUser[];
 };
 
-const getUsers = async (search: Record<string, any> = {}): Promise<IUser[]> => {
-  const hasContact = search['contact.email'];
-
-  if (hasContact) {
-    return queryByContact(search);
-  }
-
-  const filter = buildFilterExpression(search);
-  const result = await docClient.send(
-    new ScanCommand({
-      TableName: USER_TABLE,
-      ...(filter && {
-        FilterExpression: filter.FilterExpression,
-        ExpressionAttributeNames: filter.ExpressionAttributeNames,
-        ExpressionAttributeValues: filter.ExpressionAttributeValues,
-      }),
-    })
-  );
-  return (result.Items ?? []) as IUser[];
-};
-
 interface IGetUsersByContactEmailParams {
   contactEmail: string;
 }
@@ -440,4 +419,4 @@ const deleteUser = async (userId: string): Promise<boolean> => {
   return true;
 };
 
-export { createUser, getUser, updateUser, getUsers, getUsersByContactEmail, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, getUsersInBatches, deleteUser, getDecryptedCrmCredential };
+export { createUser, getUser, updateUser, getUsersByContactEmail, getUsersWithPagination, getUserByCrmProfileUserId, getUsersByCrmId, getUsersInBatches, deleteUser, getDecryptedCrmCredential };

@@ -17,6 +17,7 @@ const runEmrJob = async () => {
             void cleanupStaleRetrieveObjects(config);
 
             if ([STATUS.pending].includes(config.backupStatus ?? '')) {
+              logger.info(`[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=backup_pending`);
               continue;
             }
 
@@ -37,7 +38,7 @@ const runEmrJob = async () => {
 
               if (hasComparisonError) {
                 logger.warn(
-                  `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
+                  `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
                 );
                 continue;
               }
@@ -46,7 +47,7 @@ const runEmrJob = async () => {
                 user = await getUser({ userId: config.userId });
                 if (!user) {
                   logger.warn(
-                    `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+                    `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
                   );
                   continue;
                 }
@@ -61,7 +62,7 @@ const runEmrJob = async () => {
               await initalizePayloadTransform(config.backupConfigId);
             }
           } catch (error) {
-            logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+            logger.error(`[EMR JOb - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
           }
 
           if (config.dataset === 'ENTIRE') {
@@ -75,9 +76,10 @@ const runEmrJob = async () => {
                   continue;
                 }
               }
+              await checkSalesforceApiLimitUsage(user.userId, config.crmId);
               await syncObjects({ backupConfig: config, user });
             } catch (error) {
-              logger.error(`[emr job - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+              logger.error(`[EMR JOb SYNC OBJECT - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
             }
           }
         }

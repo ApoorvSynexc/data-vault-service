@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, AWS_REGION } from '../../constant';
-import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
+import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser, IS3Config } from '../../models';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { logger } from '../../middlewares/logger';
 import { getCrmById } from '../crm';
@@ -19,7 +19,6 @@ import { tableExists } from '../third-party/athena/glue';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
-import { S3Config } from '../../utils/validate-aws-credentials';
 
 export { FilterError, buildAthenaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 export { validateColumns } from './athena-fetch';
@@ -45,185 +44,6 @@ import {
   validateColumns,
 } from './athena-fetch';
 import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records-by-ids';
-
-const RESTORE_JOB_TYPE = 'RESTORE';
-
-// ---------------------------------------------------------------------------
-// Restore / Retrieve job queries
-// ---------------------------------------------------------------------------
-
-const getRestoreRetrieveJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
-  const result = await docClient.send(
-    new GetCommand({ TableName: BACKUP_JOB_TABLE, Key: { backupJobId } })
-  );
-
-  const item = result.Item as IBackupJob | undefined;
-  if (!item || item.type !== RESTORE_JOB_TYPE) return null;
-  return item;
-};
-
-const getRestoreRetrieveJobsByConfig = async (
-  backupConfigId: string,
-  options?: { limit?: number; cursor?: string; status?: string }
-): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
-  const limit = options?.limit ?? 10;
-  const exclusiveStartKey = decodeCursor(options?.cursor);
-
-  const queryParams: any = {
-    TableName: BACKUP_JOB_TABLE,
-    IndexName: 'backupConfigId-index',
-    KeyConditionExpression: 'backupConfigId = :backupConfigId',
-    FilterExpression: '#type = :type',
-    ExpressionAttributeNames: { '#type': 'type' },
-    ExpressionAttributeValues: {
-      ':backupConfigId': backupConfigId,
-      ':type': RESTORE_JOB_TYPE,
-    },
-    Limit: limit,
-    ScanIndexForward: false,
-    ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-  };
-
-  if (options?.status) {
-    queryParams.FilterExpression += ' AND #status = :status';
-    queryParams.ExpressionAttributeNames['#status'] = 'status';
-    queryParams.ExpressionAttributeValues[':status'] = options.status;
-  }
-
-  const result = await docClient.send(new QueryCommand(queryParams));
-  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
-  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
-};
-
-const getRestoreRetrieveJobsByUser = async (
-  userId: string,
-  options?: { limit?: number; cursor?: string; status?: string }
-): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
-  const limit = options?.limit ?? 10;
-  const exclusiveStartKey = decodeCursor(options?.cursor);
-
-  const queryParams: any = {
-    TableName: BACKUP_JOB_TABLE,
-    IndexName: 'userId-index',
-    KeyConditionExpression: 'userId = :userId',
-    FilterExpression: '#type = :type',
-    ExpressionAttributeNames: { '#type': 'type' },
-    ExpressionAttributeValues: {
-      ':userId': userId,
-      ':type': RESTORE_JOB_TYPE,
-    },
-    Limit: limit,
-    ScanIndexForward: false,
-    ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-  };
-
-  if (options?.status) {
-    queryParams.FilterExpression += ' AND #status = :status';
-    queryParams.ExpressionAttributeNames['#status'] = 'status';
-    queryParams.ExpressionAttributeValues[':status'] = options.status;
-  }
-
-  const result = await docClient.send(new QueryCommand(queryParams));
-  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
-  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
-};
-
-// ---------------------------------------------------------------------------
-// Backup jobs inside a time window
-// ---------------------------------------------------------------------------
-
-export interface IBackupJobsChangedBetweenParams {
-  backupConfigId: string;
-  // ISO UTC bounds, inclusive. Normalised by the controller so they compare
-  // correctly against the stored ISO timestamps (DynamoDB compares strings).
-  startTime: string;
-  endTime: string;
-  userId: string;
-  limit?: number;
-  cursor?: string;
-}
-
-// Page size when the caller doesn't ask for one, and the ceiling it may ask for
-// — the window is caller-chosen and can span an unbounded number of jobs, so
-// the response size is capped here rather than left to the request.
-export const CHANGED_BETWEEN_JOBS_LIMIT = 50;
-export const CHANGED_BETWEEN_JOBS_MAX_LIMIT = 200;
-
-// Most rows this query is allowed to evaluate before returning a short page.
-// `startedAt` is a filter, not a key condition, so a sparse window could
-// otherwise walk the whole partition inside one request. Hitting the cap
-// returns a cursor, so nothing is lost — the next call resumes where it stopped.
-const MAX_QUERY_ROUNDS = 5;
-
-/**
- * Backup job ids for a config whose run started inside [startTime, endTime],
- * newest first. Feeds the CHANGED_BETWEEN flow: the caller picks a window here
- * and passes the resulting ids to /retrieve/fetch-records as
- * source.backupJobIds.
- *
- * RESTORE jobs share this table but write no backup partitions, so they are
- * excluded. NORMAL and ARCHIVAL jobs need no filter — a config is one type, so
- * its jobs are all of that type.
- *
- * A page holds at most `limit` ids; `nextCursor` is present when more may
- * follow, and a short page carrying a cursor is normal (see MAX_QUERY_ROUNDS).
- *
- * Returns null when the config doesn't exist or isn't owned by the caller, so
- * the controller can collapse both into the same not_exist.
- */
-const getBackupJobIdsChangedBetween = async (
-  params: IBackupJobsChangedBetweenParams
-): Promise<{ backupJobIds: string[]; nextCursor?: string } | null> => {
-  const { backupConfigId, startTime, endTime, userId } = params;
-  const limit = Math.min(params.limit ?? CHANGED_BETWEEN_JOBS_LIMIT, CHANGED_BETWEEN_JOBS_MAX_LIMIT);
-
-  const config = await getBackupConfigById(backupConfigId);
-  if (!config || config.userId !== userId) return null;
-
-  const backupJobIds: string[] = [];
-  let exclusiveStartKey = decodeCursor(params.cursor);
-  let rounds = 0;
-
-  // The filter can drop a whole page, so one query does not necessarily fill
-  // one page. Keep asking for exactly what is still missing — never more, so a
-  // page can never overshoot `limit` and leave ids stranded behind the cursor.
-  do {
-    const result = await docClient.send(
-      new QueryCommand({
-        TableName: BACKUP_JOB_TABLE,
-        IndexName: 'backupConfigId-index',
-        // A job is created before it starts, so createdAt <= startedAt always —
-        // which makes the window's upper bound a sound prune on the index sort
-        // key. Its lower bound is not: a job created long ago can be resumed
-        // inside the window, so startTime stays a filter on startedAt only.
-        KeyConditionExpression: 'backupConfigId = :backupConfigId AND createdAt <= :endTime',
-        FilterExpression: '#type <> :restoreType AND startedAt BETWEEN :startTime AND :endTime',
-        ExpressionAttributeNames: { '#type': 'type' },
-        ExpressionAttributeValues: {
-          ':backupConfigId': backupConfigId,
-          ':restoreType': RESTORE_JOB_TYPE,
-          ':startTime': startTime,
-          ':endTime': endTime,
-        },
-        ProjectionExpression: 'backupJobId',
-        Limit: limit - backupJobIds.length,
-        ScanIndexForward: false,
-        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-      })
-    );
-
-    for (const item of (result.Items ?? []) as Pick<IBackupJob, 'backupJobId'>[]) {
-      backupJobIds.push(item.backupJobId);
-    }
-    exclusiveStartKey = result.LastEvaluatedKey;
-    rounds += 1;
-  } while (exclusiveStartKey && backupJobIds.length < limit && rounds < MAX_QUERY_ROUNDS);
-
-  return {
-    backupJobIds,
-    ...(exclusiveStartKey ? { nextCursor: encodeCursor(exclusiveStartKey) } : {}),
-  };
-};
 
 // ---------------------------------------------------------------------------
 // Object list helper
@@ -408,7 +228,7 @@ const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthe
   const destination = await getDestinationById(config.destinationId);
   if (!destination) return { region: AWS_REGION };
 
-  const { bucketName, region } = getDecryptedDestinationConfig(destination) as S3Config;
+  const { bucketName, region } = getDecryptedDestinationConfig(destination) as IS3Config;
   return {
     region: region || AWS_REGION,
     outputLocation: bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined,
@@ -421,7 +241,7 @@ export const cleanupStaleRetrieveObjects = async (config: IBackupConfig): Promis
     const destination = await getDestinationById(config.destinationId);
     if (!destination) return;
 
-    const s3Config = getDecryptedDestinationConfig(destination) as S3Config;
+    const s3Config = getDecryptedDestinationConfig(destination) as IS3Config;
     if (!s3Config.bucketName) return;
 
     const prefix = `salesforce/${config.crmId}/retrieve/`;
@@ -2018,7 +1838,7 @@ export type FetchObjectFieldsResult =
 const resolveSchemaS3 = async (
   backupConfigId: string,
   userId: string
-): Promise<{ destConfig: S3Config; keyParams: ISchemaS3KeyParams } | null> => {
+): Promise<{ destConfig: IS3Config; keyParams: ISchemaS3KeyParams } | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) {
     return null;
@@ -2034,7 +1854,7 @@ const resolveSchemaS3 = async (
     return null;
   }
 
-  const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
+  const destConfig = getDecryptedDestinationConfig(destination) as IS3Config;
   return {
     destConfig,
     keyParams: {
@@ -2118,10 +1938,6 @@ const fetchPicklistValues = async (params: {
 };
 
 export {
-  getRestoreRetrieveJobById,
-  getRestoreRetrieveJobsByConfig,
-  getRestoreRetrieveJobsByUser,
-  getBackupJobIdsChangedBetween,
   getObjectListByConfigId,
   getRestoreObjectListByConfigId,
   toTreeSummary,
