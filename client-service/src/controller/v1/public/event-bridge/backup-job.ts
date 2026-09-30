@@ -20,7 +20,7 @@ const backupJob = async (params: { backupConfigId: string, userId: string, id?: 
         const targetObject = objectId ? config.objects?.find((obj) => obj.id === objectId) : undefined;
         const scheduleConfig = objectId ? targetObject?.scheduleConfig : config.scheduleConfig;
         if (scheduleConfig && !isScheduledForToday(scheduleConfig)) {
-            logger.info(`[EVENT BRIDGE] Skipping — today is not a scheduled weekday | backupConfigId=${backupConfigId}${objectId ? ` objectId=${objectId}` : ''}`);
+            logger.info(`[EVENT BRIDGE] Skipping — today is not a scheduled day | backupConfigId=${backupConfigId}${objectId ? ` objectId=${objectId}` : ''}`);
             return;
         }
 

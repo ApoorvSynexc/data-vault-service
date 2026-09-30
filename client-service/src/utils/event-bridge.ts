@@ -113,6 +113,46 @@ const nextWeeklyOccurrence = (
   return reference.toDate();
 };
 
+const MONTH_INDEX: Record<string, number> = {
+  JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11,
+};
+
+// MONTHLY's AWS trigger already fires every month on monthDate (cron()'s own
+// month field is `*` — unlike WEEKLY, there's no AWS-side limitation forcing a
+// coarser trigger), so this just mirrors isScheduledForToday's selectedMonths
+// filter to find the earliest matching month at/after `reference`, keeping the
+// existing no-selectedMonths behavior (every month) when none are configured.
+const nextMonthlyOccurrence = (
+  day: number,
+  startTime: string | undefined,
+  selectedMonths: string[] | undefined,
+  now: dayjs.Dayjs,
+  anchor: dayjs.Dayjs | null
+): Date => {
+  const [hour, minute] = (startTime ?? '00:00').split(':').map(Number);
+  const reference = anchor && anchor.isAfter(now) ? anchor : now;
+
+  let next = reference.date(day).hour(hour).minute(minute).second(0).millisecond(0);
+  if (!next.isAfter(reference)) {
+    next = next.add(1, 'month');
+  }
+
+  const monthIndices = selectedMonths?.length ? selectedMonths.map((m) => MONTH_INDEX[m]).filter((m) => m !== undefined) : null;
+  if (!monthIndices) {
+    return next.toDate();
+  }
+
+  // At most 12 distinct months exist, so a matching one is always found within
+  // one year — the +1 is just headroom, never hit.
+  for (let i = 0; i < 13; i++) {
+    if (monthIndices.includes(next.month())) {
+      return next.toDate();
+    }
+    next = next.add(1, 'month');
+  }
+  return next.toDate();
+};
+
 const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = new Date()): Date => {
   const s = scheduleConfig.scheduling;
   const tz = scheduleConfig.timeZone || 'UTC';
@@ -139,15 +179,7 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
         : nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
     case 'MONTHLY': {
       const day = s.monthDate ?? 1;
-      const [hour, minute] = (s.startTime ?? '00:00').split(':').map(Number);
-      // Once AWS's StartDate gates the schedule, no occurrence can land before it —
-      // anchor the search there when it's still ahead of `now`.
-      const reference = anchor && anchor.isAfter(now) ? anchor : now;
-      let next = reference.date(day).hour(hour).minute(minute).second(0).millisecond(0);
-      if (!next.isAfter(reference)) {
-        next = next.add(1, 'month');
-      }
-      return next.toDate();
+      return nextMonthlyOccurrence(day, s.startTime, s.selectedMonths, now, anchor);
     }
     case 'CUSTOM': {
       if (!s.startDate) {
@@ -164,13 +196,7 @@ const computeNextScheduledRun = (scheduleConfig: IScheduleConfig, from: Date = n
             : nextRateOccurrence(anchor, now, (s.interval || 1) * 7, 'day');
         case 'MONTHLY': {
           const day = anchor?.date() ?? dayjs.tz(s.startDate, tz).date();
-          const [hour, minute] = (s.startTime ?? '00:00').split(':').map(Number);
-          const reference = anchor && anchor.isAfter(now) ? anchor : now;
-          let next = reference.date(day).hour(hour).minute(minute).second(0).millisecond(0);
-          if (!next.isAfter(reference)) {
-            next = next.add(1, 'month');
-          }
-          return next.toDate();
+          return nextMonthlyOccurrence(day, s.startTime, s.selectedMonths, now, anchor);
         }
         default:
           throw new Error(`Unsupported customFrequency: ${s.customFrequency}`);
@@ -232,15 +258,32 @@ const buildEventScheduleInput = (config: IBackupConfig) =>
 const isWeeklyFrequency = (s: IScheduleConfig['scheduling']): boolean =>
   s?.frequency === DURATION_TYPE.weekly || (s?.frequency === 'CUSTOM' && s?.customFrequency === DURATION_TYPE.weekly);
 
+const isMonthlyFrequency = (s: IScheduleConfig['scheduling']): boolean =>
+  s?.frequency === DURATION_TYPE.monthly || (s?.frequency === 'CUSTOM' && s?.customFrequency === DURATION_TYPE.monthly);
+
+// Two independent gates, both fail-open when their selector is empty/not set —
+// a WEEKLY schedule with no weekDays or a MONTHLY one with no selectedMonths
+// runs on every trigger, same as before either field existed.
 const isScheduledForToday = (scheduleConfig: IScheduleConfig, from: Date = new Date()): boolean => {
   const s = scheduleConfig.scheduling;
-  if (!isWeeklyFrequency(s) || !s?.weekDays?.length) {
-    return true;
+  const tz = scheduleConfig.timeZone || 'UTC';
+  const now = dayjs.tz(from, tz);
+
+  if (isWeeklyFrequency(s) && s?.weekDays?.length) {
+    const today = now.format('ddd').toUpperCase();
+    if (!s.weekDays.includes(today)) {
+      return false;
+    }
   }
 
-  const tz = scheduleConfig.timeZone || 'UTC';
-  const today = dayjs.tz(from, tz).format('ddd').toUpperCase();
-  return s.weekDays.includes(today);
+  if (isMonthlyFrequency(s) && s?.selectedMonths?.length) {
+    const thisMonth = now.format('MMM').toUpperCase();
+    if (!s.selectedMonths.includes(thisMonth)) {
+      return false;
+    }
+  }
+
+  return true;
 };
 
 export {
