@@ -108,11 +108,13 @@ const STATUS = {
   failed: 'FAILED',
   partialFailure: 'PARTIAL_FAILURE',
   cancelled: 'CANCELLED',
+  
+  compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
+  compressed: 'COMPRESSED',
+  compressionFailed: 'COMPRESSION_JOB_FAILED',
 };
 
 // Per-object/per-item progress inside a job's object[]/objects[] array —
-// backup/archival object lifecycle, restore/rollback per-object phases, and
-// compression phases. Mirrors client-service's own copy of this constant.
 const JOB_OBJECT_STATUS = {
   created: 'CREATED',
 
@@ -136,10 +138,6 @@ const JOB_OBJECT_STATUS = {
   rollbackCompleted: 'ROLLBACK_COMPLETED',
   rollbackFailed: 'ROLLBACK_FAILED',
 
-  compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
-  compressed: 'COMPRESSED',
-  compressionFailed: 'COMPRESSION_JOB_FAILED',
-  
   failed: 'FAILED',
 };
 

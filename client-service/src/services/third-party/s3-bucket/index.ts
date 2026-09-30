@@ -1,6 +1,7 @@
 import {
     DeleteObjectsCommand,
     GetObjectCommand,
+    HeadBucketCommand,
     ListObjectsV2Command,
     PutObjectCommand,
     S3Client,
@@ -31,6 +32,13 @@ const getS3Client = (config: IS3Config): S3Client => {
         clientCache.set(cacheKey, client);
     }
     return client;
+};
+
+// Confirms the given credentials/bucket are usable — throws if the bucket
+// doesn't exist or the credentials can't access it.
+const validateS3Credentials = async (config: IS3Config): Promise<void> => {
+    const client = getS3Client(config);
+    await client.send(new HeadBucketCommand({ Bucket: config.bucketName }));
 };
 
 const downloadFromS3 = async (
@@ -204,6 +212,7 @@ const deleteS3Objects = async (config: IS3Config, keys: string[]): Promise<void>
 };
 
 export {
+    validateS3Credentials,
     downloadFromS3,
     getPresignedDownloadUrl,
     listS3Objects,

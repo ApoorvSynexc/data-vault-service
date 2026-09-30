@@ -178,7 +178,7 @@ async function fetchAllBackupJobs(backupConfigId: string) {
 const COMPRESSIBLE_STATUSES: string[] = [
     STATUS.success,
     STATUS.partialFailure,
-    JOB_OBJECT_STATUS.compressionFailed,
+    STATUS.compressionFailed,
 ];
 const isCompressible = (job: IBackupJob): boolean => COMPRESSIBLE_STATUSES.includes(job.status);
 

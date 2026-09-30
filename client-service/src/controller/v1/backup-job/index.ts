@@ -61,22 +61,6 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
   });
 };
 
-const getBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupJobId } = req.query;
-  if (!backupJobId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const job = await getBackupJobById(String(backupJobId));
-  if (!isOwner(job, req.user!.userId, req.user!.crmId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', sanitize(job!));
-};
-
 const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupJobId } = req.query;
   if (!backupJobId) {
@@ -102,6 +86,5 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
 
 export const backupJobController = wrapController({
   listBackupJobsHandler,
-  getBackupJobHandler,
   resumeBackupJobHandler,
 });

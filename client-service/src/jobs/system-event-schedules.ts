@@ -26,13 +26,13 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
             isSyncSalesforceRefreshToken: true,
         },
     },
-    // {
-    //     name: "datavault-daily-system-job-11am",
-    //     scheduleExpression: "cron(0 11 * * ? *)",
-    //     payload: {
-    //         purpose: "RUN_EMR",
-    //     },
-    // },
+    {
+        name: "datavault-daily-system-job-07am",
+        scheduleExpression: "cron(0 7 * * ? *)",
+        payload: {
+            purpose: "RUN_EMR",
+        },
+    },
     // {
     //     name: "datavault-daily-system-job-7pm",
     //     scheduleExpression: "cron(0 19 * * ? *)",
