@@ -7,7 +7,6 @@ import {
   QueryExecutionState,
 } from '@aws-sdk/client-athena';
 import { AWS_ATHENA_ROLE_ARN } from '../../../constant';
-import { logger } from '../../../middlewares';
 
 // One AthenaClient per region, not one global client: Athena is a regional
 // service, and a query must run in the same region as the client's own S3
@@ -69,26 +68,7 @@ const startQuery = async (
     ...(outputLocation && { ResultConfiguration: { OutputLocation: outputLocation } }),
   };
 
-  logger.info(`[athena] StartQueryExecution request | ${JSON.stringify(input)}`);
-
-  // Wall-clock around just the send() call, plus the SDK's own retry
-  // accounting ($metadata.attempts/totalRetryDelay) — together these tell
-  // apart "AWS was slow to respond" (elapsedMs high, attempts:1) from
-  // "the SDK silently retried/backed off" (totalRetryDelay accounts for most
-  // of elapsedMs) from "the request took long to leave this host" (elapsedMs
-  // high but AWS's own requestId/CloudTrail timing is short). requestId is
-  // already logged below — cross-reference it in CloudTrail for the
-  // server-side view.
-  const sendStartedAt = Date.now();
   const response = await getAthenaClient(region).send(new StartQueryExecutionCommand(input));
-  const sendElapsedMs = Date.now() - sendStartedAt;
-
-  logger.info(
-    `[athena] StartQueryExecution response | queryExecutionId:${response.QueryExecutionId} ` +
-    `requestId:${response.$metadata.requestId} httpStatusCode:${response.$metadata.httpStatusCode} ` +
-    `sendElapsedMs:${sendElapsedMs} attempts:${response.$metadata.attempts ?? 'n/a'} ` +
-    `totalRetryDelayMs:${response.$metadata.totalRetryDelay ?? 'n/a'}`
-  );
 
   if (!response.QueryExecutionId) {
     throw new Error('[athena] StartQueryExecution returned no QueryExecutionId');
@@ -116,11 +96,6 @@ const waitForQuery = async (queryExecutionId: string, region: string): Promise<v
 
     const state = QueryExecution?.Status?.State;
 
-    logger.info(
-      `[athena] GetQueryExecution poll #${poll} | queryExecutionId:${queryExecutionId} ` +
-      `state:${state} elapsedMs:${Date.now() - started}`
-    );
-
     if (!state) {
       throw new Error('[athena] GetQueryExecution returned no state');
     }
@@ -128,32 +103,8 @@ const waitForQuery = async (queryExecutionId: string, region: string): Promise<v
     if (TERMINAL_STATES.has(state)) {
       if (state !== QueryExecutionState.SUCCEEDED) {
         const reason = QueryExecution?.Status?.StateChangeReason ?? 'unknown';
-        // Logged here, not just embedded in the thrown error: a caller
-        // upstream (e.g. makeRunner's `run`) may match this message against
-        // /does not exist/i and swallow it as "table not compressed yet",
-        // which would otherwise hide a genuinely different failure (wrong
-        // region, permissions, a malformed query) behind a silent empty result.
-        logger.error(
-          `[athena] query ${state} | queryExecutionId:${queryExecutionId} region:${region} reason:${reason}`
-        );
         throw new Error(`[athena] query ${state} | reason: ${reason}`);
       }
-      // Athena's own timing breakdown — the only way to tell "small data, slow
-      // query" apart without guessing: a high queueMs points at DPU/workgroup
-      // capacity contention, a high planningMs points at partition/file-listing
-      // overhead (often many small files), and a high engineExecMs with a low
-      // dataScannedBytes points at read-side cost (e.g. Merge-on-Read Hudi
-      // merging base+log files) rather than genuine data volume.
-      const stats = QueryExecution?.Statistics;
-      logger.info(
-        `[athena] query stats | queryExecutionId:${queryExecutionId} ` +
-        `queueMs:${stats?.QueryQueueTimeInMillis ?? 'n/a'} ` +
-        `planningMs:${stats?.QueryPlanningTimeInMillis ?? 'n/a'} ` +
-        `engineExecMs:${stats?.EngineExecutionTimeInMillis ?? 'n/a'} ` +
-        `serviceProcessingMs:${stats?.ServiceProcessingTimeInMillis ?? 'n/a'} ` +
-        `totalMs:${stats?.TotalExecutionTimeInMillis ?? 'n/a'} ` +
-        `dataScannedBytes:${stats?.DataScannedInBytes ?? 'n/a'}`
-      );
       return;
     }
 
@@ -184,11 +135,9 @@ const fetchQueryResults = async (
   const rows: Record<string, string>[] = [];
   let nextToken: string | undefined;
   let isFirstPage = true;
-  let page = 0;
 
   do {
-    page += 1;
-    const { ResultSet, NextToken, $metadata } = await getAthenaClient(region).send(
+    const { ResultSet, NextToken } = await getAthenaClient(region).send(
       new GetQueryResultsCommand({
         QueryExecutionId: queryExecutionId,
         NextToken: nextToken,
@@ -196,12 +145,6 @@ const fetchQueryResults = async (
     );
 
     const resultRows = ResultSet?.Rows ?? [];
-
-    logger.info(
-      `[athena] GetQueryResults page ${page} | queryExecutionId:${queryExecutionId} ` +
-      `rowsInPage:${resultRows.length} rowsSoFar:${rows.length} hasNextToken:${Boolean(NextToken)} ` +
-      `requestId:${$metadata.requestId} httpStatusCode:${$metadata.httpStatusCode}`
-    );
 
     if (isFirstPage) {
       // First row of the first page is always the header row.
@@ -244,11 +187,7 @@ export const fetchStoredResults = async (
   region: string,
   maxRows?: number
 ): Promise<IQueryResult> => {
-  const result = await fetchQueryResults(queryExecutionId, region, maxRows);
-  logger.info(
-    `[athena] result replay | queryExecutionId:${queryExecutionId} rows:${result.rows.length}`
-  );
-  return result;
+  return fetchQueryResults(queryExecutionId, region, maxRows);
 };
 
 // Runs a SQL query against Athena, waits for completion, and returns results.
@@ -266,23 +205,9 @@ export const runAthenaQuery = async (
   outputLocation?: string,
   maxRows?: number
 ): Promise<IQueryResult> => {
-  logger.info(
-    `[athena] executing query | database:${database} region:${region} outputLocation:${outputLocation ?? 'workgroup-default'} sql:${sql}`
-  );
-
   const queryExecutionId = await startQuery(sql, database, region, outputLocation);
-console.log(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
-  logger.info(`[athena] query submitted | queryExecutionId:${queryExecutionId}`);
 
   await waitForQuery(queryExecutionId, region);
 
-  const result = await fetchQueryResults(queryExecutionId, region, maxRows);
-
-  logger.info(
-    `[athena] query complete | queryExecutionId:${queryExecutionId} rows:${result.rows.length}`
-  );
-  logger.info(
-    `[athena] results | details : ${JSON.stringify(result)}`
-  );
-  return result;
+  return fetchQueryResults(queryExecutionId, region, maxRows);
 };
