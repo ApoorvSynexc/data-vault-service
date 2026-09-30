@@ -2,6 +2,7 @@ import JSZip from 'jszip';
 import { salesforceRequest, SalesforceTokens } from './index';
 import { timer } from '../../../utils/helper';
 import { SALESFORCE_METADATA_API_VERSION } from '../../../constant';
+import { logger } from '../../../middlewares';
 
 // Metadata API version — sourced from ENV (SALESFORCE_METADATA_API_VERSION),
 // shared by every file in this directory that imports it.
@@ -96,8 +97,14 @@ export const deployMetadata = async (
         done: boolean;
         success: boolean;
         errorMessage?: string;
+        // Widened past the 3 fields the summary line uses (componentType/
+        // fullName/problem) — Salesforce's real response also carries
+        // problemType, fileName, lineNumber, columnNumber, created, changed,
+        // deleted, success per component. Kept as Record<string, any> so the
+        // debug log below can dump whatever Salesforce actually sent without
+        // this type drifting out of sync with the API.
         details?: {
-          componentFailures?: { problem: string; componentType: string; fullName: string }[];
+          componentFailures?: (Record<string, any> & { problem: string; componentType: string; fullName: string })[];
         };
       };
     }>(
@@ -113,6 +120,10 @@ export const deployMetadata = async (
       continue;
     }
     if (!success) {
+      // Full raw deploy result, not just the flattened one-line summary below —
+      // the summary drops fields (problemType, lineNumber/columnNumber, etc.)
+      // that often explain *why* a component failed, not just that it did.
+      logger.error(`[metadata-deploy] failed | jobId=${jobId} deployResult=${JSON.stringify(data.deployResult)}`);
       const failures = details?.componentFailures
         ?.map((f) => `${f.componentType}:${f.fullName} — ${f.problem}`)
         .join('; ');
