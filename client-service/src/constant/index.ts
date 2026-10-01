@@ -118,6 +118,33 @@ const SALESFORCE_AUDIT_ENABLE_OBJECTS = String(
   process.env.SALESFORCE_AUDIT_ENABLE_OBJECTS ||
   'Account,ArticleVersion,Attachment,CampaignMember,Case,CaseComment,Contact,ContentVersion,Contract,Event,Idea,IdeaComment,Lead,Opportunity,Question,Task,Vote'
 ).trim();
+// API/developer name + label of the Permission Set restore provisions on the
+// destination org to grant the connected user object/field access for
+// restored objects — see services/third-party/salesforce/restore-permission-set.ts.
+// Changing SALESFORCE_RESTORE_PERMISSION_SET_NAME without a matching cleanup
+// orphans the old permission set in every already-restored-to org.
+const SALESFORCE_RESTORE_PERMISSION_SET_NAME = String(
+  process.env.SALESFORCE_RESTORE_PERMISSION_SET_NAME || 'Data_Craft_Restore_Permission_Set'
+).trim();
+const SALESFORCE_RESTORE_PERMISSION_SET_LABEL = String(
+  process.env.SALESFORCE_RESTORE_PERMISSION_SET_LABEL || '360 Data Craft Restore Permission Set'
+).trim();
+
+// The 3 custom tracking fields restore creates on every object it touches —
+// see services/third-party/salesforce/restore-fields.ts's
+// ensureRestoreTrackingFields. DC_External_Id__c doubles as the ingest-stage
+// upsert key (marked externalId/unique there), so it's the one of the three
+// that must never be renamed without a matching restore-pipeline change.
+export interface IRestoreTrackingField {
+  apiName: string;
+  label: string;
+}
+
+export const RESTORE_TRACKING_FIELDS: IRestoreTrackingField[] = [
+  { apiName: 'DC_External_Id__c', label: '360 Data Craft External Id' },
+  { apiName: 'DC_Restore_Job_Name__c', label: '360 Data Craft Restore Job Name' },
+  { apiName: 'DC_Restore_Id__c', label: '360 Data Craft Restore Job Id' },
+];
 // Apex classes shipped with the managed package that must have Apex Class access
 // granted on the real-time trigger permission set — see trigger.ts's setupPermissionSet.
 // Comma-separated so ops can extend it without a code change.
@@ -468,6 +495,8 @@ export {
   SALESFORCE_METADATA_API_VERSION,
   SALESFORCE_ECA_API_NAME,
   SALESFORCE_AUDIT_ENABLE_OBJECTS,
+  SALESFORCE_RESTORE_PERMISSION_SET_NAME,
+  SALESFORCE_RESTORE_PERMISSION_SET_LABEL,
   SALESFORCE_PERMISSION_SET_APEX_CLASSES,
   SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL,
   SALESFORCE_HANDLER_CLASS_NAME,

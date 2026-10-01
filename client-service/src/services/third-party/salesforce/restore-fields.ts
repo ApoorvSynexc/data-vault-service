@@ -1,19 +1,6 @@
 import { salesforceRequest, SalesforceTokens } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
-
-// Restore-tracking fields created on every object touched by a restore. Metadata
-// API only — Tooling API rejects field creation in production orgs (see
-// trigger.ts's note on Apex for the same production constraint applied here).
-export interface IRestoreTrackingField {
-  apiName: string;
-  label: string;
-}
-
-export const RESTORE_TRACKING_FIELDS: IRestoreTrackingField[] = [
-  { apiName: 'DC_External_Id__c', label: 'Data Craft External Id' },
-  { apiName: 'DC_Restore_Job_Name__c', label: 'Data Craft Restore Job Name' },
-  { apiName: 'DC_Restore_Id__c', label: 'Data Craft Restor Job Id' },
-];
+import { IRestoreTrackingField, RESTORE_TRACKING_FIELDS } from '../../../constant';
 
 // DC_External_Id__c doubles as the upsert key for the ingest stage, so it's the
 // only one of the three marked externalId/unique.

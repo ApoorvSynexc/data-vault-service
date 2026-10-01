@@ -1,12 +1,12 @@
 import { logger } from "../../../../middlewares";
-import { STATUS } from "../../../../constant";
+import { STATUS, RESTORE_TRACKING_FIELDS, IRestoreTrackingField } from "../../../../constant";
 import { flattenBackupObjects } from "../../../../utils/helper";
 import { getBackupConfigById } from "../../../backup-config";
 import { getRestoreById } from "../../../restore";
 import { getRestoreJobById, updateRestoreJob } from "../../../restore-job";
 import { initalizeRestoreTransform } from "../../../payload";
 import { getDecryptedCrmCredential, getUser } from "../../../user";
-import { ensureRestoreTrackingFields, RESTORE_TRACKING_FIELDS, IRestoreTrackingField } from "../restore-fields";
+import { ensureRestoreTrackingFields } from "../restore-fields";
 import { provisionRestorePermissionSet } from "../restore-permission-set";
 
 // object API name -> the tracking fields to grant field-level permission for.
