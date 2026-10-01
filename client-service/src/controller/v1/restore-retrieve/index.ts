@@ -1112,9 +1112,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
             },
             ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
           });
-        } else {
-          await runRestoreFieldSetupAndTransform(restoreJob.restoreJobId);
-        }
+        }        
       } else {
         await triggerBackupJob({
           user: backupConfigUser,
@@ -1129,9 +1127,8 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
       }
-    } else {
-      await runRestoreFieldSetupAndTransform(restoreJob.restoreJobId);
     }
+    await runRestoreFieldSetupAndTransform(restoreJob.restoreJobId);
   } catch (error) {
     logger.error(`[Restore creation handler] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
   }
