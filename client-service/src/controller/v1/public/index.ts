@@ -267,7 +267,6 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const orgId = '00Df600000T9DlJEAV';
   const userId = '005f6000008QmlyAAC';
   // const account = await createPaymentAccount(orgId, userId);
-  // console.log(JSON.stringify({account}));
   // const account = {
   //   token: 'FmwBKdNra6wnkLMLRe1UxQPSv4HvVf9TzSOh4QuDDXHjAKwOGzm54gsby3VhGsoa2RbLXcza8Q4X/mmk01qCT9ZuhIqWXKMq1hl3TvwFe/U=',
   //   sf_secret: '360SMS-Secret-IV:360SMS-Secrt-key',
