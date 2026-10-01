@@ -52,7 +52,6 @@ initializeDatabase()
     initializeApp();
     startStaleJobSweeper();
   })
-  .catch((error) => {
-    console.log(error);
+  .catch(() => {
     process.exit(1);
   });

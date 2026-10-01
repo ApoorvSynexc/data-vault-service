@@ -236,7 +236,6 @@ export const exportFirstTime = async (
       const whereClause = buildWhereClause(object);
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
 
-      console.log(JSON.stringify({ soql }));
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
         salesforceApiCount += 2;

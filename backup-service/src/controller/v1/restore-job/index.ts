@@ -28,7 +28,6 @@ const createRollbackJobHandler = async (req: IRequest, res: IResponse): Promise<
   const { restoreJobId } = req.body as { restoreJobId: string };
 
   const restoreJob = await getRestoreJobById(restoreJobId);
-  console.log(JSON.stringify({ restoreJobId, restoreJob }));
   if (!restoreJob) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
