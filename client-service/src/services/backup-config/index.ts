@@ -339,6 +339,7 @@ const getBackupConfigsWithPagination = async (
   const { userId, crmId, type, name, status, destinationId, schedule, backupStatus, search, withoutLastBackupAt } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
+  console.log({withoutLastBackupAt})
 
   if (!userId && !crmId) {
     throw new Error('Either userId or crmId must be provided');
