@@ -1,6 +1,6 @@
 import { logger } from "../middlewares";
-import { getCrmById, getUsersInBatches, refreashSalesforceToken, updateUser } from "../services";
-import { decrypt, encrypt, EncryptedPayload } from "../utils/encryption";
+import { getCrmById, getUsersInBatches, refreshAndPersistSalesforceToken } from "../services";
+import { decrypt, EncryptedPayload } from "../utils/encryption";
 
 const runSyncSalesforceRefreshTokenJob = async () => {
     try {
@@ -13,13 +13,7 @@ const runSyncSalesforceRefreshTokenJob = async () => {
                     if (!refresh_token) continue;
 
                     const crm = await getCrmById(user.crmId);
-                    const refreshed = await refreashSalesforceToken(refresh_token, crm?.environment, user.customUrl);
-
-                    const crmCredential = {
-                        access_token: refreshed.access_token,
-                        refresh_token: refreshed.refresh_token || refresh_token,
-                    };
-                    await updateUser({ userId: user.userId }, { crmCredential: encrypt(JSON.stringify(crmCredential)) });
+                    await refreshAndPersistSalesforceToken(user.userId, refresh_token, crm?.environment, user.customUrl);
 
                     logger.info(`[salesforce refresh token sync - CRON] user ${user.userId} synced successfully`);
                 } catch (error) {
