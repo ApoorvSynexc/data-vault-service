@@ -143,7 +143,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
         ...(backupStatus && { backupStatus }),
         ...(schedule && { schedule }),
         ...(destinationId && { destinationId }),
-        ...(withoutLastBackupAt && { withoutLastBackupAt: withoutLastBackupAt === 'true' }),
+        ...(withoutLastBackupAt && { withoutLastBackupAt: withoutLastBackupAt === 'true' ? true : false }),
       },
       { limit: limitNum, cursor }
     );
