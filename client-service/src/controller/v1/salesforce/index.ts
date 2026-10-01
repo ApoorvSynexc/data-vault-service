@@ -109,7 +109,6 @@ const getUsersHandler = async (req: IRequest, res: IResponse): Promise<void> => 
 
   // Wrapped under `users` — c/dvPermissionHandler's loadAll() reads
   // safeParseJson(usersRaw)?.users off the decrypted body.
-  console.log(`[salesforce] getUsersHandler | users: ${JSON.stringify(users)}`);
   res.status(200).json(encryptEnvelope({ users }, decrypt(crm.encryptionKey!)));
 };
 
@@ -129,10 +128,8 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
       const { profile, role, ...rest } = user;
       const crmProfileUserId = profile.userId;
       const existingUser = await getUserByCrmProfileUserId(crmProfileUserId, crm.organizationId);
-      console.log(`[salesforce] upsertUsersHandler | existingUser: ${JSON.stringify(existingUser)}`);
 
       const hasGrant = hasAnyGrant(role.permissions);
-      console.log(`[salesforce] upsertUsersHandler | hasGrant: ${hasGrant} for user: ${JSON.stringify(user)}`);
       if (!hasGrant) {
         if (existingUser?.userId) {
           // check if user created any restore
@@ -140,10 +137,8 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
           if (!backups?.length) {
             await deleteRole({ roleId: existingUser.role.roleId });
             await deleteUser(existingUser.userId);
-            console.log(`[salesforce] upsertUsersHandler | user deleted: ${JSON.stringify(user)}`);
             result.push({ ...user, status: 'success', action: 'deleted' });
           } else {
-            console.log(`[salesforce] upsertUsersHandler | user has backups, archival or restores: ${JSON.stringify(user)}`);
             result.push({ ...user, status: "failed", message: "user has backups, archival or restores" });
           }
         }
@@ -160,7 +155,6 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             { roleId: existingUser.role.roleId },
             { permissions: role.permissions }
           )
-          console.log(`[salesforce] upsertUsersHandler | user updated: ${JSON.stringify(user)}`);
           result.push({ ...user, status: 'success', action: 'updated' });
           // If permission exist and if user not exist then create user and role
         } else {
@@ -180,7 +174,6 @@ const upsertUsersHandler = async (req: IRequest, res: IResponse): Promise<void> 
             organizationId: crm.organizationId,
             crmName: 'salesforce',
           });
-          console.log(`[salesforce] upsertUsersHandler | user created: ${JSON.stringify(user)}`);
           result.push({ ...user, status: 'success', action: 'created' });
         }
       }

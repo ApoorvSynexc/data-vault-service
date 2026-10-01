@@ -173,7 +173,6 @@ const restoreObjectHierarchy = async (
   const currentNode = { name: node.name, id: uuidv4(), status: JOB_OBJECT_STATUS.restoreInProgress };
   const object = ctx.recurvedObject.find((obj) => obj.name === node.name);
 
-  console.log(`Found object ${object?.name}`);
   if (object) {
     currentNode.status = object.status || '';
     currentNode.id = object.id;
@@ -551,7 +550,6 @@ const salesforceHandler: ICrmBackupHandler = {
 
       const recurvedObject = recursivelyFlatten(objects || []);
       const hierarchy = buildParentToChildHierarchy(objectHierarchy ?? []);
-      console.log(JSON.stringify({ hierarchy }));
 
       // Persist the resolved single-parent tree this run actually walks (distinct
       // from the raw, possibly-multi-parent objectHierarchy input) for audit/debugging.
@@ -569,7 +567,6 @@ const salesforceHandler: ICrmBackupHandler = {
       };
 
       for (let index = 0; index < hierarchy.length; index++) {
-        console.log(`[Restore] Root object pushed`);
         const rootObject = hierarchy[index];
         await restoreObjectHierarchy(rootObject, hierarchyContext);
       }

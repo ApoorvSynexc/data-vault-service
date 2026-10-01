@@ -19,7 +19,5 @@ app.use((req, res) => {
 
 export const initializeApp = () => {
   const server: Server = createServer(app);
-  server.listen(PORT, HOST, async () => {
-    console.log(`* App is running at PORT: ${PORT} *`);
-  });
+  server.listen(PORT, HOST);
 };

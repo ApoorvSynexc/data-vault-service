@@ -210,7 +210,6 @@ const restoreObjectData = async (
       status: type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted,
     });
 
-    console.log(`[Restore] No backed-up data found for object ${objectName} under ${csvFilePath}`);
     return [];
   }
 
@@ -427,8 +426,6 @@ export const runSalesforceRollback = async (
       if (!['update', 'delete'].includes(operation)) {
         operation = splitKeys[splitKeys.length - 2] as 'update' | 'delete';
       }
-
-      console.log(JSON.stringify({ operation, splitKeys, key }));
 
       await restoreObjectData(
         restoreJobId,

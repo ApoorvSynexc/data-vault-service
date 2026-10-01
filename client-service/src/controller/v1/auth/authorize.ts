@@ -84,7 +84,6 @@ const authorizationHandler = async (req: IRequest, res: IResponse): Promise<void
     makeResponse(req, res, 200, true, 'fetch', encryptEnvelope(finalResponse, SALESFORCE_ENCRYPTION_KEY));
   } catch (error) {
     logger.error(`Error in authorizeOrganizationHandler: ${error}`);
-    console.log(`STACK TRACE: ${error instanceof Error ? error.stack : 'No stack trace available'}`);
     makeResponse(req, res, 500, false, 'unknown_error');
   }
 };

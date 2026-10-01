@@ -143,16 +143,13 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
 const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
   try {
     await client.send(new DescribeTableCommand({ TableName: def.TableName }));
-    console.log(`Table exists: ${def.TableName}`);
   } catch (err: any) {
     if (err.name !== 'ResourceNotFoundException') {
       throw err;
     }
 
-    console.log(`Creating table: ${def.TableName}`);
     await client.send(new CreateTableCommand(def));
     await waitUntilTableExists({ client, maxWaitTime: 60 }, { TableName: def.TableName });
-    console.log(`Table ready: ${def.TableName}`);
   }
 };
 
@@ -162,7 +159,6 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
 
 const initializeDatabase = async () => {
   // await Promise.all(TABLE_DEFINITIONS.map(ensureTable));
-  console.log(`DynamoDB ready (region: ${AWS_REGION})`);
   return docClient;
 };
 

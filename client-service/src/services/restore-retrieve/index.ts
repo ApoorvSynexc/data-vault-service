@@ -801,9 +801,6 @@ const retrieveMissingFields = async (
   const liveFields = described.fields.filter(isQueryableField).map(toFieldSnapshot);
   const liveNames = new Set(liveFields.map((f) => f.name));
 
-  console.log(`[fetch-missing-fields] S3 stored fields | configId=${backupConfigId} object=${objectApiName}`, JSON.stringify(storedFields));
-  console.log(`[fetch-missing-fields] Salesforce live fields | configId=${backupConfigId} object=${objectApiName}`, JSON.stringify(liveFields));
-
   if (storedFields) {
     const { removedFields } = diffSchemas(storedFields, liveFields);
     for (const field of storedFields) {
