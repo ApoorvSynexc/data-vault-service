@@ -332,11 +332,11 @@ const getBackupConfigsWithPagination = async (
     schedule?: string;
     backupStatus?: string;
     search?: string;
-    withoutLastBackupAt?: boolean;
+    withLastBackupAt?: boolean;
   },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, crmId, type, name, status, destinationId, schedule, backupStatus, search, withoutLastBackupAt } = filter;
+  const { userId, crmId, type, name, status, destinationId, schedule, backupStatus, search, withLastBackupAt } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
@@ -394,7 +394,7 @@ const getBackupConfigsWithPagination = async (
       expressionAttributeValues[':destinationId'] = destinationId;
       expressions.push('destinationId = :destinationId');
     }
-    if (!withoutLastBackupAt) {
+    if (!withLastBackupAt) {
       expressions.push('attribute_exists(lastBackupAt)');
     }
 
