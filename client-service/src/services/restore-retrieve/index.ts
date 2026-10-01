@@ -1073,6 +1073,7 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
 
   // Thrown FilterError is intentionally not caught here — see doc above.
   const whereBody = buildAthenaFilterWhere(params.filter, undefined, resolver);
+  console.log('Athena WHERE clause:', whereBody);
 
   const databaseName = toGlueId(params.backupConfigId);
   const hudiTable = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}_hudi`;
@@ -1155,6 +1156,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
             : t.filter
               ? buildAthenaFilterWhere(t.filter)
               : null;
+          console.log('Athena WHERE clause:', whereBody);
           const hudiTable = `${tableFor(t.objectApiName)}_hudi`;
 
           const count = await runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, whereBody), region, outputLocation);
@@ -1196,6 +1198,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
                 }),
               })
             : null;
+        console.log('Athena WHERE clause:', scopeWhere);
         const counts = await runDeltaCount(
           databaseName,
           `${tableFor(t.objectApiName)}_delta`,
