@@ -116,7 +116,9 @@ export const childHandler = async (
                 metadataType: 'childs',
             });
 
-            await uploadToS3(destConfig, s3Key, buffer);
+            if (params.isUpdateSchemaOnS3 !== false) {
+                await uploadToS3(destConfig, s3Key, buffer);
+            }
 
             // logger.info(
             //     `Object child relationship change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedChilds.length}, removed=${diff.removedChilds.length}, modified=${diff.modifiedChilds.length}`

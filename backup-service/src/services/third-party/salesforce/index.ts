@@ -17,7 +17,7 @@ import {
 import { ICrmBackupHandler } from '../types';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getBackupJob, updateJobStatus } from '../../backup-job';
-import { getRestoreById } from '../../restore';
+import { getRestoreById, updateRestore } from '../../restore';
 import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
 
 import { SalesforceTokens } from './api-request';
@@ -574,6 +574,7 @@ const salesforceHandler: ICrmBackupHandler = {
       logger.info(`Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`);
 
       const freshJob = await getRestoreJobById(restoreJobId);
+      const latestObjects = (freshJob?.destination.objects ?? []);
       const failedObjects = (freshJob?.destination.objects ?? []).filter(
         (obj) => obj.status === JOB_OBJECT_STATUS.restoreFailed
       );
@@ -585,8 +586,20 @@ const salesforceHandler: ICrmBackupHandler = {
         return obj;
       });
 
+      const finalStatus = latestObjects.length === failedObjects.length ?
+        STATUS.failed :
+        failedObjects.length ?
+          STATUS.partialFailure :
+          STATUS.success;
+
+      await updateRestore({
+        restoreId,
+        status: finalStatus
+      });
       await updateRestoreJob({
         restoreJobId,
+        status: finalStatus,
+        completedAt: dayjs().toISOString(),
         replaceObjects: updatedObjects,
       });
 
@@ -716,31 +729,41 @@ const salesforceHandler: ICrmBackupHandler = {
       const reversedHierarchy = reverseHierarchy(hierarchy ?? []);
 
       await rollbackRestoreObjectHierarchy(reversedHierarchy, hierarchyContext);
-
-      const restoreJob = await getRestoreJobById(restoreJobId);
-      if (restoreJob) {
-        const updatedObjects = restoreJob.destination.objects.map((obj) => {
-          if (obj.status === JOB_OBJECT_STATUS.rollbackInProgress) {
-            return {
-              ...obj,
-              status: JOB_OBJECT_STATUS.rollbackCompleted,
-            };
-          }
-          return obj;
-        });
-
-        await updateRestoreJob({
-          restoreJobId,
-          replaceObjects: updatedObjects,
-        });
-      }
-
       logger.info(`Rollback job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`);
 
       const freshJob = await getRestoreJobById(restoreJobId);
+      const latestObjects = (freshJob?.destination.objects ?? []);
       const failedObjects = (freshJob?.destination.objects ?? []).filter(
         (obj) => obj.status === JOB_OBJECT_STATUS.rollbackFailed
       );
+
+      const updatedObjects = (freshJob?.destination.objects ?? []).map((obj) => {
+        if (obj.status === JOB_OBJECT_STATUS.rollbackInProgress) {
+          return {
+            ...obj,
+            status: JOB_OBJECT_STATUS.rollbackCompleted,
+          };
+        }
+        return obj;
+      });
+
+      const finalStatus = latestObjects.length === failedObjects.length ?
+        STATUS.failed :
+        failedObjects.length ?
+          STATUS.partialFailure :
+          STATUS.success;
+
+      await updateRestore({
+        restoreId,
+        status: finalStatus
+      });
+      await updateRestoreJob({
+        restoreJobId,
+        status: finalStatus,
+        completedAt: dayjs().toISOString(),
+        replaceObjects: updatedObjects,
+      });
+
 
       if (failedObjects.length) {
         const restore = await getRestoreById(restoreId);

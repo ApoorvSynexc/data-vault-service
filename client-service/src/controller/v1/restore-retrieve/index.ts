@@ -40,6 +40,7 @@ import {
   getPresignedDownloadUrl,
   checkSalesforceApiLimitUsage,
   getCrmById,
+  hasMetadataChanged,
 } from '../../../services';
 import { STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -1086,11 +1087,11 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   try {
     if (backupConfig.type === 'NORMAL') {
       if (backupConfig.schedule === 'REALTIME') {
-        const result = await runMetadataComparisonForConfig(backupConfig);
+        const result = await runMetadataComparisonForConfig(backupConfig, false);
         for (const { objectName, result: metadataResult } of result) {
-          const operations = getMetadataChangeOperations(metadataResult);
-          const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
-          if (requiresSchemaSync && !changedObjectNames.includes(objectName)) {
+          // const operations = getMetadataChangeOperations(metadataResult);
+          // const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
+          if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
             changedObjectNames.push(objectName);
           }
         }

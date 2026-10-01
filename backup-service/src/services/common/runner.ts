@@ -315,15 +315,15 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       objectHierarchy
     );
 
-    await updateRestoreJobStatus({
-      restoreJobId,
-      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
-      completedAt: dayjs().toISOString(),
-    });
-    await updateRestore({
-      restoreId,
-      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
-    });
+    // await updateRestoreJobStatus({
+    //   restoreJobId,
+    //   status: result === STATUS.failed ? STATUS.failed : STATUS.success,
+    //   completedAt: dayjs().toISOString(),
+    // });
+    // await updateRestore({
+    //   restoreId,
+    //   status: result === STATUS.failed ? STATUS.failed : STATUS.success,
+    // });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
     await updateRestoreJobStatus({
@@ -393,15 +393,15 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       hierarchy
     );
 
-    await updateRestoreJobStatus({
-      restoreJobId,
-      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
-      completedAt: dayjs().toISOString(),
-    });
-    await updateRestore({
-      restoreId,
-      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
-    });
+    // await updateRestoreJobStatus({
+    //   restoreJobId,
+    //   status: result === STATUS.failed ? STATUS.failed : STATUS.success,
+    //   completedAt: dayjs().toISOString(),
+    // });
+    // await updateRestore({
+    //   restoreId,
+    //   status: result === STATUS.failed ? STATUS.failed : STATUS.success,
+    // });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
     await updateRestoreJobStatus({

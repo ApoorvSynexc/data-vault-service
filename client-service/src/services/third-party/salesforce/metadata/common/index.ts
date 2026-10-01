@@ -14,6 +14,7 @@ export interface ISalesforceMetadataHandler {
     objectName: string;
     backupJobId: string;
     isInitialBackup: boolean;
+    isUpdateSchemaOnS3?: boolean;
 }
 
 // `user` isn't needed here any more — every metadataType now gets its latest
