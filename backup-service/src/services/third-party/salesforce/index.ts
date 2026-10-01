@@ -630,7 +630,7 @@ const salesforceHandler: ICrmBackupHandler = {
 
       const restore = await getRestoreById(restoreId);
       if (restore) {
-        const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
+        const backupConfig = await getBackupConfigById(restore.source.backupConfigId);
         const backupConfigName = backupConfig?.name ?? 'N/A';
         const configLabel = restore.jobDetail?.name ?? restoreId;
 
@@ -794,9 +794,9 @@ const salesforceHandler: ICrmBackupHandler = {
 
       if (failedObjects.length) {
         const restore = await getRestoreById(restoreId);
-        const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
-        const backupConfigName = backupConfig?.name ?? '';
         if (restore) {
+          const backupConfig = await getBackupConfigById(restore.source.backupConfigId);
+          const backupConfigName = backupConfig?.name ?? '';
           const objectNames = failedObjects.map((obj) => obj.name).join(', ');
           const configLabel = restore.jobDetail?.name ?? restoreId;
 
