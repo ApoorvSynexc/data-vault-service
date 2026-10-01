@@ -61,13 +61,7 @@ export interface IRestoreScope {
 
 export interface IRestoreSource {
   backupConfigId: string;
-  // BACKUP | ARCHIVAL — which config type backupConfigId belongs to. Optional here
-  // only to tolerate records written before this field existed; the create-restore
-  // Joi schema requires it on every new request.
   configType?: 'BACKUP' | 'ARCHIVAL';
-  // New creates: BACKUP -> ENTIRE | CHANGED_BETWEEN; ARCHIVAL -> ENTIRE | DELETED_BETWEEN
-  // (enforced by the create-restore Joi schema). PARTIAL stays in the union only to
-  // type legacy stored records — the schema no longer accepts it on new requests.
   type?: 'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN' | 'DELETED_BETWEEN';
   startDate?: string;
   endDate?: string;

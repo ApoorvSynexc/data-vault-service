@@ -604,6 +604,8 @@ const salesforceHandler: ICrmBackupHandler = {
       });
 
       const restore = await getRestoreById(restoreId);
+      const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
+      const backupConfigName = backupConfig?.name ?? 'N/A';
       if (restore) {
         const configLabel = restore.jobDetail?.name ?? restoreId;
 
@@ -628,7 +630,7 @@ const salesforceHandler: ICrmBackupHandler = {
               params: {
                 restoreConfigId: restoreId,
                 restoreConfigName: configLabel,
-                backupConfigName: configLabel,
+                backupConfigName,
                 restoreJobId,
                 createdAt: restore.createdAt,
                 totalObjectCount: countObjectsRecursively(updatedObjects),
@@ -656,7 +658,7 @@ const salesforceHandler: ICrmBackupHandler = {
               params: {
                 restoreConfigId: restoreId,
                 restoreConfigName: configLabel,
-                backupConfigName: configLabel,
+                backupConfigName,
                 restoreJobId,
                 createdAt: restore.createdAt,
                 totalObjectCount: countObjectsRecursively(updatedObjects),
@@ -767,6 +769,8 @@ const salesforceHandler: ICrmBackupHandler = {
 
       if (failedObjects.length) {
         const restore = await getRestoreById(restoreId);
+        const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
+        const backupConfigName = backupConfig?.name ?? '';
         if (restore) {
           const objectNames = failedObjects.map((obj) => obj.name).join(', ');
           const configLabel = restore.jobDetail?.name ?? restoreId;
@@ -789,7 +793,7 @@ const salesforceHandler: ICrmBackupHandler = {
               params: {
                 restoreConfigId: restoreId,
                 restoreConfigName: configLabel,
-                backupConfigName: configLabel,
+                backupConfigName,
                 restoreJobId,
                 createdAt: restore.createdAt,
                 totalObjectCount: countObjectsRecursively(freshJob?.destination.objects ?? []),

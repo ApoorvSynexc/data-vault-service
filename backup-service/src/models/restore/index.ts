@@ -59,6 +59,18 @@ export interface IRestoreScope {
   deletedOnly?: boolean;
 }
 
+// Mirrors client-service's models/restore/index.ts IRestoreSource — this is
+// the shape client-service sends as a restore's `source`, so it has to stay
+// in sync with that side.
+export interface IRestoreSource {
+  backupConfigId: string;
+  configType?: 'BACKUP' | 'ARCHIVAL';
+  type?: 'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN' | 'DELETED_BETWEEN';
+  startDate?: string;
+  endDate?: string;
+  backupJobIds: string[];
+}
+
 export interface IRestoreDestination {
   type: string; // SAME | DIFFERENT
   crmId?: string;
@@ -159,9 +171,7 @@ export interface IRestore {
   status: string; // DRAFT | PENDING | RUNNING | SUCCESS | FAILED
   errorMessage?: string;
 
-  source: {
-    backupJobIds: string[];
-  };
+  source: IRestoreSource;
   selection: {
     restoreScope: IRestoreScope;
   };
