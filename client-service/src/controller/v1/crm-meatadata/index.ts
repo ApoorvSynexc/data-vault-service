@@ -479,8 +479,10 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
 
+  const parent = getCascadeDeleteFields(objectDescription.fields);
+
   if (apexMode === 'archival') {
-    const { children, parent } = await buildArchivalChildRelationshipTree({
+    const { children } = await buildArchivalChildRelationshipTree({
       user,
       objectDescription,
       objectName: String(objectName),
@@ -494,7 +496,7 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
     return makeResponse(req, res, 200, true, 'fetch', { children, parent });
   }
 
-  const { children, parent } = await buildChildRelationshipTree({
+  const { children } = await buildChildRelationshipTree({
     user,
     objectDescription,
     objectName: String(objectName),
