@@ -234,7 +234,9 @@ const buildCompressionRootKey = (
   const isArchival = policyConfigType === 'archival';
   const root = isArchival ? 'archival' : 'backup';
   const folder =
-    dataset === 'main_backup_files' && isArchival ? 'main_archival_files' : DATASET_S3_FOLDER[dataset];
+    dataset === 'main_backup_files' && isArchival
+      ? 'main_archival_files'
+      : DATASET_S3_FOLDER[dataset];
   return `${crmName}/${crmId}/${root}/${backupConfigId}/${folder}/${objectName}/`;
 };
 
@@ -435,7 +437,14 @@ const ensureHudiFormatTable = async (
 
   await ensureGlueDatabase(databaseName, destConfig.region);
 
-  const rootKey = buildCompressionRootKey(crmName, crmId, backupConfigId, objectName, dataset, policyConfigType);
+  const rootKey = buildCompressionRootKey(
+    crmName,
+    crmId,
+    backupConfigId,
+    objectName,
+    dataset,
+    policyConfigType
+  );
 
   const syncPartitions = (): Promise<void> =>
     syncHudiTablePartitions(databaseName, tableName, destConfig, rootKey).catch((err: any) => {

@@ -31,7 +31,11 @@ export type EmailAccentKey = keyof typeof EMAIL_ACCENT;
 // renders server-side with no request context) rather than each builder
 // hand-rolling its own.
 export const formatEmailDate = (iso: string): string =>
-  new Date(iso).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }) + ' UTC';
+  new Date(iso).toLocaleString('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'UTC',
+  }) + ' UTC';
 
 interface IRenderEmailParams {
   // Filename (no extension) under ./templates — the small partial with this

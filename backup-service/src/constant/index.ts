@@ -4,7 +4,9 @@ const NODE_ENV = String(process.env.NODE_ENV);
 const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 
 const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || '360 DataCraft');
-const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com');
+const EMAIL_SUPPORT_ADDRESS = String(
+  process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com'
+);
 const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
 const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
 const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
@@ -108,7 +110,7 @@ const STATUS = {
   failed: 'FAILED',
   partialFailure: 'PARTIAL_FAILURE',
   cancelled: 'CANCELLED',
-  
+
   compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
   compressed: 'COMPRESSED',
   compressionFailed: 'COMPRESSION_JOB_FAILED',

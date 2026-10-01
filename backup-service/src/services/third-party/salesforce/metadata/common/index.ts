@@ -42,7 +42,8 @@ export const valuesAreEqual = (a: unknown, b: unknown): boolean => {
     if (a.length !== b.length) {
       return false;
     }
-    const isPrimitiveArray = (arr: unknown[]) => arr.every((v) => v === null || typeof v !== 'object');
+    const isPrimitiveArray = (arr: unknown[]) =>
+      arr.every((v) => v === null || typeof v !== 'object');
     if (isPrimitiveArray(a) && isPrimitiveArray(b)) {
       const sortedA = [...a].sort();
       const sortedB = [...b].sort();
