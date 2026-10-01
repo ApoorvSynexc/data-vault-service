@@ -335,11 +335,8 @@ interface RestoreJobStats {
   pendingRestore: number;
   successRestore: number;
   failedRestore: number;
-  // processedRecordCount already counts both successes and failures (matches
-  // Salesforce Bulk API's numberRecordsProcessed semantics — see
-  // submitIngestChunk in backup-service), so actual successes are the
-  // difference, not processedRecordCount on its own.
   successRecordCount: number;
+  partialFailedRestore: number;
 }
 
 // Mirrors computeJobStats's paginated-scan-and-tally shape (backup-job
@@ -354,6 +351,7 @@ const computeRestoreJobStats = async (query: {
   let totalRestoreJobs = 0;
   let pendingRestore = 0;
   let successRestore = 0;
+  let partialFailedRestore = 0;
   let failedRestore = 0;
   let totalProcessedRecordCount = 0;
   let totalFailedRecordCount = 0;
@@ -383,6 +381,8 @@ const computeRestoreJobStats = async (query: {
         successRestore++;
       } else if (job.status === STATUS.failed) {
         failedRestore++;
+      } else if(job.status === STATUS.partialFailure) {
+        partialFailedRestore++;
       }
 
       for (const object of job.destination.objects ?? []) {
@@ -397,6 +397,7 @@ const computeRestoreJobStats = async (query: {
     pendingRestore,
     successRestore,
     failedRestore,
+    partialFailedRestore,
     successRecordCount: totalProcessedRecordCount - totalFailedRecordCount,
   };
 };
@@ -407,14 +408,9 @@ interface IRestoreOverview {
   pendingStatus: number;
   successStatus: number;
   failedStatus: number;
+  partialFailureStatus: number
 }
 
-// Dashboard overview for restore jobs — same shape as backup-config's
-// getBackupOverview, built on top of computeRestoreJobStats instead of a
-// separate query+tally (that function already does the single paginated
-// userId-index pass this needs). There's no real size tracking for restores,
-// so totalSize is a records-based estimate (records * 2), same as backup
-// config's real sizeInBytes stands in for elsewhere.
 const getRestoreOverview = async (userId: string): Promise<IRestoreOverview> => {
   const stats = await computeRestoreJobStats({
     indexName: 'userId-index',
@@ -428,6 +424,7 @@ const getRestoreOverview = async (userId: string): Promise<IRestoreOverview> => 
     pendingStatus: stats.pendingRestore,
     successStatus: stats.successRestore,
     failedStatus: stats.failedRestore,
+    partialFailureStatus: stats.partialFailedRestore
   };
 };
 
