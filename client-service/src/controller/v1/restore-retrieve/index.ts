@@ -671,10 +671,13 @@ const parseValidateQueryParams = (
  * structurally valid SOQL but doesn't exist on this object's actual schema
  * fails here instead of silently passing.
  *
- * Response: { matched: boolean } — whether at least one record matches. When
- * the object has no compressed Hudi table yet, matched is false rather than
- * an error — the filter is still validated, there's just nothing to run it
- * against.
+ * Response: { matched: boolean, valid: true } — matched is whether at least
+ * one record currently matches; valid confirms the query itself ran/compiled
+ * successfully, independent of matched (a valid filter can legitimately match
+ * zero rows — that's not a validation failure). When the object has no
+ * compressed Hudi table yet, matched is false rather than an error — the
+ * filter is still validated, there's just nothing to run it against, and
+ * valid is still true.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the
  * caller.

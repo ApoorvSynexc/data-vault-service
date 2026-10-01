@@ -29,7 +29,9 @@ import { createRestoreValidation, uploadSingleCsv, bulkCsvUploadRateLimit } from
  * POST /retrieve/validate-query         — validates one object's SOQL FILTER condition by
  *                                         converting it to an Athena WHERE clause and running it
  *                                         (LIMIT 1) against that object's compressed Hudi table —
- *                                         { matched: boolean }
+ *                                         { matched: boolean, valid: true } — valid confirms the
+ *                                         query itself ran successfully, independent of whether
+ *                                         matched is true or false
  * GET  /download-csv                    — for a completed restore job, returns presigned S3 URLs
  *                                         (one per part) so the client downloads the exported
  *                                         CSV(s) for one object directly from S3
