@@ -5,6 +5,7 @@ import { NODE_ENV } from "../constant";
 export interface ISystemSchedulePayload {
     purpose: string;
     isSyncPayment?: boolean;
+    isSyncObject?: boolean;
     isLogsArchive?: boolean;
     isSyncSalesforceRefreshToken?: boolean;
 }
@@ -21,6 +22,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
         scheduleExpression: "cron(0 3 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
+            isSyncObject: true,
             isSyncPayment: true,
             isLogsArchive: true,
             isSyncSalesforceRefreshToken: true,

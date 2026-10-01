@@ -442,39 +442,49 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   let hasComparisonError = false;
   let user;
   const changedObjectNames: string[] = [];
-  if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
-    const result = await runMetadataComparisonForConfig(config, false);
-    for (const { objectName, result: metadataResult } of result) {
-      if (!metadataResult) {
-        hasComparisonError = true;
-        continue;
-      }
-      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-        changedObjectNames.push(objectName);
-      }
-    }
+  try {
 
-    if (hasComparisonError) {
-      logger.warn(
-        `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
-      );
-      return;
-    }
 
-    if (changedObjectNames.length) {
-      user = await getUser({ userId: config.userId });
-      if (!user) {
+    if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
+      const result = await runMetadataComparisonForConfig(config, false);
+      for (const { objectName, result: metadataResult } of result) {
+        if (!metadataResult) {
+          hasComparisonError = true;
+          continue;
+        }
+        if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+          changedObjectNames.push(objectName);
+        }
+      }
+
+      if (hasComparisonError) {
         logger.warn(
-          `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+          `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
         );
         return;
       }
-      await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
+
+      if (changedObjectNames.length) {
+        user = await getUser({ userId: config.userId });
+        if (!user) {
+          logger.warn(
+            `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+          );
+          return;
+        }
+        await checkSalesforceApiLimitUsage(user.userId, config.crmId);
+        await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
+      } else {
+        await initalizePayloadTransform(config.backupConfigId);
+      }
+    } else {
+      initalizePayloadTransform(config.backupConfigId).catch((err) => {
+        logger.error('EMR job failed after response sent:', err?.message ?? err);
+      });
     }
-  } else {
-    initalizePayloadTransform(config.backupConfigId).catch((err) => {
-      logger.error('EMR job failed after response sent:', err?.message ?? err);
-    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown_error';
+    console.log(`[initalizePayloadTransformHandler] error: ${message}`);
   }
 };
 

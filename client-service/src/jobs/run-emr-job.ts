@@ -2,16 +2,17 @@ import { logger } from "../middlewares";
 import { getBackupConfigsInBatches, getUser, initalizePayloadTransform, triggerBackupJob, runMetadataComparisonForConfig, hasMetadataChanged, updateBackupConfig, checkSalesforceApiLimitUsage, cleanupStaleRetrieveObjects } from "../services";
 import { STATUS } from '../constant';
 import { IUser } from "../models";
-import { syncObjects } from "./sync-objects";
-// import { syncObjects } from "./sync-objects";
 
 const runEmrJob = async () => {
+  let totalBackups = 0;
+  let successBackups = 0;
   try {
     await getBackupConfigsInBatches(
       async (configs) => {
         for (let index = 0; index < configs.length; index++) {
           const config = configs[index];
           let user: IUser | null = null;
+          totalBackups++;
 
           try {
             void cleanupStaleRetrieveObjects(config);
@@ -61,30 +62,15 @@ const runEmrJob = async () => {
             } else {
               await initalizePayloadTransform(config.backupConfigId);
             }
+            successBackups++;
           } catch (error) {
             logger.error(`[EMR JOb - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
           }
-
-          if (config.dataset === 'ENTIRE') {
-            try {
-              if (!user) {
-                user = await getUser({ userId: config.userId });
-                if (!user) {
-                  logger.warn(
-                    `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
-                  );
-                  continue;
-                }
-              }
-              await checkSalesforceApiLimitUsage(user.userId, config.crmId);
-              await syncObjects({ backupConfig: config, user });
-            } catch (error) {
-              logger.error(`[EMR JOb SYNC OBJECT - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
-            }
-          }
         }
-      },
+      }
     );
+
+    logger.info(`[emr job - CRON] tick END | ${successBackups}/${totalBackups} successful triggered`);
   } catch (error) {
     logger.error(`[emr job - CRON] tick threw error: ${(error as Error)?.message ?? String(error)}`);
   }
