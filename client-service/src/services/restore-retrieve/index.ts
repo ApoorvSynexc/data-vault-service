@@ -1198,6 +1198,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
                 }),
               })
             : null;
+        console.log('Athena WHERE clause:', scopeWhere);
         const counts = await runDeltaCount(
           databaseName,
           `${tableFor(t.objectApiName)}_delta`,
