@@ -7,7 +7,8 @@ const getLastNBackupJobs = async (userId: string, limit: number, type?: 'NORMAL'
 
   const backupConfigMapping: Record<string, object> = {};
   for (let index = 0; index < items.length; index++) {
-    const element: any = items[index];
+    let element: any = items[index];
+    element = { ...element, source: undefined, destination: { type: element.destination.type } };
     if (backupConfigMapping[element.backupConfigId]) {
       element.backupConfig = backupConfigMapping[element.backupConfigId]
     } else {
@@ -46,7 +47,11 @@ const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> =>
       return makeResponse(req, res, 200, true, 'fetch', jobs);
     }
     case 'restore': {
-      const jobs = await getLastNRestoreJobs(userId, 10);
+      const jobs = await getRestoreJobsByUserId(userId, { limit: 10 });
+      for (let index = 0; index < jobs.length; index++) {
+        let element = jobs[index];
+        element = { ...element, source: { ...element.source, encryptedKeys: (undefined as any) } }
+      }
       return makeResponse(req, res, 200, true, 'fetch', jobs);
     }
     default:
@@ -63,12 +68,12 @@ const overviewV2Handler = async (req: IRequest, res: IResponse): Promise<void> =
     case 'backup': {
       const overview = await getBackupOverview(userId, 'NORMAL');
       const jobOverview = await getBackupJobOverview(userId, 'NORMAL');
-      return makeResponse(req, res, 200, true, 'fetch', {...overview, jobOverview});
+      return makeResponse(req, res, 200, true, 'fetch', { ...overview, jobOverview });
     }
     case 'archival': {
       const overview = await getBackupOverview(userId, 'ARCHIVAL');
       const jobOverview = await getBackupJobOverview(userId, 'ARCHIVAL');
-      return makeResponse(req, res, 200, true, 'fetch', {...overview, jobOverview});
+      return makeResponse(req, res, 200, true, 'fetch', { ...overview, jobOverview });
     }
     case 'restore': {
       const overview = await getRestoreOverview(userId);
