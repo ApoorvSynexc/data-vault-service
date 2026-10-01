@@ -25,6 +25,7 @@ export interface IUser {
     iv: string;
     authTag: string;
   }
+  refreshLockedUntil?: number;
   contact?: {
     email?: string;
     isEmailVerified?: boolean;

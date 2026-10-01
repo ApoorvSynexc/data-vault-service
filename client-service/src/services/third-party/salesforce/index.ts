@@ -1,11 +1,14 @@
 import crypto from 'crypto';
+import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { httpRequest } from '../../../utils/http-request';
 import {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
   SALESFORCE_METADATA_API_VERSION,
+  USER_TABLE,
 } from '../../../constant';
+import { docClient } from '../../../config';
 import { encrypt } from '../../../utils/encryption';
 import { getDecryptedCrmCredential, getUser, updateUser } from '../../user';
 import { logger } from '../../../middlewares';
@@ -110,12 +113,21 @@ const salesforceRequest = async <T = any>(
     }
     logger.info(`Salesforce request got 401, refreshing token: ${error?.message}`);
 
-    // Access token expired — refresh and retry once.
-    // Use deduplicatedRefresh when crmId is available so that N concurrent
-    // callers on the same CRM share a single refresh call instead of racing.
-    let refreshed: any;
+    // Access token expired — refresh and retry once. Deduped per-userId so N
+    // concurrent callers for the same user share a single refresh+persist
+    // instead of racing (see refreshAndPersistSalesforceToken above).
+    let refreshed: RefreshedCrmCredential;
     try {
-      refreshed = await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
+      if (tokens.userId) {
+        refreshed = await refreshAndPersistSalesforceToken(
+          tokens.userId,
+          tokens.refreshToken,
+          tokens.environment,
+          tokens.customUrl
+        );
+      } else {
+        refreshed = await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
+      }
     } catch (e: any) {
       logger.error(`Salesforce token refresh failed: ${e?.message}`);
       // Refresh token also expired — user must reconnect
@@ -123,15 +135,6 @@ const salesforceRequest = async <T = any>(
     }
 
     const newAccessToken: string = refreshed.access_token;
-
-    if (tokens.userId) {
-      const crmCredential = {
-        access_token: refreshed.access_token,
-        refresh_token: refreshed.refresh_token || tokens.refreshToken,
-      }
-      const encrptedCrm = encrypt(JSON.stringify(crmCredential));
-      await updateUser({ userId: tokens.userId }, { crmCredential: encrptedCrm });
-    }
 
     const data = await makeCall(newAccessToken);
     return { data, accessToken: newAccessToken };
@@ -219,6 +222,129 @@ const refreashSalesforceToken = async (
       client_secret: SALESFORCE_CLIENT_SECRET,
       refresh_token: refreshToken,
     }).toString(),
+  });
+};
+
+interface RefreshedCrmCredential {
+  access_token: string;
+  refresh_token: string;
+}
+
+// Dedups concurrent refreshes within this process (same userId).
+const inFlightSalesforceRefreshes = new Map<string, Promise<RefreshedCrmCredential>>();
+const REFRESH_LOCK_TTL_MS = 15_000;
+const REFRESH_LOCK_POLL_INTERVAL_MS = 500;
+const REFRESH_LOCK_MAX_WAIT_MS = REFRESH_LOCK_TTL_MS + 5_000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// Returns the fencing token (the lockUntil value this call wrote) on success,
+// or null if another instance currently holds the lock. The token lets
+// release target only the lock *this* call acquired — see below.
+const acquireSalesforceRefreshLock = async (userId: string): Promise<number | null> => {
+  const now = Date.now();
+  const lockUntil = now + REFRESH_LOCK_TTL_MS;
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: USER_TABLE,
+        Key: { userId },
+        UpdateExpression: 'SET refreshLockedUntil = :lockUntil',
+        ConditionExpression: 'attribute_not_exists(refreshLockedUntil) OR refreshLockedUntil < :now',
+        ExpressionAttributeValues: {
+          ':lockUntil': lockUntil,
+          ':now': now,
+        },
+      })
+    );
+    return lockUntil;
+  } catch (error: any) {
+    if (error?.name === 'ConditionalCheckFailedException') {
+      return null;
+    }
+    throw error;
+  }
+};
+
+// Only clears the lock if it still holds the exact value we set when we
+// acquired it. Without this check, a refresh that overran the TTL (so
+// another instance legitimately took over the lock) would delete that
+// instance's still-active lock out from under it on release.
+const releaseSalesforceRefreshLock = async (userId: string, lockToken: number): Promise<void> => {
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: USER_TABLE,
+        Key: { userId },
+        UpdateExpression: 'REMOVE refreshLockedUntil',
+        ConditionExpression: 'refreshLockedUntil = :lockToken',
+        ExpressionAttributeValues: { ':lockToken': lockToken },
+      })
+    );
+  } catch (error: any) {
+    if (error?.name === 'ConditionalCheckFailedException') {
+      // Our lock already expired and someone else owns it now — leave it alone.
+      return;
+    }
+    logger.error(`Failed to release Salesforce refresh lock for user ${userId}: ${error?.message}`);
+  }
+};
+
+// Lock is held by another instance — rather than redeeming the refresh_token
+// ourselves (risking invalid_grant on a rotated token), wait for the holder
+// to finish and read back whatever it persisted.
+const waitForSalesforceRefreshToComplete = async (userId: string): Promise<RefreshedCrmCredential> => {
+  const deadline = Date.now() + REFRESH_LOCK_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleep(REFRESH_LOCK_POLL_INTERVAL_MS);
+    const user = await getUser({ userId });
+    const stillLocked = !!user?.refreshLockedUntil && user.refreshLockedUntil > Date.now();
+    if (!stillLocked) {
+      const { access_token, refresh_token } = getDecryptedCrmCredential(user);
+      if (access_token) {
+        return { access_token, refresh_token };
+      }
+      break;
+    }
+  }
+  throw new Error(`Timed out waiting for concurrent Salesforce token refresh (userId=${userId})`);
+};
+
+const refreshAndPersistSalesforceToken = (
+  userId: string,
+  refreshToken: string,
+  environment?: SalesforceEnvironment,
+  customUrl?: string
+): Promise<RefreshedCrmCredential> => {
+  const existing = inFlightSalesforceRefreshes.get(userId);
+  if (existing) {
+    return existing;
+  }
+
+  const refreshPromise = (async (): Promise<RefreshedCrmCredential> => {
+    const lockToken = await acquireSalesforceRefreshLock(userId);
+    if (lockToken === null) {
+      return waitForSalesforceRefreshToComplete(userId);
+    }
+
+    try {
+      const refreshed = await refreashSalesforceToken(refreshToken, environment, customUrl);
+      const crmCredential: RefreshedCrmCredential = {
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token || refreshToken,
+      };
+      const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+      await updateUser({ userId }, { crmCredential: encrptedCrm });
+      return crmCredential;
+    } finally {
+      await releaseSalesforceRefreshLock(userId, lockToken);
+    }
+  })();
+
+  inFlightSalesforceRefreshes.set(userId, refreshPromise);
+
+  return refreshPromise.finally(() => {
+    inFlightSalesforceRefreshes.delete(userId);
   });
 };
 
@@ -321,6 +447,7 @@ export {
   getSalesforceToken,
   getSalesforceProfile,
   refreashSalesforceToken,
+  refreshAndPersistSalesforceToken,
   salesforceRequest,
   getSalesforceOrgLimits,
   checkSalesforceApiLimitUsage,
