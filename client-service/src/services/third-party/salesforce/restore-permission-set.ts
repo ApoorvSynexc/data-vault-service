@@ -1,7 +1,6 @@
 import { salesforceRequest, SalesforceTokens } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
 import { IRestoreTrackingField } from './restore-fields';
-import { logger } from '../../../middlewares';
 
 // Label carries the '360 ...' branding; the API/developer name can't start
 // with a digit (Salesforce naming rule for any metadata fullName — the same
@@ -143,12 +142,6 @@ const computeMissingGrants = async (
   );
 
   const objectsNeeded = new Set([...objectsMissingPermission, ...missingFieldsByObject.keys()]);
-  const skipped = objectApiNames.filter((name) => !objectsNeeded.has(name));
-  if (skipped.length) {
-    logger.info(
-      `[restore-permission-set] already fully granted, skipping | permissionSetId=${permissionSetId} objects=${skipped.join(',')}`
-    );
-  }
 
   return {
     objectApiNames: objectApiNames.filter((name) => objectsNeeded.has(name)),
@@ -353,9 +346,6 @@ const assignPermissionSetToUser = async (
 
   const expired = data.records[0];
   if (expired) {
-    logger.info(
-      `[restore-permission-set] reactivating expired assignment | assignmentId=${expired.Id} assigneeId=${salesforceUserId} permissionSetId=${permissionSetId}`
-    );
     await salesforceRequest(
       {
         url: `${instanceUrl}/services/data/v${METADATA_API_VERSION}/sobjects/PermissionSetAssignment/${expired.Id}`,

@@ -42,6 +42,5 @@ export const initializeApp = () => {
   const server: Server = createServer(app);
   server.listen(PORT, HOST, async () => {
     startCron();
-    console.log(`* App is running at PORT: ${PORT} *`);
   });
 };
