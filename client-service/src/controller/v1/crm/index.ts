@@ -170,10 +170,11 @@ const crmListHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   }
 
   for (let index = 0; index < users.length; index++) {
+    users[index] = { ...users[index], password: undefined, crmCredential: undefined };
     const currentUser = users[index];
     const crm = await getCrmById(currentUser.crmId!);
     if (crm) {
-      (users[index] as any).crm = crm;
+      (users[index] as any).crm = { ...crm, encryptionKey: undefined, apiKey: undefined, paymentToken: undefined };
     }
   }
   makeResponse(req, res, 200, true, 'fetch', users);
@@ -213,7 +214,7 @@ const updateCrmHandler = async (req: IRequest, res: IResponse): Promise<void> =>
 
   const updatedCrm = await updateCrm(String(crmId), body);
 
-  makeResponse(req, res, 200, true, 'update', updatedCrm);
+  makeResponse(req, res, 200, true, 'update', {...updatedCrm, encryptionKey: undefined, apiKey: undefined, paymentToken: undefined});
 };
 
 const crmDeleteHandler = async (req: IRequest, res: IResponse): Promise<void> => {

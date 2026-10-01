@@ -19,8 +19,8 @@ const overview = async (req: IRequest, res: IResponse): Promise<void> => {
 
     const payload = {
         backupConfigSizeRecord,
-         lastBackupJob,
-          monthlyStats
+        lastBackupJob: { ...lastBackupJob, source: undefined, destination: { type: lastBackupJob?.destination.type } },
+        monthlyStats
     }
 
     makeResponse(req, res, 200, true, 'fetch', payload);

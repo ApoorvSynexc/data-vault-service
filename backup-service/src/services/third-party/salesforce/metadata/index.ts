@@ -167,8 +167,6 @@ export const salesforceObjectFilteredList = async (
     'tagset',
     'comment',
     'changeevent',
-    'e',
-    'et',
   ];
   const objectsList = await salesforceObjectList(instanceUrl, tokens);
   let filteredObjects = objectsList.filter(
