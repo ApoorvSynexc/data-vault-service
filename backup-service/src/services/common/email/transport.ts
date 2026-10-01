@@ -1,5 +1,10 @@
 import nodemailer, { Transporter } from 'nodemailer';
-import { EMAIL_SMTP_USER, EMAIL_SMTP_APP_PASSWORD, EMAIL_FROM_ADDRESS, EMAIL_COMPANY_NAME } from '../../../constant';
+import {
+  EMAIL_SMTP_USER,
+  EMAIL_SMTP_APP_PASSWORD,
+  EMAIL_FROM_ADDRESS,
+  EMAIL_COMPANY_NAME,
+} from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 
 // Built lazily (not at import time) so a missing EMAIL_SMTP_* env var only
@@ -43,9 +48,13 @@ export const dispatchMail = async ({ to, subject, html }: ISendMailPayload): Pro
       subject,
       html,
     });
-    logger.info(`[email] sent | to:${Array.isArray(to) ? to.join(',') : to} subject:"${subject}" messageId:${info.messageId}`);
+    logger.info(
+      `[email] sent | to:${Array.isArray(to) ? to.join(',') : to} subject:"${subject}" messageId:${info.messageId}`
+    );
   } catch (err: any) {
-    logger.error(`[email] send failed | to:${Array.isArray(to) ? to.join(',') : to} subject:"${subject}" err:${err?.message ?? err}`);
+    logger.error(
+      `[email] send failed | to:${Array.isArray(to) ? to.join(',') : to} subject:"${subject}" err:${err?.message ?? err}`
+    );
     throw err;
   }
 };

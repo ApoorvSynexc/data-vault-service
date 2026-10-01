@@ -25,7 +25,11 @@ import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { runSalesforceRestore, runSalesforceRollback } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
-import { buildParentToChildHierarchy, recursivelyFlatten, reverseHierarchy } from '../../../utils/helper';
+import {
+  buildParentToChildHierarchy,
+  recursivelyFlatten,
+  reverseHierarchy,
+} from '../../../utils/helper';
 import { notifyJobOutcome } from '../../../utils/notification';
 import dayjs from 'dayjs';
 
@@ -37,7 +41,9 @@ const MAX_RETRIES = 3;
 const sumProcessedRecords = (objects: IRestoreJobObject[]): number =>
   objects.reduce(
     (sum, obj) =>
-      sum + (obj.processedRecordCount ?? 0) + (obj.children ? sumProcessedRecords(obj.children) : 0),
+      sum +
+      (obj.processedRecordCount ?? 0) +
+      (obj.children ? sumProcessedRecords(obj.children) : 0),
     0
   );
 
@@ -46,7 +52,9 @@ const sumProcessedRecords = (objects: IRestoreJobObject[]): number =>
 const countObjectsRecursively = (objects: { children?: unknown[] }[]): number =>
   objects.reduce(
     (count, obj) =>
-      count + 1 + (obj.children ? countObjectsRecursively(obj.children as { children?: unknown[] }[]) : 0),
+      count +
+      1 +
+      (obj.children ? countObjectsRecursively(obj.children as { children?: unknown[] }[]) : 0),
     0
   );
 
@@ -55,7 +63,9 @@ const countObjectsRecursively = (objects: { children?: unknown[] }[]): number =>
 const sumBackupRecordCount = (objects: IBackupObject[]): number =>
   objects.reduce(
     (sum, obj) =>
-      sum + (obj.completedRecordCount ?? 0) + (obj.children ? sumBackupRecordCount(obj.children) : 0),
+      sum +
+      (obj.completedRecordCount ?? 0) +
+      (obj.children ? sumBackupRecordCount(obj.children) : 0),
     0
   );
 
@@ -170,7 +180,11 @@ const restoreObjectHierarchy = async (
   ctx: RestoreHierarchyContext
 ): Promise<boolean> => {
   let hasFailure = false;
-  const currentNode = { name: node.name, id: uuidv4(), status: JOB_OBJECT_STATUS.restoreInProgress };
+  const currentNode = {
+    name: node.name,
+    id: uuidv4(),
+    status: JOB_OBJECT_STATUS.restoreInProgress,
+  };
   const object = ctx.recurvedObject.find((obj) => obj.name === node.name);
 
   if (object) {
@@ -211,7 +225,11 @@ const rollbackRestoreObjectHierarchy = async (
   let hasFailure = false;
 
   for (const node of nodes) {
-    const currentNode = { name: node.name, id: uuidv4(), status: JOB_OBJECT_STATUS.rollbackInProgress };
+    const currentNode = {
+      name: node.name,
+      id: uuidv4(),
+      status: JOB_OBJECT_STATUS.rollbackInProgress,
+    };
     const object = ctx.recurvedObject.find((obj) => obj.name === node.name);
 
     if (object) {
@@ -316,11 +334,12 @@ const salesforceHandler: ICrmBackupHandler = {
       failedStatus.includes(obj.status ?? '')
     );
 
-    const finalStatus = latestObjects.length === failedObjects.length ?
-      STATUS.failed :
-      failedObjects.length ?
-        STATUS.partialFailure :
-        STATUS.success;
+    const finalStatus =
+      latestObjects.length === failedObjects.length
+        ? STATUS.failed
+        : failedObjects.length
+          ? STATUS.partialFailure
+          : STATUS.success;
 
     await updateBackupConfig(backupConfigId, {
       backupStatus: finalStatus,
@@ -357,7 +376,9 @@ const salesforceHandler: ICrmBackupHandler = {
             backupConfigName: configLabel,
             crmName,
             backupJobId,
-            configType: backupConfig.type as typeof BACKUP_TYPE.normal | typeof BACKUP_TYPE.archival,
+            configType: backupConfig.type as
+              | typeof BACKUP_TYPE.normal
+              | typeof BACKUP_TYPE.archival,
             dataset: backupConfig.dataset,
             jobType: completedJob?.jobType ?? 'BULK',
             createdAt: completedJob?.createdAt ?? dayjs().toISOString(),
@@ -452,11 +473,12 @@ const salesforceHandler: ICrmBackupHandler = {
       ARCHIVAL_FAILURE_STATUSES.has(obj.status ?? '')
     );
 
-    const finalStatus = latestObjects.length === failedObjects.length ?
-      STATUS.failed :
-      failedObjects.length ?
-        STATUS.partialFailure :
-        STATUS.success;
+    const finalStatus =
+      latestObjects.length === failedObjects.length
+        ? STATUS.failed
+        : failedObjects.length
+          ? STATUS.partialFailure
+          : STATUS.success;
 
     await updateBackupConfig(backupConfigId, {
       backupStatus: finalStatus,
@@ -494,7 +516,9 @@ const salesforceHandler: ICrmBackupHandler = {
             backupConfigName: configLabel,
             crmName: source.crmName,
             backupJobId,
-            configType: backupConfig.type as typeof BACKUP_TYPE.normal | typeof BACKUP_TYPE.archival,
+            configType: backupConfig.type as
+              | typeof BACKUP_TYPE.normal
+              | typeof BACKUP_TYPE.archival,
             dataset: backupConfig.dataset,
             jobType: freshJob?.jobType ?? 'BULK',
             createdAt: freshJob?.createdAt ?? dayjs().toISOString(),
@@ -574,7 +598,7 @@ const salesforceHandler: ICrmBackupHandler = {
       logger.info(`Restore job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`);
 
       const freshJob = await getRestoreJobById(restoreJobId);
-      const latestObjects = (freshJob?.destination.objects ?? []);
+      const latestObjects = freshJob?.destination.objects ?? [];
       const failedObjects = (freshJob?.destination.objects ?? []).filter(
         (obj) => obj.status === JOB_OBJECT_STATUS.restoreFailed
       );
@@ -586,15 +610,16 @@ const salesforceHandler: ICrmBackupHandler = {
         return obj;
       });
 
-      const finalStatus = latestObjects.length === failedObjects.length ?
-        STATUS.failed :
-        failedObjects.length ?
-          STATUS.partialFailure :
-          STATUS.success;
+      const finalStatus =
+        latestObjects.length === failedObjects.length
+          ? STATUS.failed
+          : failedObjects.length
+            ? STATUS.partialFailure
+            : STATUS.success;
 
       await updateRestore({
         restoreId,
-        status: finalStatus
+        status: finalStatus,
       });
       await updateRestoreJob({
         restoreJobId,
@@ -604,9 +629,9 @@ const salesforceHandler: ICrmBackupHandler = {
       });
 
       const restore = await getRestoreById(restoreId);
-      const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
-      const backupConfigName = backupConfig?.name ?? 'N/A';
       if (restore) {
+        const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
+        const backupConfigName = backupConfig?.name ?? 'N/A';
         const configLabel = restore.jobDetail?.name ?? restoreId;
 
         if (failedObjects.length) {
@@ -734,7 +759,7 @@ const salesforceHandler: ICrmBackupHandler = {
       logger.info(`Rollback job completed, restoreId=${restoreId}, restoreJobId=${restoreJobId}`);
 
       const freshJob = await getRestoreJobById(restoreJobId);
-      const latestObjects = (freshJob?.destination.objects ?? []);
+      const latestObjects = freshJob?.destination.objects ?? [];
       const failedObjects = (freshJob?.destination.objects ?? []).filter(
         (obj) => obj.status === JOB_OBJECT_STATUS.rollbackFailed
       );
@@ -749,15 +774,16 @@ const salesforceHandler: ICrmBackupHandler = {
         return obj;
       });
 
-      const finalStatus = latestObjects.length === failedObjects.length ?
-        STATUS.failed :
-        failedObjects.length ?
-          STATUS.partialFailure :
-          STATUS.success;
+      const finalStatus =
+        latestObjects.length === failedObjects.length
+          ? STATUS.failed
+          : failedObjects.length
+            ? STATUS.partialFailure
+            : STATUS.success;
 
       await updateRestore({
         restoreId,
-        status: finalStatus
+        status: finalStatus,
       });
       await updateRestoreJob({
         restoreJobId,
@@ -765,7 +791,6 @@ const salesforceHandler: ICrmBackupHandler = {
         completedAt: dayjs().toISOString(),
         replaceObjects: updatedObjects,
       });
-
 
       if (failedObjects.length) {
         const restore = await getRestoreById(restoreId);

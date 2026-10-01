@@ -59,7 +59,11 @@ export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> 
   if (job.status === STATUS.success) {
     throw new HttpError(409, `Backup job ${backupJobId} already completed successfully`);
   }
-  if (job.status === STATUS.partialFailure || job.status === STATUS.failed || job.status === STATUS.cancelled) {
+  if (
+    job.status === STATUS.partialFailure ||
+    job.status === STATUS.failed ||
+    job.status === STATUS.cancelled
+  ) {
     return job; // allow retry on any non-success terminal state
   }
   // status stays PENDING for a job's whole in-flight duration now — an
@@ -218,7 +222,9 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
             id: obj.id,
             errorMessage: '',
             deletedfailedRecordCount: 0,
-            ...(st !== JOB_OBJECT_STATUS.deletionRecordsFailed ? { deletedSuccessRecordCount: 0 } : {}),
+            ...(st !== JOB_OBJECT_STATUS.deletionRecordsFailed
+              ? { deletedSuccessRecordCount: 0 }
+              : {}),
           },
         });
       }
@@ -249,7 +255,6 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     //   status: finalJobStatus,
     //   completedAt: dayjs().toISOString(),
     // });
-
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
     await Promise.all([
@@ -306,7 +311,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
     const restoreDestination = destination as unknown as IRestoreJobDestination;
 
     const handler = getRestoreCrmHandler(restoreDestination.crmName);
-    const result = await handler.runRestore(
+    await handler.runRestore(
       restoreId,
       restoreJobId,
       restoreSource,
@@ -384,7 +389,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
     const restoreDestination = destination as unknown as IRestoreJobDestination;
 
     const handler = getRestoreCrmHandler(restoreDestination.crmName);
-    const result = await handler.runRollback(
+    await handler.runRollback(
       restoreId,
       restoreJobId,
       restoreSource,

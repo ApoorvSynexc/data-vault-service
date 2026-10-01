@@ -259,7 +259,9 @@ export const exportFirstTime = async (
       await updateBackupObject({
         backupJobId,
         objectIndex,
-        status: totalRecordCount ? JOB_OBJECT_STATUS.bulkQueryCompleted : JOB_OBJECT_STATUS.uploadCompleted,
+        status: totalRecordCount
+          ? JOB_OBJECT_STATUS.bulkQueryCompleted
+          : JOB_OBJECT_STATUS.uploadCompleted,
         bulkJobId: jobId,
         salesforceApiCount,
       });
@@ -439,7 +441,9 @@ export const exportIncremental = async (
       await updateBackupObject({
         backupJobId,
         objectIndex,
-        status: totalRecordCount ? JOB_OBJECT_STATUS.bulkQueryCompleted : JOB_OBJECT_STATUS.uploadCompleted,
+        status: totalRecordCount
+          ? JOB_OBJECT_STATUS.bulkQueryCompleted
+          : JOB_OBJECT_STATUS.uploadCompleted,
         bulkJobId,
         salesforceApiCount,
       });

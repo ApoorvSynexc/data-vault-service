@@ -304,11 +304,12 @@ const classifyAndUploadBulkResultsByPage = async (
             const createdDate = createdDateIdx >= 0 ? fields[createdDateIdx] : null;
             const lastModifiedDate = lastModifiedDateIdx >= 0 ? fields[lastModifiedDateIdx] : null;
 
-            const isNewRecord = (createdDate && lastUpdatedAt) ?
-              new Date(createdDate) >= new Date(lastUpdatedAt) :
-              createdDate === lastModifiedDate ?
-                true :
-                false;
+            const isNewRecord =
+              createdDate && lastUpdatedAt
+                ? new Date(createdDate) >= new Date(lastUpdatedAt)
+                : createdDate === lastModifiedDate
+                  ? true
+                  : false;
 
             if (isNewRecord) {
               insertRows.push(row);

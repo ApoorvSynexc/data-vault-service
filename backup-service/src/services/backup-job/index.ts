@@ -480,7 +480,8 @@ const getStaleRunningJobs = async (
         // a terminal status, and not touched in a while — status itself stays
         // PENDING for the whole in-flight duration, so it's no longer part of
         // this filter.
-        FilterExpression: 'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
+        FilterExpression:
+          'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
         ExpressionAttributeNames: { '#status': 'status' },
         ExpressionAttributeValues: { ':pending': STATUS.pending, ':cutoff': cutoff },
         ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),

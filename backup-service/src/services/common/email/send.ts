@@ -1,7 +1,10 @@
 import { EMAIL_TEMPLATE } from '../../../constant';
 import { dispatchMail } from './transport';
 import { buildBackupJobFailureEmail, IBackupJobFailureEmailParams } from './backup-job-failure';
-import { buildArchivalJobFailureEmail, IArchivalJobFailureEmailParams } from './archival-job-failure';
+import {
+  buildArchivalJobFailureEmail,
+  IArchivalJobFailureEmailParams,
+} from './archival-job-failure';
 import { buildRestoreCompleteEmail, IRestoreCompleteEmailParams } from './restore-complete';
 import { buildRestoreFailureEmail, IRestoreFailureEmailParams } from './restore-failure';
 import { buildRollbackFailureEmail, IRollbackFailureEmailParams } from './rollback-failure';
@@ -43,7 +46,10 @@ const buildEmail = (payload: SendEmailPayload) => {
  * which `params` shape each EMAIL_TEMPLATE member expects) and delivers it
  * via the configured SMTP transport (./transport.ts).
  */
-export const sendEmail = async (to: string | string[], payload: SendEmailPayload): Promise<void> => {
+export const sendEmail = async (
+  to: string | string[],
+  payload: SendEmailPayload
+): Promise<void> => {
   const { subject, html } = buildEmail(payload);
   await dispatchMail({ to, subject, html });
 };

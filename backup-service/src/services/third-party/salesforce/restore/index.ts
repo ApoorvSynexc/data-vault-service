@@ -131,7 +131,13 @@ const submitIngestChunk = async (
   s3Config: IDestinationConfig,
   successfulResultsPath: string,
   type: 'RESTORE' | 'ROLLBACK'
-): Promise<{ processed: number; failed: number; jobId: string; errors: string[]; status: BulkJobState }> => {
+): Promise<{
+  processed: number;
+  failed: number;
+  jobId: string;
+  errors: string[];
+  status: BulkJobState;
+}> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({
     instanceUrl,
@@ -207,7 +213,10 @@ const restoreObjectData = async (
       objectName,
       processedRecordCount: 0,
       failedRecordCount: 0,
-      status: type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted,
+      status:
+        type === 'RESTORE'
+          ? JOB_OBJECT_STATUS.restoreCompleted
+          : JOB_OBJECT_STATUS.rollbackCompleted,
     });
 
     return [];
@@ -254,8 +263,12 @@ const restoreObjectData = async (
       processedRecordCount: job.processed,
       failedRecordCount: job.failed,
       status: jobFailed
-        ? (type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreFailed : JOB_OBJECT_STATUS.rollbackFailed)
-        : (type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted),
+        ? type === 'RESTORE'
+          ? JOB_OBJECT_STATUS.restoreFailed
+          : JOB_OBJECT_STATUS.rollbackFailed
+        : type === 'RESTORE'
+          ? JOB_OBJECT_STATUS.restoreCompleted
+          : JOB_OBJECT_STATUS.rollbackCompleted,
       errors: job.errors.length ? job.errors : undefined,
     });
     logger.info(
