@@ -1156,6 +1156,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
             : t.filter
               ? buildAthenaFilterWhere(t.filter)
               : null;
+          console.log('Athena WHERE clause:', whereBody);
           const hudiTable = `${tableFor(t.objectApiName)}_hudi`;
 
           const count = await runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, whereBody), region, outputLocation);
