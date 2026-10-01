@@ -2,7 +2,7 @@ import { STATUS } from "../constant";
 import { logger } from "../middlewares";
 import { IBackupConfig, IObject, IUser } from "../models";
 import { v4 as uuidv4 } from 'uuid';
-import { createTriggers, deleteTriggers, getCrmById, getDecryptedCrmCredential, getDecryptedDestinationConfig, getDestinationById, getSourceObjects, submitBackupJobRequest, SalesforceAuthExpiredError, SalesforceTokens, updateBackupConfig } from "../services";
+import { createTriggers, deleteTriggers, getCrmById, getDecryptedCrmCredential, getDecryptedDestinationConfig, getDestinationById, getSourceObjects, submitBackupJobRequest, SalesforceAuthExpiredError, SalesforceTokens, updateBackupConfig, getBackupConfigsInBatches, getUser, checkSalesforceApiLimitUsage } from "../services";
 import { salesforceObjectFilteredList } from "../services/third-party/salesforce/metadata/index";
 
 interface ISyncObject {
@@ -100,6 +100,46 @@ const syncObjects = async (params: ISyncObject) => {
     }
 };
 
+const runSyncObjectJob = async () => {
+    let totalBackups = 0;
+    let successBackups = 0;
+    try {
+        await getBackupConfigsInBatches(
+            async (configs) => {
+                for (let index = 0; index < configs.length; index++) {
+                    const config = configs[index];
+                    let user: IUser | null = null;
+                    totalBackups++;
+
+                    if (config.dataset === 'ENTIRE') {
+                        try {
+                            if (!user) {
+                                user = await getUser({ userId: config.userId });
+                                if (!user) {
+                                    logger.warn(
+                                        `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+                                    );
+                                    continue;
+                                }
+                            }
+                            await checkSalesforceApiLimitUsage(user.userId, config.crmId);
+                            await syncObjects({ backupConfig: config, user });
+                            successBackups++;
+                        } catch (error) {
+                            logger.error(`[EMR JOb SYNC OBJECT - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+                        }
+                    }
+                }
+            }
+        );
+
+        logger.info(`[SYNC-OBJECTS - CRON] ${successBackups}/${totalBackups} synced successfully`);
+    } catch (error) {
+        logger.error(`[SYNC-OBJECTS - CRON] tick threw error: ${(error as Error)?.message ?? String(error)}`);
+    }
+}
+
 export {
+    runSyncObjectJob,
     syncObjects
 }
