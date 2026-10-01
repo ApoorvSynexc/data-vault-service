@@ -1073,6 +1073,7 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
 
   // Thrown FilterError is intentionally not caught here — see doc above.
   const whereBody = buildAthenaFilterWhere(params.filter, undefined, resolver);
+  console.log('Athena WHERE clause:', whereBody);
 
   const databaseName = toGlueId(params.backupConfigId);
   const hudiTable = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}_hudi`;
