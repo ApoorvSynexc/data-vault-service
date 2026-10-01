@@ -12,8 +12,9 @@ import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 
-const sanitize = ({ destination, ...rest }: IBackupJob) => ({
+const sanitizeEncryption = ({ destination, ...rest }: IBackupJob) => ({
   ...rest,
+  source : undefined,
   destination: { type: destination.type },
 });
 
@@ -39,7 +40,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
       getTableCounter(BACKUP_JOB_TABLE, config.backupConfigId),
     ]);
 
-    makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
+    makeResponse(req, res, 200, true, 'fetch', items.map(sanitizeEncryption), {
       limit: limitNum,
       nextCursor,
       totalRecords: counter?.count ?? 0,
@@ -53,7 +54,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
     getTableCounter(BACKUP_JOB_TABLE, userId),
   ]);
 
-  makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
+  makeResponse(req, res, 200, true, 'fetch', items.map(sanitizeEncryption), {
     limit: limitNum,
     nextCursor,
     totalRecords: counter?.count ?? 0,

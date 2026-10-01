@@ -21,6 +21,7 @@ const myProfileHandler = async (req: IRequest, res: IResponse) => {
     ...user,
     role: { ...user.role, description: role?.description ?? '', permissions: role?.permissions },
     password: undefined,
+    crmCredential: undefined
   });
 };
 
