@@ -1,14 +1,11 @@
 import { salesforceRequest, SalesforceTokens } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
-import { IRestoreTrackingField } from './restore-fields';
 import { logger } from '../../../middlewares';
-
-// Label carries the '360 ...' branding; the API/developer name can't start
-// with a digit (Salesforce naming rule for any metadata fullName — the same
-// constraint eca-permission-set.ts documents for its own permission set),
-// hence the label/name split.
-export const RESTORE_PERMISSION_SET_LABEL = '360 Data Craft Restore Permission Set';
-export const RESTORE_PERMISSION_SET_NAME = 'Data_Craft_Restore_Permission_Set';
+import {
+  IRestoreTrackingField,
+  SALESFORCE_RESTORE_PERMISSION_SET_NAME as RESTORE_PERMISSION_SET_NAME,
+  SALESFORCE_RESTORE_PERMISSION_SET_LABEL as RESTORE_PERMISSION_SET_LABEL,
+} from '../../../constant';
 
 const soqlUrl = (instanceUrl: string, soql: string): string =>
   `${instanceUrl}/services/data/v${METADATA_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
@@ -278,7 +275,7 @@ const deployRestorePermissions = async (
 interface ISalesforceReferenceField {
   type: string;
   referenceTo?: string[];
-  nillable: boolean;
+  cascadeDelete: boolean;
 }
 
 const describeObjectFields = async (
@@ -293,22 +290,26 @@ const describeObjectFields = async (
   return data.fields;
 };
 
-// Discovers every object a required reference puts between it and the
-// selected objects — walked all the way to the top of the chain, not just
-// one level. A master-detail reference is always non-nillable; an admin-
-// marked-Required lookup is non-nillable too — Salesforce's object-permission
-// dependency rule ("Read X depends on permission(s): Read Y", see
-// parseMissingPermissions below) applies identically to both, so both are
-// discovered the same way here without needing to separately detect
-// master-detail via cascadeDelete.
+// Discovers every master-detail parent standing between a selected object and
+// the top of its reference chain — not required lookups, which don't carry
+// the same object-permission dependency rule (see parseMissingPermissions
+// below) and are left entirely to the reactive fallback. True master-detail
+// is detected via cascadeDelete === true on a reference field, the same
+// convention controller/v1/crm-meatadata/index.ts already uses
+// (getCascadeDeleteFields) — not nillable, which a Required lookup also sets
+// false and would wrongly include here.
 //
-// This exists to seed the first deploy attempt correctly instead of relying
-// solely on deployWithDependencies's reactive, error-driven retry — a chain
-// deeper than MAX_DEPENDENCY_ATTEMPTS levels could otherwise exhaust that
-// retry budget before converging. The reactive loop stays in place
-// unchanged as a fallback for anything this misses (a describe failure here
-// is swallowed, not fatal — that object is simply left to it, same as if
-// this function didn't exist).
+// Bounded to MAX_PARENT_DEPTH levels rather than walked to the literal top of
+// an arbitrarily deep chain. This exists to seed the first deploy attempt
+// correctly instead of relying solely on deployWithDependencies's reactive,
+// error-driven retry — a chain deeper than MAX_DEPENDENCY_ATTEMPTS levels
+// could otherwise exhaust that retry budget before converging. The reactive
+// loop stays in place unchanged as a fallback for anything this misses
+// (beyond the depth cap, or a describe failure here — swallowed per call, not
+// fatal — that object simply falls through to it, same as if this function
+// didn't exist).
+const MAX_PARENT_DEPTH = 5;
+
 const resolveRequiredParentObjects = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -317,29 +318,30 @@ const resolveRequiredParentObjects = async (
   const selected = new Set(objectApiNames);
   const discovered = new Set<string>();
   const visited = new Set(objectApiNames);
-  const queue = [...objectApiNames];
+  let currentLevel = [...objectApiNames];
 
-  while (queue.length) {
-    const objectName = queue.shift()!;
-    let fields: ISalesforceReferenceField[];
-    try {
-      fields = await describeObjectFields(instanceUrl, tokens, objectName);
-    } catch {
-      continue;
-    }
-    for (const field of fields) {
-      if (field.type !== 'reference' || field.nillable) continue;
-      for (const parent of field.referenceTo ?? []) {
-        if (visited.has(parent)) continue;
-        visited.add(parent);
-        if (!selected.has(parent)) discovered.add(parent);
-        queue.push(parent);
+  for (let depth = 0; depth < MAX_PARENT_DEPTH && currentLevel.length; depth++) {
+    const levelFields = await Promise.all(
+      currentLevel.map((objectName) => describeObjectFields(instanceUrl, tokens, objectName).catch(() => []))
+    );
+
+    const nextLevel: string[] = [];
+    for (const fields of levelFields) {
+      for (const field of fields) {
+        if (field.type !== 'reference' || !field.cascadeDelete) continue;
+        for (const parent of field.referenceTo ?? []) {
+          if (visited.has(parent)) continue;
+          visited.add(parent);
+          if (!selected.has(parent)) discovered.add(parent);
+          nextLevel.push(parent);
+        }
       }
     }
+    currentLevel = nextLevel;
   }
 
   if (discovered.size) {
-    logger.info(`[restore-permission-set] required parent object(s) discovered: ${[...discovered].join(', ')}`);
+    logger.info(`[restore-permission-set] required master-detail parent object(s) discovered: ${[...discovered].join(', ')}`);
   }
 
   return discovered;
