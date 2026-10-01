@@ -43,7 +43,16 @@ export const valuesAreEqual = (a: unknown, b: unknown): boolean => {
         return false;
     }
     if (Array.isArray(a) && Array.isArray(b)) {
-        return a.length === b.length && a.every((v, i) => valuesAreEqual(v, b[i]));
+        if (a.length !== b.length) {
+            return false;
+        }
+        const isPrimitiveArray = (arr: unknown[]) => arr.every((v) => v === null || typeof v !== "object");
+        if (isPrimitiveArray(a) && isPrimitiveArray(b)) {
+            const sortedA = [...a].sort();
+            const sortedB = [...b].sort();
+            return sortedA.every((v, i) => Object.is(v, sortedB[i]));
+        }
+        return a.every((v, i) => valuesAreEqual(v, b[i]));
     }
     const aKeys = Object.keys(a as Record<string, unknown>);
     const bKeys = Object.keys(b as Record<string, unknown>);
