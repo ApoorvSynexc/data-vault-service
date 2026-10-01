@@ -108,11 +108,17 @@ const fetchExistingFieldPermissions = async (
 // already-true permission is a harmless no-op (see the additive-deploy note
 // on deployRestorePermissions), it's just not worth doing for an object with
 // nothing missing at all.
+//
+// readOnlyObjects (required-parent objects discovered by
+// resolveRequiredParentObjects, not objects actually selected for restore)
+// only ever need Read — checking them against full create+edit+read would
+// never see them as satisfied and would redeploy a no-op grant every run.
 const computeMissingGrants = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   permissionSetId: string,
   objectApiNames: string[],
+  readOnlyObjects: Set<string>,
   newFieldsByObject: Map<string, IRestoreTrackingField[]>
 ): Promise<{ objectApiNames: string[]; newFieldsByObject: Map<string, IRestoreTrackingField[]> }> => {
   const allFieldNames = [...newFieldsByObject].flatMap(([obj, fields]) => fields.map((f) => `${obj}.${f.apiName}`));
@@ -125,6 +131,7 @@ const computeMissingGrants = async (
   const objectsMissingPermission = new Set(
     objectApiNames.filter((name) => {
       const existing = existingObjectPerms.get(name);
+      if (readOnlyObjects.has(name)) return !existing || !existing.read;
       return !existing || !existing.create || !existing.edit || !existing.read;
     })
   );
@@ -263,6 +270,76 @@ const deployRestorePermissions = async (
   });
 };
 
+// Raw describe, (instanceUrl, tokens)-keyed rather than IUser-keyed — same
+// local-interface-per-caller convention restore-fields.ts and trigger.ts
+// already use for this exact call, not a shared helper (a third near-
+// identical copy isn't worth factoring out).
+interface ISalesforceReferenceField {
+  type: string;
+  referenceTo?: string[];
+  nillable: boolean;
+}
+
+const describeObjectFields = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiName: string
+): Promise<ISalesforceReferenceField[]> => {
+  const { data } = await salesforceRequest<{ fields: ISalesforceReferenceField[] }>(
+    { url: `${instanceUrl}/services/data/v${METADATA_API_VERSION}/sobjects/${objectApiName}/describe`, method: 'GET' },
+    tokens
+  );
+  return data.fields;
+};
+
+// Discovers every object a required reference puts between it and the
+// selected objects — walked all the way to the top of the chain, not just
+// one level. A master-detail reference is always non-nillable; an admin-
+// marked-Required lookup is non-nillable too — Salesforce's object-permission
+// dependency rule ("Read X depends on permission(s): Read Y", see
+// parseMissingPermissions below) applies identically to both, so both are
+// discovered the same way here without needing to separately detect
+// master-detail via cascadeDelete.
+//
+// This exists to seed the first deploy attempt correctly instead of relying
+// solely on deployWithDependencies's reactive, error-driven retry — a chain
+// deeper than MAX_DEPENDENCY_ATTEMPTS levels could otherwise exhaust that
+// retry budget before converging. The reactive loop stays in place
+// unchanged as a fallback for anything this misses (a describe failure here
+// is swallowed, not fatal — that object is simply left to it, same as if
+// this function didn't exist).
+const resolveRequiredParentObjects = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiNames: string[]
+): Promise<Set<string>> => {
+  const selected = new Set(objectApiNames);
+  const discovered = new Set<string>();
+  const visited = new Set(objectApiNames);
+  const queue = [...objectApiNames];
+
+  while (queue.length) {
+    const objectName = queue.shift()!;
+    let fields: ISalesforceReferenceField[];
+    try {
+      fields = await describeObjectFields(instanceUrl, tokens, objectName);
+    } catch {
+      continue;
+    }
+    for (const field of fields) {
+      if (field.type !== 'reference' || field.nillable) continue;
+      for (const parent of field.referenceTo ?? []) {
+        if (visited.has(parent)) continue;
+        visited.add(parent);
+        if (!selected.has(parent)) discovered.add(parent);
+        queue.push(parent);
+      }
+    }
+  }
+
+  return discovered;
+};
+
 // Deploys, and on a dependency rejection adds the parent permissions
 // Salesforce asked for and deploys again. Resolving one dependency can expose
 // the next one up the chain (Quote -> Opportunity -> Account), hence the loop;
@@ -274,10 +351,14 @@ const deployWithDependencies = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiNames: string[],
+  readOnlyObjects: Set<string>,
   newFieldsByObject: Map<string, IRestoreTrackingField[]>
 ): Promise<void> => {
   const permissions: ObjectPermissionMap = new Map(
-    objectApiNames.map((name) => [name, new Set(RESTORE_OBJECT_PERMISSIONS)])
+    objectApiNames.map((name) => [
+      name,
+      readOnlyObjects.has(name) ? new Set(['allowRead']) : new Set(RESTORE_OBJECT_PERMISSIONS),
+    ])
   );
 
   for (let attempt = 0; attempt < MAX_DEPENDENCY_ATTEMPTS; attempt++) {
@@ -392,6 +473,14 @@ const assignPermissionSetToUser = async (
 // them. An object can be object-permission-complete but still missing FLS on
 // one of its fields (or vice versa); either gap keeps the object in the
 // deploy, per computeMissingGrants.
+//
+// Also resolves every required (master-detail, or Required lookup) parent
+// object standing between a selected object and the top of its reference
+// chain — see resolveRequiredParentObjects — and seeds them into the same
+// deploy as read-only grants, so the common dependency case needs no retry at
+// all. Never added to newFieldsByObject, so a discovered parent never gets
+// tracking fields created or field-level permissions — only the objects
+// actually selected for restore do.
 export const provisionRestorePermissionSet = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -403,16 +492,19 @@ export const provisionRestorePermissionSet = async (
     return;
   }
 
+  const requiredParents = await resolveRequiredParentObjects(instanceUrl, tokens, objectApiNames);
+  const allObjectApiNames = [...objectApiNames, ...requiredParents];
+
   const existingPermissionSetId = await fetchRestorePermissionSetId(instanceUrl, tokens);
 
   // No existing permission set — this is the first restore for this org, so
   // nothing has been granted yet; nothing to check, everything is needed.
   const { objectApiNames: neededObjectApiNames, newFieldsByObject: neededFieldsByObject } = existingPermissionSetId
-    ? await computeMissingGrants(instanceUrl, tokens, existingPermissionSetId, objectApiNames, newFieldsByObject)
-    : { objectApiNames, newFieldsByObject };
+    ? await computeMissingGrants(instanceUrl, tokens, existingPermissionSetId, allObjectApiNames, requiredParents, newFieldsByObject)
+    : { objectApiNames: allObjectApiNames, newFieldsByObject };
 
   if (neededObjectApiNames.length) {
-    await deployWithDependencies(instanceUrl, tokens, neededObjectApiNames, neededFieldsByObject);
+    await deployWithDependencies(instanceUrl, tokens, neededObjectApiNames, requiredParents, neededFieldsByObject);
   }
 
   const permissionSetId = existingPermissionSetId ?? (await fetchRestorePermissionSetId(instanceUrl, tokens));

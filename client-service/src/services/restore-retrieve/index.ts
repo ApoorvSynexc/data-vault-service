@@ -992,7 +992,14 @@ export interface IValidateQueryParams {
 }
 
 export type IValidateQueryOutcome =
-  | { ok: true; value: { matched: boolean } }
+  // valid is always true here — reaching this branch at all means
+  // buildAthenaFilterWhere didn't throw FilterError and (when a real query
+  // ran) Athena didn't reject the compiled WHERE clause either, so the query
+  // itself is confirmed valid independent of whether any row matched. matched
+  // is a separate question: whether a row currently satisfies it. Exposed as
+  // its own field so a caller doesn't have to infer "valid" from "matched:
+  // false" — a valid filter that happens to match nothing is not an invalid one.
+  | { ok: true; value: { matched: boolean; valid: true } }
   | { ok: false; error: 'not_exist' | 'crm_not_connected' };
 
 /**
@@ -1028,6 +1035,12 @@ export type IValidateQueryOutcome =
  * Hudi table yet (nothing backed up for it), the filter is still validated
  * above but the Athena query is skipped — there's nothing to run it against,
  * so this reports matched: false rather than an error.
+ *
+ * valid is always true on the ok:true branch — it's reported explicitly
+ * rather than left implicit so a caller never has to infer "the query is
+ * valid" from "matched happens to be false". An actually invalid filter
+ * never reaches a return statement at all — it throws (FilterError, or
+ * Athena's COLUMN_NOT_FOUND) and the controller maps that to a 400.
  */
 const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidateQueryOutcome> => {
   const config = await getBackupConfigById(params.backupConfigId);
@@ -1068,11 +1081,15 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
   // No compressed Hudi table yet (nothing backed up for this object) — the
   // filter itself is already validated above, there's just nothing to run it
   // against, so this is "no matches" rather than an error.
-  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: true, value: { matched: false } };
+  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: true, value: { matched: false, valid: true } };
 
   const result = await runAthenaQuery(buildValidateQuerySql(hudiTable, whereBody), databaseName, region, outputLocation, 1);
 
-  return { ok: true, value: { matched: result.rows.length > 0 } };
+  // Reaching here means Athena actually ran the compiled WHERE clause without
+  // erroring (a bad field name would have thrown COLUMN_NOT_FOUND before this
+  // line) — that's what "valid" reports. Zero rows back is a legitimate
+  // result of a valid query, not a sign the query itself failed.
+  return { ok: true, value: { matched: result.rows.length > 0, valid: true } };
 };
 
 /**
