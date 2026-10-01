@@ -1,6 +1,7 @@
 import { salesforceRequest, SalesforceTokens } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
 import { IRestoreTrackingField } from './restore-fields';
+import { logger } from '../../../middlewares';
 
 // Label carries the '360 ...' branding; the API/developer name can't start
 // with a digit (Salesforce naming rule for any metadata fullName — the same
@@ -337,6 +338,10 @@ const resolveRequiredParentObjects = async (
     }
   }
 
+  if (discovered.size) {
+    logger.info(`[restore-permission-set] required parent object(s) discovered: ${[...discovered].join(', ')}`);
+  }
+
   return discovered;
 };
 
@@ -372,6 +377,9 @@ const deployWithDependencies = async (
       if (!missing.length) {
         throw error;
       }
+      logger.warn(
+        `[restore-permission-set] reactive retry attempt ${attempt + 1}: granting ${missing.map((m) => `${m.element} on ${m.object}`).join(', ')}`
+      );
       for (const { object, element } of missing) {
         const granted = permissions.get(object) ?? new Set<string>();
         granted.add(element);
