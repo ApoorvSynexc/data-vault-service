@@ -132,7 +132,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
-    const { search, status, backupStatus, schedule, destinationId } = req.query as Record<string, string>;
+    const { search, status, backupStatus, schedule, destinationId, withoutLastBackupAt } = req.query as Record<string, string>;
 
     const result = await getBackupConfigsWithPagination(
       {
@@ -143,6 +143,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
         ...(backupStatus && { backupStatus }),
         ...(schedule && { schedule }),
         ...(destinationId && { destinationId }),
+        ...(withoutLastBackupAt && { withoutLastBackupAt: withoutLastBackupAt === 'true' }),
       },
       { limit: limitNum, cursor }
     );
@@ -290,7 +291,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     if (existing?.status === VISIBILITY_STATUS.draft && updated.status === VISIBILITY_STATUS.active) {
       await createAwsEventScheduler(buildEventScheduleInput(updated));
-    } else if (req.body.scheduleConfig &&[VISIBILITY_STATUS.paused, VISIBILITY_STATUS.active, VISIBILITY_STATUS.resumed].includes(existing?.status ?? '')) {
+    } else if (req.body.scheduleConfig && [VISIBILITY_STATUS.paused, VISIBILITY_STATUS.active, VISIBILITY_STATUS.resumed].includes(existing?.status ?? '')) {
       await updateAwsEventSchedule(buildEventScheduleInput(updated!));
     }
   } else if (updated?.schedule === SCHEDULE_MODE.realtime && updated?.status === VISIBILITY_STATUS.active && !updated.lastBackupAt) {
