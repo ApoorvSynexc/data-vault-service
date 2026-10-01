@@ -81,18 +81,24 @@ const buildChildRelationshipTree = async (params: {
   const childNodes = await Promise.all(
     rawChildren.map(async (child): Promise<ISalesforceChildTreeNode> => {
       const childDescription = descriptionByName.get(child.name)!;
+      // This child's own additional cascade-delete fields — other master-detail
+      // relationships it participates in besides the one we just reached it
+      // through. Attached directly to the child's own node (not its parent's)
+      // so inspecting this node alone is enough to see it.
+      const parent = child.cascadeDelete ? getCascadeDeleteFields(childDescription.fields) : [];
+
       if (visitedObjectNames.has(child.name)) {
-        return { ...child, children: [], parent: [] };
+        return { ...child, children: [], parent };
       }
 
       // restrictedDelete blocks deleting the parent while this child still has
       // records, and without cascadeDelete the child isn't removed alongside
       // it either — so there's no cascade edge to keep walking past this node.
       if (child.restrictedDelete && !child.cascadeDelete) {
-        return { ...child, children: [], parent: [] };
+        return { ...child, children: [], parent };
       }
 
-      const { children, parent } = await buildChildRelationshipTree({
+      const { children } = await buildChildRelationshipTree({
         user,
         objectDescription: childDescription,
         objectName: child.name,
@@ -107,11 +113,9 @@ const buildChildRelationshipTree = async (params: {
     })
   );
 
-  const parent = rawChildren
-    .filter((child) => child.cascadeDelete)
-    .flatMap((child) => getCascadeDeleteFields(descriptionByName.get(child.name)!.fields));
-
-  return { children: childNodes, parent };
+  // Each child's own cascade-field exposure now lives on that child's node
+  // above — this level has nothing further of its own to report.
+  return { children: childNodes, parent: [] };
 };
 
 // --- Archival-only traversal ---
@@ -226,19 +230,27 @@ const buildArchivalChildRelationshipTree = async (params: {
   const childNodes = await Promise.all(
     deletableChildren.map(async (child): Promise<ISalesforceArchivalChildTreeNode> => {
       const childDescription = descriptionByName.get(child.name)!;
+      // This child's own additional cascade-delete fields — other master-detail
+      // relationships it participates in besides the one we just reached it
+      // through. Attached directly to the child's own node (not its parent's)
+      // so inspecting this node alone is enough to see it. Mirrors
+      // getSalesforceDescribeObject's parent-detection, reusing the
+      // description already fetched above instead of re-describing.
+      const parent = child.cascadeDelete ? getCascadeDeleteFields(childDescription.fields) : [];
+
       if (visitedObjectNames.has(child.name)) {
-        return { ...child, children: [], parent: [] };
+        return { ...child, children: [], parent };
       }
 
       // restrictedDelete blocks deleting the parent while this child still has
       // records, and without cascadeDelete the child isn't removed alongside
       // it either — so there's no cascade edge to keep walking past this node.
       if (child.restrictedDelete && !child.cascadeDelete) {
-        return { ...child, children: [], parent: [] };
+        return { ...child, children: [], parent };
       }
 
       visitedObjectNames.add(child.name);
-      const { children, parent } = await buildArchivalChildRelationshipTree({
+      const { children } = await buildArchivalChildRelationshipTree({
         user,
         objectDescription: childDescription,
         objectName: child.name,
@@ -253,17 +265,9 @@ const buildArchivalChildRelationshipTree = async (params: {
     })
   );
 
-  // Of this level's own children, the cascadeDelete fields on the ones that are
-  // themselves a cascade-delete child in another master-detail relationship —
-  // mirrors getSalesforceDescribeObject's parent-detection, reusing the
-  // description already fetched above instead of re-describing. Scoped to
-  // deletableChildren, not cascadeChildren — a child excluded for lacking
-  // delete access isn't in the tree, so it shouldn't surface here either.
-  const parent = deletableChildren
-    .filter((child) => child.cascadeDelete)
-    .flatMap((child) => getCascadeDeleteFields(descriptionByName.get(child.name)!.fields));
-
-  return { children: childNodes, parent };
+  // Each child's own cascade-field exposure now lives on that child's node
+  // above — this level has nothing further of its own to report.
+  return { children: childNodes, parent: [] };
 };
 
 
