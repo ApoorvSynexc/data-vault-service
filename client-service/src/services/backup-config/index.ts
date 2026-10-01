@@ -395,9 +395,9 @@ const getBackupConfigsWithPagination = async (
       expressions.push('destinationId = :destinationId');
     }
     if (withoutLastBackupAt) {
-      expressions.push('attribute_exists(lastBackupAt)');
-    } else{
       expressions.push('attribute_not_exists(lastBackupAt)');
+    } else{
+      expressions.push('attribute_exists(lastBackupAt)');
     }
 
     return expressions;
