@@ -285,11 +285,18 @@ const setCompressionStatus = async (params: {
 }): Promise<void> => {
   const { backupJobId, backupConfigId, status, errorMessage } = params;
 
+  // A job that previously failed compression carries a stale errorMessage —
+  // on a later success (no new errorMessage given), REMOVE it rather than
+  // leaving it stranded next to a COMPRESSED status. REMOVE is a no-op if the
+  // attribute was never set, so this is safe for every success case, not just
+  // a prior-failure one.
   await docClient.send(
     new UpdateCommand({
       TableName: BACKUP_JOB_TABLE,
       Key: { backupJobId },
-      UpdateExpression: `SET #status = :status, lastUpdatedAt = :now${errorMessage ? ', errorMessage = :errorMessage' : ''}`,
+      UpdateExpression: errorMessage
+        ? 'SET #status = :status, lastUpdatedAt = :now, errorMessage = :errorMessage'
+        : 'SET #status = :status, lastUpdatedAt = :now REMOVE errorMessage',
       ConditionExpression: 'attribute_exists(backupJobId) AND backupConfigId = :backupConfigId',
       ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: {
