@@ -25,7 +25,6 @@ import {
   computeJobStats,
   getSalesforceProfile,
   initalizePayloadTransform,
-  hasActiveBackupJob,
   getUser,
   getDecryptedCrmCredential,
   runMetadataComparisonForConfig,
@@ -433,7 +432,7 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
     return;
   }
 
-  if (await hasActiveBackupJob(config.backupConfigId)) {
+  if (config.backupStatus === STATUS.pending) {
     makeResponse(req, res, 400, false, 'job_already_invoked');
     return;
   }

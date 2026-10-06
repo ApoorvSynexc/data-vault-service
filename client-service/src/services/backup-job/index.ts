@@ -32,31 +32,6 @@ export const getSourceObjects = (objects?: IObject[], includeChildren = false) =
   }
 };
 
-// Returns true if a PENDING (in-flight) job already exists for this config —
-// a job's own status has no separate "now actively running" value, it stays
-// PENDING for its entire in-flight duration (see STATUS in constant/index.ts).
-// Used to prevent duplicate concurrent backup jobs on the same config.
-const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
-  const startedAt = Date.now();
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_JOB_TABLE,
-      IndexName: 'backupConfigId-index',
-      KeyConditionExpression: 'backupConfigId = :backupConfigId',
-      FilterExpression: '#status = :pending',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: {
-        ':backupConfigId': backupConfigId,
-        ':pending': STATUS.pending,
-      },
-      Limit: 1,
-    })
-  );
-  const active = (result.Count ?? 0) > 0;
-  logger.info(`[ARCH-DEDUP] hasActiveBackupJob | configId=${backupConfigId} active=${active} count=${result.Count ?? 0} durationMs=${Date.now() - startedAt}`);
-  return active;
-};
-
 const submitBackupJobRequest = async (params: {
   backupConfigId: string;
   endpoint: string;
@@ -91,9 +66,8 @@ const triggerArchivalBackupJob = async (params: {
 
   if (!bypassDedup) {
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} dedup check (bypassDedup=false)`);
-    const active = await hasActiveBackupJob(config.backupConfigId);
-    if (active) {
-      logger.warn(`[ARCH-TRIG] EXIT short-circuit | configId=${config.backupConfigId} reason=already_active durationMs=${Date.now() - triggerStart}`);
+    if (config.backupStatus === STATUS.pending) {
+      logger.warn(`[Backup Service Trigger] EXIT short-circuit | Ms=${Date.now() - triggerStart} configId=${config.backupConfigId} reason=already_pending`);
       return null;
     }
   } else {
@@ -172,8 +146,8 @@ const triggerBackupJob = async (params: {
 }) => {
   const { config, lastUpdatedAt, type = 'backup', user, lastSchemaSyncAt, schemaSync, triggerSource } = params;
   try {
-    const active = await hasActiveBackupJob(config.backupConfigId);
-    if (active) {
+    if (config.backupStatus === STATUS.pending) {
+      logger.warn(`[Backup Service Trigger] EXIT short-circuit | configId=${config.backupConfigId} reason=already_pending`);
       return null;
     }
 
@@ -922,7 +896,6 @@ export {
   triggerArchivalBackupJob,
   submitBackupJobRequest,
   runBackupNow,
-  hasActiveBackupJob,
   resumeBackupJob,
   updateBackupJob,
   getBackupJobById,
