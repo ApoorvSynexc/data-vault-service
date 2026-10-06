@@ -145,7 +145,7 @@ export const salesforceFieldsPermission = async (params: { restoreJobId: string;
 export const runRestoreFieldSetupAndTransform = async (restoreJobId: string): Promise<void> => {
     try {
         const newFieldsByObject = await salesforceFieldCreation({ restoreJobId });
-        console.log('runRestoreFieldSetupAndTransform newFieldsByObject', { restoreJobId, JSON.stringify(newFieldsByObject) });
+        console.log('runRestoreFieldSetupAndTransform newFieldsByObject', { restoreJobId, newFieldsByObject });
         await salesforceFieldsPermission({ restoreJobId, newFieldsByObject });
     } catch (error) {
         const errorMessage = (error as Error)?.message ?? String(error);
