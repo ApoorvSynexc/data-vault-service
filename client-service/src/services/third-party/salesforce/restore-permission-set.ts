@@ -126,6 +126,9 @@ const computeMissingGrants = async (
     fetchExistingFieldPermissions(instanceUrl, tokens, permissionSetId, allFieldNames),
   ]);
 
+  console.log('existingObjectPerms', { existingObjectPerms: [...existingObjectPerms] });
+  console.log('existingFieldPerms', { existingFieldPerms: [...existingFieldPerms] });
+
   const objectsMissingPermission = new Set(
     objectApiNames.filter((name) => {
       const existing = existingObjectPerms.get(name);
@@ -147,6 +150,7 @@ const computeMissingGrants = async (
   );
 
   const objectsNeeded = new Set([...objectsMissingPermission, ...missingFieldsByObject.keys()]);
+
 
   return {
     objectApiNames: objectApiNames.filter((name) => objectsNeeded.has(name)),
@@ -310,35 +314,75 @@ const describeObjectFields = async (
 // didn't exist).
 const MAX_PARENT_DEPTH = 5;
 
+// Depth-first walk of one object's master-detail ancestry: describes the
+// object, and for every master-detail field found (an object can have up to
+// two), recurses into that parent before moving to the object's next
+// master-detail field — "find the parent, find its parent, ... to the top,
+// then back out and check for another master on the same object, then hop to
+// the next object" is exactly this function's call structure, driven by
+// resolveRequiredParentObjects's fan-out over the original selection below.
+//
+// visited/discovered are shared, mutated in place across the whole walk (all
+// branches, all selected objects) — not per-branch-local — so an object
+// reachable from two different branches is still only ever described once.
+// Safe to share across concurrent branches: every has()-then-add() pair below
+// runs with no `await` in between, and JS's single-threaded event loop never
+// interleaves two synchronous blocks mid-way, so two branches racing to
+// discover the same ancestor still can't both describe it.
+const walkRequiredParentObjects = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiName: string,
+  depth: number,
+  selected: Set<string>,
+  visited: Set<string>,
+  discovered: Set<string>
+): Promise<void> => {
+  if (depth >= MAX_PARENT_DEPTH) return;
+
+  const fields = await describeObjectFields(instanceUrl, tokens, objectApiName).catch(() => []);
+
+  const parentsToWalk: string[] = [];
+  for (const field of fields) {
+    if (field.type !== 'reference' || !field.cascadeDelete) continue;
+    for (const parent of field.referenceTo ?? []) {
+      if (visited.has(parent)) continue;
+      visited.add(parent);
+      if (!selected.has(parent)) discovered.add(parent);
+      parentsToWalk.push(parent);
+    }
+  }
+
+  // Each parent's own ancestry is independent of its siblings' — walked
+  // concurrently rather than one full branch at a time. Still depth-first per
+  // branch (each call dives to its own top of chain before resolving); only
+  // unrelated branches are allowed to overlap in wall-clock time. This
+  // removes the level-boundary synchronization a batch-by-depth walk would
+  // have (every object at depth N blocking depth N+1 from starting), so a
+  // shallow branch finishes without waiting on an unrelated deep one.
+  await Promise.all(
+    parentsToWalk.map((parent) =>
+      walkRequiredParentObjects(instanceUrl, tokens, parent, depth + 1, selected, visited, discovered)
+    )
+  );
+};
+
 const resolveRequiredParentObjects = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiNames: string[]
 ): Promise<Set<string>> => {
   const selected = new Set(objectApiNames);
-  const discovered = new Set<string>();
   const visited = new Set(objectApiNames);
-  let currentLevel = [...objectApiNames];
+  const discovered = new Set<string>();
 
-  for (let depth = 0; depth < MAX_PARENT_DEPTH && currentLevel.length; depth++) {
-    const levelFields = await Promise.all(
-      currentLevel.map((objectName) => describeObjectFields(instanceUrl, tokens, objectName).catch(() => []))
-    );
-
-    const nextLevel: string[] = [];
-    for (const fields of levelFields) {
-      for (const field of fields) {
-        if (field.type !== 'reference' || !field.cascadeDelete) continue;
-        for (const parent of field.referenceTo ?? []) {
-          if (visited.has(parent)) continue;
-          visited.add(parent);
-          if (!selected.has(parent)) discovered.add(parent);
-          nextLevel.push(parent);
-        }
-      }
-    }
-    currentLevel = nextLevel;
-  }
+  // Fans out over the original selection the same way — no reason the first
+  // selected object's whole chain must finish before the second one starts.
+  await Promise.all(
+    objectApiNames.map((objectApiName) =>
+      walkRequiredParentObjects(instanceUrl, tokens, objectApiName, 0, selected, visited, discovered)
+    )
+  );
 
   if (discovered.size) {
     logger.info(`[restore-permission-set] required master-detail parent object(s) discovered: ${[...discovered].join(', ')}`);
@@ -512,6 +556,9 @@ export const provisionRestorePermissionSet = async (
   const { objectApiNames: neededObjectApiNames, newFieldsByObject: neededFieldsByObject } = existingPermissionSetId
     ? await computeMissingGrants(instanceUrl, tokens, existingPermissionSetId, allObjectApiNames, requiredParents, newFieldsByObject)
     : { objectApiNames: allObjectApiNames, newFieldsByObject };
+  
+  console.log('neededObjectApiNames', { neededObjectApiNames });
+  console.log('neededFieldsByObject', { neededFieldsByObject });
 
   if (neededObjectApiNames.length) {
     await deployWithDependencies(instanceUrl, tokens, neededObjectApiNames, requiredParents, neededFieldsByObject);
