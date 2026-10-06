@@ -27,6 +27,7 @@ const scopeRecordSchema = Joi.object({
 }).id('scopeRecord');
 
 const scopeFieldSchema = Joi.object({
+  id: Joi.string().optional(),
   objectName: Joi.string().required(),
   fieldNames: Joi.array().items(Joi.string()).min(1).required(),
 });
@@ -68,6 +69,7 @@ const bulkCsvIdsSchema = Joi.object({
 }).id('bulkCsvIds');
 
 const scopeFilterSchema = Joi.object({
+  id: Joi.string().optional(),
   objectName: Joi.string().required(),
   filter: filtersSchema.required(),
   children: Joi.array().items(Joi.link('#scopeFilter')).optional(),
