@@ -126,6 +126,9 @@ const computeMissingGrants = async (
     fetchExistingFieldPermissions(instanceUrl, tokens, permissionSetId, allFieldNames),
   ]);
 
+  console.log('existingObjectPerms', { existingObjectPerms: [...existingObjectPerms] });
+  console.log('existingFieldPerms', { existingFieldPerms: [...existingFieldPerms] });
+
   const objectsMissingPermission = new Set(
     objectApiNames.filter((name) => {
       const existing = existingObjectPerms.get(name);
@@ -147,6 +150,7 @@ const computeMissingGrants = async (
   );
 
   const objectsNeeded = new Set([...objectsMissingPermission, ...missingFieldsByObject.keys()]);
+
 
   return {
     objectApiNames: objectApiNames.filter((name) => objectsNeeded.has(name)),
@@ -552,6 +556,9 @@ export const provisionRestorePermissionSet = async (
   const { objectApiNames: neededObjectApiNames, newFieldsByObject: neededFieldsByObject } = existingPermissionSetId
     ? await computeMissingGrants(instanceUrl, tokens, existingPermissionSetId, allObjectApiNames, requiredParents, newFieldsByObject)
     : { objectApiNames: allObjectApiNames, newFieldsByObject };
+  
+  console.log('neededObjectApiNames', { neededObjectApiNames });
+  console.log('neededFieldsByObject', { neededFieldsByObject });
 
   if (neededObjectApiNames.length) {
     await deployWithDependencies(instanceUrl, tokens, neededObjectApiNames, requiredParents, neededFieldsByObject);

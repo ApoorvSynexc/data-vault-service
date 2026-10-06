@@ -121,6 +121,7 @@ export const salesforceFieldsPermission = async (params: { restoreJobId: string;
         // the destination org may not actually be able to write the objects/
         // fields this restore needs, so it must propagate — see
         // runRestoreFieldSetupAndTransform, the only caller.
+        console.log('provisionRestorePermissionSet', { restoreJobId, objectsNames, newFieldsByObject });
         await provisionRestorePermissionSet(
             user?.crmProfile?.instanceUrl,
             credentials,
@@ -144,6 +145,7 @@ export const salesforceFieldsPermission = async (params: { restoreJobId: string;
 export const runRestoreFieldSetupAndTransform = async (restoreJobId: string): Promise<void> => {
     try {
         const newFieldsByObject = await salesforceFieldCreation({ restoreJobId });
+        console.log('runRestoreFieldSetupAndTransform newFieldsByObject', { restoreJobId, JSON.stringify(newFieldsByObject) });
         await salesforceFieldsPermission({ restoreJobId, newFieldsByObject });
     } catch (error) {
         const errorMessage = (error as Error)?.message ?? String(error);
