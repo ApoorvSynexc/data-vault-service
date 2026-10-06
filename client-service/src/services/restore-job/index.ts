@@ -56,14 +56,12 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   } else if (selection.restoreScope.type === 'OBJECT' && selection.restoreScope.objects) {
     destinationObjects = selection.restoreScope.objects.map(obj => ({ id: obj.id, name: obj.name, status: JOB_OBJECT_STATUS.restoreInProgress, }));
   } else if (selection.restoreScope.type === 'FIELD' && selection.restoreScope.fields) {
-    destinationObjects = selection.restoreScope.fields.map(field => ({ id: uuidv4(), name: field.objectName, status: JOB_OBJECT_STATUS.restoreInProgress }));
-  }  else if (selection.restoreScope.type === 'RECORD' && selection.restoreScope.records) {
-    destinationObjects = selection.restoreScope.records.map(field => ({ id: uuidv4(), name: field.objectName, status: JOB_OBJECT_STATUS.restoreInProgress }));
-  }else if (selection.restoreScope.type === 'OBJECT_TREE') {
-    // ARCHIVAL restore: the hierarchy is preserved as-is, not flattened —
-    // destination.objects holds exactly one entry (the root), and every
-    // descendant lives nested under it via `children`, recursively, mirroring
-    // the shape submitted in selection.restoreScope.objectTree.
+    destinationObjects = selection.restoreScope.fields.map(field => ({ id: field.id ?? uuidv4(), name: field.objectName, status: JOB_OBJECT_STATUS.restoreInProgress }));
+  } else if (selection.restoreScope.type === 'RECORD' && selection.restoreScope.records) {
+    destinationObjects = selection.restoreScope.records.map(field => ({ id: field.id ?? uuidv4(), name: field.objectName, status: JOB_OBJECT_STATUS.restoreInProgress }));
+  } else if (selection.restoreScope.type === 'FILTER' && selection.restoreScope.filters) {
+    destinationObjects = selection.restoreScope.filters.map(field => ({ id: field.id ?? uuidv4(), name: field.objectName, status: JOB_OBJECT_STATUS.restoreInProgress }));
+  } else if (selection.restoreScope.type === 'OBJECT_TREE') {
     const toJobObject = (node: IRestoreArchivalChildObject): IRestoreJobObject => ({
       id: uuidv4(),
       name: node.name,

@@ -9,6 +9,7 @@ export interface IRestoreScopeRecord {
 }
 
 export interface IRestoreScopeField {
+  id: string;
   objectName: string;
   fieldNames: string[];
 }
@@ -38,6 +39,7 @@ export interface IRestoreBulkCsvIds {
 }
 
 export interface IRestoreScopeFilter {
+  id: string;
   objectName: string;
   filter: IRestoreFilters;
   children?: IRestoreScopeFilter[];
