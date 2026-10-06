@@ -136,6 +136,7 @@ export const deployMetadata = async (
 // Convenience wrapper — builds the package.xml for a single metadata type + members.
 export const buildPackageXml = (type: string, members: string[]): string => {
   const memberXml = members.map((m) => `        <members>${m}</members>`).join('\n');
+  console.log('buildPackageXml', { type, members, memberXml });
   return (
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n` +

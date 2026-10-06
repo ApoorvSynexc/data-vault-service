@@ -211,11 +211,21 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeReso
   }
 
   const op = resolveOperator(n.operator ?? '');
-  // Parser preserves literal text (strings keep their quotes), so pass-through
-  // is already valid Presto for string/number/boolean/null literals.
-  const value = Array.isArray(n.value) ? `(${n.value.join(', ')})` : String(n.value ?? '');
   const open = '('.repeat(n.openParen ?? 0);
   const close = ')'.repeat(n.closeParen ?? 0);
+
+  // `= NULL` / `<> NULL` are never TRUE in SQL (NULL compared this way is
+  // UNKNOWN, not TRUE), so a bare pass-through silently excludes every row —
+  // matching SOQL's `= null` / `!= null` semantics requires IS [NOT] NULL.
+  if (n.literalType === 'NULL') {
+    if (op === '=') return `${open}${colExpr(field)} IS NULL${close}`;
+    if (op === '<>') return `${open}${colExpr(field)} IS NOT NULL${close}`;
+    throw new FilterError('invalid_filter_operator');
+  }
+
+  // Parser preserves literal text (strings keep their quotes), so pass-through
+  // is already valid Presto for string/number/boolean literals.
+  const value = Array.isArray(n.value) ? `(${n.value.join(', ')})` : String(n.value ?? '');
   return `${open}${colExpr(field)} ${op} ${value}${close}`;
 };
 
@@ -409,6 +419,11 @@ if (require.main === module) {
   );
   // SOQL no WHERE → null
   assert.strictEqual(buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'SELECT Id FROM Account' }), null);
+
+  // `!= null` / `= null` must become IS [NOT] NULL — `<> NULL` is never TRUE
+  // in SQL, so a bare pass-through would silently drop every matching row.
+  assert.strictEqual(buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Name != null' }), `"Name" IS NOT NULL`);
+  assert.strictEqual(buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Name = null' }), `"Name" IS NULL`);
 
   // SOQL unsupported surfaces
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Owner.Name = 'x'" }), 'soql_relationship_not_supported');
