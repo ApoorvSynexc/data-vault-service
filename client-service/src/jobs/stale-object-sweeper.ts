@@ -1,4 +1,4 @@
-import { JOB_OBJECT_STATUS } from "../constant";
+import { ERROR_REASON, JOB_OBJECT_STATUS } from "../constant";
 import { logger } from "../middlewares";
 import { getStaleJobs, updateBackupJob } from "../services";
 const STALE_THRESHOLD_MINUTES = 360;  // 6 hours
@@ -36,6 +36,7 @@ const staleObjectSweeperJob = async (): Promise<void> => {
                             backupJobId: job.backupJobId,
                             object: objects,
                             status: JOB_OBJECT_STATUS.failed,
+                            errorReason: ERROR_REASON.serverCrashed,
                             errorMessage: 'Job became stale — server crash or restart detected',
                             completedAt: new Date().toISOString(),
                         });

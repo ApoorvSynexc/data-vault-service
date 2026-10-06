@@ -45,6 +45,7 @@ export interface IBackupJob {
   startedAt?: string;
   completedAt?: string;
   errorMessage?: string;
+  errorReason?: string;
   recordCount?: number;
   sizeInBytes?: number;
   createdAt: string;
