@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchWriteCommand, GetCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, BACKUP_JOB_TABLE, STATUS, JOB_OBJECT_STATUS, INTERNAL_SECRET, SCHEDULE_MODE, VISIBILITY_STATUS } from '../../constant';
@@ -333,6 +333,35 @@ const setCompressionStatusBulk = async (params: {
   });
 
   return { updated, failed };
+};
+
+const updateBackupJob = async (
+  payload: Partial<IBackupJob>
+): Promise<void> => {
+  const { backupJobId, ...fields } = payload;
+  const updates: Record<string, any> = { ...fields, updatedAt: new Date().toISOString() };
+
+  const names: Record<string, string> = {};
+  const values: Record<string, any> = {};
+  const setExpr = Object.keys(updates)
+    .map((key) => {
+      const alias = `#${key}`;
+      names[alias] = key;
+      values[`:${key}`] = updates[key];
+      return `${alias} = :${key}`;
+    })
+    .join(', ');
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId },
+      UpdateExpression: `SET ${setExpr}`,
+      ConditionExpression: 'attribute_exists(backupJobId)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    })
+  );
 };
 
 const getBackupJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
@@ -851,6 +880,36 @@ const getBackupJobOverview = async (
   return overview;
 };
 
+const getStaleJobs = async (
+  thresholdMinutes: number,
+  limit: number = 100,
+  onPage: (jobs: IBackupJob[]) => Promise<void>,
+): Promise<void> => {
+  const cutoff = new Date(Date.now() - thresholdMinutes * 60 * 1000).toISOString();
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Limit: limit,
+        FilterExpression:
+          'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':pending': STATUS.pending, ':cutoff': cutoff },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const jobs = (result.Items as IBackupJob[] | undefined) ?? [];
+    if (jobs.length) {
+      await onPage(jobs);
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastEvaluatedKey !== undefined);
+};
+
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
@@ -858,6 +917,7 @@ export {
   runBackupNow,
   hasActiveBackupJob,
   resumeBackupJob,
+  updateBackupJob,
   getBackupJobById,
   getBackupJobsByUser,
   getBackupJobsByConfig,
@@ -871,4 +931,5 @@ export {
   computeArchivalJobStats,
   getMonthlyStatsByCrmCurrentYear,
   getBackupJobOverview,
+  getStaleJobs,
 };
