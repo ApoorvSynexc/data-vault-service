@@ -636,7 +636,21 @@ const searchArchivalRecords = async (
       // Fetch one extra row past `limit` so hasMore can be determined without
       // a second COUNT query.
       const offsetClause = offset > 0 ? ` OFFSET ${offset}` : '';
-      const sql = `SELECT ${selectClause} FROM "${hudiTable}" ${where} ORDER BY "Id"${offsetClause} LIMIT ${limit + 1}`;
+      // One row per Id is chosen inside the query (latest Hudi commit when the
+      // table has it), before ORDER BY/LIMIT — deduping after the LIMIT would
+      // leave the page short by however many duplicates it contained.
+      const tableColumns = await getTableColumns(hudiTable, databaseName, region);
+      const latestFirst = tableColumns.includes('_hoodie_commit_time') ? '"_hoodie_commit_time" DESC' : '"Id"';
+      // Two steps so no full-table sort/shuffle happens: (1) the page's distinct Ids
+      // — reads only the Id column, a cheap top-N; (2) the full rows for just those
+      // Ids, one per Id. The window runs on ~limit+1 Ids, not on the whole table.
+      const pageIds =
+        `SELECT "Id" FROM "${hudiTable}" ${where} GROUP BY "Id" ORDER BY "Id"${offsetClause} LIMIT ${limit + 1}`;
+      const rankColumn = tableColumns.includes('_hoodie_commit_time') ? ', "_hoodie_commit_time"' : '';
+      const sql =
+        `SELECT ${selectClause} FROM (` +
+        `SELECT ${selectClause}${rankColumn}, ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY ${latestFirst}) AS "__rn" ` +
+        `FROM "${hudiTable}" WHERE "Id" IN (${pageIds})) WHERE "__rn" = 1 ORDER BY "Id"`;
       const athenaStartedAt = Date.now();
       const result = await runAthenaQuery(sql, databaseName, region, outputLocation, limit + 1);
       // prepMs = Dynamo/Glue/S3 work before the query; athenaMs = submit + poll + fetch.
@@ -659,15 +673,7 @@ const searchArchivalRecords = async (
   // Ids overall. Salesforce Ids are ASCII, so this matches Athena's ordering.
   // Athena returns column names as Glue spells them (lower-case), hence getField.
   const idOf = (row: Record<string, string>): string => getField(row, 'Id') ?? '';
-  // The same record can be archived under several configs covering the object,
-  // so it comes back once per config: keep one row per Id (before hasMore and
-  // nextCursor are derived, so paging stays exact).
-  const uniqueById = new Map<string, Record<string, string>>();
-  for (const row of perConfigResults.flatMap((r) => r.rows)) {
-    const id = idOf(row);
-    if (!uniqueById.has(id)) uniqueById.set(id, row);
-  }
-  const merged = [...uniqueById.values()].sort((a, b) => (idOf(a) < idOf(b) ? -1 : idOf(a) > idOf(b) ? 1 : 0));
+  const merged = perConfigResults.flatMap((r) => r.rows).sort((a, b) => (idOf(a) < idOf(b) ? -1 : idOf(a) > idOf(b) ? 1 : 0));
 
   const hasMore = merged.length > limit;
   const pageRows = merged.slice(0, limit);
