@@ -659,7 +659,15 @@ const searchArchivalRecords = async (
   // Ids overall. Salesforce Ids are ASCII, so this matches Athena's ordering.
   // Athena returns column names as Glue spells them (lower-case), hence getField.
   const idOf = (row: Record<string, string>): string => getField(row, 'Id') ?? '';
-  const merged = perConfigResults.flatMap((r) => r.rows).sort((a, b) => (idOf(a) < idOf(b) ? -1 : idOf(a) > idOf(b) ? 1 : 0));
+  // The same record can be archived under several configs covering the object,
+  // so it comes back once per config: keep one row per Id (before hasMore and
+  // nextCursor are derived, so paging stays exact).
+  const uniqueById = new Map<string, Record<string, string>>();
+  for (const row of perConfigResults.flatMap((r) => r.rows)) {
+    const id = idOf(row);
+    if (!uniqueById.has(id)) uniqueById.set(id, row);
+  }
+  const merged = [...uniqueById.values()].sort((a, b) => (idOf(a) < idOf(b) ? -1 : idOf(a) > idOf(b) ? 1 : 0));
 
   const hasMore = merged.length > limit;
   const pageRows = merged.slice(0, limit);
