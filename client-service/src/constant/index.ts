@@ -336,6 +336,11 @@ const JOB_OBJECT_STATUS = {
   restoreIngestInProgress: 'INGEST_IN_PROGRESS',
   failed: 'FAILED',
 };
+
+const ERROR_REASON = {
+  serverCrashed: 'SERVER_CRASHED',
+}
+
 const ENVIRONMENT_TYPE = {
   production: 'PRODUCTION',
   sandbox: 'SANDBOX',
@@ -543,5 +548,6 @@ export {
   ENVIRONMENT_TYPE,
   STANDARD_OBJECT_LIST,
   SALESFORCE_SYSTEM_FIELDS,
-  EXCLUDE_OBJECT_SUFFIX
+  EXCLUDE_OBJECT_SUFFIX,
+  ERROR_REASON,
 };

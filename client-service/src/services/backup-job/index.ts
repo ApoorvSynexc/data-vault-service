@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchWriteCommand, GetCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_SERVICE, BACKUP_JOB_TABLE, STATUS, JOB_OBJECT_STATUS, INTERNAL_SECRET, SCHEDULE_MODE, VISIBILITY_STATUS } from '../../constant';
@@ -30,31 +30,6 @@ export const getSourceObjects = (objects?: IObject[], includeChildren = false) =
       ...(object.parentObjects ? { parentObjects: object.parentObjects } : {}),
     }));
   }
-};
-
-// Returns true if a PENDING (in-flight) job already exists for this config —
-// a job's own status has no separate "now actively running" value, it stays
-// PENDING for its entire in-flight duration (see STATUS in constant/index.ts).
-// Used to prevent duplicate concurrent backup jobs on the same config.
-const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
-  const startedAt = Date.now();
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_JOB_TABLE,
-      IndexName: 'backupConfigId-index',
-      KeyConditionExpression: 'backupConfigId = :backupConfigId',
-      FilterExpression: '#status = :pending',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: {
-        ':backupConfigId': backupConfigId,
-        ':pending': STATUS.pending,
-      },
-      Limit: 1,
-    })
-  );
-  const active = (result.Count ?? 0) > 0;
-  logger.info(`[ARCH-DEDUP] hasActiveBackupJob | configId=${backupConfigId} active=${active} count=${result.Count ?? 0} durationMs=${Date.now() - startedAt}`);
-  return active;
 };
 
 const submitBackupJobRequest = async (params: {
@@ -91,9 +66,8 @@ const triggerArchivalBackupJob = async (params: {
 
   if (!bypassDedup) {
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} dedup check (bypassDedup=false)`);
-    const active = await hasActiveBackupJob(config.backupConfigId);
-    if (active) {
-      logger.warn(`[ARCH-TRIG] EXIT short-circuit | configId=${config.backupConfigId} reason=already_active durationMs=${Date.now() - triggerStart}`);
+    if (config.backupStatus === STATUS.pending) {
+      logger.warn(`[Backup Service Trigger] EXIT short-circuit | Ms=${Date.now() - triggerStart} configId=${config.backupConfigId} reason=already_pending`);
       return null;
     }
   } else {
@@ -172,8 +146,8 @@ const triggerBackupJob = async (params: {
 }) => {
   const { config, lastUpdatedAt, type = 'backup', user, lastSchemaSyncAt, schemaSync, triggerSource } = params;
   try {
-    const active = await hasActiveBackupJob(config.backupConfigId);
-    if (active) {
+    if (config.backupStatus === STATUS.pending) {
+      logger.warn(`[Backup Service Trigger] EXIT short-circuit | configId=${config.backupConfigId} reason=already_pending`);
       return null;
     }
 
@@ -285,11 +259,18 @@ const setCompressionStatus = async (params: {
 }): Promise<void> => {
   const { backupJobId, backupConfigId, status, errorMessage } = params;
 
+  // A job that previously failed compression carries a stale errorMessage —
+  // on a later success (no new errorMessage given), REMOVE it rather than
+  // leaving it stranded next to a COMPRESSED status. REMOVE is a no-op if the
+  // attribute was never set, so this is safe for every success case, not just
+  // a prior-failure one.
   await docClient.send(
     new UpdateCommand({
       TableName: BACKUP_JOB_TABLE,
       Key: { backupJobId },
-      UpdateExpression: `SET #status = :status, lastUpdatedAt = :now${errorMessage ? ', errorMessage = :errorMessage' : ''}`,
+      UpdateExpression: errorMessage
+        ? 'SET #status = :status, lastUpdatedAt = :now, errorMessage = :errorMessage'
+        : 'SET #status = :status, lastUpdatedAt = :now REMOVE errorMessage',
       ConditionExpression: 'attribute_exists(backupJobId) AND backupConfigId = :backupConfigId',
       ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: {
@@ -333,6 +314,35 @@ const setCompressionStatusBulk = async (params: {
   });
 
   return { updated, failed };
+};
+
+const updateBackupJob = async (
+  payload: Partial<IBackupJob>
+): Promise<void> => {
+  const { backupJobId, ...fields } = payload;
+  const updates: Record<string, any> = { ...fields, updatedAt: new Date().toISOString() };
+
+  const names: Record<string, string> = {};
+  const values: Record<string, any> = {};
+  const setExpr = Object.keys(updates)
+    .map((key) => {
+      const alias = `#${key}`;
+      names[alias] = key;
+      values[`:${key}`] = updates[key];
+      return `${alias} = :${key}`;
+    })
+    .join(', ');
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId },
+      UpdateExpression: `SET ${setExpr}`,
+      ConditionExpression: 'attribute_exists(backupJobId)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    })
+  );
 };
 
 const getBackupJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
@@ -851,13 +861,43 @@ const getBackupJobOverview = async (
   return overview;
 };
 
+const getStaleJobs = async (
+  thresholdMinutes: number,
+  limit: number = 100,
+  onPage: (jobs: IBackupJob[]) => Promise<void>,
+): Promise<void> => {
+  const cutoff = new Date(Date.now() - thresholdMinutes * 60 * 1000).toISOString();
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Limit: limit,
+        FilterExpression:
+          'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':pending': STATUS.pending, ':cutoff': cutoff },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const jobs = (result.Items as IBackupJob[] | undefined) ?? [];
+    if (jobs.length) {
+      await onPage(jobs);
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastEvaluatedKey !== undefined);
+};
+
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
   submitBackupJobRequest,
   runBackupNow,
-  hasActiveBackupJob,
   resumeBackupJob,
+  updateBackupJob,
   getBackupJobById,
   getBackupJobsByUser,
   getBackupJobsByConfig,
@@ -871,4 +911,5 @@ export {
   computeArchivalJobStats,
   getMonthlyStatsByCrmCurrentYear,
   getBackupJobOverview,
+  getStaleJobs,
 };
