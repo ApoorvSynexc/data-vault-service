@@ -640,13 +640,14 @@ const searchArchivalRecords = async (
       // table has it), before ORDER BY/LIMIT — deduping after the LIMIT would
       // leave the page short by however many duplicates it contained.
       const tableColumns = await getTableColumns(hudiTable, databaseName, region);
-      const latestFirst = tableColumns.includes('_hoodie_commit_time') ? '"_hoodie_commit_time" DESC' : '"Id"';
+      const hasCommitTime = tableColumns.includes('_hoodie_commit_time');
+      const latestFirst = hasCommitTime ? '"_hoodie_commit_time" DESC' : '"Id"';
+      const rankColumn = hasCommitTime ? ', "_hoodie_commit_time"' : '';
       // Two steps so no full-table sort/shuffle happens: (1) the page's distinct Ids
       // — reads only the Id column, a cheap top-N; (2) the full rows for just those
       // Ids, one per Id. The window runs on ~limit+1 Ids, not on the whole table.
       const pageIds =
         `SELECT "Id" FROM "${hudiTable}" ${where} GROUP BY "Id" ORDER BY "Id"${offsetClause} LIMIT ${limit + 1}`;
-      const rankColumn = tableColumns.includes('_hoodie_commit_time') ? ', "_hoodie_commit_time"' : '';
       const sql =
         `SELECT ${selectClause} FROM (` +
         `SELECT ${selectClause}${rankColumn}, ROW_NUMBER() OVER (PARTITION BY "Id" ORDER BY ${latestFirst}) AS "__rn" ` +
@@ -717,7 +718,10 @@ const getArchivedRecordById = async (
 
   const where = [`"Id" = '${recordId}'`, ...table.conditions].join(' AND ');
   const selectClause = await buildSelectClause(config, objectApiName, region, fields, alwaysInclude);
-  const sql = `SELECT ${selectClause} FROM "${hudiTable}" WHERE ${where} LIMIT 1`;
+  // Several versions of one Id can exist; take the latest Hudi commit when the table has it.
+  const hasCommitTime = (await getTableColumns(hudiTable, databaseName, region)).includes('_hoodie_commit_time');
+  const orderBy = hasCommitTime ? ' ORDER BY "_hoodie_commit_time" DESC' : '';
+  const sql = `SELECT ${selectClause} FROM "${hudiTable}" WHERE ${where}${orderBy} LIMIT 1`;
   const result = await runAthenaQuery(sql, databaseName, region, outputLocation, 1);
   return result.rows[0] ?? null;
 };
