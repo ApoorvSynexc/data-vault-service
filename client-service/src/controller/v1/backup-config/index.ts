@@ -539,59 +539,6 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
 
-const syncMetadataHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { slug } = req.query;
-
-  const config = await getBackupConfigBySlug({
-    userId: req.user!.userId,
-    slug: String(slug),
-  });
-  if (!config) {
-    makeResponse(req, res, 400, false, 'backup_config_not_found');
-    return;
-  }
-
-  const user = await getUser({ userId: config.userId });
-  if (!user) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  const crm = await getCrmById(config.crmId);
-  if (!crm) {
-    makeResponse(req, res, 400, false, 'crm_not_found');
-    return;
-  }
-
-  const objects = config.objects ?? [];
-  if (!objects.length) {
-    return;
-  }
-
-  const backupJobId = uuidv4();
-  await Promise.all(
-    objects.flatMap((object) =>
-      METADATA_TYPES.map((metadataType) =>
-        salesforceMetadataHandler(
-          {
-            metadataType,
-            policyConfigType: 'backup',
-            crmName: crm.crmName,
-            crmId: config.crmId,
-            backupConfigId: config.backupConfigId,
-            objectName: object.name,
-            backupJobId,
-            isInitialBackup: false,
-          },
-          user
-        )
-      )
-    )
-  );
-
-  return makeResponse(req, res, 200, true, 'update');
-}
-
 // Recovery path for a failed real-time trigger creation (Apex Trigger + Test
 // Class). Called once the client has prompted the user for a record Id of
 // `objectApiName` — not a trigger/class Id, the user has no way to know one of
@@ -703,7 +650,6 @@ export const backupConfigController = wrapController({
   initalizePayloadTransformHandler,
   syncMetadataTriggerHandler,
   getBackupJobStatsHandler,
-  syncMetadataHandler,
   runNowHandler,
   recoverTriggerHandler,
 });
