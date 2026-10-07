@@ -442,8 +442,11 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
   // Order.StatusCode mirrors the Status picklist value rather than being
   // independently writable — Salesforce manages it off Status, so it's
   // excluded from Order's restore field list specifically (describe still
-  // reports it updateable/createable in many orgs).
-  const excludedFieldNames = objectApiName === 'Order' ? ['StatusCode'] : [];
+  // reports it updateable/createable in many orgs). Case.IsClosedOnCreate is
+  // set by Salesforce from the record type's default close behavior at
+  // creation time, not independently writable afterward, same reasoning.
+  const excludedFieldNames =
+    objectApiName === 'Order' ? ['StatusCode'] : objectApiName === 'Case' ? ['IsClosedOnCreate'] : [];
 
   const updateableFieldNames = described.fields
     .filter(
