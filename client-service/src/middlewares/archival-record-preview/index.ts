@@ -44,7 +44,13 @@ const asyncArchivalPreviewHandler =
           makeResponse(req, res, 502, false, 'upstream_access_denied' as Parameters<typeof makeResponse>[4]);
           return;
         }
-        makeResponse(req, res, 500, false, 'internal_error' as Parameters<typeof makeResponse>[4]);
+        // Debugging aid: the underlying error is returned in `meta` (it may carry
+        // SQL/table/bucket details — see the note above), not just logged.
+        const errorName = error instanceof Error ? error.name : 'Error';
+        makeResponse(req, res, 500, false, 'internal_error' as Parameters<typeof makeResponse>[4], null, {
+          error: message,
+          errorName,
+        });
       }
     };
 
