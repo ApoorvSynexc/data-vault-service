@@ -177,6 +177,7 @@ export interface IBackupJob {
   processingStartedAt?: string;
   completedAt?: string;
   errorMessage?: string;
+  errorReason?: string;
   createdAt: string;
   updatedAt: string;
   // BULK-only fields

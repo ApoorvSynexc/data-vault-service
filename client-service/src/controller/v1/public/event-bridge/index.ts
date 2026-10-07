@@ -2,6 +2,7 @@ import { AWS_EVENT_DESTINATION_API_KEY } from "../../../../constant";
 import { runLogsArchive } from "../../../../jobs/logs-archive-cron";
 import { runPaymentSyncJob } from "../../../../jobs/payement-sync";
 import { runEmrJob } from "../../../../jobs/run-emr-job";
+import { staleObjectSweeperJob } from "../../../../jobs/stale-object-sweeper";
 import { runSyncObjectJob } from "../../../../jobs/sync-objects";
 import { runSyncSalesforceRefreshTokenJob } from "../../../../jobs/sync-salesforce-refresh-token";
 import { IRequest, IResponse, makeResponse } from "../../../../lib";
@@ -22,6 +23,7 @@ interface IEventPayload {
     isSyncPayment?: boolean;
     isLogsArchive?: boolean;
     isSyncSalesforceRefreshToken?: boolean;
+    isStaleObjects?: boolean
 }
 
 const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -39,7 +41,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
         logger.info(`[Event Bridge] Triggered set for purpose: ${purpose}`);
         switch (purpose) {
             case "DAILY_MAINTENANCE": {
-                const { isSyncPayment, isLogsArchive, isSyncSalesforceRefreshToken, isSyncObject } = restPayload;
+                const { isSyncPayment, isLogsArchive, isSyncSalesforceRefreshToken, isSyncObject, isStaleObjects } = restPayload;
                 if (isSyncPayment) {
                     await runPaymentSyncJob();
                 }
@@ -51,6 +53,9 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
                 }
                 if (isSyncSalesforceRefreshToken) {
                     await runSyncSalesforceRefreshTokenJob();
+                }
+                if(isStaleObjects){
+                    staleObjectSweeperJob();
                 }
             }
                 break;

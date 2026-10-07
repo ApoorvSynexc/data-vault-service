@@ -8,6 +8,7 @@ export interface ISystemSchedulePayload {
     isSyncObject?: boolean;
     isLogsArchive?: boolean;
     isSyncSalesforceRefreshToken?: boolean;
+    isStaleObjects?: boolean;
 }
 
 interface ISystemScheduleJob {
@@ -26,6 +27,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
             isSyncPayment: true,
             isLogsArchive: true,
             isSyncSalesforceRefreshToken: true,
+            isStaleObjects: true,
         },
     },
     // {
