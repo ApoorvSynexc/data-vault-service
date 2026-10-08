@@ -341,7 +341,9 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       restoreId,
       status: STATUS.failed,
       errorMessage: err?.message ?? 'Unknown error',
-    });
+    }).catch((updateErr: any) =>
+      logger.error(`Restore ${restoreId}: could not mark restore as FAILED: ${updateErr?.message}`)
+    );
   } finally {
     activeJobs.delete(restoreJobId);
   }
@@ -419,7 +421,9 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       restoreId,
       status: STATUS.failed,
       errorMessage: err?.message ?? 'Unknown error',
-    });
+    }).catch((updateErr: any) =>
+      logger.error(`Restore ${restoreId}: could not mark restore as FAILED: ${updateErr?.message}`)
+    );
   } finally {
     activeJobs.delete(restoreJobId);
   }

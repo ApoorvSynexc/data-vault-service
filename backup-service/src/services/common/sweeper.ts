@@ -16,32 +16,37 @@ const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
   logger.info(`Stale job sweeper: processing ${jobs.length} stale job(s)`);
 
   for (const job of jobs) {
-    // Mark each stuck object as FAILED so resume can identify them
-    if (job.object?.length) {
-      await Promise.allSettled(
-        job.object
-          .map((obj, idx) => ({ obj, idx }))
-          .filter(({ obj }) => obj.status !== undefined && STUCK_STATUSES.has(obj.status))
-          .map(({ idx }) =>
-            updateBackupObject({
-              backupJobId: job.backupJobId,
-              objectIndex: idx,
-              status: JOB_OBJECT_STATUS.failed,
-              errorMessage: 'Marked stale — server crash or restart detected',
-            })
-          )
-      );
+    // One bad job must not stop the sweep of the rest of the page.
+    try {
+      // Mark each stuck object as FAILED so resume can identify them
+      if (job.object?.length) {
+        await Promise.allSettled(
+          job.object
+            .map((obj, idx) => ({ obj, idx }))
+            .filter(({ obj }) => obj.status !== undefined && STUCK_STATUSES.has(obj.status))
+            .map(({ idx }) =>
+              updateBackupObject({
+                backupJobId: job.backupJobId,
+                objectIndex: idx,
+                status: JOB_OBJECT_STATUS.failed,
+                errorMessage: 'Marked stale — server crash or restart detected',
+              })
+            )
+        );
+      }
+
+      await updateJobStatus({
+        backupJobId: job.backupJobId,
+        status: STATUS.failed,
+        completedAt: new Date().toISOString(),
+        errorMessage: 'Job became stale — server crash or restart detected',
+      });
+
+      await updateBackupConfig(job.backupConfigId, { backupStatus: STATUS.failed });
+      logger.info(`Stale job sweeper: marked job ${job.backupJobId} as FAILED`);
+    } catch (err: any) {
+      logger.error(`Stale job sweeper: failed to mark job ${job.backupJobId}: ${err?.message}`);
     }
-
-    await updateJobStatus({
-      backupJobId: job.backupJobId,
-      status: STATUS.failed,
-      completedAt: new Date().toISOString(),
-      errorMessage: 'Job became stale — server crash or restart detected',
-    });
-
-    await updateBackupConfig(job.backupConfigId, { backupStatus: STATUS.failed });
-    logger.info(`Stale job sweeper: marked job ${job.backupJobId} as FAILED`);
   }
 };
 
