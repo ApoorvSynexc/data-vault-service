@@ -203,6 +203,14 @@ const NUMERIC_LITERAL_TYPES = new Set([
 export interface ISoqlFieldMeta {
   name: string;
   type: string;
+  // Whether this field passes the same backup-eligibility gate the Bulk API
+  // SELECT / schema snapshot is built from (isQueryableField in
+  // metadata/field/index.ts — excludes compound Address/Location/Base64,
+  // calculated/formula, auto-number, and a couple of named exclusions), plus
+  // FLS-accessible. A filter naming a field Hudi never stored, or one the
+  // running user can't read, is rejected before ever reaching Athena rather
+  // than surfacing there as an opaque COLUMN_NOT_FOUND.
+  queryable: boolean;
 }
 
 // Real, describe-backed lookups the caller (validateSoqlQuery) builds from a
@@ -244,6 +252,17 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeReso
     if (!siblingMeta) throw new FilterError('soql_relationship_not_supported');
     field = siblingMeta.name;
   }
+
+  // Every field a filter condition names — direct, or resolved above from a
+  // compound sibling — must be one the backup pipeline would actually have
+  // stored (see ISoqlFieldMeta.queryable). Resolver-gated: omitted, every
+  // existing caller (dry-run's FILTER scope, the delta path) keeps today's
+  // exact behavior — this check only ever runs for validateSoqlQuery, the
+  // one caller that passes a real resolver.
+  if (resolver && !resolver.resolve(field)?.queryable) {
+    throw new FilterError('field_not_queryable');
+  }
+
   const literalTypes = n.literalType === undefined ? [] : Array.isArray(n.literalType) ? n.literalType : [n.literalType];
 
   if (n.valueQuery || literalTypes.includes('SUBQUERY')) throw new FilterError('soql_subquery_not_supported');
@@ -525,7 +544,10 @@ if (require.main === module) {
   // compoundFieldName links a flat sibling back to its compound parent,
   // exactly like Salesforce's own describe metadata (e.g. "MailingCity"
   // .compoundFieldName === "MailingAddress").
-  interface IFixtureField { name: string; type: string; compoundFieldName: string | null; }
+  // calculated/accessible added for the field_not_queryable coverage below —
+  // a minimal stand-in for isQueryableField's own gate, not a reimport,
+  // since this is a self-contained fixture.
+  interface IFixtureField { name: string; type: string; compoundFieldName: string | null; calculated?: boolean; accessible?: boolean; }
   const fixtureFields: IFixtureField[] = [
     { name: 'MailingAddress', type: 'address', compoundFieldName: null },
     { name: 'MailingCity', type: 'string', compoundFieldName: 'MailingAddress' },
@@ -534,8 +556,15 @@ if (require.main === module) {
     { name: 'Some_Location__Latitude__s', type: 'double', compoundFieldName: 'Some_Location__c' },
     { name: 'Some_Location__Longitude__s', type: 'double', compoundFieldName: 'Some_Location__c' },
     { name: 'OwnerId', type: 'reference', compoundFieldName: null },
+    { name: 'Amount', type: 'currency', compoundFieldName: null },
+    { name: 'Total_Formula__c', type: 'double', compoundFieldName: null, calculated: true },
+    { name: 'Secret_Field__c', type: 'string', compoundFieldName: null, accessible: false },
   ];
-  const fixtureMetaByName = new Map(fixtureFields.map((f) => [f.name.toLowerCase(), { name: f.name, type: f.type }]));
+  const isFixtureQueryable = (f: IFixtureField): boolean =>
+    f.type !== 'address' && f.type !== 'location' && !f.calculated && f.accessible !== false;
+  const fixtureMetaByName = new Map(
+    fixtureFields.map((f) => [f.name.toLowerCase(), { name: f.name, type: f.type, queryable: isFixtureQueryable(f) }])
+  );
   const testResolver: FieldTypeResolver = {
     resolve: (name) => fixtureMetaByName.get(name.toLowerCase()),
     resolveCompoundSibling: (base, sub) => {
@@ -543,7 +572,7 @@ if (require.main === module) {
       const match = fixtureFields.find(
         (f) => f.compoundFieldName?.toLowerCase() === base.toLowerCase() && f.name.toLowerCase().includes(subLower)
       );
-      return match ? { name: match.name, type: match.type } : undefined;
+      return match ? { name: match.name, type: match.type, queryable: isFixtureQueryable(match) } : undefined;
     },
   };
 
@@ -583,6 +612,33 @@ if (require.main === module) {
   expectError(
     () => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "MailingAddress.City = 'Austin'" }),
     'soql_relationship_not_supported'
+  );
+
+  // ── field_not_queryable (resolver-gated) ──────────────────────────────────
+  // An ordinary accessible, non-formula field passes, same as without a
+  // resolver at all.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Amount > 100' }, undefined, testResolver),
+    `CAST("Amount" AS double) > 100`
+  );
+  // A formula/roll-up field — excluded from the Bulk API SELECT by
+  // isQueryableField, so Hudi never stored it — is rejected here with a
+  // specific error instead of surfacing later as Athena's opaque
+  // COLUMN_NOT_FOUND.
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Total_Formula__c > 100' }, undefined, testResolver),
+    'field_not_queryable'
+  );
+  // A field the running user has no FLS read access to is rejected the same way.
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Secret_Field__c = 'x'" }, undefined, testResolver),
+    'field_not_queryable'
+  );
+  // A field that simply doesn't exist on the object — no dot, so this isn't
+  // the relationship-rejection path — is rejected the same way.
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "NoSuchField__c = 'x'" }, undefined, testResolver),
+    'field_not_queryable'
   );
 
   // Delta-table FILTER (buildDeltaFilterWhere): fields resolve through a
