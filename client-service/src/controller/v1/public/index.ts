@@ -71,9 +71,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
   const { crm, data: decryptedBody } = sf;
 
   const { transactionId, objectApiName } = decryptedBody;
-  console.log('processRealtimeWebhook', { transactionId, objectApiName, decryptedBody });
-  console.log('records', JSON.stringify(decryptedBody.records));
-
   if (!transactionId) {
     logger.warn('Realtime webhook received without transactionId — skipping');
     return;
