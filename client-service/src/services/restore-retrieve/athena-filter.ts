@@ -77,22 +77,43 @@ const resolveOperator = (raw: string): string => {
   return op;
 };
 
-// Formats a scalar value as a Presto literal by data type. Strings/dates are
-// single-quoted and '' -escaped; numbers/booleans render bare. Columns in the
-// Glue-backed tables are varchar, so a quoted literal compares correctly
-// either way — the bare cases just avoid needless quoting for numeric/boolean
-// filters. `value` is IRestoreFilterField's `any`, so it is coerced to a
-// string up front.
+// Every column in the Glue-backed tables (Hudi main, delta, archival) is
+// varchar end to end — see backup-service's toGlueColumnType, which types
+// everything 'string' except archival's native-Parquet datetime columns.
+// Presto/Trino gives no implicit varchar<->number/boolean coercion for ANY
+// operator (TYPE_MISMATCH: "Cannot apply operator: varchar < integer"), so a
+// numeric/boolean comparison has to CAST the column to match, not just format
+// the literal — see castColumnForDataType below, which this type set feeds.
+const NUMERIC_DATA_TYPES = new Set(['integer', 'double', 'decimal', 'currency', 'percent', 'number', 'long']);
+
+// Formats a scalar value as a Presto literal by data type. Numbers/booleans
+// render bare (the column side is cast to match, see castColumnForDataType);
+// everything else is single-quoted and '' -escaped. `value` is
+// IRestoreFilterField's `any`, so it is coerced to a string up front.
 const formatValue = (raw: unknown, dataType: string): string => {
   const value = String(raw ?? '');
   const type = dataType.toLowerCase();
-  if (['integer', 'double', 'decimal', 'currency', 'percent', 'number', 'long'].includes(type)) {
+  if (NUMERIC_DATA_TYPES.has(type)) {
     return value;
   }
   if (type === 'boolean') {
     return /^(true|1|yes)$/i.test(value.trim()) ? 'true' : 'false';
   }
   return `'${value.replace(/'/g, "''")}'`;
+};
+
+// Casts a varchar column to the real type a numeric/boolean comparison needs.
+// Without this, "CAST-less" comparisons against a text column don't just
+// error on Presto (TYPE_MISMATCH) — a plain string compare that DID somehow
+// typecheck would still silently misorder numbers by digit count ("1000" <
+// "500" lexicographically), so the column is cast rather than the literal
+// quoted as text. String/picklist/date fields are left as plain varchar —
+// correct for =, !=, and LIKE alike.
+const castColumnForDataType = (column: string, dataType: string): string => {
+  const type = dataType.toLowerCase();
+  if (NUMERIC_DATA_TYPES.has(type)) return `CAST(${column} AS double)`;
+  if (type === 'boolean') return `CAST(${column} AS boolean)`;
+  return column;
 };
 
 // ── Structured AND / OR filters ───────────────────────────────────────────────
@@ -114,16 +135,20 @@ const buildFieldCondition = (f: IRestoreFilterField, colExpr: ColExpr): string =
     return `${column} ${op} ${formatLike(f.value)}`;
   }
 
+  // LIKE above stays on the raw varchar column; every other operator against
+  // a numeric/boolean field needs it cast (see castColumnForDataType).
+  const comparisonColumn = castColumnForDataType(column, dataType);
+
   if (op === 'IN' || op === 'NOT IN') {
     const items = (Array.isArray(f.value) ? f.value.map(String) : String(f.value ?? '').split(','))
       .map((v) => v.trim())
       .filter(Boolean)
       .map((v) => formatValue(v, dataType));
     if (items.length === 0) throw new FilterError('invalid_filter_field');
-    return `${column} ${op} (${items.join(', ')})`;
+    return `${comparisonColumn} ${op} (${items.join(', ')})`;
   }
 
-  return `${column} ${op} ${formatValue(f.value, dataType)}`;
+  return `${comparisonColumn} ${op} ${formatValue(f.value, dataType)}`;
 };
 
 const buildStructuredWhere = (
@@ -137,12 +162,16 @@ const buildStructuredWhere = (
 
 // ── SOQL filters ──────────────────────────────────────────────────────────────
 
-// Minimal view of the soql-parser-js WHERE AST we traverse.
+// Minimal view of the soql-parser-js WHERE AST we traverse. literalType is an
+// array, not a bare string, when value is itself an array with mixed/uniform
+// literal kinds per element (e.g. "Foo IN (1, 2)" -> ['INTEGER','INTEGER']).
+type LiteralType = string | string[];
+
 interface WhereNode {
   field?: string;
   operator?: string;
   value?: string | string[];
-  literalType?: string;
+  literalType?: LiteralType;
   valueQuery?: unknown;
   openParen?: number;
   closeParen?: number;
@@ -157,6 +186,16 @@ interface WhereNode {
 // literal to a Presto expression keyed on the Glue column type when a real
 // query needs it.
 const UNSUPPORTED_LITERALS = new Set(['DATE_LITERAL', 'DATE_N_LITERAL', 'DATE', 'DATETIME']);
+
+// soql-parser-js's own LiteralType values for a numeric literal — tells us a
+// bare "> 1000" needs the varchar column cast (see castColumnForDataType's
+// comment; same TYPE_MISMATCH reasoning applies here).
+const NUMERIC_LITERAL_TYPES = new Set([
+  'INTEGER',
+  'DECIMAL',
+  'INTEGER_WITH_CURRENCY_PREFIX',
+  'DECIMAL_WITH_CURRENCY_PREFIX',
+]);
 
 // A field's canonical (describe-correct) name + Salesforce describe type,
 // keyed case-insensitively — built by the caller (validateSoqlQuery) from a
@@ -205,8 +244,10 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeReso
     if (!siblingMeta) throw new FilterError('soql_relationship_not_supported');
     field = siblingMeta.name;
   }
-  if (n.valueQuery || n.literalType === 'SUBQUERY') throw new FilterError('soql_subquery_not_supported');
-  if (n.literalType && UNSUPPORTED_LITERALS.has(n.literalType)) {
+  const literalTypes = n.literalType === undefined ? [] : Array.isArray(n.literalType) ? n.literalType : [n.literalType];
+
+  if (n.valueQuery || literalTypes.includes('SUBQUERY')) throw new FilterError('soql_subquery_not_supported');
+  if (literalTypes.some((t) => UNSUPPORTED_LITERALS.has(t))) {
     throw new FilterError('soql_date_filter_not_supported');
   }
 
@@ -217,16 +258,26 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeReso
   // `= NULL` / `<> NULL` are never TRUE in SQL (NULL compared this way is
   // UNKNOWN, not TRUE), so a bare pass-through silently excludes every row —
   // matching SOQL's `= null` / `!= null` semantics requires IS [NOT] NULL.
-  if (n.literalType === 'NULL') {
+  if (literalTypes.length === 1 && literalTypes[0] === 'NULL') {
     if (op === '=') return `${open}${colExpr(field)} IS NULL${close}`;
     if (op === '<>') return `${open}${colExpr(field)} IS NOT NULL${close}`;
     throw new FilterError('invalid_filter_operator');
   }
 
   // Parser preserves literal text (strings keep their quotes), so pass-through
-  // is already valid Presto for string/number/boolean literals.
+  // is already valid Presto for string literals. Numeric/boolean literals
+  // need the varchar column cast to match (same reasoning as
+  // castColumnForDataType) — soql_parser_js's own literalType (INTEGER,
+  // DECIMAL, BOOLEAN, ...) is what tells us which, independent of whether a
+  // FieldTypeResolver was even passed in.
+  const column =
+    literalTypes.length > 0 && literalTypes.every((t) => NUMERIC_LITERAL_TYPES.has(t))
+      ? `CAST(${colExpr(field)} AS double)`
+      : literalTypes.length > 0 && literalTypes.every((t) => t === 'BOOLEAN')
+        ? `CAST(${colExpr(field)} AS boolean)`
+        : colExpr(field);
   const value = Array.isArray(n.value) ? `(${n.value.join(', ')})` : String(n.value ?? '');
-  return `${open}${colExpr(field)} ${op} ${value}${close}`;
+  return `${open}${column} ${op} ${value}${close}`;
 };
 
 const renderSoqlWhere = (n: WhereNode | null | undefined, colExpr: ColExpr, resolveField?: FieldTypeResolver): string => {
@@ -369,7 +420,11 @@ if (require.main === module) {
     }
   };
 
-  // AND / OR structured filters
+  // AND / OR structured filters. Numeric dataType casts the column (not the
+  // literal) — the Glue column is varchar, and Presto gives no implicit
+  // varchar<->number coercion for ANY operator (reported bug: ">" against a
+  // currency field failed TYPE_MISMATCH: "Cannot apply operator: varchar <
+  // integer"). LIKE stays on the raw varchar column either way.
   assert.strictEqual(
     buildAthenaFilterWhere({
       type: 'AND',
@@ -378,7 +433,17 @@ if (require.main === module) {
         { name: 'Amount', dataType: 'number', operator: '>=', value: '100' },
       ],
     }),
-    `"Name" LIKE '%Acme%' AND "Amount" >= 100`
+    `"Name" LIKE '%Acme%' AND CAST("Amount" AS double) >= 100`
+  );
+  // Boolean dataType casts to boolean the same way.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'IsActive', dataType: 'boolean', operator: '=', value: 'true' }] }),
+    `CAST("IsActive" AS boolean) = true`
+  );
+  // Numeric IN-list casts the column too, not just each item's formatting.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'Amount', dataType: 'number', operator: 'IN', value: '100,200' }] }),
+    `CAST("Amount" AS double) IN (100, 200)`
   );
   assert.strictEqual(
     buildAthenaFilterWhere({
@@ -408,10 +473,26 @@ if (require.main === module) {
     'invalid_filter_operator'
   );
 
-  // SOQL pass-through
+  // SOQL pass-through. A numeric literal (parser literalType INTEGER/DECIMAL)
+  // casts the column the same way the structured path's dataType does — this
+  // is the exact reported bug: "Annual_Bonus__c > 1000" against a varchar
+  // Hudi column, which Presto rejects outright without the cast.
   assert.strictEqual(
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Name = 'Acme' AND Amount > 100" }),
-    `"Name" = 'Acme' AND "Amount" > 100`
+    `"Name" = 'Acme' AND CAST("Amount" AS double) > 100`
+  );
+  // Bare boolean literal casts to boolean too (soql-parser-js normalizes the
+  // literal text to uppercase TRUE — still valid, case-insensitive Presto).
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'IsActive = true' }),
+    `CAST("IsActive" AS boolean) = TRUE`
+  );
+  // A quoted numeric-looking string is a STRING literal, not INTEGER — no
+  // cast, plain varchar compare (this is a caller choice, not something to
+  // second-guess here).
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Amount = '100'" }),
+    `"Amount" = '100'`
   );
   assert.strictEqual(
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "SELECT Id FROM Account WHERE Status = 'Active'" }),
@@ -472,10 +553,11 @@ if (require.main === module) {
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "MailingAddress.City = 'Austin'" }, undefined, testResolver),
     `"MailingCity" = 'Austin'`
   );
-  // A custom Geolocation field resolves to its own real sibling the same way.
+  // A custom Geolocation field resolves to its own real sibling the same way
+  // — and still gets the numeric-literal cast, same as any other field.
   assert.strictEqual(
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Some_Location__c.Latitude > 10' }, undefined, testResolver),
-    `"Some_Location__Latitude__s" > 10`
+    `CAST("Some_Location__Latitude__s" AS double) > 10`
   );
   // Two dots is always a relationship traversal, never a compound sub-field —
   // rejected regardless of resolver.
@@ -512,8 +594,12 @@ if (require.main === module) {
     { type: 'AND', fields: [{ name: 'Amount', dataType: 'number', operator: '>=', value: '100' }] },
     deltaCtx
   )!;
+  // Numeric dataType casts the WHOLE colExpr result (the COALESCE, not just
+  // a plain column) — the delta path's column expression is varchar end to
+  // end too (json_extract_scalar and the Hudi fallback are both cast to
+  // varchar already), so it needs exactly the same outer CAST.
   assert.ok(
-    amountDelta.startsWith(`COALESCE((SELECT CASE WHEN change_type = 'DELETE'`),
+    amountDelta.startsWith(`CAST(COALESCE((SELECT CASE WHEN change_type = 'DELETE'`),
     'DELETE\'s flat snapshot is read directly, no nested old/new'
   );
   assert.ok(
@@ -529,8 +615,8 @@ if (require.main === module) {
     'takes the EARLIEST touching event, not the latest — a later event\'s OLD is only an intermediate value, not the true pre-window one'
   );
   assert.ok(
-    amountDelta.endsWith(`CAST("Amount" AS varchar)) >= 100`),
-    'falls back to the joined Hudi column when untouched; operator/value binds outside the COALESCE'
+    amountDelta.endsWith(`CAST("Amount" AS varchar)) AS double) >= 100`),
+    'falls back to the joined Hudi column when untouched; operator/value binds outside the inner COALESCE but inside the outer numeric CAST'
   );
   // Same operator/value/AND-OR handling as the Hudi path — only the column
   // expression differs.

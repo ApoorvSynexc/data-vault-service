@@ -9,7 +9,7 @@ import { AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { IS3Config } from '../../../models';
 
 // SID stamped on our statement so we can detect and skip re-adding it.
-const ATHENA_POLICY_SID = 'DataVaultAthenaRoleAccess';
+const ATHENA_POLICY_SID = 'DataCraftAthenaRoleAccess';
 
 // S3 bucket policy writes are strongly consistent (AWS guarantee since 2020),
 // but two concurrent callers can still race: both read the same policy before
@@ -44,7 +44,7 @@ const REQUIRED_ATHENA_ACTIONS = [
   's3:AbortMultipartUpload',
 ];
 
-const ATHENA_KMS_POLICY_SID = 'DataVaultAthenaS3KMSRoleAccess';
+const ATHENA_KMS_POLICY_SID = 'DataCraftKmsAccessPolicy';
 const REQUIRED_ATHENA_KMS_ACTIONS = ['kms:Decrypt', 'kms:DescribeKey'];
 
 type KeyPolicy = { Version: string; Statement: any[] };
