@@ -1140,6 +1140,13 @@ const createRollbackHandler = async (req: IRequest, res: IResponse): Promise<voi
   if (!restoreJob) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
+  // Rollback writes back into the Salesforce org — only users of the restore's own org may
+  // trigger it (the creator, or another user of the same CRM). Same 'not_exist' response as a
+  // missing job so ids of other tenants can't be probed.
+  const restore = await getRestoreById(restoreJob.restoreId);
+  if (!isOwner(restore, req.user!.userId, req.user!.crmId)) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
   const objectPayload = restoreJob.destination.objects.map((obj => ({ name: obj.name, id: obj.id, status: JOB_OBJECT_STATUS.rollbackInProgress })));
   await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload, status: STATUS.pending });
 
