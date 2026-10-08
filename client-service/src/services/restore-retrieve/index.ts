@@ -11,7 +11,7 @@ import { getDestinationById, getDecryptedDestinationConfig } from '../destinatio
 import { getUser } from '../user';
 import { createNotification } from '../notification';
 import { listStaleS3Objects, deleteS3Objects } from '../third-party/s3-bucket';
-import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third-party/salesforce/metadata/index';
+import { salesforceObjectFilteredList, salesforceObjectDescribe, ISalesforceFieldDescribe } from '../third-party/salesforce/metadata/index';
 import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
 import { ISalesforceRecordTypeInfo } from '../third-party/salesforce/metadata/recordType';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
@@ -1051,8 +1051,16 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
   }
 
   const described = await salesforceObjectDescribe({ user: params.user, objectName: params.objectApiName });
+  // Same gate isQueryableField applies before building the Bulk API SELECT /
+  // schema snapshot (metadata/field/index.ts), plus FLS-accessible — a field
+  // the backup pipeline would never have stored, or the running user can't
+  // read, can't be filtered on either. accessible defaults true if describe
+  // ever omits it (every real describe response sets it; this is just belt
+  // and suspenders against a missing/undefined value).
+  const isFieldFilterable = (f: ISalesforceFieldDescribe): boolean =>
+    isQueryableField(f) && f.accessible !== false;
   const fieldMetaByName = new Map<string, ISoqlFieldMeta>(
-    described.fields.map((f) => [f.name.toLowerCase(), { name: f.name, type: f.type }])
+    described.fields.map((f) => [f.name.toLowerCase(), { name: f.name, type: f.type, queryable: isFieldFilterable(f) }])
   );
   const resolver: FieldTypeResolver = {
     resolve: (name) => fieldMetaByName.get(name.toLowerCase()),
@@ -1067,7 +1075,7 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
       const sibling = described.fields.find(
         (f) => f.compoundFieldName?.toLowerCase() === baseLower && f.name.toLowerCase().includes(subLower)
       );
-      return sibling ? { name: sibling.name, type: sibling.type } : undefined;
+      return sibling ? { name: sibling.name, type: sibling.type, queryable: isFieldFilterable(sibling) } : undefined;
     },
   };
 
