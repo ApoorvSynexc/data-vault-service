@@ -69,6 +69,8 @@ const OPERATORS: Record<string, string> = {
   'NOT LIKE': 'NOT LIKE',
   IN: 'IN',
   'NOT IN': 'NOT IN',
+  INCLUDES: 'INCLUDES',
+  EXCLUDES: 'EXCLUDES',
 };
 
 const resolveOperator = (raw: string): string => {
@@ -116,6 +118,37 @@ const castColumnForDataType = (column: string, dataType: string): string => {
   return column;
 };
 
+// Hudi stores a multi-select picklist's value as the same ';'-joined string
+// Salesforce itself uses (e.g. "Dental;PF;ESI"). split(...) + contains(...)
+// checks membership by whole token, not substring — a plain LIKE '%PF%' would
+// also false-match "ESPF" or "PFx". Per SOQL's own grouping rules for
+// INCLUDES/EXCLUDES: values joined by ';' within ONE list item are ANDed
+// ("includes every one of these"); separate comma-separated list items are
+// ORed ("includes at least one of these groups"). `raw` still carries its
+// original SOQL quote characters when it comes from the parser (soql-parser-js
+// preserves literal text verbatim) but not when it comes from the structured
+// AND/OR filter path's plain IRestoreFilterField.value — the optional
+// strip handles both without the caller needing to know which path it's on.
+const stripQuotes = (raw: string): string => raw.trim().replace(/^'([\s\S]*)'$/, '$1');
+
+const buildIncludesGroup = (column: string, rawGroup: string): string => {
+  const values = stripQuotes(rawGroup)
+    .split(';')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (!values.length) throw new FilterError('invalid_filter_field');
+  return values.map((v) => `contains(split(${column}, ';'), '${v.replace(/'/g, "''")}')`).join(' AND ');
+};
+
+// EXCLUDES is Salesforce's own documented logical negation of INCLUDES for
+// the identical value grouping — built the same way and wrapped in NOT(...)
+// rather than carrying independent logic that could drift from it.
+const buildIncludesExpr = (column: string, op: 'INCLUDES' | 'EXCLUDES', rawGroups: string[]): string => {
+  if (!rawGroups.length) throw new FilterError('invalid_filter_field');
+  const expr = rawGroups.map((g) => `(${buildIncludesGroup(column, g)})`).join(' OR ');
+  return op === 'EXCLUDES' ? `NOT (${expr})` : expr;
+};
+
 // ── Structured AND / OR filters ───────────────────────────────────────────────
 
 // Formats a LIKE pattern: '' -escape, then wrap with % when the caller
@@ -135,8 +168,16 @@ const buildFieldCondition = (f: IRestoreFilterField, colExpr: ColExpr): string =
     return `${column} ${op} ${formatLike(f.value)}`;
   }
 
-  // LIKE above stays on the raw varchar column; every other operator against
-  // a numeric/boolean field needs it cast (see castColumnForDataType).
+  if (op === 'INCLUDES' || op === 'EXCLUDES') {
+    const groups = (Array.isArray(f.value) ? f.value.map(String) : String(f.value ?? '').split(','))
+      .map((v) => v.trim())
+      .filter(Boolean);
+    return buildIncludesExpr(column, op, groups);
+  }
+
+  // LIKE/INCLUDES/EXCLUDES above stay on the raw varchar column; every other
+  // operator against a numeric/boolean field needs it cast (see
+  // castColumnForDataType).
   const comparisonColumn = castColumnForDataType(column, dataType);
 
   if (op === 'IN' || op === 'NOT IN') {
@@ -273,6 +314,14 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeReso
   const op = resolveOperator(n.operator ?? '');
   const open = '('.repeat(n.openParen ?? 0);
   const close = ')'.repeat(n.closeParen ?? 0);
+
+  // Multi-select picklist membership — soql-parser-js always gives `value` as
+  // an array here (one entry per comma-separated list item, quotes intact),
+  // even for a single item like `INCLUDES ('Dental;PF')`.
+  if (op === 'INCLUDES' || op === 'EXCLUDES') {
+    const groups = (Array.isArray(n.value) ? n.value : [n.value]).map((v) => String(v ?? ''));
+    return `${open}${buildIncludesExpr(colExpr(field), op, groups)}${close}`;
+  }
 
   // `= NULL` / `<> NULL` are never TRUE in SQL (NULL compared this way is
   // UNKNOWN, not TRUE), so a bare pass-through silently excludes every row —
@@ -517,6 +566,13 @@ if (require.main === module) {
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "SELECT Id FROM Account WHERE Status = 'Active'" }),
     `"Status" = 'Active'`
   );
+  // A Percent field's decimal literal (literalType DECIMAL, same as any other
+  // non-integer number) casts the column the same way — reported bug:
+  // "Utilization_Percent__c = 0.90" against a varchar Hudi column.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Utilization_Percent__c = 0.90' }),
+    `CAST("Utilization_Percent__c" AS double) = 0.90`
+  );
   // SOQL no WHERE → null
   assert.strictEqual(buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'SELECT Id FROM Account' }), null);
 
@@ -691,6 +747,36 @@ if (require.main === module) {
   assert.strictEqual(
     buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'X', dataType: 'string', operator: '=', value: 'y' }] }),
     `"X" = 'y'`
+  );
+
+  // ── INCLUDES / EXCLUDES (multi-select picklist membership) ───────────────────
+  // Reported bug: "Benefits_Enrolled__c INCLUDES ('Dental;PF;ESI;Life Insurance')"
+  // threw invalid_filter_operator — INCLUDES/EXCLUDES weren't in the whitelist
+  // at all. ';' within ONE list item is AND ("includes every one of these");
+  // separate comma-separated items are OR ("includes at least one group").
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Benefits_Enrolled__c INCLUDES ('Dental;PF;ESI;Life Insurance')" }),
+    `(contains(split("Benefits_Enrolled__c", ';'), 'Dental') AND contains(split("Benefits_Enrolled__c", ';'), 'PF') AND contains(split("Benefits_Enrolled__c", ';'), 'ESI') AND contains(split("Benefits_Enrolled__c", ';'), 'Life Insurance'))`
+  );
+  // Comma-separated items OR together, each its own parenthesized group.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Benefits_Enrolled__c INCLUDES ('Dental','PF')" }),
+    `(contains(split("Benefits_Enrolled__c", ';'), 'Dental')) OR (contains(split("Benefits_Enrolled__c", ';'), 'PF'))`
+  );
+  // EXCLUDES is the exact negation of the equivalent INCLUDES expression.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Benefits_Enrolled__c EXCLUDES ('Dental')" }),
+    `NOT ((contains(split("Benefits_Enrolled__c", ';'), 'Dental')))`
+  );
+  // Same operators work through the structured AND/OR path (FILTER_OPERATOR's
+  // includes/excludes) — comma-joined string input, same as IN/NOT IN's.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'Benefits_Enrolled__c', dataType: 'string', operator: 'INCLUDES', value: 'Dental;PF' }] }),
+    `(contains(split("Benefits_Enrolled__c", ';'), 'Dental') AND contains(split("Benefits_Enrolled__c", ';'), 'PF'))`
+  );
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'Benefits_Enrolled__c', dataType: 'string', operator: 'EXCLUDES', value: '' }] }),
+    'invalid_filter_field'
   );
 
   console.log('athena-filter self-check passed');
