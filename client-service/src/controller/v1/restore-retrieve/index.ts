@@ -1118,7 +1118,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           user: backupConfigUser,
           config: backupConfig,
           type: 'backup',
-          lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+          lastUpdatedAt: backupConfig.lastBackupAt,
           schemaSync: true,
           triggerSource: {
             name: "CREATE_RESTORE",
