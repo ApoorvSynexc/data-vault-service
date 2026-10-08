@@ -220,13 +220,21 @@ interface WhereNode {
   right?: WhereNode;
 }
 
-// Literal kinds that don't translate 1:1 to Presto (SOQL date literals like
-// TODAY / LAST_N_DAYS:7, and bare date/datetime literals). Rejected rather
-// than mistranslated.
-// ponytail: no date-literal translation. Upgrade path: map each SOQL date
-// literal to a Presto expression keyed on the Glue column type when a real
-// query needs it.
-const UNSUPPORTED_LITERALS = new Set(['DATE_LITERAL', 'DATE_N_LITERAL', 'DATE', 'DATETIME']);
+// SOQL's RELATIVE date literals (TODAY, YESTERDAY, LAST_N_DAYS:7, ...) need
+// actual date-math against "now" to translate correctly — a much bigger,
+// separate feature. Rejected rather than mistranslated.
+// ponytail: no relative date-literal translation. Upgrade path: map each one
+// to a Presto expression (e.g. TODAY -> current_date) keyed off server/query
+// time when a real query needs it.
+//
+// Bare DATE/DATETIME literals (e.g. "2026-05-20", "2026-05-20T10:00:00Z") are
+// NOT in this set — see castColumnForLiteralType/formatDateLiteral below, not
+// rejected, just handled on their own: SOQL writes these with no quotes at
+// all, so passing the raw text straight through (like a plain number) isn't
+// just a TYPE_MISMATCH the way a numeric literal was — Presto parses the bare
+// text itself as arithmetic ("2026-05-20" = 2026 minus 5 minus 20), silently
+// comparing against the wrong integer instead of erroring.
+const UNSUPPORTED_LITERALS = new Set(['DATE_LITERAL', 'DATE_N_LITERAL']);
 
 // soql-parser-js's own LiteralType values for a numeric literal — tells us a
 // bare "> 1000" needs the varchar column cast (see castColumnForDataType's
@@ -237,6 +245,22 @@ const NUMERIC_LITERAL_TYPES = new Set([
   'INTEGER_WITH_CURRENCY_PREFIX',
   'DECIMAL_WITH_CURRENCY_PREFIX',
 ]);
+
+// Casts the varchar Hudi/delta column to match a bare DATE/DATETIME literal.
+// DATE compares as a SQL date (Presto's CAST(varchar AS date) expects
+// exactly Salesforce's own Date serialization, 'YYYY-MM-DD'); DATETIME uses
+// from_iso8601_timestamp, which — unlike a bare TIMESTAMP literal — parses
+// Salesforce's trailing 'Z'/offset correctly either way.
+const castColumnForLiteralType = (column: string, literalType: string): string =>
+  literalType === 'DATE' ? `CAST(${column} AS date)` : literalType === 'DATETIME' ? `from_iso8601_timestamp(${column})` : column;
+
+// Formats one bare DATE/DATETIME literal value (raw ISO text, no quotes at
+// all per SOQL's own grammar) as the matching Presto literal/expression —
+// the generic pass-through every other literal kind gets would otherwise
+// hand Presto unquoted text it parses as arithmetic (see UNSUPPORTED_LITERALS
+// above).
+const formatDateLiteral = (raw: string, literalType: string): string =>
+  literalType === 'DATETIME' ? `from_iso8601_timestamp('${raw}')` : `DATE '${raw}'`;
 
 // A field's canonical (describe-correct) name + Salesforce describe type,
 // keyed case-insensitively — built by the caller (validateSoqlQuery) from a
@@ -333,18 +357,26 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeReso
   }
 
   // Parser preserves literal text (strings keep their quotes), so pass-through
-  // is already valid Presto for string literals. Numeric/boolean literals
-  // need the varchar column cast to match (same reasoning as
-  // castColumnForDataType) — soql_parser_js's own literalType (INTEGER,
-  // DECIMAL, BOOLEAN, ...) is what tells us which, independent of whether a
-  // FieldTypeResolver was even passed in.
+  // is already valid Presto for string literals. Numeric/boolean/date
+  // literals need the varchar column cast/converted to match (same reasoning
+  // as castColumnForDataType) — soql-parser-js's own literalType (INTEGER,
+  // DECIMAL, BOOLEAN, DATE, DATETIME, ...) is what tells us which,
+  // independent of whether a FieldTypeResolver was even passed in.
+  const soleLiteralType = literalTypes.length === 1 ? literalTypes[0] : undefined;
+  const isDateOrDatetime = soleLiteralType === 'DATE' || soleLiteralType === 'DATETIME';
   const column =
     literalTypes.length > 0 && literalTypes.every((t) => NUMERIC_LITERAL_TYPES.has(t))
       ? `CAST(${colExpr(field)} AS double)`
       : literalTypes.length > 0 && literalTypes.every((t) => t === 'BOOLEAN')
         ? `CAST(${colExpr(field)} AS boolean)`
-        : colExpr(field);
-  const value = Array.isArray(n.value) ? `(${n.value.join(', ')})` : String(n.value ?? '');
+        : isDateOrDatetime
+          ? castColumnForLiteralType(colExpr(field), soleLiteralType!)
+          : colExpr(field);
+  const value = Array.isArray(n.value)
+    ? `(${n.value.map((v) => (isDateOrDatetime ? formatDateLiteral(String(v), soleLiteralType!) : v)).join(', ')})`
+    : isDateOrDatetime
+      ? formatDateLiteral(String(n.value ?? ''), soleLiteralType!)
+      : String(n.value ?? '');
   return `${open}${column} ${op} ${value}${close}`;
 };
 
@@ -573,6 +605,34 @@ if (require.main === module) {
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Utilization_Percent__c = 0.90' }),
     `CAST("Utilization_Percent__c" AS double) = 0.90`
   );
+  // Bare DATE/DATETIME literals (no quotes at all per SOQL's own grammar —
+  // reported bug: "Date_of_Joining__c = 2026-05-20" previously rejected
+  // outright as soql_date_filter_not_supported). DATE casts the column and
+  // wraps the literal in Presto's DATE '...' syntax; DATETIME uses
+  // from_iso8601_timestamp on both sides, which handles a trailing 'Z' or
+  // offset correctly where a bare TIMESTAMP literal wouldn't.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Date_of_Joining__c = 2026-05-20' }),
+    `CAST("Date_of_Joining__c" AS date) = DATE '2026-05-20'`
+  );
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Date_of_Joining__c > 2026-05-20' }),
+    `CAST("Date_of_Joining__c" AS date) > DATE '2026-05-20'`
+  );
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate = 2026-05-20T10:00:00Z' }),
+    `from_iso8601_timestamp("CreatedDate") = from_iso8601_timestamp('2026-05-20T10:00:00Z')`
+  );
+  // A date IN-list casts/wraps every element the same way.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate IN (2026-01-01, 2026-01-02)' }),
+    `CAST("CreatedDate" AS date) IN (DATE '2026-01-01', DATE '2026-01-02')`
+  );
+  // RELATIVE date literals (TODAY, LAST_N_DAYS:7, ...) are a different,
+  // unimplemented feature (real date-math against "now") — still rejected
+  // rather than silently mistranslated, same as before this fix.
+  expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate = TODAY' }), 'soql_date_filter_not_supported');
+
   // SOQL no WHERE → null
   assert.strictEqual(buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'SELECT Id FROM Account' }), null);
 
