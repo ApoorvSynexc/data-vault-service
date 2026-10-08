@@ -393,20 +393,38 @@ const renderSoqlWhere = (n: WhereNode | null | undefined, colExpr: ColExpr, reso
 // soql-parser-js can't tokenize Salesforce's bare (unquoted) Time literal
 // syntax (HH:mm:ss[.SSS][Z|±hh:mm]) at all — parseQuery throws a confusing,
 // unrelated error for it ("Mismatched parentheses...") instead of failing
-// cleanly. Unlike DATE/DATETIME (which the parser handles fine and this
-// module just declines to translate via UNSUPPORTED_LITERALS above), there's
-// no post-parse literalType to check here since parsing itself never
-// succeeds — caught before parsing instead, with the same clear rejection.
-const BARE_TIME_LITERAL_RE = /\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})?\b/;
+// cleanly. Unlike DATE/DATETIME, there's no special column cast/conversion
+// needed once it parses, though: Salesforce always serializes a Time value
+// as this exact zero-padded "HH:mm:ss.SSS[Z]" text, so the varchar Hudi
+// column already stores the same canonical shape the literal is written in —
+// a fixed-width zero-padded time string sorts correctly as plain text, the
+// same reasoning bare ISO dates/datetimes sort correctly as text (unlike a
+// bare number, which doesn't). So quoting it before parsing — '$&' instead of
+// bare $& — is enough: it then parses as an ordinary STRING literal, which is
+// already exactly the right SQL, no post-parse handling required.
+const BARE_TIME_LITERAL_RE = /\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
+
+// Applies BARE_TIME_LITERAL_RE only OUTSIDE existing quoted-string spans, so
+// a real string that merely looks time-like (e.g. "Meeting at 10:30:00")
+// is left untouched — walks the query split on '...'-quoted segments
+// (Salesforce string literals escape an embedded quote by doubling it, same
+// pattern used elsewhere in this module) and only rewrites the gaps between them.
+const STRING_LITERAL_RE = /'(?:[^']|'')*'/g;
+const quoteBareTimeLiterals = (soql: string): string => {
+  let result = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = STRING_LITERAL_RE.exec(soql))) {
+    result += soql.slice(lastIndex, match.index).replace(BARE_TIME_LITERAL_RE, "'$&'");
+    result += match[0];
+    lastIndex = match.index + match[0].length;
+  }
+  return result + soql.slice(lastIndex).replace(BARE_TIME_LITERAL_RE, "'$&'");
+};
 
 const buildSoqlWhere = (soqlQuery: string, colExpr: ColExpr, resolveField?: FieldTypeResolver): string | null => {
-  const trimmed = soqlQuery.trim();
+  const trimmed = quoteBareTimeLiterals(soqlQuery.trim());
   if (!trimmed) return null;
-
-  const withoutStringLiterals = trimmed.replace(/'(?:[^']|'')*'/g, "''");
-  if (BARE_TIME_LITERAL_RE.test(withoutStringLiterals)) {
-    throw new FilterError('soql_time_filter_not_supported');
-  }
 
   // Accept either a full "SELECT ... FROM ... WHERE ..." or a bare WHERE body.
   const wrapped = /^SELECT\b/i.test(trimmed)
@@ -644,10 +662,18 @@ if (require.main === module) {
   // SOQL unsupported surfaces
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Owner.Name = 'x'" }), 'soql_relationship_not_supported');
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate = LAST_N_DAYS:7' }), 'soql_date_filter_not_supported');
-  // A bare Time literal can't even be parsed (soql-parser-js throws its own
-  // confusing error for the colons) — caught before parsing, same as the
-  // other unsupported literal kinds above.
-  expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Time_Test__c = 10:30:00.000Z' }), 'soql_time_filter_not_supported');
+  // A bare Time literal can't even be parsed as-is (soql-parser-js throws its
+  // own confusing error for the colons) — quoted before parsing instead (see
+  // quoteBareTimeLiterals), reported bug: "Shift_Start_Time__c =00:15:00.000Z"
+  // (no space before the value either — the regex doesn't care).
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Shift_Start_Time__c =00:15:00.000Z' }),
+    `"Shift_Start_Time__c" = '00:15:00.000Z'`
+  );
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Time_Test__c = 10:30:00.000Z' }),
+    `"Time_Test__c" = '10:30:00.000Z'`
+  );
   // A quoted string that merely looks time-like must not be mistaken for one.
   assert.strictEqual(
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Name = 'Meeting at 10:30:00'" }),
