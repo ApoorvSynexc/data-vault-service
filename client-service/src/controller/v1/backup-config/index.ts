@@ -215,6 +215,7 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     makeResponse(req, res, 400, false, 'destination_not_found');
     return;
   }
+  const decryptedDestinationDetail = getDecryptedDestinationConfig(destination)
 
   const crmDetail = {
     crmId: crmPayload.crmId,
@@ -227,6 +228,9 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     destinationId: destination.destinationId,
     destinationName: destination.name,
     type: destination.type,
+    provider: destination.provider,
+    bucketName: decryptedDestinationDetail.bucketName,
+    region: decryptedDestinationDetail.region
   };
   makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail, destinationDetail });
 };
