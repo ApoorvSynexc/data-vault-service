@@ -621,13 +621,16 @@ export const buildDeltaPartitionWhere = (
  * fetch-records would actually return.
  */
 
-// ENTIRE: a plain count of the Hudi table (current state), optionally narrowed
-// by a FILTER-scope WHERE body built from restoreScope.filters via
-// buildAthenaFilterWhere. Per the dry-run contract, ENTIRE counts main Hudi
-// data only — deleted records (reconstructed from the delta table) are not
-// part of it.
+// ENTIRE: a count of DISTINCT records in the Hudi table (current state),
+// optionally narrowed by a FILTER-scope WHERE body built from
+// restoreScope.filters via buildAthenaFilterWhere. COUNT(DISTINCT "Id"), not
+// COUNT(*) — a Merge-on-Read Hudi table can carry more than one physical row
+// for the same Id between compactions, and a dry-run count has to agree with
+// the number of actual records a restore would touch, not the raw row count.
+// Per the dry-run contract, ENTIRE counts main Hudi data only — deleted
+// records (reconstructed from the delta table) are not part of it.
 export const buildHudiCountSql = (hudiTable: string, whereBody?: string | null): string =>
-  `SELECT COUNT(*) AS cnt FROM "${hudiTable}"` + whereClause([whereBody], 'WHERE');
+  `SELECT COUNT(DISTINCT ${quoteCol(ID)}) AS cnt FROM "${hudiTable}"` + whereClause([whereBody], 'WHERE');
 
 // The record-row/window/partition predicate every delta scan for a
 // CHANGED_BETWEEN count applies — shared, not duplicated, between
@@ -689,10 +692,15 @@ export const buildDeltaCountSql = (
     `d.change_type AS ${quoteCol(DELTA_CHANGE_TYPE_ALIAS)}, h.* ` +
     `FROM (${latest}) d LEFT JOIN "${hudiTable}" h ON h.${quoteCol(ID)} = d.record_id`;
 
+  // COUNT(DISTINCT ...) on the record id, not COUNT(*)/SUM(CASE...) of raw
+  // rows — the LEFT JOIN above matches each already-deduped delta record
+  // onto its Hudi row by Id, and a Merge-on-Read Hudi table can carry more
+  // than one physical row for the same Id between compactions, which would
+  // otherwise fan this join out and inflate every one of these counts.
   return (
-    `SELECT COUNT(*) AS total_cnt, ` +
-    `SUM(CASE WHEN ${quoteCol(DELTA_CHANGE_TYPE_ALIAS)} = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
-    `SUM(CASE WHEN ${quoteCol(DELTA_CHANGE_TYPE_ALIAS)} = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt ` +
+    `SELECT COUNT(DISTINCT ${quoteCol(DELTA_RECORD_ID_ALIAS)}) AS total_cnt, ` +
+    `COUNT(DISTINCT CASE WHEN ${quoteCol(DELTA_CHANGE_TYPE_ALIAS)} = 'UPDATE' THEN ${quoteCol(DELTA_RECORD_ID_ALIAS)} END) AS update_cnt, ` +
+    `COUNT(DISTINCT CASE WHEN ${quoteCol(DELTA_CHANGE_TYPE_ALIAS)} = 'DELETE' THEN ${quoteCol(DELTA_RECORD_ID_ALIAS)} END) AS delete_cnt ` +
     `FROM (${merged}) x` +
     whereClause([p.scopeWhere], 'WHERE')
   );
@@ -901,15 +909,19 @@ if (require.main === module) {
   assert.strictEqual(buildHudiEntireSql('t_hudi', retrieve), buildHudiEntireSql('t_hudi', { ...retrieve, scopeWhere: null }));
 
   // ── Dry-run counts ──────────────────────────────────────────────────────────
-  assert.strictEqual(buildHudiCountSql('t_hudi'), `SELECT COUNT(*) AS cnt FROM "t_hudi"`);
+  // COUNT(DISTINCT "Id"), not COUNT(*) — a Merge-on-Read Hudi table can carry
+  // more than one physical row per Id between compactions, and the dry-run
+  // count has to reflect unique records, not raw rows.
+  assert.strictEqual(buildHudiCountSql('t_hudi'), `SELECT COUNT(DISTINCT "Id") AS cnt FROM "t_hudi"`);
   assert.strictEqual(
     buildHudiCountSql('t_hudi', `"Name" = 'Acme'`),
-    `SELECT COUNT(*) AS cnt FROM "t_hudi" WHERE ("Name" = 'Acme')`
+    `SELECT COUNT(DISTINCT "Id") AS cnt FROM "t_hudi" WHERE ("Name" = 'Acme')`
   );
   const deltaCount = buildDeltaCountSql('t_delta', 't_hudi', { startDate: START, endDate: END, deltaPartition: prune });
   assert.ok(deltaCount.startsWith(
-    `SELECT COUNT(*) AS total_cnt, SUM(CASE WHEN "dv_change_type" = 'UPDATE' THEN 1 ELSE 0 END) AS update_cnt, ` +
-    `SUM(CASE WHEN "dv_change_type" = 'DELETE' THEN 1 ELSE 0 END) AS delete_cnt FROM (`
+    `SELECT COUNT(DISTINCT "dv_record_id") AS total_cnt, ` +
+    `COUNT(DISTINCT CASE WHEN "dv_change_type" = 'UPDATE' THEN "dv_record_id" END) AS update_cnt, ` +
+    `COUNT(DISTINCT CASE WHEN "dv_change_type" = 'DELETE' THEN "dv_record_id" END) AS delete_cnt FROM (`
   ));
   assert.ok(deltaCount.includes('(NOT COALESCE(is_schema_change, false))'), 'schema-change deltas excluded');
   assert.ok(deltaCount.includes(prune), 'prunes to the window’s months like every other delta scan');

@@ -263,6 +263,7 @@ export interface ISalesforcePicklistValue {
 }
 
 export interface ISalesforceFieldDescribe {
+    accessible: boolean;
     aggregatable: boolean;
     aiPredictionField: boolean;
     autoNumber: boolean;

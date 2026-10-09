@@ -84,6 +84,7 @@
   "soql_relationship_not_supported": "relationship fields (e.g. Owner.Name) are not supported in filters",
   "soql_subquery_not_supported": "subqueries are not supported in filters",
   "soql_date_filter_not_supported": "SOQL date literals are not yet supported in filters",
+  "field_not_queryable": "Field is not queryable, either the field is not accessible, or is it auto calculated field or it doesn't exist. Please try with another field.",
   "repair": "Glue table repair completed",
   "backup_id_required": "backupId is required",
   "backup_job_not_found": "Backup job not found",

@@ -357,7 +357,6 @@ const getBackupJobsByUser = async (
   options?: { limit?: number; cursor?: string; status?: string; type?: string }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
-  const exclusiveStartKey = decodeCursor(options?.cursor);
 
   const filterParts: string[] = [];
   const expressionNames: Record<string, string> = {};
@@ -375,24 +374,32 @@ const getBackupJobsByUser = async (
     expressionValues[':type'] = options.type;
   }
 
-  const queryParams: any = {
-    TableName: BACKUP_JOB_TABLE,
-    IndexName: 'userId-index',
-    KeyConditionExpression: 'userId = :userId',
-    ExpressionAttributeValues: expressionValues,
-    Limit: limit,
-    ScanIndexForward: false,
-    ...(filterParts.length && {
-      FilterExpression: filterParts.join(' AND '),
-      ExpressionAttributeNames: expressionNames,
-    }),
-    ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-  };
+  const items: IBackupJob[] = [];
+  let lastKey = decodeCursor(options?.cursor);
 
-  const result = await docClient.send(new QueryCommand(queryParams));
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_JOB_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: expressionValues,
+        Limit: limit - items.length,
+        ScanIndexForward: false,
+        ...(filterParts.length && {
+          FilterExpression: filterParts.join(' AND '),
+          ExpressionAttributeNames: expressionNames,
+        }),
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      })
+    );
 
-  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
-  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
+    items.push(...((result.Items ?? []) as IBackupJob[]));
+    lastKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (items.length < limit && lastKey);
+
+  const nextCursor = lastKey ? encodeCursor(lastKey) : undefined;
+  return { items, nextCursor };
 };
 
 const getBackupJobsByConfig = async (

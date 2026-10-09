@@ -88,11 +88,11 @@ const syncObjects = async (params: ISyncObject) => {
         if (deletedObjects?.length) {
             logger.info(`[SYNC-OBJECTS] deleted objects found backupConfigId=${backupConfig.backupConfigId} deletedObjectCount=${deletedObjects.length}`);
             const deletedObjectsName = deletedObjects.map((obj) => obj.name);
-            const triggersToBeDelete = backupConfig.triggerResults?.filter((obj) => deletedObjectsName.includes(obj.triggerName || ""));
+            const triggersToBeDelete = backupConfig.triggerResults?.filter((obj) => deletedObjectsName.includes(obj.objectApiName || ""));
             await deleteTriggers(instanceUrl, tokens, { ...backupConfig, triggerResults: triggersToBeDelete });
 
             const updatedObject = backupConfig.objects?.filter((obj) => !deletedObjectsName.includes(obj.name));
-            const updateTriggerResult = backupConfig.triggerResults?.filter((obj) => !deletedObjectsName.includes(obj.triggerName || ""));
+            const updateTriggerResult = backupConfig.triggerResults?.filter((obj) => !deletedObjectsName.includes(obj.objectApiName || ""));
             await updateBackupConfig(backupConfig.backupConfigId, { objects: updatedObject, triggerResults: updateTriggerResult });
         }
     } catch (error) {
