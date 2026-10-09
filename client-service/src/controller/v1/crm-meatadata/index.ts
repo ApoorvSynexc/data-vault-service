@@ -21,7 +21,11 @@ const filterChildRelationships = (
 
 type ISalesforceRelationshipChild = ReturnType<typeof filterChildRelationships>[number];
 
-interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
+export interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
+  // Whether this child object itself is a custom (vs. standard) Salesforce
+  // object — sourced from the child's own describe, already fetched to
+  // compute `parent`/walk its own children, not from the relationship edge.
+  custom: boolean;
   children: ISalesforceChildTreeNode[];
   parent: ISalesforceCascadeDeleteField[];
 }
@@ -33,7 +37,7 @@ const getCascadeDeleteFields = (fields: ISalesforceObjectDescribeResponse['field
   fields
     .filter((field) => field.cascadeDelete)
 
-type ISalesforceCascadeDeleteField = ReturnType<typeof getCascadeDeleteFields>[number];
+export type ISalesforceCascadeDeleteField = ReturnType<typeof getCascadeDeleteFields>[number];
 
 // Archival-only node shape — kept as its own type, separate from
 // ISalesforceChildTreeNode, even though the two now carry the same fields.
@@ -41,7 +45,11 @@ type ISalesforceCascadeDeleteField = ReturnType<typeof getCascadeDeleteFields>[n
 // fixes (shared describe queue/cache, deletable-child filtering) to stay
 // isolated from buildChildRelationshipTree/backup's traversal, not because
 // the node shapes themselves need to differ.
-interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild {
+export interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild {
+  // Whether this child object itself is a custom (vs. standard) Salesforce
+  // object — sourced from the child's own describe, already fetched to
+  // compute `parent`/walk its own children, not from the relationship edge.
+  custom: boolean;
   children: ISalesforceArchivalChildTreeNode[];
   // Of this node's own children, the cascadeDelete fields on the ones that are
   // themselves a cascade-delete child in another master-detail relationship —
@@ -49,9 +57,9 @@ interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild 
   parent: ISalesforceCascadeDeleteField[];
 }
 
-const MAX_RELATIONSHIP_DEPTH = 5;
+export const MAX_RELATIONSHIP_DEPTH = 5;
 
-const buildChildRelationshipTree = async (params: {
+export const buildChildRelationshipTree = async (params: {
   user: IUser;
   objectDescription: ISalesforceObjectDescribeResponse;
   objectName: string;
@@ -86,16 +94,17 @@ const buildChildRelationshipTree = async (params: {
       // through. Attached directly to the child's own node (not its parent's)
       // so inspecting this node alone is enough to see it.
       const parent = child.cascadeDelete ? getCascadeDeleteFields(childDescription.fields) : [];
+      const custom = childDescription.custom;
 
       if (visitedObjectNames.has(child.name)) {
-        return { ...child, children: [], parent };
+        return { ...child, custom, children: [], parent };
       }
 
       // restrictedDelete blocks deleting the parent while this child still has
       // records, and without cascadeDelete the child isn't removed alongside
       // it either — so there's no cascade edge to keep walking past this node.
       if (child.restrictedDelete && !child.cascadeDelete) {
-        return { ...child, children: [], parent };
+        return { ...child, custom, children: [], parent };
       }
 
       const { children } = await buildChildRelationshipTree({
@@ -109,7 +118,7 @@ const buildChildRelationshipTree = async (params: {
         maxDepth,
       });
 
-      return { ...child, children, parent };
+      return { ...child, custom, children, parent };
     })
   );
 
@@ -136,9 +145,9 @@ const buildChildRelationshipTree = async (params: {
 // at once. This queue caches each object's describe by name (so it's only ever
 // fetched once across the whole traversal) and caps how many of those fetches run at
 // the same time.
-const MAX_CONCURRENT_ARCHIVAL_DESCRIBES = 6;
+export const MAX_CONCURRENT_ARCHIVAL_DESCRIBES = 6;
 
-const createSalesforceDescribeQueue = (
+export const createSalesforceDescribeQueue = (
   user: IUser,
   concurrency: number,
   seed?: Iterable<[string, ISalesforceObjectDescribeResponse]>
@@ -178,9 +187,9 @@ const createSalesforceDescribeQueue = (
   };
 };
 
-type ISalesforceDescribeQueue = ReturnType<typeof createSalesforceDescribeQueue>;
+export type ISalesforceDescribeQueue = ReturnType<typeof createSalesforceDescribeQueue>;
 
-const buildArchivalChildRelationshipTree = async (params: {
+export const buildArchivalChildRelationshipTree = async (params: {
   user: IUser;
   objectDescription: ISalesforceObjectDescribeResponse;
   objectName: string;
@@ -237,16 +246,17 @@ const buildArchivalChildRelationshipTree = async (params: {
       // getSalesforceDescribeObject's parent-detection, reusing the
       // description already fetched above instead of re-describing.
       const parent = child.cascadeDelete ? getCascadeDeleteFields(childDescription.fields) : [];
+      const custom = childDescription.custom;
 
       if (visitedObjectNames.has(child.name)) {
-        return { ...child, children: [], parent };
+        return { ...child, custom, children: [], parent };
       }
 
       // restrictedDelete blocks deleting the parent while this child still has
       // records, and without cascadeDelete the child isn't removed alongside
       // it either — so there's no cascade edge to keep walking past this node.
       if (child.restrictedDelete && !child.cascadeDelete) {
-        return { ...child, children: [], parent };
+        return { ...child, custom, children: [], parent };
       }
 
       visitedObjectNames.add(child.name);
@@ -261,7 +271,7 @@ const buildArchivalChildRelationshipTree = async (params: {
         maxDepth,
       });
 
-      return { ...child, children, parent };
+      return { ...child, custom, children, parent };
     })
   );
 
