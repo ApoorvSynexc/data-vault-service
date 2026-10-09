@@ -1221,6 +1221,14 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
         dataset: backupConfig?.dataset,
         schedule: backupConfig?.schedule,
         createdAt: backupConfig?.createdAt,
+      },
+      type: restore?.source.type,
+      startDate: restore?.source.startDate,
+      endDate: restore?.source.endDate,
+    },
+    selection: {
+      restoreScope: {
+        type: restore?.selection.restoreScope.type,
       }
     }
   });
