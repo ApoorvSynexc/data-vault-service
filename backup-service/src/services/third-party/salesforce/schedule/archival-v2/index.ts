@@ -328,7 +328,8 @@ const archiveObject = async (payload: IArchiveObject) => {
     );
 
     if (!fieldsMetadata?.fields) {
-      return;
+      // Throw so the catch below marks the object FAILED instead of leaving it at CREATED.
+      throw new Error(`Unable to read field metadata from Salesforce for object ${objectName}`);
     }
 
     const fieldNames: string[] = [];
