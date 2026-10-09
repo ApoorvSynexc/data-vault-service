@@ -4,17 +4,21 @@ import { resumeBackupJob, runBackupJob, runArchivalJob } from '../../../services
 import { wrapController } from '../../../utils/helper';
 
 const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { triggerSource } = req.body;
-  const job = await createBackupJob(req.body);
+  const { triggerSource, lastUpdatedAt } = req.body;
+  const modifiedSince = lastUpdatedAt ? new Date(lastUpdatedAt) : undefined;
+  const modifiedUntil = new Date();
+  const job = await createBackupJob({ ...req.body, modifiedSince, modifiedUntil });
 
   // Respond immediately — backup runs in the background
   makeResponse(req, res, 201, true, 'create', {
     backupJobId: job.backupJobId,
     status: job.status,
+    modifiedSince,
+    modifiedUntil,
   });
 
   // Fire-and-forget: errors are caught inside runBackupJob and persisted to DynamoDB
-  runBackupJob({ ...job, triggerSource }).catch(() => {});
+  runBackupJob({ ...job, triggerSource }).catch(() => { });
 };
 
 const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -27,20 +31,25 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   }
 
   makeResponse(req, res, 200, true, 'job_resume', { backupJobId, status: job.status });
-  runBackupJob(job).catch(() => {});
+  runBackupJob(job).catch(() => { });
 };
 
 const createArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const job = await createArchivalJob(req.body);
+  const { lastUpdatedAt } = req.body;
+  const modifiedSince = lastUpdatedAt ? new Date(lastUpdatedAt) : undefined;
+  const modifiedUntil = new Date();
+  const job = await createArchivalJob({ ...req.body, modifiedSince, modifiedUntil });
 
   // Respond immediately — archival runs in the background
   makeResponse(req, res, 201, true, 'create', {
     backupJobId: job.backupJobId,
     status: job.status,
+    modifiedSince,
+    modifiedUntil,
   });
 
   // Fire-and-forget: errors are caught inside runArchivalJob and persisted to DynamoDB
-  runArchivalJob(job).catch(() => {});
+  runArchivalJob(job).catch(() => { });
 };
 
 const resumeArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -52,7 +61,7 @@ const resumeArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<
   }
 
   makeResponse(req, res, 200, true, 'job_resume', { backupJobId, status: job.status });
-  runArchivalJob(job).catch(() => {});
+  runArchivalJob(job).catch(() => { });
 };
 
 export const backupJobController = wrapController({
