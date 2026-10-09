@@ -71,10 +71,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
   const { crm, data: decryptedBody } = sf;
 
   const { transactionId, objectApiName } = decryptedBody;
-  // Log identifiers and counts only — never the records themselves (customer data).
-  logger.info(
-    `processRealtimeWebhook transactionId: ${transactionId} objectApiName: ${objectApiName} recordCount: ${decryptedBody.records?.length ?? 0}`
-  );
 
   if (!transactionId) {
     logger.warn('Realtime webhook received without transactionId — skipping');

@@ -41,6 +41,7 @@ import {
   checkSalesforceApiLimitUsage,
   getCrmById,
   hasMetadataChanged,
+  updateRestore,
 } from '../../../services';
 import { STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -1088,6 +1089,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   // Step 1: compare metadata comparison
+  let hasComparisonError = false;
   const changedObjectNames: string[] = [];
   try {
     if (backupConfig.type === 'NORMAL') {
@@ -1096,7 +1098,15 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
         for (const { objectName, result: metadataResult } of result) {
           // const operations = getMetadataChangeOperations(metadataResult);
           // const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
-          if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+
+          if (!metadataResult) {
+            const failedObjects = restoreJob.destination.objects.filter((obj) => ({ ...obj, status: JOB_OBJECT_STATUS.failed, errorMessage: 'Metadata comparison failed, Please retry after reconnect your crm' }));
+            await updateRestoreJob({ restoreJobId: restoreJob.restoreJobId, replaceObjects: failedObjects, status: STATUS.failed });
+            await updateRestore({ restoreId, status: STATUS.failed });
+            hasComparisonError = true;
+          }
+
+          if (!hasComparisonError && hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
             changedObjectNames.push(objectName);
           }
         }
@@ -1114,13 +1124,15 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
             },
             ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
           });
-        }        
+        } else if (!hasComparisonError) {
+          await runRestoreFieldSetupAndTransform(restoreJob.restoreJobId);
+        }
       } else {
         await triggerBackupJob({
           user: backupConfigUser,
           config: backupConfig,
           type: 'backup',
-          lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+          lastUpdatedAt: backupConfig.lastBackupAt,
           schemaSync: true,
           triggerSource: {
             name: "CREATE_RESTORE",
@@ -1130,7 +1142,6 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
         });
       }
     }
-    await runRestoreFieldSetupAndTransform(restoreJob.restoreJobId);
   } catch (error) {
     logger.error(`[Restore creation handler] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
   }
