@@ -33,130 +33,13 @@ const fetchRestorePermissionSetId = async (
   return data.totalSize > 0 ? data.records[0].Id : null;
 };
 
-// Object/field API names are already validated upstream (Salesforce describe
-// results / our own tracking-field constant), not user-supplied — embedded
-// directly the same way fetchRestorePermissionSetId already embeds
-// RESTORE_PERMISSION_SET_NAME, just quoted per SOQL IN-list item.
-const soqlInList = (values: string[]): string => values.map((v) => `'${v}'`).join(',');
-
-// Current object-level grants on the permission set, for exactly the objects
-// about to be (re-)granted — read before deploying so an object that's
-// already fully granted (allowCreate+allowEdit+allowRead) can be dropped from
-// the deploy entirely rather than redeploying a no-op every restore.
-const fetchExistingObjectPermissions = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  permissionSetId: string,
-  objectApiNames: string[]
-): Promise<Map<string, { create: boolean; edit: boolean; read: boolean }>> => {
-  if (!objectApiNames.length) return new Map();
-  const { data } = await salesforceRequest<{
-    records: { SobjectType: string; PermissionsCreate: boolean; PermissionsEdit: boolean; PermissionsRead: boolean }[];
-  }>(
-    {
-      url: soqlUrl(
-        instanceUrl,
-        `SELECT SobjectType, PermissionsCreate, PermissionsEdit, PermissionsRead FROM ObjectPermissions ` +
-        `WHERE ParentId = '${permissionSetId}' AND SobjectType IN (${soqlInList(objectApiNames)})`
-      ),
-      method: 'GET',
-    },
-    tokens
-  );
-  return new Map(
-    data.records.map((r) => [r.SobjectType, { create: r.PermissionsCreate, edit: r.PermissionsEdit, read: r.PermissionsRead }])
-  );
-};
-
-// Current field-level grants, for exactly the "object.field" pairs about to
-// be (re-)granted — same reasoning as fetchExistingObjectPermissions, at
-// field granularity: an object can have its object permission already
-// granted while one or more of its tracking fields still lack FLS (or vice
-// versa), so the two are checked and narrowed independently.
-const fetchExistingFieldPermissions = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  permissionSetId: string,
-  fieldNames: string[] // "ObjectApiName.FieldApiName"
-): Promise<Map<string, { read: boolean; edit: boolean }>> => {
-  if (!fieldNames.length) return new Map();
-  const { data } = await salesforceRequest<{
-    records: { Field: string; PermissionsRead: boolean; PermissionsEdit: boolean }[];
-  }>(
-    {
-      url: soqlUrl(
-        instanceUrl,
-        `SELECT Field, PermissionsRead, PermissionsEdit FROM FieldPermissions ` +
-        `WHERE ParentId = '${permissionSetId}' AND Field IN (${soqlInList(fieldNames)})`
-      ),
-      method: 'GET',
-    },
-    tokens
-  );
-  return new Map(data.records.map((r) => [r.Field, { read: r.PermissionsRead, edit: r.PermissionsEdit }]));
-};
-
-// Narrows objectApiNames/newFieldsByObject down to only what's actually
-// missing on the permission set today — an object with full object
-// permission AND every tracking field already readable+editable is dropped
-// entirely (not included in either return value), so a restore that's
-// already fully granted deploys nothing. An object missing only its field
-// permissions (object permission already granted) still gets included, since
-// deployRestorePermissions grants both together per object — re-granting an
-// already-true permission is a harmless no-op (see the additive-deploy note
-// on deployRestorePermissions), it's just not worth doing for an object with
-// nothing missing at all.
-//
-// readOnlyObjects (required-parent objects discovered by
-// resolveRequiredParentObjects, not objects actually selected for restore)
-// only ever need Read — checking them against full create+edit+read would
-// never see them as satisfied and would redeploy a no-op grant every run.
-const computeMissingGrants = async (
-  instanceUrl: string,
-  tokens: SalesforceTokens,
-  permissionSetId: string,
-  objectApiNames: string[],
-  readOnlyObjects: Set<string>,
-  newFieldsByObject: Map<string, IRestoreTrackingField[]>
-): Promise<{ objectApiNames: string[]; newFieldsByObject: Map<string, IRestoreTrackingField[]> }> => {
-  const allFieldNames = [...newFieldsByObject].flatMap(([obj, fields]) => fields.map((f) => `${obj}.${f.apiName}`));
-
-  const [existingObjectPerms, existingFieldPerms] = await Promise.all([
-    fetchExistingObjectPermissions(instanceUrl, tokens, permissionSetId, objectApiNames),
-    fetchExistingFieldPermissions(instanceUrl, tokens, permissionSetId, allFieldNames),
-  ]);
-
-  console.log('existingObjectPerms', { existingObjectPerms: [...existingObjectPerms] });
-  console.log('existingFieldPerms', { existingFieldPerms: [...existingFieldPerms] });
-
-  const objectsMissingPermission = new Set(
-    objectApiNames.filter((name) => {
-      const existing = existingObjectPerms.get(name);
-      if (readOnlyObjects.has(name)) return !existing || !existing.read;
-      return !existing || !existing.create || !existing.edit || !existing.read;
-    })
-  );
-
-  const missingFieldsByObject = new Map(
-    [...newFieldsByObject]
-      .map(([obj, fields]) => {
-        const missing = fields.filter((f) => {
-          const existing = existingFieldPerms.get(`${obj}.${f.apiName}`);
-          return !existing || !existing.read || !existing.edit;
-        });
-        return [obj, missing] as const;
-      })
-      .filter(([, missing]) => missing.length > 0)
-  );
-
-  const objectsNeeded = new Set([...objectsMissingPermission, ...missingFieldsByObject.keys()]);
-
-
-  return {
-    objectApiNames: objectApiNames.filter((name) => objectsNeeded.has(name)),
-    newFieldsByObject: missingFieldsByObject,
-  };
-};
+// Deliberately no "what's already granted" check here — every provision call
+// deploys the full object/field set it's given, unconditionally, even if the
+// permission set already has some or all of it. deployRestorePermissions'
+// deploy is additive (merges into the existing PermissionSet by fullName
+// rather than replacing it), so re-granting an already-true permission is a
+// harmless no-op; this trades the extra Metadata API deploy call every
+// restore for not having to query ObjectPermissions/FieldPermissions first.
 
 // The permissionset XML element behind each verb Salesforce names in a
 // dependency error ("... depends on permission(s): Read Account"). Restore
@@ -260,6 +143,8 @@ const deployRestorePermissions = async (
     `${objectPermissionsXml(permissions)}\n` +
     `${fieldPermissionsXml(newFieldsByObject)}\n` +
     `</PermissionSet>`;
+
+  logger.info(`[restore-permission-set] deploying ${RESTORE_PERMISSION_SET_NAME}:\n${permissionSetXml}`);
 
   await deployMetadata(instanceUrl, tokens, {
     files: [
@@ -520,13 +405,13 @@ const assignPermissionSetToUser = async (
 // permissions only, never a field-permission grant for a field that might
 // not exist.
 //
-// Before deploying anything, checks what the permission set (if it already
-// exists) already grants and drops any object that's already fully covered —
-// both its object permission AND every one of its tracking fields' FLS — so a
-// restore that's run before against the same objects deploys nothing for
-// them. An object can be object-permission-complete but still missing FLS on
-// one of its fields (or vice versa); either gap keeps the object in the
-// deploy, per computeMissingGrants.
+// Deploys unconditionally, every call — no check of what the permission set
+// (if it already exists) currently grants, and no narrowing to only what's
+// "missing". The full object/field set given is always deployed, even if
+// some or all of it is already there; deployRestorePermissions' deploy is
+// additive (Salesforce merges into the existing PermissionSet by fullName
+// rather than replacing it), so re-granting an already-true permission is a
+// harmless no-op, not a regression.
 //
 // Also resolves every required (master-detail, or Required lookup) parent
 // object standing between a selected object and the top of its reference
@@ -549,22 +434,9 @@ export const provisionRestorePermissionSet = async (
   const requiredParents = await resolveRequiredParentObjects(instanceUrl, tokens, objectApiNames);
   const allObjectApiNames = [...objectApiNames, ...requiredParents];
 
-  const existingPermissionSetId = await fetchRestorePermissionSetId(instanceUrl, tokens);
+  await deployWithDependencies(instanceUrl, tokens, allObjectApiNames, requiredParents, newFieldsByObject);
 
-  // No existing permission set — this is the first restore for this org, so
-  // nothing has been granted yet; nothing to check, everything is needed.
-  const { objectApiNames: neededObjectApiNames, newFieldsByObject: neededFieldsByObject } = existingPermissionSetId
-    ? await computeMissingGrants(instanceUrl, tokens, existingPermissionSetId, allObjectApiNames, requiredParents, newFieldsByObject)
-    : { objectApiNames: allObjectApiNames, newFieldsByObject };
-  
-  console.log('neededObjectApiNames', { neededObjectApiNames });
-  console.log('neededFieldsByObject', { neededFieldsByObject });
-
-  if (neededObjectApiNames.length) {
-    await deployWithDependencies(instanceUrl, tokens, neededObjectApiNames, requiredParents, neededFieldsByObject);
-  }
-
-  const permissionSetId = existingPermissionSetId ?? (await fetchRestorePermissionSetId(instanceUrl, tokens));
+  const permissionSetId = await fetchRestorePermissionSetId(instanceUrl, tokens);
   if (!permissionSetId) {
     throw new Error(`permission_set_not_found_after_deploy:${RESTORE_PERMISSION_SET_NAME}`);
   }
