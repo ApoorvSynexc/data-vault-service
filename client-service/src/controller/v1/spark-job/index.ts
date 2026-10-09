@@ -279,28 +279,44 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     objectsToBeAffected = flattenParentObjects(objectsToBeAffected);
     const restoreJobObjectNames = restoreJob.destination.objects.map(o => o.name);
 
+    // Anything that throws after EMR succeeded must still move the restore out of
+    // its in-progress state, otherwise it stays stuck with no visible cause.
+    const markRestoreFailed = async (stage: string, error: any): Promise<void> => {
+      const failureMessage = error?.message ?? String(error);
+      logger.error(`[restore-csv] ${stage} failed | restoreJobId=${restoreConfigId} err:${failureMessage}`);
+      await Promise.all([
+        updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage }),
+        updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
+      ]);
+    };
+
     const objectToBeInsert = objectsToBeAffected.filter(o => !restoreJobObjectNames.includes(o.name));
     if (objectToBeInsert.length) {
-      const backupConfig = await getBackupConfigById(restoreJob.source.backupConfigId);
-      if (backupConfig) {
-        const backupConfigObjects = flattenBackupObjects(backupConfig.objects || []);
+      try {
+        const backupConfig = await getBackupConfigById(restoreJob.source.backupConfigId);
+        if (backupConfig) {
+          const backupConfigObjects = flattenBackupObjects(backupConfig.objects || []);
 
-        const objectPayload = objectToBeInsert.map(obj => {
-          const backupConfigObject = backupConfigObjects.find(o => o.name === obj.name);
-          if (backupConfigObject) {
-            return {
-              ...obj,
-              id: backupConfigObject.id || uuidv4(),
-              status: JOB_OBJECT_STATUS.restoreInProgress
-            };
-          }
-          return { ...obj, id: uuidv4(), status: JOB_OBJECT_STATUS.restoreInProgress };
-        });
+          const objectPayload = objectToBeInsert.map(obj => {
+            const backupConfigObject = backupConfigObjects.find(o => o.name === obj.name);
+            if (backupConfigObject) {
+              return {
+                ...obj,
+                id: backupConfigObject.id || uuidv4(),
+                status: JOB_OBJECT_STATUS.restoreInProgress
+              };
+            }
+            return { ...obj, id: uuidv4(), status: JOB_OBJECT_STATUS.restoreInProgress };
+          });
 
-        await updateRestoreJob({
-          restoreJobId: restoreConfigId,
-          replaceObjects: [...restoreJob.destination.objects, ...objectPayload]
-        });
+          await updateRestoreJob({
+            restoreJobId: restoreConfigId,
+            replaceObjects: [...restoreJob.destination.objects, ...objectPayload]
+          });
+        }
+      } catch (error: any) {
+        await markRestoreFailed('updating restore objects', error);
+        return makeResponse(req, res, 400, false, 'restore_trigger_failed');
       }
     }
 
@@ -341,14 +357,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       try {
         await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
       } catch (error: any) {
-        const failureMessage = error?.message ?? String(error);
-        logger.error(
-          `[restore-csv] triggering backup-service restore failed | restoreJobId=${restoreConfigId} err:${failureMessage}`
-        );
-        await Promise.all([
-          updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage }),
-          updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
-        ]);
+        await markRestoreFailed('triggering backup-service restore', error);
         return makeResponse(req, res, 400, false, 'restore_trigger_failed');
       }
     }
