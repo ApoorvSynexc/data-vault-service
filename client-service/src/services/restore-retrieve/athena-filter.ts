@@ -69,6 +69,8 @@ const OPERATORS: Record<string, string> = {
   'NOT LIKE': 'NOT LIKE',
   IN: 'IN',
   'NOT IN': 'NOT IN',
+  INCLUDES: 'INCLUDES',
+  EXCLUDES: 'EXCLUDES',
 };
 
 const resolveOperator = (raw: string): string => {
@@ -116,6 +118,37 @@ const castColumnForDataType = (column: string, dataType: string): string => {
   return column;
 };
 
+// Hudi stores a multi-select picklist's value as the same ';'-joined string
+// Salesforce itself uses (e.g. "Dental;PF;ESI"). split(...) + contains(...)
+// checks membership by whole token, not substring — a plain LIKE '%PF%' would
+// also false-match "ESPF" or "PFx". Per SOQL's own grouping rules for
+// INCLUDES/EXCLUDES: values joined by ';' within ONE list item are ANDed
+// ("includes every one of these"); separate comma-separated list items are
+// ORed ("includes at least one of these groups"). `raw` still carries its
+// original SOQL quote characters when it comes from the parser (soql-parser-js
+// preserves literal text verbatim) but not when it comes from the structured
+// AND/OR filter path's plain IRestoreFilterField.value — the optional
+// strip handles both without the caller needing to know which path it's on.
+const stripQuotes = (raw: string): string => raw.trim().replace(/^'([\s\S]*)'$/, '$1');
+
+const buildIncludesGroup = (column: string, rawGroup: string): string => {
+  const values = stripQuotes(rawGroup)
+    .split(';')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (!values.length) throw new FilterError('invalid_filter_field');
+  return values.map((v) => `contains(split(${column}, ';'), '${v.replace(/'/g, "''")}')`).join(' AND ');
+};
+
+// EXCLUDES is Salesforce's own documented logical negation of INCLUDES for
+// the identical value grouping — built the same way and wrapped in NOT(...)
+// rather than carrying independent logic that could drift from it.
+const buildIncludesExpr = (column: string, op: 'INCLUDES' | 'EXCLUDES', rawGroups: string[]): string => {
+  if (!rawGroups.length) throw new FilterError('invalid_filter_field');
+  const expr = rawGroups.map((g) => `(${buildIncludesGroup(column, g)})`).join(' OR ');
+  return op === 'EXCLUDES' ? `NOT (${expr})` : expr;
+};
+
 // ── Structured AND / OR filters ───────────────────────────────────────────────
 
 // Formats a LIKE pattern: '' -escape, then wrap with % when the caller
@@ -135,8 +168,16 @@ const buildFieldCondition = (f: IRestoreFilterField, colExpr: ColExpr): string =
     return `${column} ${op} ${formatLike(f.value)}`;
   }
 
-  // LIKE above stays on the raw varchar column; every other operator against
-  // a numeric/boolean field needs it cast (see castColumnForDataType).
+  if (op === 'INCLUDES' || op === 'EXCLUDES') {
+    const groups = (Array.isArray(f.value) ? f.value.map(String) : String(f.value ?? '').split(','))
+      .map((v) => v.trim())
+      .filter(Boolean);
+    return buildIncludesExpr(column, op, groups);
+  }
+
+  // LIKE/INCLUDES/EXCLUDES above stay on the raw varchar column; every other
+  // operator against a numeric/boolean field needs it cast (see
+  // castColumnForDataType).
   const comparisonColumn = castColumnForDataType(column, dataType);
 
   if (op === 'IN' || op === 'NOT IN') {
@@ -179,13 +220,21 @@ interface WhereNode {
   right?: WhereNode;
 }
 
-// Literal kinds that don't translate 1:1 to Presto (SOQL date literals like
-// TODAY / LAST_N_DAYS:7, and bare date/datetime literals). Rejected rather
-// than mistranslated.
-// ponytail: no date-literal translation. Upgrade path: map each SOQL date
-// literal to a Presto expression keyed on the Glue column type when a real
-// query needs it.
-const UNSUPPORTED_LITERALS = new Set(['DATE_LITERAL', 'DATE_N_LITERAL', 'DATE', 'DATETIME']);
+// SOQL's RELATIVE date literals (TODAY, YESTERDAY, LAST_N_DAYS:7, ...) need
+// actual date-math against "now" to translate correctly — a much bigger,
+// separate feature. Rejected rather than mistranslated.
+// ponytail: no relative date-literal translation. Upgrade path: map each one
+// to a Presto expression (e.g. TODAY -> current_date) keyed off server/query
+// time when a real query needs it.
+//
+// Bare DATE/DATETIME literals (e.g. "2026-05-20", "2026-05-20T10:00:00Z") are
+// NOT in this set — see castColumnForLiteralType/formatDateLiteral below, not
+// rejected, just handled on their own: SOQL writes these with no quotes at
+// all, so passing the raw text straight through (like a plain number) isn't
+// just a TYPE_MISMATCH the way a numeric literal was — Presto parses the bare
+// text itself as arithmetic ("2026-05-20" = 2026 minus 5 minus 20), silently
+// comparing against the wrong integer instead of erroring.
+const UNSUPPORTED_LITERALS = new Set(['DATE_LITERAL', 'DATE_N_LITERAL']);
 
 // soql-parser-js's own LiteralType values for a numeric literal — tells us a
 // bare "> 1000" needs the varchar column cast (see castColumnForDataType's
@@ -196,6 +245,22 @@ const NUMERIC_LITERAL_TYPES = new Set([
   'INTEGER_WITH_CURRENCY_PREFIX',
   'DECIMAL_WITH_CURRENCY_PREFIX',
 ]);
+
+// Casts the varchar Hudi/delta column to match a bare DATE/DATETIME literal.
+// DATE compares as a SQL date (Presto's CAST(varchar AS date) expects
+// exactly Salesforce's own Date serialization, 'YYYY-MM-DD'); DATETIME uses
+// from_iso8601_timestamp, which — unlike a bare TIMESTAMP literal — parses
+// Salesforce's trailing 'Z'/offset correctly either way.
+const castColumnForLiteralType = (column: string, literalType: string): string =>
+  literalType === 'DATE' ? `CAST(${column} AS date)` : literalType === 'DATETIME' ? `from_iso8601_timestamp(${column})` : column;
+
+// Formats one bare DATE/DATETIME literal value (raw ISO text, no quotes at
+// all per SOQL's own grammar) as the matching Presto literal/expression —
+// the generic pass-through every other literal kind gets would otherwise
+// hand Presto unquoted text it parses as arithmetic (see UNSUPPORTED_LITERALS
+// above).
+const formatDateLiteral = (raw: string, literalType: string): string =>
+  literalType === 'DATETIME' ? `from_iso8601_timestamp('${raw}')` : `DATE '${raw}'`;
 
 // A field's canonical (describe-correct) name + Salesforce describe type,
 // keyed case-insensitively — built by the caller (validateSoqlQuery) from a
@@ -274,6 +339,14 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeReso
   const open = '('.repeat(n.openParen ?? 0);
   const close = ')'.repeat(n.closeParen ?? 0);
 
+  // Multi-select picklist membership — soql-parser-js always gives `value` as
+  // an array here (one entry per comma-separated list item, quotes intact),
+  // even for a single item like `INCLUDES ('Dental;PF')`.
+  if (op === 'INCLUDES' || op === 'EXCLUDES') {
+    const groups = (Array.isArray(n.value) ? n.value : [n.value]).map((v) => String(v ?? ''));
+    return `${open}${buildIncludesExpr(colExpr(field), op, groups)}${close}`;
+  }
+
   // `= NULL` / `<> NULL` are never TRUE in SQL (NULL compared this way is
   // UNKNOWN, not TRUE), so a bare pass-through silently excludes every row —
   // matching SOQL's `= null` / `!= null` semantics requires IS [NOT] NULL.
@@ -284,18 +357,26 @@ const renderSoqlLeaf = (n: WhereNode, colExpr: ColExpr, resolver?: FieldTypeReso
   }
 
   // Parser preserves literal text (strings keep their quotes), so pass-through
-  // is already valid Presto for string literals. Numeric/boolean literals
-  // need the varchar column cast to match (same reasoning as
-  // castColumnForDataType) — soql_parser_js's own literalType (INTEGER,
-  // DECIMAL, BOOLEAN, ...) is what tells us which, independent of whether a
-  // FieldTypeResolver was even passed in.
+  // is already valid Presto for string literals. Numeric/boolean/date
+  // literals need the varchar column cast/converted to match (same reasoning
+  // as castColumnForDataType) — soql-parser-js's own literalType (INTEGER,
+  // DECIMAL, BOOLEAN, DATE, DATETIME, ...) is what tells us which,
+  // independent of whether a FieldTypeResolver was even passed in.
+  const soleLiteralType = literalTypes.length === 1 ? literalTypes[0] : undefined;
+  const isDateOrDatetime = soleLiteralType === 'DATE' || soleLiteralType === 'DATETIME';
   const column =
     literalTypes.length > 0 && literalTypes.every((t) => NUMERIC_LITERAL_TYPES.has(t))
       ? `CAST(${colExpr(field)} AS double)`
       : literalTypes.length > 0 && literalTypes.every((t) => t === 'BOOLEAN')
         ? `CAST(${colExpr(field)} AS boolean)`
-        : colExpr(field);
-  const value = Array.isArray(n.value) ? `(${n.value.join(', ')})` : String(n.value ?? '');
+        : isDateOrDatetime
+          ? castColumnForLiteralType(colExpr(field), soleLiteralType!)
+          : colExpr(field);
+  const value = Array.isArray(n.value)
+    ? `(${n.value.map((v) => (isDateOrDatetime ? formatDateLiteral(String(v), soleLiteralType!) : v)).join(', ')})`
+    : isDateOrDatetime
+      ? formatDateLiteral(String(n.value ?? ''), soleLiteralType!)
+      : String(n.value ?? '');
   return `${open}${column} ${op} ${value}${close}`;
 };
 
@@ -312,20 +393,38 @@ const renderSoqlWhere = (n: WhereNode | null | undefined, colExpr: ColExpr, reso
 // soql-parser-js can't tokenize Salesforce's bare (unquoted) Time literal
 // syntax (HH:mm:ss[.SSS][Z|±hh:mm]) at all — parseQuery throws a confusing,
 // unrelated error for it ("Mismatched parentheses...") instead of failing
-// cleanly. Unlike DATE/DATETIME (which the parser handles fine and this
-// module just declines to translate via UNSUPPORTED_LITERALS above), there's
-// no post-parse literalType to check here since parsing itself never
-// succeeds — caught before parsing instead, with the same clear rejection.
-const BARE_TIME_LITERAL_RE = /\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})?\b/;
+// cleanly. Unlike DATE/DATETIME, there's no special column cast/conversion
+// needed once it parses, though: Salesforce always serializes a Time value
+// as this exact zero-padded "HH:mm:ss.SSS[Z]" text, so the varchar Hudi
+// column already stores the same canonical shape the literal is written in —
+// a fixed-width zero-padded time string sorts correctly as plain text, the
+// same reasoning bare ISO dates/datetimes sort correctly as text (unlike a
+// bare number, which doesn't). So quoting it before parsing — '$&' instead of
+// bare $& — is enough: it then parses as an ordinary STRING literal, which is
+// already exactly the right SQL, no post-parse handling required.
+const BARE_TIME_LITERAL_RE = /\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
+
+// Applies BARE_TIME_LITERAL_RE only OUTSIDE existing quoted-string spans, so
+// a real string that merely looks time-like (e.g. "Meeting at 10:30:00")
+// is left untouched — walks the query split on '...'-quoted segments
+// (Salesforce string literals escape an embedded quote by doubling it, same
+// pattern used elsewhere in this module) and only rewrites the gaps between them.
+const STRING_LITERAL_RE = /'(?:[^']|'')*'/g;
+const quoteBareTimeLiterals = (soql: string): string => {
+  let result = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = STRING_LITERAL_RE.exec(soql))) {
+    result += soql.slice(lastIndex, match.index).replace(BARE_TIME_LITERAL_RE, "'$&'");
+    result += match[0];
+    lastIndex = match.index + match[0].length;
+  }
+  return result + soql.slice(lastIndex).replace(BARE_TIME_LITERAL_RE, "'$&'");
+};
 
 const buildSoqlWhere = (soqlQuery: string, colExpr: ColExpr, resolveField?: FieldTypeResolver): string | null => {
-  const trimmed = soqlQuery.trim();
+  const trimmed = quoteBareTimeLiterals(soqlQuery.trim());
   if (!trimmed) return null;
-
-  const withoutStringLiterals = trimmed.replace(/'(?:[^']|'')*'/g, "''");
-  if (BARE_TIME_LITERAL_RE.test(withoutStringLiterals)) {
-    throw new FilterError('soql_time_filter_not_supported');
-  }
 
   // Accept either a full "SELECT ... FROM ... WHERE ..." or a bare WHERE body.
   const wrapped = /^SELECT\b/i.test(trimmed)
@@ -517,6 +616,41 @@ if (require.main === module) {
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "SELECT Id FROM Account WHERE Status = 'Active'" }),
     `"Status" = 'Active'`
   );
+  // A Percent field's decimal literal (literalType DECIMAL, same as any other
+  // non-integer number) casts the column the same way — reported bug:
+  // "Utilization_Percent__c = 0.90" against a varchar Hudi column.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Utilization_Percent__c = 0.90' }),
+    `CAST("Utilization_Percent__c" AS double) = 0.90`
+  );
+  // Bare DATE/DATETIME literals (no quotes at all per SOQL's own grammar —
+  // reported bug: "Date_of_Joining__c = 2026-05-20" previously rejected
+  // outright as soql_date_filter_not_supported). DATE casts the column and
+  // wraps the literal in Presto's DATE '...' syntax; DATETIME uses
+  // from_iso8601_timestamp on both sides, which handles a trailing 'Z' or
+  // offset correctly where a bare TIMESTAMP literal wouldn't.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Date_of_Joining__c = 2026-05-20' }),
+    `CAST("Date_of_Joining__c" AS date) = DATE '2026-05-20'`
+  );
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Date_of_Joining__c > 2026-05-20' }),
+    `CAST("Date_of_Joining__c" AS date) > DATE '2026-05-20'`
+  );
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate = 2026-05-20T10:00:00Z' }),
+    `from_iso8601_timestamp("CreatedDate") = from_iso8601_timestamp('2026-05-20T10:00:00Z')`
+  );
+  // A date IN-list casts/wraps every element the same way.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate IN (2026-01-01, 2026-01-02)' }),
+    `CAST("CreatedDate" AS date) IN (DATE '2026-01-01', DATE '2026-01-02')`
+  );
+  // RELATIVE date literals (TODAY, LAST_N_DAYS:7, ...) are a different,
+  // unimplemented feature (real date-math against "now") — still rejected
+  // rather than silently mistranslated, same as before this fix.
+  expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate = TODAY' }), 'soql_date_filter_not_supported');
+
   // SOQL no WHERE → null
   assert.strictEqual(buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'SELECT Id FROM Account' }), null);
 
@@ -528,10 +662,18 @@ if (require.main === module) {
   // SOQL unsupported surfaces
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Owner.Name = 'x'" }), 'soql_relationship_not_supported');
   expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'CreatedDate = LAST_N_DAYS:7' }), 'soql_date_filter_not_supported');
-  // A bare Time literal can't even be parsed (soql-parser-js throws its own
-  // confusing error for the colons) — caught before parsing, same as the
-  // other unsupported literal kinds above.
-  expectError(() => buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Time_Test__c = 10:30:00.000Z' }), 'soql_time_filter_not_supported');
+  // A bare Time literal can't even be parsed as-is (soql-parser-js throws its
+  // own confusing error for the colons) — quoted before parsing instead (see
+  // quoteBareTimeLiterals), reported bug: "Shift_Start_Time__c =00:15:00.000Z"
+  // (no space before the value either — the regex doesn't care).
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Shift_Start_Time__c =00:15:00.000Z' }),
+    `"Shift_Start_Time__c" = '00:15:00.000Z'`
+  );
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: 'Time_Test__c = 10:30:00.000Z' }),
+    `"Time_Test__c" = '10:30:00.000Z'`
+  );
   // A quoted string that merely looks time-like must not be mistaken for one.
   assert.strictEqual(
     buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Name = 'Meeting at 10:30:00'" }),
@@ -691,6 +833,36 @@ if (require.main === module) {
   assert.strictEqual(
     buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'X', dataType: 'string', operator: '=', value: 'y' }] }),
     `"X" = 'y'`
+  );
+
+  // ── INCLUDES / EXCLUDES (multi-select picklist membership) ───────────────────
+  // Reported bug: "Benefits_Enrolled__c INCLUDES ('Dental;PF;ESI;Life Insurance')"
+  // threw invalid_filter_operator — INCLUDES/EXCLUDES weren't in the whitelist
+  // at all. ';' within ONE list item is AND ("includes every one of these");
+  // separate comma-separated items are OR ("includes at least one group").
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Benefits_Enrolled__c INCLUDES ('Dental;PF;ESI;Life Insurance')" }),
+    `(contains(split("Benefits_Enrolled__c", ';'), 'Dental') AND contains(split("Benefits_Enrolled__c", ';'), 'PF') AND contains(split("Benefits_Enrolled__c", ';'), 'ESI') AND contains(split("Benefits_Enrolled__c", ';'), 'Life Insurance'))`
+  );
+  // Comma-separated items OR together, each its own parenthesized group.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Benefits_Enrolled__c INCLUDES ('Dental','PF')" }),
+    `(contains(split("Benefits_Enrolled__c", ';'), 'Dental')) OR (contains(split("Benefits_Enrolled__c", ';'), 'PF'))`
+  );
+  // EXCLUDES is the exact negation of the equivalent INCLUDES expression.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'SOQL', soqlQuery: "Benefits_Enrolled__c EXCLUDES ('Dental')" }),
+    `NOT ((contains(split("Benefits_Enrolled__c", ';'), 'Dental')))`
+  );
+  // Same operators work through the structured AND/OR path (FILTER_OPERATOR's
+  // includes/excludes) — comma-joined string input, same as IN/NOT IN's.
+  assert.strictEqual(
+    buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'Benefits_Enrolled__c', dataType: 'string', operator: 'INCLUDES', value: 'Dental;PF' }] }),
+    `(contains(split("Benefits_Enrolled__c", ';'), 'Dental') AND contains(split("Benefits_Enrolled__c", ';'), 'PF'))`
+  );
+  expectError(
+    () => buildAthenaFilterWhere({ type: 'AND', fields: [{ name: 'Benefits_Enrolled__c', dataType: 'string', operator: 'EXCLUDES', value: '' }] }),
+    'invalid_filter_field'
   );
 
   console.log('athena-filter self-check passed');
