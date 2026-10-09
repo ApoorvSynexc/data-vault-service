@@ -54,9 +54,14 @@ const resolveOrgAndConfigs = async (
  * column is returned. `filters` is a plain object, one key per field, ANDed
  * together — e.g. { "Status": "Active", "Email_ne": "x@y.com" } means
  * Status = 'Active' AND Email <> 'x@y.com' (a "_ne" suffix on the key means
- * NOT_EQUALS; a plain key means EQUALS). When a nested "OR" object is present,
- * the top-level conditions and the OR group's are all ORed — e.g.
- * { "OwnerId": "005…", "OR": { "Id": "001…", "Name": "sfd" } } means
+ * NOT_EQUALS; a plain key means EQUALS). An array value is IN, with "_ne" NOT IN:
+ * { "Stage": ["Won", "Lost"] }. A { from, to } value is a date range:
+ * { "CreatedDate": { "from": "2026-01-01", "to": "2026-03-31" } }.
+ * "AND" / "OR" keys take an array of filter objects (each ANDed inside, nestable)
+ * — { "Status": "Active", "OR": [ { "Type": "A" }, { "Type": "B", "Rating": "Hot" } ] }
+ * means Status = 'Active' AND (Type = 'A' OR (Type = 'B' AND Rating = 'Hot')).
+ * Legacy: an "OR" holding a plain object ORs its conditions with the top-level
+ * ones — { "OwnerId": "005…", "OR": { "Id": "001…", "Name": "sfd" } } means
  * OwnerId = '005…' OR Id = '001…' OR Name = 'sfd'. `page` is 1-based,
  * defaults to 1. Prefer `cursor` (the previous response's `nextCursor`, the
  * last Id of that page): it fetches the next rows directly instead of
