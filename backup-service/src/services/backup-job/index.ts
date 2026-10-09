@@ -13,10 +13,12 @@ interface CreateBackupJobParams {
   destination: { type: string; config: IDestinationConfig };
   lastUpdatedAt?: string;
   schemaSync?: boolean;
+  modifiedSince: string;
+  modifiedUntil: string
 }
 
 const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination, lastUpdatedAt, schemaSync } = params;
+  const { userId, backupConfigId, source, destination, lastUpdatedAt, schemaSync, modifiedSince, modifiedUntil } = params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
   // Minted up front so child schema written during expansion lands in this job's changes/.
@@ -54,6 +56,8 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     ...(schemaSync ? { schemaSync: true } : {}),
     createdAt: now,
     updatedAt: now,
+    modifiedSince,
+    modifiedUntil
   };
 
   await Promise.all([
@@ -69,6 +73,8 @@ interface CreateArchivalJobParams {
   backupConfigId: string;
   source: ISource & { object?: IBackupObject[] };
   destination: { type: string; config: IDestinationConfig };
+  modifiedSince: string;
+  modifiedUntil: string
 }
 
 const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
@@ -86,7 +92,7 @@ const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
 };
 
 const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination } = params;
+  const { userId, backupConfigId, source, destination, modifiedSince, modifiedUntil } = params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
@@ -107,6 +113,8 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
     status: STATUS.pending,
     createdAt: now,
     updatedAt: now,
+    modifiedSince,
+    modifiedUntil
   };
 
   await Promise.all([
@@ -337,7 +345,7 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
 
 const recursivelyUpdateObjects = async (
   objects: IBackupObject[],
-  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined }
+  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined }
 ): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
@@ -349,29 +357,29 @@ const recursivelyUpdateObjects = async (
           // Clear stale error fields when the object is reset for a retry run.
           ...(isReset
             ? {
-                errorMessage: '',
-                deletedfailedRecordCount: 0,
-                deletedSuccessRecordCount: 0,
-                errors: [],
-              }
+              errorMessage: '',
+              deletedfailedRecordCount: 0,
+              deletedSuccessRecordCount: 0,
+              errors: [],
+            }
             : {}),
           ...(!isReset && (object as any)?.salesforceApiCount
             ? {
-                salesforceApiCount:
-                  (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
-              }
+              salesforceApiCount:
+                (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
+            }
             : {}),
           ...(!isReset && (object as any)?.deletedSuccessRecordCount
             ? {
-                deletedSuccessRecordCount:
-                  (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
-              }
+              deletedSuccessRecordCount:
+                (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
+            }
             : {}),
           ...(!isReset && (object as any)?.deletedfailedRecordCount
             ? {
-                deletedfailedRecordCount:
-                  (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
-              }
+              deletedfailedRecordCount:
+                (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
+            }
             : {}),
           // recordErrorsS3Prefix: last write wins (each bulk job gets its own prefix)
           ...(!isReset && (object as any)?.recordErrorsS3Prefix
@@ -398,7 +406,7 @@ const updateArchivalObject = async ({
   objects,
 }: {
   backupJobId: string;
-  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined };
+  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
   // When `objects` is provided (caller already holds the array), use it directly

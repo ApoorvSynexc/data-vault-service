@@ -50,6 +50,8 @@ export interface IBackupJob {
   sizeInBytes?: number;
   createdAt: string;
   updatedAt: string;
+  modifiedSince?: string;
+  modifiedUntil?: string;
 
    objectApiName?: string;
     operation?: string;
