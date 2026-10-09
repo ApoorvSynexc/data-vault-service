@@ -90,7 +90,13 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
     return makeResponse(req, res, 401, false, 'unauthorized');
   }
 
-  const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
+  // An expired or tampered token is a normal 401, not an unhandled error.
+  let payload: jwt.JwtPayload;
+  try {
+    payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
+  } catch {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
 
   const user = await getUser({ userId: payload.userId, status: VISIBILITY_STATUS.active });
   if (!user) {
