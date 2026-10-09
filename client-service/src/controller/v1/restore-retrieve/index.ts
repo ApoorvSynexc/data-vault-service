@@ -119,7 +119,9 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   }
 
   let config = await getBackupConfigById(backupConfigId);
-  if (!config) {
+  // Only the config's own org (creator or another user of the same CRM) may read it.
+  // Same 'not_exist' as a missing config so other tenants' ids can't be probed.
+  if (!isOwner(config, req.user!.userId, req.user!.crmId)) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
@@ -1151,6 +1153,13 @@ const createRollbackHandler = async (req: IRequest, res: IResponse): Promise<voi
   if (!restoreJob) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
+  // Rollback writes back into the Salesforce org — only users of the restore's own org may
+  // trigger it (the creator, or another user of the same CRM). Same 'not_exist' response as a
+  // missing job so ids of other tenants can't be probed.
+  const restore = await getRestoreById(restoreJob.restoreId);
+  if (!isOwner(restore, req.user!.userId, req.user!.crmId)) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
   const objectPayload = restoreJob.destination.objects.map((obj => ({ name: obj.name, id: obj.id, status: JOB_OBJECT_STATUS.rollbackInProgress })));
   await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload, status: STATUS.pending });
 
@@ -1220,6 +1229,14 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
 const getRestoreJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreId } = req.query as Record<string, string>;
   const userId = req.user!.userId;
+
+  // A restoreId bypasses the userId-scoped query below, so confirm the caller's org owns it first.
+  if (restoreId) {
+    const restore = await getRestoreById(restoreId);
+    if (!isOwner(restore, userId, req.user!.crmId)) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+  }
 
   const stats = restoreId
     ? await computeRestoreJobStats({ indexName: 'restoreId-index', keyName: 'restoreId', keyValue: restoreId })
