@@ -46,7 +46,7 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils/event-bridge';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
-import { syncObjects } from '../../../jobs/sync-objects';
+import { syncObjectsForEntireDataset } from '../../../jobs/sync-objects';
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -512,7 +512,7 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
 
   makeResponse(req, res, 201, true, 'create');
   if (config.dataset === 'ENTIRE') {
-    await syncObjects({ backupConfig: config, user: backupCreatedUser });
+    await syncObjectsForEntireDataset({ backupConfig: config, user: backupCreatedUser });
   }
 };
 

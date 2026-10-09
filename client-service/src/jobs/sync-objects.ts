@@ -10,7 +10,7 @@ interface ISyncObject {
     user: IUser
 }
 
-const syncObjects = async (params: ISyncObject) => {
+const syncObjectsForEntireDataset = async (params: ISyncObject) => {
     const { backupConfig, user } = params;
     const mode = backupConfig.type === 'NORMAL' ? 'backup' : 'archival';
     const type = backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule';
@@ -114,22 +114,31 @@ const runSyncObjectJob = async () => {
                     let user: IUser | null = null;
                     totalBackups++;
 
-                    if (config.dataset === 'ENTIRE') {
+                    if (!user) {
+                        user = await getUser({ userId: config.userId });
+                        if (!user) {
+                            logger.warn(
+                                `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+                            );
+                            continue;
+                        }
+                    }
+
+                    if (config.type === 'NORMAL' && config.dataset === 'ENTIRE') {
                         try {
-                            if (!user) {
-                                user = await getUser({ userId: config.userId });
-                                if (!user) {
-                                    logger.warn(
-                                        `[emr job - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
-                                    );
-                                    continue;
-                                }
-                            }
                             await checkSalesforceApiLimitUsage(user.userId, config.crmId);
-                            await syncObjects({ backupConfig: config, user });
+                            await syncObjectsForEntireDataset({ backupConfig: config, user });
                             successBackups++;
                         } catch (error) {
-                            logger.error(`[EMR JOb SYNC OBJECT - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+                            logger.error(`[JOB SYNC OBJECT FOR ENTIRE DATASET - BACKUP - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
+                        }
+                    } else if (config.type === 'NORMAL' && config.dataset === 'PARTIAL') {
+                        try {
+                            // await checkSalesforceApiLimitUsage(user.userId, config.crmId);
+                            // await syncObjectsForPartialDataset({ backupConfig: config, user });
+                            // successBackups++;
+                        } catch (error) {
+                            logger.error(`[JOB SYNC OBJECT FOR PARTIAL DATASET - BACKUP - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
                         }
                     }
                 }
@@ -144,5 +153,5 @@ const runSyncObjectJob = async () => {
 
 export {
     runSyncObjectJob,
-    syncObjects
+    syncObjectsForEntireDataset
 }
