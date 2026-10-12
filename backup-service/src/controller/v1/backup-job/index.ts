@@ -36,8 +36,8 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
 
 const createArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { lastUpdatedAt } = req.body;
-  const modifiedSince = lastUpdatedAt ? new Date(lastUpdatedAt) : undefined;
-  const modifiedUntil = new Date();
+  const modifiedSince = lastUpdatedAt ? new Date(lastUpdatedAt).toISOString() : undefined;
+  const modifiedUntil = new Date().toISOString();
   const job = await createArchivalJob({ ...req.body, modifiedSince, modifiedUntil });
 
   // Respond immediately — archival runs in the background
