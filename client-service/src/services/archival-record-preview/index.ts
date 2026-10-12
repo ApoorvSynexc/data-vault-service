@@ -146,19 +146,32 @@ const RECORD_ID_RE = /^[A-Za-z0-9]{15,18}$/;
 
 const escapeSqlValue = (value: string): string => `'${value.replace(/'/g, "''")}'`;
 
-// Simple plain-object filter shape instead of an array of {field,operator,value}
-// triples: { "Status": "Active" } means Status = 'Active'; a key suffixed
-// "_ne" means NOT_EQUALS — { "Email_ne": "x@y.com" } means Email <> 'x@y.com'.
-// One key per field, ANDed together. The reserved key "OR" holds a nested
-// object of the same shape; when it is present, the top-level conditions and
-// the OR group's conditions are all ORed — { "OwnerId": "o", "OR": { "Id": "x",
-// "Name": "y" } } means OwnerId = 'o' OR Id = 'x' OR Name = 'y'.
+// Filter shape (plain JSON, SOQL-like). Every form below is a "group": a
+// plain object whose conditions are ANDed together.
+//   { "Status": "Active" }                       Status = 'Active'
+//   { "Email_ne": "x@y.com" }                    Email <> 'x@y.com'   ("_ne" suffix)
+//   { "Stage": ["Won", "Lost"] }                 Stage IN ('Won', 'Lost')
+//   { "Stage_ne": ["Won", "Lost"] }              Stage NOT IN ('Won', 'Lost')
+//   { "CreatedDate": { "from": "2026-01-01", "to": "2026-03-31" } }   date range (either bound optional)
+// Text matching is case-insensitive. "AND" / "OR" keys combine nested groups:
+//   { "Status": "Active", "OR": [ { "Type": "A" }, { "Type": "B", "Rating": "Hot" } ] }
+//     means Status = 'Active' AND (Type = 'A' OR (Type = 'B' AND Rating = 'Hot'))
+//   { "OR": [ { "AND": [ {...}, {...} ] }, {...} ] } nests up to MAX_FILTER_DEPTH levels.
+// Legacy form, kept as-is: "OR" holding a plain object (not an array) ORs that
+// object's conditions together with the group's own top-level ones —
+// { "OwnerId": "o", "OR": { "Id": "x", "Name": "y" } } means
+// OwnerId = 'o' OR Id = 'x' OR Name = 'y'.
 const NOT_EQUAL_SUFFIX = '_ne';
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const OR_KEY = 'OR';
+const MAX_FILTER_DEPTH = 5;
+const MAX_FILTER_CONDITIONS = 50;
+const MAX_IN_VALUES = 200;
 
-type IArchivalFilterValue = string | number | boolean;
-type IArchivalFilters = Record<string, IArchivalFilterValue | Record<string, IArchivalFilterValue>>;
+type IArchivalFilterScalar = string | number | boolean;
+type IArchivalFilterValue = IArchivalFilterScalar | IArchivalFilterScalar[] | IArchivalDateRange;
+interface IArchivalFilters {
+  [key: string]: IArchivalFilterValue | IArchivalFilters | IArchivalFilters[];
+}
 
 interface IFilterCondition {
   field: string;
@@ -167,11 +180,25 @@ interface IFilterCondition {
   negated?: boolean;
 }
 
-type IFilterError = 'invalid_filters' | 'invalid_filter_field';
+// The compiled filter: leaves are SQL conditions, branches are AND / OR groups.
+type IFilterNode =
+  | { kind: 'condition'; condition: IFilterCondition }
+  | { kind: 'and' | 'or'; children: IFilterNode[] };
 
-type IValidateFiltersResult =
-  | { ok: true; and: IFilterCondition[]; or: IFilterCondition[] }
-  | { ok: false; error: IFilterError };
+type IFilterError = 'invalid_filters' | 'invalid_filter_field' | 'invalid_date_filters';
+
+type IValidateFiltersResult = { ok: true; where: IFilterNode | null } | { ok: false; error: IFilterError };
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isFilterScalar = (value: unknown): value is IArchivalFilterScalar =>
+  typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+
+const logicalKeyOf = (key: string): 'AND' | 'OR' | null => {
+  const upper = key.toUpperCase();
+  return upper === 'AND' || upper === 'OR' ? upper : null;
+};
 
 // Compiles one flat { field: value } object into conditions.
 const buildConditions = (
@@ -179,12 +206,8 @@ const buildConditions = (
 ): { ok: true; conditions: IFilterCondition[] } | { ok: false; error: IFilterError } => {
   const conditions: IFilterCondition[] = [];
   for (const [key, rawValue] of Object.entries(filters)) {
-    // Numbers/booleans are accepted and compared as text (the column is CAST to
-    // varchar below), so { "IsDeleted": false } works the same as "false".
-    if (typeof rawValue !== 'string' && typeof rawValue !== 'number' && typeof rawValue !== 'boolean') {
-      return { ok: false, error: 'invalid_filters' };
-    }
-    const value = String(rawValue);
+    // Every filter is optional: a null value or an empty IN list means "not provided".
+    if (rawValue === undefined || rawValue === null || (Array.isArray(rawValue) && !rawValue.length)) continue;
 
     const isNotEqual = key.toLowerCase().endsWith(NOT_EQUAL_SUFFIX);
     const field = isNotEqual ? key.slice(0, -NOT_EQUAL_SUFFIX.length) : key;
@@ -196,6 +219,35 @@ const buildConditions = (
     // Text matching is case-insensitive: both sides are lower-cased, so
     // "sunny kumar" finds "Sunny Kumar".
     const column = `LOWER(CAST("${field}" AS varchar))`;
+
+    // { "from": ..., "to": ... } — a date range on a datetime column.
+    if (isPlainObject(rawValue)) {
+      const rangeSql = isNotEqual ? null : buildRangeSql(field, rawValue);
+      if (!rangeSql) return { ok: false, error: 'invalid_date_filters' };
+      conditions.push({ field, sql: rangeSql });
+      continue;
+    }
+
+    // [a, b, c] — IN (or NOT IN with "_ne").
+    if (Array.isArray(rawValue)) {
+      if (!rawValue.length || rawValue.length > MAX_IN_VALUES || !rawValue.every(isFilterScalar)) {
+        return { ok: false, error: 'invalid_filters' };
+      }
+      // Duplicates (any casing) add nothing to an IN list, only SQL length.
+      const unique = [...new Set(rawValue.map((v) => String(v).toLowerCase()))];
+      const list = unique.map((v) => `LOWER(${escapeSqlValue(v)})`).join(', ');
+      conditions.push({
+        field,
+        sql: isNotEqual ? `("${field}" IS NULL OR ${column} NOT IN (${list}))` : `${column} IN (${list})`,
+        negated: isNotEqual,
+      });
+      continue;
+    }
+
+    // Numbers/booleans are accepted and compared as text (the column is CAST to
+    // varchar), so { "IsDeleted": false } works the same as "false".
+    if (!isFilterScalar(rawValue)) return { ok: false, error: 'invalid_filters' };
+    const value = String(rawValue);
     const lowered = `LOWER(${escapeSqlValue(value)})`;
     const exact = `${column} = ${lowered}`;
 
@@ -224,49 +276,85 @@ const buildConditions = (
   return { ok: true, conditions };
 };
 
-/**
- * Validates the filters object and compiles it into AND conditions plus an
- * optional OR group. Never throws — a caller-supplied filter is untrusted
- * input, not a programmer error, so a bad field is a normal validation
- * failure the controller turns into a 400.
- */
-const validateAndBuildFilters = (filters: unknown): IValidateFiltersResult => {
-  if (filters === undefined) return { ok: true, and: [], or: [] };
-  if (typeof filters !== 'object' || filters === null || Array.isArray(filters)) {
-    return { ok: false, error: 'invalid_filters' };
+const conditionNodes = (conditions: IFilterCondition[]): IFilterNode[] =>
+  conditions.map((condition) => ({ kind: 'condition', condition }));
+
+// The value of an "AND" / "OR" key: a list of groups (a single object is one group).
+const buildGroupList = (kind: 'and' | 'or', value: unknown, depth: number): IValidateFiltersResult => {
+  const groups = Array.isArray(value) ? value : [value];
+
+  // Empty / null groups are "not provided" and skipped.
+  const children: IFilterNode[] = [];
+  for (const group of groups) {
+    const built = buildFilterGroup(group, depth + 1);
+    if (!built.ok) return built;
+    if (built.where) children.push(built.where);
   }
+  return { ok: true, where: children.length ? { kind, children } : null };
+};
+
+const buildFilterGroup = (group: unknown, depth: number): IValidateFiltersResult => {
+  if (group === undefined || group === null) return { ok: true, where: null };
+  if (!isPlainObject(group) || depth > MAX_FILTER_DEPTH) return { ok: false, error: 'invalid_filters' };
 
   // Keys are matched case-insensitively: "OR"/"or", "CreatedDate"/"CREATEDDATE"/"createddate_NE".
-  const andFilters: Record<string, unknown> = {};
-  let orGroup: unknown;
-  let orKeys = 0;
-  for (const [key, value] of Object.entries(filters as Record<string, unknown>)) {
-    if (key.toUpperCase() === OR_KEY) {
-      orGroup = value;
-      orKeys += 1;
-    } else andFilters[key] = value;
+  const leaves: Record<string, unknown> = {};
+  const logical: { AND?: unknown; OR?: unknown } = {};
+  for (const [key, value] of Object.entries(group)) {
+    const logicalKey = logicalKeyOf(key);
+    if (!logicalKey) leaves[key] = value;
+    else if (logicalKey in logical) return { ok: false, error: 'invalid_filters' };
+    else logical[logicalKey] = value;
   }
-  if (orKeys > 1) return { ok: false, error: 'invalid_filters' };
 
-  const andResult = buildConditions(andFilters);
-  if (!andResult.ok) return andResult;
-  if (orGroup === undefined) return { ok: true, and: andResult.conditions, or: [] };
+  const leafResult = buildConditions(leaves);
+  if (!leafResult.ok) return leafResult;
+  let nodes = conditionNodes(leafResult.conditions);
 
-  if (typeof orGroup !== 'object' || orGroup === null || Array.isArray(orGroup)) {
-    return { ok: false, error: 'invalid_filters' };
+  if (isPlainObject(logical.OR)) {
+    // Legacy: the OR object's conditions and the group's own are alternatives.
+    if (Object.keys(logical.OR).some(logicalKeyOf)) return { ok: false, error: 'invalid_filters' };
+    const orResult = buildConditions(logical.OR);
+    if (!orResult.ok) return orResult;
+    if (orResult.conditions.length) {
+      nodes = [{ kind: 'or', children: [...nodes, ...conditionNodes(orResult.conditions)] }];
+    }
+  } else if (logical.OR !== undefined) {
+    const orResult = buildGroupList('or', logical.OR, depth);
+    if (!orResult.ok) return orResult;
+    if (orResult.where) nodes.push(orResult.where);
   }
-  const orResult = buildConditions(orGroup as Record<string, unknown>);
-  if (!orResult.ok) return orResult;
-  // An empty OR would silently mean "no filter" — almost certainly a caller mistake.
-  if (!orResult.conditions.length) return { ok: false, error: 'invalid_filters' };
 
-  // With an "OR" key present, the top-level conditions and the OR group's conditions
-  // are all alternatives: a row matching any one of them is returned.
-  return { ok: true, and: [], or: [...andResult.conditions, ...orResult.conditions] };
+  if (logical.AND !== undefined) {
+    const andResult = buildGroupList('and', logical.AND, depth);
+    if (!andResult.ok) return andResult;
+    if (andResult.where) nodes.push(andResult.where);
+  }
+
+  if (!nodes.length) return { ok: true, where: null };
+  return { ok: true, where: nodes.length === 1 ? nodes[0] : { kind: 'and', children: nodes } };
+};
+
+const countConditions = (node: IFilterNode): number =>
+  node.kind === 'condition' ? 1 : node.children.reduce((sum, child) => sum + countConditions(child), 0);
+
+/**
+ * Validates the filters object and compiles it into one AND/OR tree. Never
+ * throws — a caller-supplied filter is untrusted input, not a programmer
+ * error, so a bad field is a normal validation failure the controller turns
+ * into a 400.
+ */
+const validateAndBuildFilters = (filters: unknown): IValidateFiltersResult => {
+  const built = buildFilterGroup(filters, 0);
+  if (!built.ok) return built;
+  // Bounds the size of the generated Athena WHERE clause.
+  if (built.where && countConditions(built.where) > MAX_FILTER_CONDITIONS) return { ok: false, error: 'invalid_filters' };
+  return built;
 };
 
 const validateFields = (fields: unknown): { ok: true; fields: string[] | null } | { ok: false } => {
-  if (fields === undefined) return { ok: true, fields: null };
+  // Optional: omitted, null or [] all mean "every column".
+  if (fields === undefined || fields === null || (Array.isArray(fields) && !fields.length)) return { ok: true, fields: null };
   if (!Array.isArray(fields) || !fields.length || !fields.every((f) => typeof f === 'string' && FIELD_NAME_RE.test(f))) {
     return { ok: false };
   }
@@ -430,56 +518,63 @@ const buildSelectClause = async (
 // Either bound may be omitted; both are inclusive. A bound is an ISO date or
 // timestamp (UTC when no zone is given); a date-only "to" means the end of that
 // day. The stored "2026-07-03 11:52:47.000" spelling is accepted too.
+// Usable as the top-level `dateFilters` (always ANDed) or, with the same
+// { from, to } value, as a field inside `filters` (so it can sit in an OR group).
 interface IArchivalDateRange {
   from?: string;
   to?: string;
 }
 type IArchivalDateFilters = Record<string, IArchivalDateRange>;
 
-type ICriteriaError = IFilterError | 'invalid_date_filters';
+type ICriteriaError = IFilterError;
 
 // Everything a caller can filter rows by, validated and compiled once so the
 // search and the detail endpoint apply identical rules.
 interface IArchivalCriteria {
-  and: IFilterCondition[];
-  or: IFilterCondition[];
+  where: IFilterNode | null;
   dates: IFilterCondition[];
 }
 
 const DATE_WITH_SPACE_RE = /^(\d{4}-\d{2}-\d{2}) (?=\d)/;
 
+// SQL for one { from?, to? } range on `field`, or null when it is malformed
+// (no bound, a bad date, or from after to).
+const buildRangeSql = (field: string, range: unknown): string | null => {
+  if (!isPlainObject(range)) return null;
+  const { from, to } = range as IArchivalDateRange;
+  if (from === undefined && to === undefined) return null;
+
+  const instant = datetimeInstant(field);
+  const bounds: [unknown, 'start' | 'end', '>=' | '<='][] = [
+    [from, 'start', '>='],
+    [to, 'end', '<='],
+  ];
+  const parts: string[] = [];
+  let start: IsoDateString | null = null;
+  let end: IsoDateString | null = null;
+  for (const [raw, bound, operator] of bounds) {
+    if (raw === undefined) continue;
+    const parsed = typeof raw === 'string' ? toIsoDateString(raw.replace(DATE_WITH_SPACE_RE, '$1T'), bound) : null;
+    if (!parsed) return null;
+    if (bound === 'start') start = parsed;
+    else end = parsed;
+    parts.push(`${instant} ${operator} from_iso8601_timestamp('${parsed}')`);
+  }
+  if (start && end && start > end) return null;
+  return parts.length > 1 ? `(${parts.join(' AND ')})` : parts[0];
+};
+
 const buildDateConditions = (
   dateFilters: unknown
 ): { ok: true; conditions: IFilterCondition[] } | { ok: false; error: 'invalid_date_filters' } => {
-  if (dateFilters === undefined) return { ok: true, conditions: [] };
-  if (typeof dateFilters !== 'object' || dateFilters === null || Array.isArray(dateFilters)) {
-    return { ok: false, error: 'invalid_date_filters' };
-  }
+  if (dateFilters === undefined || dateFilters === null) return { ok: true, conditions: [] };
+  if (!isPlainObject(dateFilters)) return { ok: false, error: 'invalid_date_filters' };
 
   const conditions: IFilterCondition[] = [];
-  for (const [field, range] of Object.entries(dateFilters as Record<string, unknown>)) {
-    if (!FIELD_NAME_RE.test(field) || typeof range !== 'object' || range === null || Array.isArray(range)) {
-      return { ok: false, error: 'invalid_date_filters' };
-    }
-    const { from, to } = range as IArchivalDateRange;
-    if (from === undefined && to === undefined) return { ok: false, error: 'invalid_date_filters' };
-
-    const instant = datetimeInstant(field);
-    const bounds: [unknown, 'start' | 'end', '>=' | '<='][] = [
-      [from, 'start', '>='],
-      [to, 'end', '<='],
-    ];
-    let start: IsoDateString | null = null;
-    let end: IsoDateString | null = null;
-    for (const [raw, bound, operator] of bounds) {
-      if (raw === undefined) continue;
-      const parsed = typeof raw === 'string' ? toIsoDateString(raw.replace(DATE_WITH_SPACE_RE, '$1T'), bound) : null;
-      if (!parsed) return { ok: false, error: 'invalid_date_filters' };
-      if (bound === 'start') start = parsed;
-      else end = parsed;
-      conditions.push({ field, sql: `${instant} ${operator} from_iso8601_timestamp('${parsed}')` });
-    }
-    if (start && end && start > end) return { ok: false, error: 'invalid_date_filters' };
+  for (const [field, range] of Object.entries(dateFilters)) {
+    const sql = FIELD_NAME_RE.test(field) ? buildRangeSql(field, range) : null;
+    if (!sql) return { ok: false, error: 'invalid_date_filters' };
+    conditions.push({ field, sql });
   }
   return { ok: true, conditions };
 };
@@ -492,36 +587,53 @@ const compileArchivalCriteria = (
   if (!filterCheck.ok) return filterCheck;
   const dateCheck = buildDateConditions(dateFilters);
   if (!dateCheck.ok) return dateCheck;
-  return { ok: true, criteria: { and: filterCheck.and, or: filterCheck.or, dates: dateCheck.conditions } };
+  return { ok: true, criteria: { where: filterCheck.where, dates: dateCheck.conditions } };
+};
+
+// Compiles the tree to one SQL string for a table, given which columns exist.
+// A missing column is NULL on every row, so its condition is a constant: an
+// equality / IN / range on it is false, a "_ne" / NOT IN on it is true. Constants
+// are folded away (AND drops true and is false if any is false; OR drops false
+// and is true if any is true), so what comes back is a SQL string, or
+// true / false when the filter is decided without querying.
+const compileFilterNode = (node: IFilterNode, hasColumn: (c: IFilterCondition) => boolean): string | boolean => {
+  if (node.kind === 'condition') {
+    return hasColumn(node.condition) ? node.condition.sql : !!node.condition.negated;
+  }
+
+  const isOr = node.kind === 'or';
+  const parts: string[] = [];
+  for (const child of node.children) {
+    const compiled = compileFilterNode(child, hasColumn);
+    if (typeof compiled === 'string') parts.push(compiled);
+    else if (compiled === isOr) return isOr; // OR met a true / AND met a false
+  }
+  if (!parts.length) return !isOr;
+  return parts.length === 1 ? parts[0] : `(${parts.join(isOr ? ' OR ' : ' AND ')})`;
 };
 
 // WHERE conditions for one table. `missing` means the table lacks a filtered
-// column, so no row in it can match and the Athena query is skipped: an AND
-// (or date) condition on a missing column would fail the whole query and can
-// never match; an OR branch on one can never match either, so it is just
-// dropped — only when every branch is dropped is the table skipped.
+// column in a way that rules out every row (see compileFilterNode), so the
+// Athena query is skipped — an AND (or date) condition on a missing column would
+// fail the whole query and can never match.
 const buildTableConditions = async (
   criteria: IArchivalCriteria,
   hudiTable: string,
   databaseName: string,
   region: string
 ): Promise<{ conditions: string[]; missing: false } | { missing: true }> => {
-  const required = [...criteria.and, ...criteria.dates];
-  if (!required.length && !criteria.or.length) return { conditions: [], missing: false };
+  if (!criteria.where && !criteria.dates.length) return { conditions: [], missing: false };
 
   const known = new Set((await getTableColumns(hudiTable, databaseName, region)).map((c) => c.toLowerCase()));
   const hasColumn = (c: IFilterCondition) => known.has(c.field.toLowerCase());
 
-  if (!required.every(hasColumn)) return { missing: true };
-  const conditions = required.map((c) => c.sql);
+  if (!criteria.dates.every(hasColumn)) return { missing: true };
+  const conditions = criteria.dates.map((c) => c.sql);
 
-  // A missing column is NULL on every row: an equality branch on it never matches
-  // (dropped), but a "_ne" branch is true for every row, making the whole OR true.
-  const orMatchesEverything = criteria.or.some((c) => c.negated && !hasColumn(c));
-  const orConditions = criteria.or.filter(hasColumn);
-  if (criteria.or.length && !orMatchesEverything) {
-    if (!orConditions.length) return { missing: true };
-    conditions.push(`(${orConditions.map((c) => c.sql).join(' OR ')})`);
+  if (criteria.where) {
+    const compiled = compileFilterNode(criteria.where, hasColumn);
+    if (compiled === false) return { missing: true };
+    if (compiled !== true) conditions.push(compiled);
   }
   return { conditions, missing: false };
 };
@@ -591,19 +703,20 @@ const searchArchivalRecords = async (
   if (!criteriaCheck.ok) return { ok: false, error: criteriaCheck.error };
   const { criteria } = criteriaCheck;
 
-  const rawLimit = params.limit;
+  // Optional params: null is treated like omitted.
+  const rawLimit = params.limit ?? undefined;
   if (rawLimit !== undefined && (typeof rawLimit !== 'number' || !Number.isInteger(rawLimit) || rawLimit < 1)) {
     return { ok: false, error: 'invalid_limit' };
   }
   const limit = Math.min(rawLimit ?? DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
 
-  const rawPage = params.page;
+  const rawPage = params.page ?? undefined;
   if (rawPage !== undefined && (typeof rawPage !== 'number' || !Number.isInteger(rawPage) || rawPage < 1)) {
     return { ok: false, error: 'invalid_page' };
   }
   const page = rawPage ?? 1;
 
-  const cursor = params.cursor;
+  const cursor = params.cursor ?? undefined;
   if (cursor !== undefined && (typeof cursor !== 'string' || !RECORD_ID_RE.test(cursor))) {
     return { ok: false, error: 'invalid_cursor' };
   }
@@ -714,7 +827,7 @@ const getArchivedRecordById = async (
   recordId: string,
   fields: string[] | null = null,
   alwaysInclude: string[] = [],
-  criteria: IArchivalCriteria = { and: [], or: [], dates: [] }
+  criteria: IArchivalCriteria = { where: null, dates: [] }
 ): Promise<Record<string, string> | null> => {
   if (!RECORD_ID_RE.test(recordId)) return null;
 
