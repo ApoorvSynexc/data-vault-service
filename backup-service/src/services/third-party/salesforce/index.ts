@@ -80,6 +80,7 @@ const exportObjectToDestination = async (
   objectIndex: number,
   destinationType: string,
   destConfig: IDestinationConfig,
+  executionType: 'RETRY' | 'NEW',
   lastUpdatedAt?: string
 ): Promise<void> => {
   if (object.status === JOB_OBJECT_STATUS.uploadCompleted) {
@@ -100,7 +101,8 @@ const exportObjectToDestination = async (
       objectNames,
       object,
       objectIndex,
-      destConfig
+      destConfig,
+      executionType
     );
   } else {
     await exportIncremental(
@@ -113,7 +115,8 @@ const exportObjectToDestination = async (
       object,
       objectIndex,
       destConfig,
-      lastUpdatedAt
+      lastUpdatedAt,
+      executionType
     );
   }
 };
@@ -264,6 +267,7 @@ const salesforceHandler: ICrmBackupHandler = {
     source: ISource,
     destinationType: string,
     destConfig: IDestinationConfig,
+    executionType: 'RETRY' | 'NEW',
     object?: IBackupObject[],
     lastUpdatedAt?: string
   ): Promise<void> => {
@@ -305,6 +309,7 @@ const salesforceHandler: ICrmBackupHandler = {
             i + batchIndex,
             destinationType,
             destConfig,
+            executionType,
             lastUpdatedAt
           )
         )
@@ -400,6 +405,7 @@ const salesforceHandler: ICrmBackupHandler = {
     source: ISource,
     destinationType: string,
     destConfig: IDestinationConfig,
+    executionType: 'RETRY' | 'NEW',
     object?: IBackupObject[]
   ): Promise<typeof STATUS.success | typeof STATUS.partialFailure> => {
     if (!object?.length) {
@@ -425,6 +431,7 @@ const salesforceHandler: ICrmBackupHandler = {
         backupJobId,
         source,
         destConfig,
+        executionType,
         object: objectDetail,
         objectNames,
         s3Keys,
@@ -439,6 +446,7 @@ const salesforceHandler: ICrmBackupHandler = {
         backupJobId,
         source,
         destConfig,
+        executionType,
         object: objectDetail,
         s3Keys,
       });

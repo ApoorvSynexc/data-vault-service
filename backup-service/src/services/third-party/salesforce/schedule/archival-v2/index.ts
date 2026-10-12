@@ -26,6 +26,7 @@ interface IArchiveObject {
   backupJobId: string;
   source: ISource;
   destConfig: IDestinationConfig;
+  executionType: 'RETRY' | 'NEW',
   object: IBackupObject;
   parentWhereClause?: string;
   s3Keys?: IS3ObjectKey[];
@@ -296,7 +297,7 @@ function transformWhereBodyForChild(whereBody: string, fkFieldName: string): str
 }
 
 const archiveObject = async (payload: IArchiveObject) => {
-  const { backupConfig, backupJobId, source, destConfig, object, s3Keys, objectNames } = payload;
+  const { backupConfig, backupJobId, source, destConfig, object, s3Keys, objectNames, executionType } = payload;
   const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
   const backupConfigId = backupConfig.backupConfigId;
   const tokens: SalesforceTokens = {
@@ -515,6 +516,7 @@ const archiveObject = async (payload: IArchiveObject) => {
             backupJobId,
             source,
             destConfig,
+            executionType,
             object: childObject,
             parentWhereClause,
             s3Keys,
@@ -550,7 +552,7 @@ const archiveObject = async (payload: IArchiveObject) => {
 };
 
 const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => {
-  const { backupConfig, backupJobId, source, destConfig, object, s3Keys } = payload;
+  const { backupConfig, backupJobId, source, destConfig, object, s3Keys, executionType } = payload;
 
   let anyChildFailed = false;
 
@@ -564,6 +566,7 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
           backupJobId,
           source,
           destConfig,
+          executionType,
           object: childObject,
           s3Keys,
         });
@@ -668,6 +671,7 @@ const exportWithRetryArchivalV2 = async (data: {
   backupJobId: string;
   source: ISource;
   destConfig: IDestinationConfig;
+  executionType: 'RETRY' | 'NEW',
   object: IBackupObject;
   parentWhereClause?: string;
   s3Keys?: IS3ObjectKey[];

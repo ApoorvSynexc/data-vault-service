@@ -195,7 +195,6 @@ const triggerBackupJob = async (params: {
 
     const endpoint = type === 'archival' ? '/archival' : '';
     const result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: JSON.stringify(payload) });
-    console.log("Trigger Backup response ", JSON.stringify({ result }))
     await updateBackupConfig(config.backupConfigId, { lastBackupAt: result.data.modifiedUntil ?? currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
     return result;
   } catch (error) {

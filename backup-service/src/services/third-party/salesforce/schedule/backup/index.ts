@@ -136,7 +136,8 @@ export const exportFirstTime = async (
   objectNames: Array<string>,
   object: IBackupObject,
   objectIndex: number,
-  destConfig: IDestinationConfig
+  destConfig: IDestinationConfig,
+  executionType: 'RETRY' | 'NEW'
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
@@ -355,7 +356,8 @@ export const exportIncremental = async (
   object: IBackupObject,
   objectIndex: number,
   destConfig: IDestinationConfig,
-  lastUpdatedAt: string
+  lastUpdatedAt: string,
+  executionType: 'RETRY' | 'NEW'
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;

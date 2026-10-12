@@ -18,6 +18,7 @@ export interface ICrmBackupHandler {
     source: ISource,
     destinationType: string,
     destConfig: IDestinationConfig,
+    executionType: 'RETRY' | 'NEW',
     object?: IBackupObject[],
     lastUpdatedAt?: string
   ): Promise<void>;
@@ -27,6 +28,7 @@ export interface ICrmBackupHandler {
     source: ISource,
     destinationType: string,
     destConfig: IDestinationConfig,
+    executionType: 'RETRY' | 'NEW',
     object?: IBackupObject[],
     lastUpdatedAt?: string
   ): Promise<typeof STATUS.success | typeof STATUS.partialFailure>;

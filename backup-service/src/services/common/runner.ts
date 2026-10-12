@@ -77,7 +77,11 @@ export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> 
 // ---------------------------------------------------------------------------
 // Entry point — call this fire-and-forget from the controller
 // ---------------------------------------------------------------------------
-export const runBackupJob = async (job: IBackupJob): Promise<void> => {
+interface IRunBackupJobParams extends IBackupJob {
+  executionType: 'RETRY' | 'NEW';
+}
+
+export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
   const {
     backupConfigId,
     backupJobId,
@@ -85,6 +89,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
     destination,
     object,
     triggerSource,
+    executionType
   } = job;
   const startedAt = dayjs().toISOString();
 
@@ -134,6 +139,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       source,
       destination.type,
       destConfig,
+      executionType,
       object,
       job.lastUpdatedAt
     );
@@ -154,7 +160,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
   } finally {
     activeJobs.delete(backupJobId);
   }
@@ -163,8 +169,11 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
 // ---------------------------------------------------------------------------
 // Entry point for archival jobs — call this fire-and-forget from the controller
 // ---------------------------------------------------------------------------
-export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
-  const { backupConfigId, backupJobId, source: encryptedSource, destination, object } = job;
+interface IRunArchivalJobParams extends IBackupJob {
+  executionType: 'RETRY' | 'NEW';
+}
+export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
+  const { backupConfigId, backupJobId, source: encryptedSource, destination, object, executionType } = job;
   const startedAt = dayjs().toISOString();
 
   activeJobs.add(backupJobId);
@@ -243,6 +252,7 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       source,
       destination.type,
       destConfig,
+      executionType,
       object,
       job.lastUpdatedAt
     );
@@ -263,8 +273,8 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
         status: STATUS.failed,
         completedAt: dayjs().toISOString(),
         errorMessage: err?.message ?? 'Unknown error',
-      }).catch(() => {}),
-      updateBackupConfig(backupConfigId, { backupStatus: STATUS.failed }).catch(() => {}),
+      }).catch(() => { }),
+      updateBackupConfig(backupConfigId, { backupStatus: STATUS.failed }).catch(() => { }),
     ]);
   } finally {
     activeJobs.delete(backupJobId);
@@ -336,7 +346,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
     await updateRestore({
       restoreId,
       status: STATUS.failed,
@@ -416,7 +426,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
     await updateRestore({
       restoreId,
       status: STATUS.failed,
