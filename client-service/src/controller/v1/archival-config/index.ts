@@ -27,6 +27,7 @@ import { dryRunV2 } from "../../../services/third-party/salesforce/dryrun-v2";
 import { ICondition, IFieldFilter } from "../../../services/third-party/salesforce/dryrun-v2/types";
 import { validateSoql } from "../../../services/third-party/salesforce/dryrun-v2/validate-soql";
 import { generateSoqlQueries } from "../../../services/third-party/salesforce/dryrun-v2/soql-generation";
+import { previewRecords } from "../../../services/third-party/salesforce/dryrun-v2/preview-records";
 
 const attachArchivalStatsToRows = async (documents: any[]): Promise<void> => {
     await Promise.all(
@@ -47,6 +48,18 @@ const attachArchivalStatsToRows = async (documents: any[]): Promise<void> => {
             }
         })
     );
+};
+
+const getObjectRecordsHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
+    const { name, fieldNames, soql } = req.body as any;
+
+    const user = req.user;
+    if (!user) {
+        return makeResponse(req, res, 400, false, 'not_exist');
+    }
+
+    const result = await previewRecords({ user, objectName: name, fieldNames, soql, limit: 50 });
+    makeResponse(req, res, 200, true, 'fetch', result);
 };
 
 const listArchivalConfigsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -461,6 +474,7 @@ const getArchivalJobStatsHandler = async (req: IRequest, res: IResponse): Promis
 
 
 export const archivalConfigController = wrapController({
+    getObjectRecordsHanlder,
     listArchivalConfigsHandler,
     createArchivalConfigHandler,
     getArchivalConfigHandler,
