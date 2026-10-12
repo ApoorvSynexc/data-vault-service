@@ -92,14 +92,8 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
     executionType
   } = job;
   const startedAt = dayjs().toISOString();
-
   activeJobs.add(backupJobId);
 
-  // Atomically claim this job for processing only if it's not already claimed.
-  // Two concurrent resume calls will both pass the in-memory check in
-  // resumeBackupJob, but only one will win this conditional write — the other
-  // gets ConditionalCheckFailedException and stops without double-processing.
-  // status itself stays PENDING for the whole in-flight duration; processingStartedAt is the lock.
   try {
     await updateJobStatus({
       backupJobId,
@@ -119,19 +113,16 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
     if (!encryptedSource) {
       throw new Error(`Backup job ${backupJobId}: source credentials are missing`);
     }
+
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
-    // crmId is stored top-level on the job (createBackupJob strips it out of the
-    // encrypted source), so restore it here — glue table/partition naming needs it.
     source.crmId = source.crmId ?? (job.crmId as string);
-    // Fail loud before any S3/Glue work — a missing id would otherwise silently
-    // produce `undefined/` S3 paths and a cryptic toLowerCase crash in Glue.
     if (!source.crmId || !backupConfigId) {
       throw new Error(
         `Backup job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
       );
     }
-    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
 
+    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
     const handler = getCrmHandler(source.crmName);
     await handler.runBackup(
       backupConfigId,
@@ -143,12 +134,6 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
       object,
       job.lastUpdatedAt
     );
-
-    // await updateJobStatus({
-    //   backupJobId,
-    //   status: STATUS.success,
-    //   completedAt: dayjs().toISOString(),
-    // });
 
     if (job.schemaSync) {
       await notifySchemaSyncCompleted(backupConfigId, triggerSource);
@@ -173,7 +158,7 @@ interface IRunArchivalJobParams extends IBackupJob {
   executionType: 'RETRY' | 'NEW';
 }
 export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
-  const { backupConfigId, backupJobId, source: encryptedSource, destination, object, executionType } = job;
+  const { backupConfigId, backupJobId, source: encryptedSource, destination, object, triggerSource, executionType } = job;
   const startedAt = dayjs().toISOString();
 
   activeJobs.add(backupJobId);
@@ -197,23 +182,16 @@ export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> 
     if (!encryptedSource) {
       throw new Error(`Archival job ${backupJobId}: source credentials are missing`);
     }
+
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
-    // crmId is stored top-level on the job (createArchivalJob strips it out of the
-    // encrypted source), so restore it here — glue table/partition naming needs it.
     source.crmId = source.crmId ?? (job.crmId as string);
-    // Fail loud before any S3/Glue work — a missing id would otherwise silently
-    // produce `undefined/` S3 paths and a cryptic toLowerCase crash in Glue.
     if (!source.crmId || !backupConfigId) {
       throw new Error(
         `Archival job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
       );
     }
-    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
 
-    // For objects that failed during or before the delete phase, clear stale error
-    // fields so they don't persist into the retry run. Objects that already reached
-    // UPLOAD_COMPLETED are NOT reset — the orchestrator will skip straight to Phase 3
-    // (delete-only) for them, avoiding a redundant re-upload.
+    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
     const clearObjectError = async (obj: IBackupObject) => {
       const st = obj.status;
       if (
@@ -257,14 +235,9 @@ export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> 
       job.lastUpdatedAt
     );
 
-    // const finalJobStatus =
-    //   archivalResult === STATUS.partialFailure ? STATUS.partialFailure : STATUS.success;
-
-    // await updateJobStatus({
-    //   backupJobId,
-    //   status: finalJobStatus,
-    //   completedAt: dayjs().toISOString(),
-    // });
+    if (job.schemaSync) {
+      await notifySchemaSyncCompleted(backupConfigId, triggerSource);
+    }
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
     await Promise.all([
