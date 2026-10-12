@@ -32,11 +32,19 @@ export const getSourceObjects = (objects?: IObject[], includeChildren = false) =
   }
 };
 
+interface ISubmitBackupJobResponse {
+  data: {
+    backupJobId: string;
+    status: string;
+    modifiedUntil: string;
+  }
+}
+
 const submitBackupJobRequest = async (params: {
   backupConfigId: string;
   endpoint: string;
   body: string;
-}): Promise<any> => {
+}): Promise<ISubmitBackupJobResponse> => {
   const { backupConfigId, endpoint, body } = params;
   try {
     return await httpRequest({
@@ -57,9 +65,14 @@ const triggerArchivalBackupJob = async (params: {
   objects?: IObject[];
   lastUpdatedAt?: string;
   bypassDedup?: boolean;
+  lastSchemaSyncAt?: boolean;
+  triggerSource?: {
+    name: string;
+    entityId: string;
+  }
 }) => {
   const triggerStart = Date.now();
-  const { config, objects, lastUpdatedAt, bypassDedup, user } = params;
+  const { config, objects, lastUpdatedAt, bypassDedup, lastSchemaSyncAt, user } = params;
   const objectNames = (objects ?? []).map(o => o.name).join(',') || 'none';
 
   if (!user) return null;
@@ -114,22 +127,17 @@ const triggerArchivalBackupJob = async (params: {
   const bodyStr = JSON.stringify(payload);
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ${BACKUP_SERVICE}/v1/backup-job${endpoint} | payloadBytes=${bodyStr.length} objects=[${objectNames}]`);
 
-  let result;
   const postStart = Date.now();
+  const currentDate = new Date().toISOString();
   try {
-    result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: bodyStr });
-    logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ok | durationMs=${Date.now() - postStart}`);
+    const result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: bodyStr });
+    await updateBackupConfig(config.backupConfigId, { lastBackupAt: result.data.modifiedUntil ?? currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
+    logger.info(`[ARCH-TRIG] EXIT ok | configId=${config.backupConfigId} totalDurationMs=${Date.now() - triggerStart}`);
   } catch (error) {
+    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.failed });
     logger.error(`[ARCH-TRIG] configId=${config.backupConfigId} POST FAILED | durationMs=${Date.now() - postStart} error=${(error as Error)?.message ?? String(error)}`);
     throw error;
   }
-
-  const newLastBackupAt = new Date().toISOString();
-  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set lastBackupAt=${newLastBackupAt}`);
-  await updateBackupConfig(config.backupConfigId, { lastBackupAt: newLastBackupAt });
-
-  logger.info(`[ARCH-TRIG] EXIT ok | configId=${config.backupConfigId} totalDurationMs=${Date.now() - triggerStart}`);
-  return result;
 };
 
 const triggerBackupJob = async (params: {
@@ -187,11 +195,12 @@ const triggerBackupJob = async (params: {
 
     const endpoint = type === 'archival' ? '/archival' : '';
     const result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: JSON.stringify(payload) });
-    console.log("Trigger Backup response "  ,JSON.stringify({result}))
-    await updateBackupConfig(config.backupConfigId, { lastBackupAt: currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
+    console.log("Trigger Backup response ", JSON.stringify({ result }))
+    await updateBackupConfig(config.backupConfigId, { lastBackupAt: result.data.modifiedUntil ?? currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
     return result;
   } catch (error) {
     logger.error(`triggerBackupJob failed configId=${config.backupConfigId} type=${type} error=${(error as Error)?.message ?? String(error)}`);
+    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.failed });
     throw error
   }
 };
