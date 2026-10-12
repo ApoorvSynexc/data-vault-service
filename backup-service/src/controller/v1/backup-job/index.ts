@@ -18,7 +18,7 @@ const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   });
 
   // Fire-and-forget: errors are caught inside runBackupJob and persisted to DynamoDB
-  runBackupJob({ ...job, triggerSource }).catch(() => { });
+  runBackupJob({ ...job, triggerSource, executionType: 'NEW' }).catch(() => { });
 };
 
 const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -31,11 +31,11 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   }
 
   makeResponse(req, res, 200, true, 'job_resume', { backupJobId, status: job.status });
-  runBackupJob(job).catch(() => { });
+  runBackupJob({...job, executionType: 'RETRY'}).catch(() => { });
 };
 
 const createArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { lastUpdatedAt } = req.body;
+  const { triggerSource, lastUpdatedAt } = req.body;
   const modifiedSince = lastUpdatedAt ? new Date(lastUpdatedAt).toISOString() : undefined;
   const modifiedUntil = new Date().toISOString();
   const job = await createArchivalJob({ ...req.body, modifiedSince, modifiedUntil });
@@ -49,7 +49,7 @@ const createArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<
   });
 
   // Fire-and-forget: errors are caught inside runArchivalJob and persisted to DynamoDB
-  runArchivalJob(job).catch(() => { });
+  runArchivalJob({...job, triggerSource, executionType: 'NEW'}).catch(() => { });
 };
 
 const resumeArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -61,7 +61,7 @@ const resumeArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<
   }
 
   makeResponse(req, res, 200, true, 'job_resume', { backupJobId, status: job.status });
-  runArchivalJob(job).catch(() => { });
+  runArchivalJob({...job, executionType: 'RETRY'}).catch(() => { });
 };
 
 export const backupJobController = wrapController({
