@@ -4,6 +4,7 @@ import { createArchivalConfigValidation, dryRunArchivalValidation, validateSoqlA
 
 const router = Router();
 
+router.post('/object-records', archivalConfigController.getObjectRecordsHanlder);
 // router.get('/get-picklist-field-values', archivalConfigController.getPicklistFieldValuesHandler);
 
 router.get('/list', archivalConfigController.listArchivalConfigsHandler);
