@@ -1,24 +1,14 @@
-/v1/crm-metadata/object-schema:
-  get:
-    tags: [CRM Metadata]
-    summary: Get the stored S3 schema for a Salesforce object
-    security: [{ cookieAuth: [] }]
-    parameters:
-      - name: objectApiName
-        in: query
-        required: true
-        schema: { type: string }
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
 /v1/crm-metadata/all-objects/list:
   get:
     tags: [CRM Metadata]
     summary: List every Salesforce object available on the connected org (unfiltered)
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: name
+        in: query
+        required: true
+        schema: { type: string }
+        description: Substring filter against the object's name/label
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -30,6 +20,18 @@
     tags: [CRM Metadata]
     summary: List Salesforce objects eligible for backup/archival configuration
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: crmId
+        in: query
+        schema: { type: string }
+        description: Switches the lookup to another CRM belonging to the same org (by contact email)
+      - name: mode
+        in: query
+        schema: { type: string }
+        description: 'e.g. "backup" (default) or "archival" — also used to derive type when type is omitted'
+      - name: type
+        in: query
+        schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -42,10 +44,19 @@
     summary: Describe a single Salesforce object (fields, relationships, record types)
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: objectApiName
+      - name: objectName
         in: query
         required: true
         schema: { type: string }
+      - name: mode
+        in: query
+        schema: { type: string }
+      - name: type
+        in: query
+        schema: { type: string }
+      - name: relationshipDepth
+        in: query
+        schema: { type: integer }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -55,35 +66,25 @@
 /v1/crm-metadata/object/depth-children:
   get:
     tags: [CRM Metadata]
-    summary: List child objects reachable from a Salesforce object, one relationship deep
+    summary: List child objects reachable from a Salesforce object, depth-aware
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: objectApiName
+      - name: objectName
         in: query
         required: true
         schema: { type: string }
+      - name: mode
+        in: query
+        schema: { type: string }
+      - name: type
+        in: query
+        schema: { type: string }
+      - name: maxDepth
+        in: query
+        schema: { type: integer }
     responses:
       200:
         $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/crm-metadata/objects/master/list:
-  post:
-    tags: [CRM Metadata]
-    summary: List the master (parent) objects for a set of Salesforce objects
-    security: [{ cookieAuth: [] }]
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      400:
-        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -93,10 +94,21 @@
     summary: List fields of a Salesforce object
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: objectApiName
+      - name: objectName
         in: query
         required: true
         schema: { type: string }
+      - name: crmId
+        in: query
+        schema: { type: string }
+      - name: filterable
+        in: query
+        schema: { type: string, enum: ['true', 'false'] }
+        description: 'true" keeps only filterable=true fields'
+      - name: excludeSystemFields
+        in: query
+        schema: { type: string, enum: ['true', 'false'] }
+        description: '"true" keeps only writable, non-system/audit fields (restore-mapping destinations)'
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -109,10 +121,17 @@
     summary: List record types of a Salesforce object
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: objectApiName
+      - name: objectName
         in: query
         required: true
         schema: { type: string }
+      - name: crmId
+        in: query
+        schema: { type: string }
+      - name: activeOnly
+        in: query
+        schema: { type: string, enum: ['true', 'false'] }
+        description: '"true" drops record types that are not currently active'
     responses:
       200:
         $ref: '#/components/responses/Success'

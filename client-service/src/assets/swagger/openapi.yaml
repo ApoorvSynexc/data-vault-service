@@ -24,7 +24,7 @@ tags:
   - name: Backup Config
     description: Backup configuration CRUD, scheduling and metadata sync
   - name: Backup Job
-    description: Backup job run history and manual resume
+    description: Backup job run history and manual retry
   - name: Internal
     description: Server-to-server routes called by backup-service (X-Internal-Secret)
   - name: Public
@@ -60,6 +60,11 @@ components:
       in: header
       name: X-Internal-Secret
       description: Shared secret used for server-to-server calls (e.g. from backup-service).
+    sparkApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Shared secret used by the EMR Spark job's callback routes (SPARK_JOB_API_KEY).
 
   schemas:
     ApiResponse:

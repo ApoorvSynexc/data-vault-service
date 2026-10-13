@@ -14,17 +14,15 @@
     tags: [CRM]
     summary: Update a connected CRM account
     security: [{ cookieAuth: [] }]
-    parameters:
-      - name: id
-        in: query
-        required: true
-        schema: { type: string }
     requestBody:
       required: true
       content:
         application/json:
           schema:
             type: object
+            required: [crmId]
+            properties:
+              crmId: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -37,7 +35,7 @@
     summary: Delete a connected CRM account record
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: crmId
         in: query
         required: true
         schema: { type: string }
@@ -54,17 +52,42 @@
     tags: [CRM]
     summary: Start the Salesforce OAuth connect flow (redirects to Salesforce)
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: crmName
+        in: query
+        schema: { type: string }
+        description: Defaults to "salesforce" when omitted; either crmName or userId is required
+      - name: userId
+        in: query
+        schema: { type: string }
+      - name: environment
+        in: query
+        schema: { type: string, enum: [production, sandbox, custom] }
+        default: production
+      - name: name
+        in: query
+        schema: { type: string }
+        description: Optional display name persisted on the OAuth state
     responses:
       200:
         $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
+      400:
+        $ref: '#/components/responses/BadRequest'
 
 /v1/crm/callback:
   get:
     tags: [CRM]
     summary: Salesforce OAuth callback that finalizes the CRM connection
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: code
+        in: query
+        required: true
+        schema: { type: string }
+      - name: state
+        in: query
+        required: true
+        schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -77,23 +100,7 @@
     summary: Disconnect a CRM account without deleting its record
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
-        in: query
-        required: true
-        schema: { type: string }
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/crm/refresh-token:
-  get:
-    tags: [CRM]
-    summary: Refresh the stored Salesforce access token for a connected CRM
-    security: [{ cookieAuth: [] }]
-    parameters:
-      - name: id
+      - name: userId
         in: query
         required: true
         schema: { type: string }

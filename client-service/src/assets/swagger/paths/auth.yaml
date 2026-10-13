@@ -1,3 +1,32 @@
+/v1/auth/signup:
+  post:
+    tags: [Auth]
+    summary: Create a new user account
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [firstName, contact, authProvider]
+            properties:
+              firstName: { type: string }
+              lastName: { type: string }
+              contact:
+                type: object
+                required: [email]
+                properties:
+                  email: { type: string, format: email }
+              password: { type: string, format: password }
+              authProvider: { type: string }
+              gender: { type: string }
+    responses:
+      201:
+        $ref: '#/components/responses/Created'
+      400:
+        $ref: '#/components/responses/BadRequest'
+
 /v1/auth/login:
   post:
     tags: [Auth]

@@ -17,17 +17,26 @@
       401:
         $ref: '#/components/responses/Unauthorized'
 
-/v1/restore/activate:
+/v1/restore/bulk-csv/upload:
   post:
     tags: [Restore Retrieve]
-    summary: Activate a previously created restore job so it starts running
+    summary: Upload a CSV of record Ids for use as a restore's bulkCsvIds scope
+    description: >
+      Multipart upload (field "file", plus "objectName" and "backupConfigId" fields).
+      Uploads the CSV to the config's destination S3 and returns { objectName, ids, s3Key }
+      for use as one entry of selection.restoreScope.bulkCsvIds when creating a restore.
     security: [{ cookieAuth: [] }]
     requestBody:
       required: true
       content:
-        application/json:
+        multipart/form-data:
           schema:
             type: object
+            required: [file, objectName, backupConfigId]
+            properties:
+              file: { type: string, format: binary }
+              objectName: { type: string }
+              backupConfigId: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -50,10 +59,10 @@
 /v1/restore/job:
   get:
     tags: [Restore Retrieve]
-    summary: Get a single restore job by id
+    summary: Get a single restore job by restoreId
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: restoreId
         in: query
         required: true
         schema: { type: string }
@@ -65,27 +74,36 @@
       404:
         $ref: '#/components/responses/NotFound'
 
-/v1/restore/job/stats:
-  get:
+/v1/restore/job/rollback:
+  put:
     tags: [Restore Retrieve]
-    summary: Get restore job success/failure stats
+    summary: Roll back a completed restore job
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: restoreJobId
         in: query
         required: true
         schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
-/v1/restore/list:
+/v1/restore/job/stats:
   get:
     tags: [Restore Retrieve]
-    summary: List restore/retrieve jobs
+    summary: Get restore job success/failure stats
+    description: >
+      restoreId is optional — when omitted, stats are aggregated across every
+      restore job owned by the authenticated user.
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: restoreId
+        in: query
+        schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -95,40 +113,23 @@
 /v1/restore/get-objectlist-by-configid:
   get:
     tags: [Restore Retrieve]
-    summary: List the object(s) selected on a single backup configuration
+    summary: List the object(s) selected on a single backup configuration, narrowed to what a restore can write back
     security: [{ cookieAuth: [] }]
     parameters:
       - name: backupConfigId
         in: query
         required: true
         schema: { type: string }
+      - name: configType
+        in: query
+        required: true
+        schema: { type: string, enum: [BACKUP, ARCHIVAL] }
+        description: Validated against the config's stored type to prevent cross-type access
     responses:
       200:
         $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/restore/fetch-change-between-backup-jobs:
-  get:
-    tags: [Restore Retrieve]
-    summary: List backupJobIds of a config that started inside a given time window
-    security: [{ cookieAuth: [] }]
-    parameters:
-      - name: backupConfigId
-        in: query
-        required: true
-        schema: { type: string }
-      - name: startDate
-        in: query
-        required: true
-        schema: { type: string, format: date-time }
-      - name: endDate
-        in: query
-        required: true
-        schema: { type: string, format: date-time }
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -146,6 +147,17 @@
         application/json:
           schema:
             type: object
+            required: [backupConfigId, configType, objectApiName, type, columnNames]
+            properties:
+              backupConfigId: { type: string }
+              configType: { type: string, enum: [BACKUP, ARCHIVAL] }
+              objectApiName: { type: string }
+              type: { type: string, enum: [ENTIRE, CHANGED_BETWEEN] }
+              startDate: { type: string, format: date-time, description: Required for CHANGED_BETWEEN }
+              endDate: { type: string, format: date-time, description: Required for CHANGED_BETWEEN }
+              columnNames: { type: array, items: { type: string } }
+              searchText: { type: string }
+              cursor: { type: string, description: Opaque nextCursor echoed back from a previous response }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -165,6 +177,13 @@
         application/json:
           schema:
             type: object
+            required: [backupConfigId, objectApiName, configType]
+            properties:
+              backupConfigId: { type: string }
+              objectApiName: { type: string }
+              configType: { type: string, enum: [BACKUP, ARCHIVAL] }
+              startDate: { type: string, format: date-time }
+              endDate: { type: string, format: date-time }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -184,6 +203,13 @@
         application/json:
           schema:
             type: object
+            required: [backupConfigId, configType]
+            properties:
+              backupConfigId: { type: string }
+              configType: { type: string, enum: [BACKUP, ARCHIVAL] }
+              objectApiNames: { type: array, items: { type: string }, description: Omit to resolve every restorable object on the config }
+              startDate: { type: string, format: date-time }
+              endDate: { type: string, format: date-time }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -204,6 +230,40 @@
         application/json:
           schema:
             type: object
+            required: [backupConfigId, objectApiName]
+            properties:
+              backupConfigId: { type: string }
+              objectApiName: { type: string }
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/restore/retrieve/validate-query:
+  post:
+    tags: [Restore Retrieve]
+    summary: Validate one object's SOQL FILTER condition against its compressed Hudi table
+    description: >
+      Converts the SOQL to an Athena WHERE clause and runs it (LIMIT 1) against the
+      object's real compressed data. Response: { matched: boolean, valid: true } — valid
+      confirms the query itself ran successfully, independent of whether matched is true
+      or false.
+    security: [{ cookieAuth: [] }]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [backupConfigId, configType, objectApiName, soqlQuery]
+            properties:
+              backupConfigId: { type: string }
+              configType: { type: string, enum: [BACKUP, ARCHIVAL] }
+              objectApiName: { type: string }
+              soqlQuery: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -215,21 +275,22 @@
 /v1/restore/fetch-object-fields:
   get:
     tags: [Restore Retrieve]
-    summary: Get the latest S3 schema for an object across the shared backup config of given job ids
+    summary: Get the latest S3 schema for an object on a backup configuration
     security: [{ cookieAuth: [] }]
     parameters:
       - name: objectApiName
         in: query
         required: true
         schema: { type: string }
-      - name: backupJobIds
+      - name: backupConfigId
         in: query
         required: true
         schema: { type: string }
-        description: Comma-separated backup job ids
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -288,6 +349,10 @@
     summary: Get picklist values for a field, used to populate restore filter UI
     security: [{ cookieAuth: [] }]
     parameters:
+      - name: backupConfigId
+        in: query
+        required: true
+        schema: { type: string }
       - name: objectApiName
         in: query
         required: true
@@ -299,23 +364,30 @@
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
-/v1/restore/restore:
+/v1/restore/download-csv:
   get:
     tags: [Restore Retrieve]
-    summary: Get a single restore/retrieve job by backupJobId
+    summary: Get presigned S3 download URLs for a completed restore job's exported CSV(s)
+    description: One presigned URL per part, for the given object of a SUCCESS-status restore job.
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: backupJobId
+      - name: restoreJobId
+        in: query
+        required: true
+        schema: { type: string }
+      - name: objectName
         in: query
         required: true
         schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
-      404:
-        $ref: '#/components/responses/NotFound'

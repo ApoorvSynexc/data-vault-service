@@ -21,23 +21,23 @@
     summary: Get a single destination by id
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: destinationId
         in: query
         required: true
         schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
-      404:
-        $ref: '#/components/responses/NotFound'
   put:
     tags: [Destination]
     summary: Update a destination
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: destinationId
         in: query
         required: true
         schema: { type: string }
@@ -59,23 +59,30 @@
     summary: Delete a destination
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: destinationId
         in: query
         required: true
         schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
-      404:
-        $ref: '#/components/responses/NotFound'
 
 /v1/destination/list:
   get:
     tags: [Destination]
     summary: List destinations (paginated)
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: limit
+        in: query
+        schema: { type: integer, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -88,12 +95,14 @@
     summary: Get the raw config (e.g. bucket/region) of a destination
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: destinationId
         in: query
         required: true
         schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
