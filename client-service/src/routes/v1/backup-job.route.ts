@@ -4,6 +4,6 @@ import { backupJobController } from '../../controller';
 const router = Router();
 
 router.get('/list', backupJobController.listBackupJobsHandler);
-router.get('/resume', backupJobController.resumeBackupJobHandler);
+router.get('/retry', backupJobController.resumeBackupJobHandler);
 
 export const backupJobRouter = router;
