@@ -13,8 +13,8 @@ interface CreateBackupJobParams {
   destination: { type: string; config: IDestinationConfig };
   lastUpdatedAt?: string;
   schemaSync?: boolean;
-  modifiedSince: string;
-  modifiedUntil: string
+  modifiedSince?: string;
+  modifiedUntil: string;
 }
 
 const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJob> => {
@@ -56,8 +56,8 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     ...(schemaSync ? { schemaSync: true } : {}),
     createdAt: now,
     updatedAt: now,
-    modifiedSince,
-    modifiedUntil
+    ...(modifiedSince ? { modifiedSince } : {}),
+    modifiedUntil,
   };
 
   await Promise.all([

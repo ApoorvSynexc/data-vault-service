@@ -1,7 +1,7 @@
 import { JOB_OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../../models';
-import { updateBackupObject } from '../../../../backup-job';
+import { getBackupJob, updateBackupObject } from '../../../../backup-job';
 import { buildS3KeyPrefix, withSystemFields } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
@@ -146,6 +146,10 @@ export const exportFirstTime = async (
   let totalRecordCount: number = 0;
   let jobId: string;
 
+  if (executionType === 'RETRY' && object.status === JOB_OBJECT_STATUS.uploadCompleted) {
+    return;
+  }
+
   try {
     const fieldsMetadata = await salesforceMetadataHandler(
       {
@@ -228,6 +232,7 @@ export const exportFirstTime = async (
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
       salesforceApiCount += object.salesforceApiCount ?? 0;
+      totalRecordCount = object.totalRecordCount ?? 0;
     } else {
       await updateBackupObject({
         backupJobId,
@@ -236,7 +241,20 @@ export const exportFirstTime = async (
       });
 
       const whereClause = buildWhereClause(object);
-      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
+
+      let dateFilter = '';
+      if (executionType === 'RETRY' && !whereClause.includes('LastModifiedDate')) {
+        const backupJob = await getBackupJob(backupJobId);
+        if (backupJob && backupJob.modifiedUntil) {
+          if(whereClause.length) {
+            dateFilter = `AND LastModifiedDate < ${backupJob.modifiedUntil}`
+          } else {
+            dateFilter = `WHERE LastModifiedDate < ${backupJob.modifiedUntil}`
+          }
+        }
+      }
+
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ${dateFilter.length ? ` ${dateFilter}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
 
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
@@ -363,7 +381,10 @@ export const exportIncremental = async (
   const objectName = object.name;
   const backupConfigId = backupConfig.backupConfigId;
   let salesforceApiCount = 0;
-  // let backupConfig;
+
+  if (executionType === 'RETRY' && object.status === JOB_OBJECT_STATUS.uploadCompleted) {
+    return;
+  }
 
   try {
     const fieldsMetadata = await salesforceMetadataHandler(
@@ -417,7 +438,21 @@ export const exportIncremental = async (
       // IsDeleted (needed for classify/delete split) is already in allFieldNames
       // via withSystemFields, same as every other system field.
       const userWhere = buildWhereClause(object);
-      const dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
+
+      let dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
+      if (executionType === 'RETRY' && !userWhere.includes('LastModifiedDate')) {
+        const backupJob = await getBackupJob(backupJobId);
+        if (backupJob) {
+          if (backupJob.modifiedSince) {
+            dateFilter = `LastModifiedDate >= ${backupJob.modifiedSince}`
+          }
+
+          if (backupJob.modifiedUntil) {
+            dateFilter = `${dateFilter} AND LastModifiedDate < ${backupJob.modifiedUntil}`
+          }
+        }
+      }
+
       const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} WITH USER_MODE ORDER BY Id ASC`;
 
