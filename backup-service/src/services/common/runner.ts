@@ -51,7 +51,7 @@ const activeJobs = new Set<string>();
 // Validate and return a job that is eligible for resume.
 // Throws if the job does not exist or cannot be resumed.
 // ---------------------------------------------------------------------------
-export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> => {
+export const retryBackupJob = async (backupJobId: string): Promise<IBackupJob> => {
   const job = await getBackupJob(backupJobId);
   if (!job) {
     throw new HttpError(404, `Backup job ${backupJobId} not found`);

@@ -52,6 +52,7 @@ export interface IBackupJob {
   updatedAt: string;
   modifiedSince?: string;
   modifiedUntil?: string;
+  retryCount?: number; // incremented by jobs/retry-failed-backups each time a FAILED/PARTIAL_FAILURE job is auto-retried; capped at MAX_RETRY_COUNT
 
    objectApiName?: string;
     operation?: string;

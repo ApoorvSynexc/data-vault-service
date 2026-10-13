@@ -5,7 +5,7 @@ import { createArchivalJobValidation, createBackupJobValidation } from '../../mi
 const router = Router();
 
 router.post('/', createBackupJobValidation, backupJobController.createBackupJobHandler);
-router.get('/retry', backupJobController.resumeBackupJobHandler);
+router.get('/retry', backupJobController.retryBackupJobHandler);
 router.post('/archival', createArchivalJobValidation, backupJobController.createArchivalJobHandler);
 router.get('/archival/retry', backupJobController.resumeArchivalJobHandler);
 
