@@ -4,6 +4,7 @@ import { logger } from '../../../../../middlewares/logger';
 import { IDestinationConfig } from '../../../../../models';
 import { uploadToS3 } from '../../../../destination/s3';
 import { makePageFetcher, salesforceRequest, SalesforceTokens } from '../../api-request';
+import { checkSalesforceApiLimitUsage, SalesforceApiLimitExceededError } from '../../api-limit';
 import { parseCSVRecords, toSingleLineCsv } from '../../../../../utils/csv';
 
 const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
@@ -17,6 +18,8 @@ interface IPollBulkJob {
   tokens: SalesforceTokens;
   jobId: string;
   salesforceApiCount: number;
+  backupConfigId: string;
+  userId?: string;
   backupJobId?: string;
   objectIndex?: number;
 }
@@ -25,7 +28,7 @@ interface IPollBulkJob {
 // Bulk API 2.0 — Poll
 // ---------------------------------------------------------------------------
 const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
-  const { instanceUrl, tokens, jobId, backupJobId, objectIndex } = payload;
+  const { instanceUrl, tokens, jobId, backupConfigId, userId, backupJobId, objectIndex } = payload;
   let { salesforceApiCount } = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
   let pollCount = 0;
@@ -44,6 +47,8 @@ const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
         `Bulk job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`
       );
     }
+
+    await checkSalesforceApiLimitUsage({ instanceUrl, tokens, userId, backupConfigId });
 
     const res = await salesforceRequest<{
       state: string;
@@ -95,6 +100,8 @@ interface IUploadBulkResultsByPage {
   instanceUrl: string;
   tokens: SalesforceTokens;
   jobId: string;
+  backupConfigId: string;
+  userId?: string;
   backupJobId: string;
   objectIndex: number;
   destConfig: IDestinationConfig;
@@ -113,6 +120,8 @@ const uploadBulkResultsByPage = async (
     instanceUrl,
     tokens,
     jobId,
+    backupConfigId,
+    userId,
     backupJobId,
     objectIndex,
     destConfig,
@@ -135,6 +144,8 @@ const uploadBulkResultsByPage = async (
       status: JOB_OBJECT_STATUS.transferInProgress,
     });
     do {
+      await checkSalesforceApiLimitUsage({ instanceUrl, tokens, userId, backupConfigId });
+
       const url = locator
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
         : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
@@ -193,6 +204,9 @@ const uploadBulkResultsByPage = async (
       errorMessage,
     });
 
+    if (err instanceof SalesforceApiLimitExceededError) {
+      throw err;
+    }
     throw new Error(errorMessage, { cause: err });
   }
 
@@ -208,6 +222,8 @@ interface IClassifyAndUploadBulkResultsByPage {
   instanceUrl: string;
   tokens: SalesforceTokens;
   jobId: string;
+  backupConfigId: string;
+  userId?: string;
   backupJobId: string;
   objectIndex: number;
   destConfig: IDestinationConfig;
@@ -229,6 +245,8 @@ const classifyAndUploadBulkResultsByPage = async (
     instanceUrl,
     tokens,
     jobId,
+    backupConfigId,
+    userId,
     backupJobId,
     objectIndex,
     destConfig,
@@ -257,6 +275,8 @@ const classifyAndUploadBulkResultsByPage = async (
       status: JOB_OBJECT_STATUS.transferInProgress,
     });
     do {
+      await checkSalesforceApiLimitUsage({ instanceUrl, tokens, userId, backupConfigId });
+
       const url = locator
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
         : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
@@ -376,6 +396,9 @@ const classifyAndUploadBulkResultsByPage = async (
       status: JOB_OBJECT_STATUS.failed,
       errorMessage,
     });
+    if (err instanceof SalesforceApiLimitExceededError) {
+      throw err;
+    }
     throw new Error(errorMessage, { cause: err });
   }
 
