@@ -5,6 +5,7 @@ import { getBackupJob, updateBackupObject } from '../../../../backup-job';
 import { buildS3KeyPrefix, withSystemFields } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
+import { SalesforceApiLimitExceededError } from '../../api-limit';
 import { updateBackupConfigObject } from '../../../../backup-config';
 import { salesforceMetadataHandler } from '../../metadata';
 
@@ -143,7 +144,7 @@ export const exportFirstTime = async (
   const objectName = object.name;
   const backupConfigId = backupConfig.backupConfigId;
   let salesforceApiCount: number = 0;
-  let totalRecordCount: number = 0;
+  let totalRecordCount: number;
   let jobId: string;
 
   if (executionType === 'RETRY' && object.status === JOB_OBJECT_STATUS.uploadCompleted) {
@@ -246,10 +247,10 @@ export const exportFirstTime = async (
       if (executionType === 'RETRY' && !whereClause.includes('LastModifiedDate')) {
         const backupJob = await getBackupJob(backupJobId);
         if (backupJob && backupJob.modifiedUntil) {
-          if(whereClause.length) {
-            dateFilter = `AND LastModifiedDate < ${backupJob.modifiedUntil}`
+          if (whereClause.length) {
+            dateFilter = `AND LastModifiedDate < ${backupJob.modifiedUntil}`;
           } else {
-            dateFilter = `WHERE LastModifiedDate < ${backupJob.modifiedUntil}`
+            dateFilter = `WHERE LastModifiedDate < ${backupJob.modifiedUntil}`;
           }
         }
       }
@@ -268,11 +269,16 @@ export const exportFirstTime = async (
           instanceUrl,
           tokens,
           jobId,
+          backupConfigId: backupConfig.backupConfigId,
+          userId: backupConfig.userId,
           backupJobId,
           objectIndex,
           salesforceApiCount,
         });
       } catch (err: any) {
+        if (err instanceof SalesforceApiLimitExceededError) {
+          throw err;
+        }
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
 
@@ -305,6 +311,8 @@ export const exportFirstTime = async (
         instanceUrl,
         tokens,
         jobId,
+        backupConfigId,
+        userId: backupConfig.userId,
         backupJobId,
         objectIndex,
         destConfig,
@@ -320,25 +328,12 @@ export const exportFirstTime = async (
         sizeInBytes,
         completedRecordCount,
       });
-      // backupConfig = await getBackupConfigById(backupConfigId);
-      // if (backupConfig?.objects) {
-      //   const updateParams: any = { sizeInBytes };
-      //   updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-      //   updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + completedRecordCount;
 
-      //   await updateBackupConfig(backupConfigId, updateParams);
-      // }
     } else {
       logger.info(
         `Object changes not found, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
       );
     }
-
-    // await writeSchemaFile(
-    //   destConfig,
-    //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
-    //   schema
-    // );
 
     logger.info(
       `Object first-time backup complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
@@ -444,11 +439,11 @@ export const exportIncremental = async (
         const backupJob = await getBackupJob(backupJobId);
         if (backupJob) {
           if (backupJob.modifiedSince) {
-            dateFilter = `LastModifiedDate >= ${backupJob.modifiedSince}`
+            dateFilter = `LastModifiedDate >= ${backupJob.modifiedSince}`;
           }
 
           if (backupJob.modifiedUntil) {
-            dateFilter = `${dateFilter} AND LastModifiedDate < ${backupJob.modifiedUntil}`
+            dateFilter = `${dateFilter} AND LastModifiedDate < ${backupJob.modifiedUntil}`;
           }
         }
       }
@@ -469,11 +464,16 @@ export const exportIncremental = async (
           instanceUrl,
           tokens,
           jobId: bulkJobId,
+          backupConfigId,
+          userId: backupConfig.userId,
           backupJobId,
           objectIndex,
           salesforceApiCount,
         });
       } catch (err: any) {
+        if (err instanceof SalesforceApiLimitExceededError) {
+          throw err;
+        }
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
 
@@ -528,6 +528,8 @@ export const exportIncremental = async (
         instanceUrl,
         tokens,
         jobId: bulkJobId,
+        backupConfigId,
+        userId: backupConfig.userId,
         backupJobId,
         objectIndex,
         destConfig,
@@ -540,16 +542,6 @@ export const exportIncremental = async (
         startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
 
-      // backupConfig = await getBackupConfigById(backupConfigId);
-      // if (backupConfig?.objects) {
-      //   const updateParams: any = { sizeInBytes };
-      //   const updatedObjects = backupConfig.objects.map((obj) =>
-      //     obj.name === objectName ? { ...obj, sizeInBytes } : obj
-      //   );
-      //   updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-      //   updateParams.objects = updatedObjects;
-      //   await updateBackupConfig(backupConfigId, updateParams);
-      // }
 
       await updateBackupConfigObject({
         backupConfigId,
@@ -615,29 +607,8 @@ export const exportIncremental = async (
       },
       { instanceUrl, tokens }
     );
-    // const storedSchema = await readLatestSchema(destConfig, {
-    //   crmId,
-    //   crmName,
-    //   backupConfigId,
-    //   objectName,
-    //   type: 'backup',
-    // });
-    // const schemaChanged = !storedSchema || !schemasAreEqual(storedSchema, latestSchema);
-
-    // await writeSchemaFile(
-    //   destConfig,
-    //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
-    //   latestSchema
-    // );
 
     if (fieldsMetadata?.metadataType === 'fields' && fieldsMetadata?.diff.schemaChanged) {
-      // if (backupConfig?.objects) {
-      //   const updatedObjects = backupConfig.objects.map((obj) =>
-      //     obj.name === objectName ? { ...obj, schemaChange: true } : obj
-      //   );
-      //   await updateBackupConfig(backupConfigId, { objects: updatedObjects });
-      // }
-
       await updateBackupConfigObject({
         backupConfigId,
         objectName,
