@@ -11,8 +11,22 @@ const runEmrJob = async () => {
       async (configs) => {
         for (let index = 0; index < configs.length; index++) {
           const config = configs[index];
-          let user: IUser | null = null;
           totalBackups++;
+
+          const user = await getUser({ userId: config.userId });
+          if (!user) {
+            logger.warn(
+              `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+            );
+            continue;
+          }
+
+          if (!user.isCrmConnected) {
+            logger.warn(
+              `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=crm_not_connected`
+            );
+            continue;
+          }
 
           try {
             void cleanupStaleRetrieveObjects(config);
@@ -45,14 +59,6 @@ const runEmrJob = async () => {
               }
 
               if (changedObjectNames.length) {
-                user = await getUser({ userId: config.userId });
-                if (!user) {
-                  logger.warn(
-                    `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
-                  );
-                  continue;
-                }
-
                 await checkSalesforceApiLimitUsage(user.userId, config.crmId);
                 await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
               } else {

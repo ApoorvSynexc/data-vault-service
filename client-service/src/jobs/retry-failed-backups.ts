@@ -1,4 +1,4 @@
-import { getFailedBackupJobs, getBackupConfigById, retryBackupJob, updateBackupJob } from '../services';
+import { getFailedBackupJobs, getBackupConfigById, retryBackupJob, updateBackupJob, getUser } from '../services';
 import { logger } from '../middlewares';
 import { IBackupJob } from '../models';
 
@@ -15,6 +15,21 @@ const retryFailedJob = async (job: IBackupJob): Promise<'retried' | 'skipped'> =
   if (!config) {
     logger.error(
       `[RETRY-FAILED-BACKUPS] backupJobId=${job.backupJobId} skipped — backupConfigId=${job.backupConfigId} not found`
+    );
+    return 'skipped';
+  }
+
+  const user = await getUser({ userId: config.userId });
+  if (!user) {
+    logger.error(
+      `[RETRY-FAILED-BACKUPS] backupJobId=${job.backupJobId} skipped — userId=${config.userId} not found`
+    );
+    return 'skipped';
+  }
+
+  if(!user.isCrmConnected) {
+    logger.error(
+      `[RETRY-FAILED-BACKUPS] backupJobId=${job.backupJobId} skipped — userId=${config.userId} crm not connected`
     );
     return 'skipped';
   }
