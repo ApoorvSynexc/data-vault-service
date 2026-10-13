@@ -862,6 +862,13 @@ interface ISalesforceLimit {
 
 type SalesforceOrgLimits = Record<string, ISalesforceLimit>;
 
+class SalesforceApiLimitExceededError extends Error {
+  constructor() {
+    super('Salesforce API limit exceeded');
+    this.name = 'SalesforceApiLimitExceededError';
+  }
+}
+
 const getSalesforceOrgLimits = async (
   instanceUrl: string,
   tokens: SalesforceTokens
@@ -923,7 +930,7 @@ const checkSalesforceApiLimitUsage = async (params: ISalesforceApiLimitUsagePara
   const percentageUsed = max > 0 ? Number(((used / max) * 100).toFixed(2)) : 0;
 
   if (percentageUsed > thresholdPercentage) {
-    throw new Error(`Salesforce API limit exceeded (${percentageUsed}%)`);
+    throw new SalesforceApiLimitExceededError();
   }
 
   return { max, remaining, used, percentageUsed };
