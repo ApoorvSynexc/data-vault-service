@@ -20,7 +20,7 @@ interface ISystemScheduleJob {
 
 const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
     {
-        name: "datavault-daily-system-job-3am",
+        name: `${NODE_ENV.toLowerCase()}-datacraft-daily-system-job-3am`,
         scheduleExpression: "cron(0 3 * * ? *)",
         payload: {
             purpose: "DAILY_MAINTENANCE",
