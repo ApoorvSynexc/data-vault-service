@@ -44,22 +44,22 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
         switch (purpose) {
             case "DAILY_MAINTENANCE": {
                 const { isSyncPayment, isLogsArchive, isSyncSalesforceRefreshToken, isSyncObject, isStaleObjects, isRetryBackupFailedJob } = restPayload;
-                if (isSyncPayment) {
-                    await runPaymentSyncJob();
-                }
-                if(isSyncObject){
-                    await runSyncObjectJob();
+                if (isSyncSalesforceRefreshToken) {
+                    await runSyncSalesforceRefreshTokenJob();
                 }
                 if (isLogsArchive) {
                     await runLogsArchive();
                 }
-                if (isSyncSalesforceRefreshToken) {
-                    await runSyncSalesforceRefreshTokenJob();
-                }
-                if(isStaleObjects){
+                if (isStaleObjects) {
                     staleObjectSweeperJob();
                 }
-                if(isRetryBackupFailedJob){
+                if (isSyncPayment) {
+                    await runPaymentSyncJob();
+                }
+                if (isSyncObject) {
+                    await runSyncObjectJob();
+                }
+                if (isRetryBackupFailedJob) {
                     runRetryFailedBackups();
                 }
             }

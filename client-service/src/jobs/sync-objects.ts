@@ -111,17 +111,20 @@ const runSyncObjectJob = async () => {
             async (configs) => {
                 for (let index = 0; index < configs.length; index++) {
                     const config = configs[index];
-                    let user: IUser | null = null;
                     totalBackups++;
 
+                    const user = await getUser({ userId: config.userId });
                     if (!user) {
-                        user = await getUser({ userId: config.userId });
-                        if (!user) {
-                            logger.warn(
-                                `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
-                            );
-                            continue;
-                        }
+                        logger.warn(
+                            `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+                        );
+                        continue;
+                    }
+                    if(!user.isCrmConnected){
+                        logger.warn(
+                            `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=crm_not_connected`
+                        );
+                        continue;
                     }
 
                     if (config.type === 'NORMAL' && config.dataset === 'ENTIRE') {

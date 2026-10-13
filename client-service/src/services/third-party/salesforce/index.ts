@@ -336,6 +336,12 @@ const refreshAndPersistSalesforceToken = (
       const encrptedCrm = encrypt(JSON.stringify(crmCredential));
       await updateUser({ userId }, { crmCredential: encrptedCrm });
       return crmCredential;
+    } catch (error) {
+      const err = error as { status?: number; body?: string };
+      if (err.status === 400 && err.body?.includes('invalid_grant')) {
+        await updateUser({ userId }, { crmCredential: null, isCrmConnected: false });
+      }
+      throw error;
     } finally {
       await releaseSalesforceRefreshLock(userId, lockToken);
     }
