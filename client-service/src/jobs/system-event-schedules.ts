@@ -9,6 +9,7 @@ export interface ISystemSchedulePayload {
     isLogsArchive?: boolean;
     isSyncSalesforceRefreshToken?: boolean;
     isStaleObjects?: boolean;
+    isRetryBackupFailedJob?: boolean;
 }
 
 interface ISystemScheduleJob {
@@ -28,6 +29,7 @@ const SYSTEM_EVENT_SCHEDULES: ISystemScheduleJob[] = [
             isLogsArchive: true,
             isSyncSalesforceRefreshToken: true,
             isStaleObjects: true,
+            isRetryBackupFailedJob: true
         },
     },
     // {
