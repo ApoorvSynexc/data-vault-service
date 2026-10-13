@@ -11,6 +11,9 @@
   put:
     tags: [Settings]
     summary: Create or update the authenticated organization's settings
+    description: >
+      standardObjects entries that don't already exist (by name) are appended
+      (isDefault: false) to the existing list rather than replacing it.
     security: [{ cookieAuth: [] }]
     requestBody:
       required: true
@@ -18,6 +21,17 @@
         application/json:
           schema:
             type: object
+            properties:
+              status: { type: string }
+              salesforceApiThreshold: { type: number }
+              rollbackWindow: { type: number }
+              notification: { type: object }
+              standardObjects:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'

@@ -2,6 +2,11 @@
   post:
     tags: [Restore Retrieve]
     summary: Create a restore job
+    description: >
+      status: 'DRAFT' creates the restore without triggering anything further;
+      any other value (or omitted) immediately kicks off metadata comparison and,
+      for a REALTIME NORMAL config, a schema-sync backup job before the restore's
+      own field setup/transform proceeds.
     security: [{ cookieAuth: [] }]
     requestBody:
       required: true
@@ -9,6 +14,45 @@
         application/json:
           schema:
             type: object
+            required: [source]
+            properties:
+              status: { type: string, enum: [DRAFT], description: Omit for a normal (non-draft) restore }
+              source:
+                type: object
+                required: [backupConfigId]
+                properties:
+                  backupConfigId: { type: string }
+                  configType: { type: string, enum: [BACKUP, ARCHIVAL] }
+                  type: { type: string, enum: [ENTIRE, PARTIAL, CHANGED_BETWEEN, DELETED_BETWEEN] }
+                  startDate: { type: string, format: date-time }
+                  endDate: { type: string, format: date-time }
+              selection:
+                type: object
+                properties:
+                  restoreScope:
+                    type: object
+                    description: 'type: ALL|OBJECT|RECORD|FIELD|FILTER|DELETED_ONLY|INSERTS_ONLY|CHANGE_SINCE|BULK_CSV|OBJECT_TREE, plus the matching objects/records/fields/filters/changeSince/bulkCsvIds array for that type'
+                    properties:
+                      type: { type: string }
+              destination:
+                type: object
+                properties:
+                  type: { type: string, enum: [SAME, DIFFERENT] }
+                  crmId: { type: string }
+                  tagRestoredRecord: { type: string }
+              conflict:
+                type: object
+                properties:
+                  restoreMode: { type: string, enum: [OVERWRITE, APPEND_NEW, REPLACE_ENTIRE_OBJECT, SKIP] }
+                  edgeCases: { type: object, description: onDuplicateRecord/missingFieldInDestination/ownerInactive/parentMissing/recordTypeMissing/missingRequiredFieldValue/includeChilds/includeAuditFields }
+                  mergeRule: { type: object, description: 'default: NEWEST_LAST_MODIFIED_DATE_WINS|SOURCE_ALWAYS_WINS|DESTINATION_ALWAYS_WINS, plus per-object/field overrides' }
+              jobDetail:
+                type: object
+                properties:
+                  name: { type: string }
+                  description: { type: string }
+                  tags: { type: array, items: { type: string } }
+              schedule: { type: object }
     responses:
       201:
         $ref: '#/components/responses/Created'
@@ -310,7 +354,7 @@
       content:
         application/json:
           schema:
-            type: object
+            $ref: '#/components/schemas/DryRunRequest'
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -334,7 +378,11 @@
       content:
         application/json:
           schema:
-            type: object
+            allOf:
+              - $ref: '#/components/schemas/DryRunRequest'
+              - type: object
+                properties:
+                  limit: { type: integer, default: 20, maximum: 20, description: Records per object }
     responses:
       200:
         $ref: '#/components/responses/Success'

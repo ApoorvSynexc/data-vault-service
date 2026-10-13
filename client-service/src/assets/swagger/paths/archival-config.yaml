@@ -9,6 +9,10 @@
         application/json:
           schema:
             type: object
+            properties:
+              name: { type: string, description: Salesforce object API name }
+              fieldNames: { type: array, items: { type: string } }
+              soql: { type: string, description: Optional SOQL filter condition }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -74,6 +78,9 @@
   put:
     tags: [Archival Config]
     summary: Update an archival configuration
+    description: >
+      Not validated by Joi — accepts a partial subset of the create-time fields
+      below (any combination), applied as-is to the stored config.
     security: [{ cookieAuth: [] }]
     parameters:
       - name: backupConfigId
@@ -86,6 +93,16 @@
         application/json:
           schema:
             type: object
+            properties:
+              crmId: { type: string }
+              destinationId: { type: string }
+              name: { type: string }
+              description: { type: string }
+              objectNames: { type: array, items: { type: string }, minItems: 1 }
+              schedule: { type: string, enum: [SCHEDULE] }
+              scheduleConfig: { type: object, description: 'See POST / for shape (type, timeZone, scheduling)' }
+              objects: { type: array, items: { type: object }, description: Per-object type/condition/field/children tree }
+              status: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -119,6 +136,29 @@
         application/json:
           schema:
             type: object
+            required: [crmId, destinationId, objectNames, schedule]
+            properties:
+              crmId: { type: string }
+              destinationId: { type: string }
+              name: { type: string }
+              description: { type: string }
+              objectNames: { type: array, items: { type: string }, minItems: 1 }
+              schedule: { type: string, enum: [SCHEDULE], description: Archival only supports the SCHEDULE mode, not REALTIME }
+              scheduleConfig:
+                type: object
+                description: Optional even though schedule is always SCHEDULE
+                required: [type, timeZone]
+                properties:
+                  type: { type: string, description: 'e.g. ONE_TIME, INCREMENTAL' }
+                  timeZone: { type: string }
+                  scheduling:
+                    type: object
+                    description: frequency, interval, and the fields that frequency requires (weekDays, monthDate/selectedMonths, startDate/endDate, startTime)
+              objects:
+                type: array
+                description: Per-object { id, name, type, field[], condition?, children? } cascade tree
+                items: { type: object }
+              status: { type: string, description: 'e.g. ACTIVE, DRAFT' }
     responses:
       201:
         $ref: '#/components/responses/Created'
@@ -172,6 +212,13 @@
         application/json:
           schema:
             type: object
+            required: [crmId, objects]
+            properties:
+              crmId: { type: string }
+              objects:
+                type: array
+                description: Per-object { id, name, type, field[], condition?, children? } cascade tree
+                items: { type: object }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -184,6 +231,11 @@
   post:
     tags: [Archival Config]
     summary: Validate a custom SOQL filter used by an archival configuration
+    description: >
+      Child objects cannot carry their own filter condition (isParent: false
+      with a condition/field present returns isValid: false rather than a 400).
+      An object with no condition at all is trivially valid (nothing to check
+      against Salesforce).
     security: [{ cookieAuth: [] }]
     requestBody:
       required: true
@@ -191,9 +243,33 @@
         application/json:
           schema:
             type: object
-            required: [soql]
+            required: [crmId, object, isParent]
             properties:
-              soql: { type: string }
+              crmId: { type: string }
+              isParent: { type: boolean }
+              object:
+                type: object
+                required: [name]
+                properties:
+                  name: { type: string }
+                  condition:
+                    type: object
+                    properties:
+                      type: { type: string, description: Condition type, e.g. CUSTOM/SOQL }
+                      expression: { type: string, description: Required when type is CUSTOM }
+                      soqlQuery: { type: string, description: Required when type is SOQL }
+                  field:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        dataType: { type: string }
+                        filter:
+                          type: object
+                          properties:
+                            operator: { type: string }
+                            value: {}
     responses:
       200:
         $ref: '#/components/responses/Success'

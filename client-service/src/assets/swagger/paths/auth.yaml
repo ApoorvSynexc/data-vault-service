@@ -91,16 +91,26 @@
 /v1/auth/configure-org:
   post:
     tags: [Auth]
-    summary: Finish organization setup after the Salesforce OAuth authorize redirect
+    summary: Registers a Salesforce org's encryption/API keys, then builds that org's admin authorization URL
+    description: >
+      Body IS the encrypted envelope (bootstrap SALESFORCE_ENCRYPTION_KEY, single
+      layer — there's no org key yet, since registering the org is what produces
+      one), decrypting to { type: 'org', org_details: { orgId, instanceUrl,
+      environment? }, user_details: { user_id, org_id, user_email, user_username,
+      user_first_name, user_last_name, instance_url, org_environment?,
+      permission_set_name } }. Response's data is itself an encrypted envelope
+      (same bootstrap key), decrypting to { org: { encryptionKey, apiKey }, user:
+      <nested envelope, encrypted with the org's own key, decrypting to
+      { authorizationUrl } > }. A malformed envelope (missing cipherText/iv/
+      authTag) 400s via authorizeOrganizationValidation before decryption is
+      even attempted; a validly-shaped envelope that fails to decrypt 401s.
     security: []
     requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
+      $ref: '#/components/requestBodies/SalesforceEnvelopeBody'
     responses:
       200:
         $ref: '#/components/responses/Success'
       400:
         $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'

@@ -66,6 +66,34 @@ components:
       name: X-Api-Key
       description: Shared secret used by the EMR Spark job's callback routes (SPARK_JOB_API_KEY).
 
+  parameters:
+    SalesforceOrgIdHeader:
+      name: X-DataCraft-Org-Id
+      in: header
+      required: true
+      schema: { type: string }
+      description: Salesforce organization id, used to look up the org's registered CRM/encryption key.
+    SalesforceApiKeyHeader:
+      name: X-Api-Key
+      in: header
+      required: true
+      schema: { type: string }
+      description: Per-org API key issued at /v1/auth/configure-org time, checked against crm.apiKey.
+    SalesforceEnvelopeQuery:
+      name: envelope
+      in: query
+      required: true
+      schema: { type: string }
+      description: JSON-stringified { cipherText, iv, authTag }, encrypted with the org's own key.
+
+  requestBodies:
+    SalesforceEnvelopeBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/EncryptedEnvelope'
+
   schemas:
     ApiResponse:
       type: object
@@ -79,6 +107,48 @@ components:
           nullable: true
         meta:
           type: object
+    DryRunRequest:
+      type: object
+      required: [backupConfigId, configType, source, selection]
+      properties:
+        backupConfigId: { type: string }
+        configType: { type: string, enum: [BACKUP, ARCHIVAL] }
+        source:
+          type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [ENTIRE, CHANGED_BETWEEN] }
+            startDate: { type: string, format: date-time, description: Required when type is CHANGED_BETWEEN }
+            endDate: { type: string, format: date-time, description: Required when type is CHANGED_BETWEEN }
+        selection:
+          type: object
+          required: [restoreScope]
+          properties:
+            restoreScope:
+              type: object
+              required: [type]
+              description: >
+                type: ALL|OBJECT|FIELD|FILTER|RECORD|BULK_CSV|DELETED_ONLY
+                (DELETED_ONLY only valid under CHANGED_BETWEEN), plus the
+                matching objects/fields/filters/records/bulkCsvIds array for
+                that type.
+              properties:
+                type: { type: string }
+    EncryptedEnvelope:
+      type: object
+      required: [cipherText, iv, authTag]
+      description: >
+        AES-256-GCM payload, decryptable with the org's own encryption key
+        (crm.encryptionKey). Used as both the request and response body on
+        Salesforce envelope-authenticated routes — success and error bodies
+        share this exact shape; the outcome is only visible after decrypting.
+      properties:
+        cipherText:
+          type: string
+        iv:
+          type: string
+        authTag:
+          type: string
 
   responses:
     Success:
@@ -117,3 +187,11 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiResponse'
+    Encrypted:
+      description: >
+        Encrypted envelope (both success and error bodies use this same shape —
+        decrypt to see the outcome, e.g. { success: true } or { errorCode }).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/EncryptedEnvelope'
