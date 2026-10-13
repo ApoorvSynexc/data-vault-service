@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { BatchWriteCommand, GetCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, STATUS, JOB_OBJECT_STATUS, INTERNAL_SECRET, SCHEDULE_MODE, VISIBILITY_STATUS } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_TYPE, STATUS, JOB_OBJECT_STATUS, INTERNAL_SECRET, SCHEDULE_MODE, VISIBILITY_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
@@ -524,7 +524,7 @@ const getBackupJobsByConfigAndStatuses = async (
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
-const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
+const retryBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
   await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending });
 
   const endpoint = config.type === 'ARCHIVAL' ? '/archival/retry' : '/retry';
@@ -906,12 +906,43 @@ const getStaleJobs = async (
   } while (lastEvaluatedKey !== undefined);
 };
 
+const getFailedBackupJobs = async (
+  limit: number = 100,
+  onPage: (jobs: IBackupJob[]) => Promise<void>
+): Promise<void> => {
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Limit: limit,
+        FilterExpression: '#status IN (:failed, :partialFailure) AND #type = :normal',
+        ExpressionAttributeNames: { '#status': 'status', '#type': 'type' },
+        ExpressionAttributeValues: {
+          ':failed': STATUS.failed,
+          ':partialFailure': STATUS.partialFailure,
+          ':normal': BACKUP_TYPE.normal,
+        },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const jobs = (result.Items as IBackupJob[] | undefined) ?? [];
+    if (jobs.length) {
+      await onPage(jobs);
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastEvaluatedKey !== undefined);
+};
+
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
   submitBackupJobRequest,
   runBackupNow,
-  resumeBackupJob,
+  retryBackupJob,
   updateBackupJob,
   getBackupJobById,
   getBackupJobsByUser,
@@ -927,4 +958,5 @@ export {
   getMonthlyStatsByCrmCurrentYear,
   getBackupJobOverview,
   getStaleJobs,
+  getFailedBackupJobs,
 };

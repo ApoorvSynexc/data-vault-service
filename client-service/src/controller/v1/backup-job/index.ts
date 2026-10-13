@@ -6,7 +6,7 @@ import {
   getBackupConfigBySlug,
   getBackupConfigById,
   getTableCounter,
-  resumeBackupJob,
+  retryBackupJob,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
@@ -62,7 +62,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
   });
 };
 
-const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+const retryBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupJobId } = req.query;
   if (!backupJobId) {
     makeResponse(req, res, 400, false, 'id_required');
@@ -81,11 +81,11 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
 
-  await resumeBackupJob(String(backupJobId), config);
+  await retryBackupJob(String(backupJobId), config);
   makeResponse(req, res, 200, true, 'resume');
 };
 
 export const backupJobController = wrapController({
   listBackupJobsHandler,
-  resumeBackupJobHandler,
+  retryBackupJobHandler,
 });

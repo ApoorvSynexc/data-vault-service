@@ -1,6 +1,6 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import { createBackupJob, createArchivalJob } from '../../../services';
-import { resumeBackupJob, runBackupJob, runArchivalJob } from '../../../services/common/runner';
+import { retryBackupJob, runBackupJob, runArchivalJob } from '../../../services/common/runner';
 import { wrapController } from '../../../utils/helper';
 
 const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -21,9 +21,9 @@ const createBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
   runBackupJob({ ...job, triggerSource, executionType: 'NEW' }).catch(() => { });
 };
 
-const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+const retryBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { id: backupJobId } = req.query as { id: string };
-  const job = await resumeBackupJob(backupJobId);
+  const job = await retryBackupJob(backupJobId);
 
   if (!job) {
     makeResponse(req, res, 400, false, 'not_exist');
@@ -54,7 +54,7 @@ const createArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<
 
 const resumeArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { id: backupJobId } = req.query as { id: string };
-  const job = await resumeBackupJob(backupJobId);
+  const job = await retryBackupJob(backupJobId);
   if (!job) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
@@ -66,7 +66,7 @@ const resumeArchivalJobHandler = async (req: IRequest, res: IResponse): Promise<
 
 export const backupJobController = wrapController({
   createBackupJobHandler,
-  resumeBackupJobHandler,
+  retryBackupJobHandler,
   createArchivalJobHandler,
   resumeArchivalJobHandler,
 });
