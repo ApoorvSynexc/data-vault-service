@@ -16,7 +16,7 @@ import {
 } from '../../../models';
 import { ICrmBackupHandler } from '../types';
 import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
-import { getBackupJob, updateJobStatus } from '../../backup-job';
+import { getBackupJob, updateBackupObject, updateJobStatus } from '../../backup-job';
 import { getRestoreById, updateRestore } from '../../restore';
 import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
 
@@ -94,6 +94,13 @@ const exportObjectToDestination = async (
     throw new Error(`Unsupported destination type: ${destinationType}`);
   }
 
+  await checkSalesforceApiLimitUsage({
+    instanceUrl,
+    tokens,
+    userId: backupConfig.userId,
+    backupConfigId: backupConfig.backupConfigId,
+  });
+
   if (!lastUpdatedAt) {
     await exportFirstTime(
       backupConfig,
@@ -127,7 +134,7 @@ const exportObjectToDestination = async (
 const exportWithRetry = async (
   ...args: Parameters<typeof exportObjectToDestination>
 ): Promise<void> => {
-  const [, backupJobId, , , , , object] = args;
+  const [, backupJobId, , , , , object, objectIndex] = args;
   const objectName = object.name;
   let lastError: any;
 
@@ -136,6 +143,21 @@ const exportWithRetry = async (
       await exportObjectToDestination(...args);
       return;
     } catch (err: any) {
+      // Org-wide API limit, not a transient per-object failure — retrying
+      // just burns more of the exhausted quota. Mark it failed and stop.
+      if (err instanceof SalesforceApiLimitExceededError) {
+        logger.error(
+          `Backup job ${backupJobId}: ${objectName} stopped — ${err.message}`
+        );
+        await updateBackupObject({
+          backupJobId,
+          objectIndex,
+          status: JOB_OBJECT_STATUS.failed,
+          errorMessage: err.message,
+        }).catch(() => { });
+        throw err;
+      }
+
       lastError = err;
       if (attempt < MAX_RETRIES) {
         logger.warn(
