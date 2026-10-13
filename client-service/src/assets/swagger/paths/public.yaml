@@ -45,7 +45,22 @@
         application/json:
           schema:
             type: object
-            description: EventBridge envelope with a detail object (see description for its shape)
+            required: [detail]
+            properties:
+              detail:
+                type: object
+                required: [purpose]
+                properties:
+                  purpose: { type: string, enum: [DAILY_MAINTENANCE, BACKUP_JOB, RUN_EMR] }
+                  backupConfigId: { type: string, description: Required for BACKUP_JOB }
+                  userId: { type: string, description: Required for BACKUP_JOB }
+                  id: { type: string, description: Optional object id, for BACKUP_JOB }
+                  isSyncObject: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isSyncPayment: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isLogsArchive: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isSyncSalesforceRefreshToken: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isStaleObjects: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isRetryBackupFailedJob: { type: boolean, description: DAILY_MAINTENANCE only }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -67,22 +82,18 @@
     tags: [Public]
     summary: Salesforce real-time change-event webhook (Data Vault managed package Apex trigger)
     description: >
-      Body arrives as an encrypted two-layer Salesforce envelope; decryption via the
-      attachDecryptedSalesforceRequest middleware is the sole authorization check.
-      Responds 200 immediately, then fans out to backup-service per matching
-      real-time backup config.
+      Body is a Salesforce envelope encrypted with the org's own key; decryption via the
+      attachDecryptedSalesforceRequest middleware (which also checks the two headers
+      below against the org's registered CRM) is the sole authorization check. Decrypts
+      to { transactionId, objectApiName, ... CDC record data }. Responds 200
+      immediately, then fans out to backup-service per matching real-time backup
+      config. Response is the standard ApiResponse envelope, not re-encrypted.
     security: []
+    parameters:
+      - $ref: '#/components/parameters/SalesforceOrgIdHeader'
+      - $ref: '#/components/parameters/SalesforceApiKeyHeader'
     requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required: [cipherText, iv, authTag]
-            properties:
-              cipherText: { type: string }
-              iv: { type: string }
-              authTag: { type: string }
+      $ref: '#/components/requestBodies/SalesforceEnvelopeBody'
     responses:
       200:
         $ref: '#/components/responses/Success'

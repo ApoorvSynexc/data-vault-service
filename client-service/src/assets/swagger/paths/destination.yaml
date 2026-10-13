@@ -2,6 +2,12 @@
   post:
     tags: [Destination]
     summary: Create a backup destination (e.g. S3 bucket)
+    description: >
+      For provider AWS, type must be S3 and config is validated against AWS
+      (validateS3Credentials) before the destination is created — invalid
+      credentials 400 with invalid_aws_credentials. Pass is_already_granted:
+      true if the Athena bucket-policy grant was already applied manually
+      (verified, not just trusted); otherwise it's granted automatically.
     security: [{ cookieAuth: [] }]
     requestBody:
       required: true
@@ -9,6 +15,21 @@
         application/json:
           schema:
             type: object
+            required: [name, provider, type, config]
+            properties:
+              name: { type: string }
+              provider: { type: string, enum: [AWS, AZURE, GCP] }
+              type: { type: string, description: Required to be S3 when provider is AWS; any string otherwise }
+              config:
+                type: object
+                description: Required shape when provider is AWS; an arbitrary object for AZURE/GCP
+                properties:
+                  bucketName: { type: string }
+                  region: { type: string }
+                  accessKeyId: { type: string }
+                  secretAccessKey: { type: string }
+                  folderPath: { type: string }
+              is_already_granted: { type: boolean }
     responses:
       201:
         $ref: '#/components/responses/Created'
@@ -35,6 +56,7 @@
   put:
     tags: [Destination]
     summary: Update a destination
+    description: At least one field required; every field is optional on its own.
     security: [{ cookieAuth: [] }]
     parameters:
       - name: destinationId
@@ -47,6 +69,19 @@
         application/json:
           schema:
             type: object
+            minProperties: 1
+            properties:
+              name: { type: string }
+              provider: { type: string, enum: [AWS, AZURE, GCP] }
+              type: { type: string }
+              config:
+                type: object
+                properties:
+                  bucketName: { type: string }
+                  region: { type: string }
+                  accessKeyId: { type: string }
+                  secretAccessKey: { type: string }
+                  folderPath: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'

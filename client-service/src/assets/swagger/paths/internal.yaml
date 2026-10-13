@@ -19,7 +19,11 @@
 /v1/internal/backup-payload:
   post:
     tags: [Internal]
-    summary: Build the backup-service job payload for a backup configuration
+    summary: Event callback backup-service posts as a backup/archival/restore job progresses
+    description: >
+      Responds 200 immediately, then processes the event async — the response does
+      not reflect success/failure of the event itself. ConditionalCheckFailedException
+      (duplicate eventId already applied) is swallowed as a no-op, not an error.
     security: [{ internalSecret: [] }]
     requestBody:
       required: true
@@ -27,6 +31,22 @@
         application/json:
           schema:
             type: object
+            required: [eventType, eventId, backupConfigId]
+            properties:
+              eventType:
+                type: string
+                enum: ['backup.completed', 'backup.failed', 'backup.size.updated', 'schema.sync.completed', 'schema.updated']
+              eventId: { type: string, description: Idempotency key — a repeat of the same eventId is ignored }
+              backupConfigId: { type: string }
+              objectName: { type: string, description: Used by backup.size.updated and schema.updated }
+              sizeInBytes: { type: number, description: Used by backup.size.updated }
+              schemaChange: { type: object, description: Used by schema.updated }
+              triggerSource:
+                type: object
+                description: Used by schema.sync.completed to route to a restore's field setup instead of the normal payload transform
+                properties:
+                  name: { type: string, enum: [CREATE_RESTORE] }
+                  entityId: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'

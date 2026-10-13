@@ -9,6 +9,30 @@
         application/json:
           schema:
             type: object
+            required: [crmId, destinationId, objectNames, schedule]
+            properties:
+              crmId: { type: string }
+              destinationId: { type: string }
+              name: { type: string }
+              description: { type: string }
+              objectNames: { type: array, items: { type: string }, minItems: 1 }
+              schedule: { type: string, enum: [SCHEDULE, REALTIME] }
+              scheduleConfig:
+                type: object
+                description: Required when schedule is SCHEDULE
+                required: [type, timeZone]
+                properties:
+                  type: { type: string, description: 'e.g. ONE_TIME, INCREMENTAL' }
+                  timeZone: { type: string }
+                  scheduling:
+                    type: object
+                    description: frequency, interval, and the fields that frequency requires (weekDays, monthDate/selectedMonths, startDate/endDate, startTime)
+              objects:
+                type: array
+                description: Per-object { id, name, type, isUserSelected?, condition?, field?, parentObjects?, children? }
+                items: { type: object }
+              dataset: { type: string, description: 'e.g. ENTIRE' }
+              status: { type: string, description: 'e.g. ACTIVE, DRAFT' }
     responses:
       201:
         $ref: '#/components/responses/Created'
@@ -35,6 +59,7 @@
   put:
     tags: [Backup Config]
     summary: Update a backup configuration
+    description: At least one field required; every field is optional on its own.
     security: [{ cookieAuth: [] }]
     parameters:
       - name: backupConfigId
@@ -47,6 +72,18 @@
         application/json:
           schema:
             type: object
+            minProperties: 1
+            properties:
+              crmId: { type: string }
+              destinationId: { type: string }
+              name: { type: string }
+              description: { type: string }
+              objectNames: { type: array, items: { type: string }, minItems: 1 }
+              schedule: { type: string, enum: [SCHEDULE, REALTIME] }
+              scheduleConfig: { type: object, description: 'See POST / for shape (type, timeZone, scheduling)' }
+              objects: { type: array, items: { type: object } }
+              dataset: { type: string, description: 'e.g. ENTIRE' }
+              status: { type: string, description: 'e.g. ACTIVE, PAUSED, DRAFT' }
     responses:
       200:
         $ref: '#/components/responses/Success'

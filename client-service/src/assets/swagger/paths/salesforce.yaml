@@ -1,41 +1,87 @@
 /v1/salesforce/permissions:
   get:
     tags: [Salesforce]
-    summary: Get the current org's Salesforce permission set assignments
+    summary: Get the static permission module/action catalog
+    description: >
+      Unlike every other /v1/salesforce/* route, this one is unauthenticated and
+      unencrypted (no X-DataCraft-Org-Id/X-Api-Key, no envelope) — it's a static
+      module catalog, not org data. Response bypasses the standard
+      {success,message,data,meta} envelope entirely: the body is
+      { modules: [{ key, label, description, actions: [{ key, label, description,
+      risky }] }] }, returned as-is for an Apex callout that reads it untouched.
     security: []
     responses:
       200:
-        $ref: '#/components/responses/Success'
+        description: Static permission module catalog (not the ApiResponse envelope)
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                modules:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      key: { type: string }
+                      label: { type: string }
+                      description: { type: string }
+                      actions:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            key: { type: string }
+                            label: { type: string }
+                            description: { type: string }
+                            risky: { type: boolean }
 
 /v1/salesforce/user/list:
   get:
     tags: [Salesforce]
-    summary: List Salesforce org users
-    description: Request query is an encrypted Salesforce envelope, decrypted by middleware.
+    summary: List Salesforce org users with their role/permission mapping
+    description: >
+      Salesforce envelope-authenticated route (see the shared header/query
+      parameters below). The decrypted envelope carries no required fields here —
+      the org is resolved from X-DataCraft-Org-Id alone. Response is the
+      encrypted envelope, not the ApiResponse wrapper: decrypts to { users: [{
+      userId, name, email, modules, roleId, roleName, roleDescription,
+      lastSyncDate }] }.
     security: []
+    parameters:
+      - $ref: '#/components/parameters/SalesforceOrgIdHeader'
+      - $ref: '#/components/parameters/SalesforceApiKeyHeader'
+      - $ref: '#/components/parameters/SalesforceEnvelopeQuery'
     responses:
       200:
-        $ref: '#/components/responses/Success'
+        $ref: '#/components/responses/Encrypted'
       401:
         $ref: '#/components/responses/Unauthorized'
 
 /v1/salesforce/user-update:
   post:
     tags: [Salesforce]
-    summary: Create or update Salesforce org users
-    description: Request body is an encrypted Salesforce envelope, decrypted by middleware.
+    summary: Create, update, or delete Salesforce org users and their roles
+    description: >
+      Salesforce envelope-authenticated route. Decrypts (payload-unwrapped) to
+      { organizationId, environment?, users: [{ firstName, lastName, profile,
+      role }] } — validated by upsertUsersValidation (400 errorCode
+      VALIDATION_FAILED on a bad shape). A user with no granted permissions on
+      any module is deleted (if they have no backups/archivals/restores)
+      rather than created/updated. Response is the encrypted envelope:
+      decrypts to an array of { ...user, status: 'success'|'failed', action?,
+      message?, errorMessage? }, or errorCode VALIDATION_FAILED / ID_REQUIRED.
     security: []
+    parameters:
+      - $ref: '#/components/parameters/SalesforceOrgIdHeader'
+      - $ref: '#/components/parameters/SalesforceApiKeyHeader'
     requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
+      $ref: '#/components/requestBodies/SalesforceEnvelopeBody'
     responses:
-      200:
-        $ref: '#/components/responses/Success'
+      201:
+        $ref: '#/components/responses/Encrypted'
       400:
-        $ref: '#/components/responses/BadRequest'
+        $ref: '#/components/responses/Encrypted'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -43,11 +89,18 @@
   get:
     tags: [Salesforce]
     summary: List Salesforce org roles
-    description: Request query is an encrypted Salesforce envelope, decrypted by middleware.
+    description: >
+      Salesforce envelope-authenticated route. Response is the encrypted
+      envelope: decrypts to { roles: [{ roleId, name, description, modules,
+      createdBy, modifiedDate }] }.
     security: []
+    parameters:
+      - $ref: '#/components/parameters/SalesforceOrgIdHeader'
+      - $ref: '#/components/parameters/SalesforceApiKeyHeader'
+      - $ref: '#/components/parameters/SalesforceEnvelopeQuery'
     responses:
       200:
-        $ref: '#/components/responses/Success'
+        $ref: '#/components/responses/Encrypted'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -55,19 +108,26 @@
   post:
     tags: [Salesforce]
     summary: Create a Salesforce org role
-    description: Request body is an encrypted Salesforce envelope, decrypted by middleware.
+    description: >
+      Salesforce envelope-authenticated route. Decrypts (payload-unwrapped) to
+      { name (required), description?, modules?, createdBy? } — validated by
+      createRoleValidation (400 errorCode VALIDATION_FAILED on a bad shape);
+      modules is IRole.permissions on the wire, createdBy comes from Apex's
+      UserInfo.getName(). Also rejected (errorCode ROLE_NAME_EXISTS /
+      PERMISSIONS_REQUIRED) if the name is already taken in this org or
+      modules grants nothing. Response is the encrypted envelope: decrypts to
+      { roleId } on success.
     security: []
+    parameters:
+      - $ref: '#/components/parameters/SalesforceOrgIdHeader'
+      - $ref: '#/components/parameters/SalesforceApiKeyHeader'
     requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
+      $ref: '#/components/requestBodies/SalesforceEnvelopeBody'
     responses:
       201:
-        $ref: '#/components/responses/Created'
+        $ref: '#/components/responses/Encrypted'
       400:
-        $ref: '#/components/responses/BadRequest'
+        $ref: '#/components/responses/Encrypted'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -75,14 +135,69 @@
   put:
     tags: [Salesforce]
     summary: Update a Salesforce org role
-    description: Request body is an encrypted Salesforce envelope, decrypted by middleware.
+    description: >
+      Salesforce envelope-authenticated route. Decrypts (payload-unwrapped) to
+      { roleId (required), name?, description?, modules? } — validated by
+      updateRoleValidation (400 errorCode VALIDATION_FAILED on a bad shape)
+      before the role lookup. Only the fields present are changed. Response is
+      the encrypted envelope: decrypts to the updated role, or errorCode
+      VALIDATION_FAILED (400) / ROLE_NOT_FOUND (404).
     security: []
+    parameters:
+      - $ref: '#/components/parameters/SalesforceOrgIdHeader'
+      - $ref: '#/components/parameters/SalesforceApiKeyHeader'
     requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
+      $ref: '#/components/requestBodies/SalesforceEnvelopeBody'
+    responses:
+      200:
+        $ref: '#/components/responses/Encrypted'
+      400:
+        $ref: '#/components/responses/Encrypted'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/Encrypted'
+
+/v1/salesforce/role/delete:
+  delete:
+    tags: [Salesforce]
+    summary: Delete a Salesforce org role
+    description: >
+      Salesforce envelope-authenticated route. Decrypts to { roleId }. Response
+      is the encrypted envelope: decrypts to { success: true }, or errorCode
+      ID_REQUIRED / ROLE_NOT_FOUND.
+    security: []
+    parameters:
+      - $ref: '#/components/parameters/SalesforceOrgIdHeader'
+      - $ref: '#/components/parameters/SalesforceApiKeyHeader'
+      - $ref: '#/components/parameters/SalesforceEnvelopeQuery'
+    responses:
+      200:
+        $ref: '#/components/responses/Encrypted'
+      400:
+        $ref: '#/components/responses/Encrypted'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+      404:
+        $ref: '#/components/responses/Encrypted'
+
+/v1/salesforce/confirm-org-authorized:
+  get:
+    tags: [Salesforce]
+    summary: Confirm the Salesforce org has completed OAuth authorization
+    description: >
+      Bootstrap-only check — unlike the routes above, this does NOT use
+      X-DataCraft-Org-Id/X-Api-Key or a per-org key: the org isn't registered
+      yet at this point, so the envelope query param is decrypted directly with
+      the bootstrap key and must itself carry { orgId }. Response is the
+      standard ApiResponse envelope (not encrypted), data: { success: boolean }.
+    security: []
+    parameters:
+      - name: envelope
+        in: query
+        required: true
+        schema: { type: string }
+        description: JSON-stringified { cipherText, iv, authTag }, decrypting to { orgId }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -90,26 +205,5 @@
         $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
-
-/v1/salesforce/role/delete:
-  delete:
-    tags: [Salesforce]
-    summary: Delete a Salesforce org role
-    description: Request query is an encrypted Salesforce envelope, decrypted by middleware.
-    security: []
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
       404:
         $ref: '#/components/responses/NotFound'
-
-/v1/salesforce/confirm-org-authorized:
-  get:
-    tags: [Salesforce]
-    summary: Confirm the Salesforce org has completed OAuth authorization
-    security: []
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
