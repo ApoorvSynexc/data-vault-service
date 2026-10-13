@@ -2,59 +2,103 @@
   post:
     tags: [Spark Job]
     summary: Build the payload an EMR/Spark job runs against
-    security: []
+    security: [{ sparkApiKey: [] }]
     requestBody:
       required: true
       content:
         application/json:
           schema:
             type: object
+            description: Encrypted envelope decrypting to { backupConfigId } | { restoreConfigId }
     responses:
       200:
         $ref: '#/components/responses/Success'
       400:
         $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
 
 /v1/spark-job/update-spark-job-status:
   post:
     tags: [Spark Job]
     summary: Callback used by the EMR/Spark job to report its run status
-    security: []
+    security: [{ sparkApiKey: [] }]
     requestBody:
       required: true
       content:
         application/json:
           schema:
             type: object
+            description: >
+              Encrypted envelope decrypting to { type: BACKUP|ARCHIVAL|RESTORE, backup?,
+              archival?, restore? }, each carrying { backupConfigId/restoreConfigId,
+              backupJobIds/objects, success, errorMessage? }
     responses:
       200:
         $ref: '#/components/responses/Success'
       400:
         $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
 
 /v1/spark-job/get-inactive-owner-ids:
   get:
     tags: [Spark Job]
     summary: List Salesforce owner ids that are inactive, for the Spark job to exclude
-    security: []
+    security: [{ sparkApiKey: [] }]
+    parameters:
+      - name: restoreConfigId
+        in: query
+        required: true
+        schema: { type: string }
+      - name: includeManagers
+        in: query
+        schema: { type: string, enum: ['true', 'false'] }
+        description: Also return the distinct set of ManagerId values off the inactive records
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
 
 /v1/spark-job/restore-fields:
   get:
     tags: [Spark Job]
     summary: Get the field list an EMR/Spark restore job should write
-    security: []
+    security: [{ sparkApiKey: [] }]
+    parameters:
+      - name: restoreConfigId
+        in: query
+        required: true
+        schema: { type: string }
+      - name: objectApiName
+        in: query
+        required: true
+        schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
 
 /v1/spark-job/restore-objects:
   get:
     tags: [Spark Job]
     summary: Get the object list an EMR/Spark restore job should process
-    security: []
+    security: [{ sparkApiKey: [] }]
+    parameters:
+      - name: restoreConfigId
+        in: query
+        required: true
+        schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'

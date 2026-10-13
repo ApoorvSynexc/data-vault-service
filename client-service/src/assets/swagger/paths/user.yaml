@@ -25,31 +25,11 @@
         $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
-  delete:
-    tags: [User]
-    summary: Delete (soft-remove) the authenticated user's profile
-    security: [{ cookieAuth: [] }]
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
 
 /v1/user/default-permissions:
   get:
     tags: [User]
     summary: Get the default permission set assigned to new roles
-    security: [{ cookieAuth: [] }]
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/user/list:
-  get:
-    tags: [User]
-    summary: List users belonging to the authenticated user's organization
     security: [{ cookieAuth: [] }]
     responses:
       200:
@@ -65,28 +45,5 @@
     responses:
       200:
         $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/user/change-password:
-  post:
-    tags: [User]
-    summary: Change the authenticated user's password
-    security: [{ cookieAuth: [] }]
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required: [oldPassword, newPassword]
-            properties:
-              oldPassword: { type: string, format: password }
-              newPassword: { type: string, format: password }
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      400:
-        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'

@@ -1,65 +1,3 @@
-/v1/backup-config/objects:
-  get:
-    tags: [Backup Config]
-    summary: List Salesforce objects available to back up
-    security: [{ cookieAuth: [] }]
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/backup-config/object-childs:
-  get:
-    tags: [Backup Config]
-    summary: List child objects reachable from a given object for backup configuration
-    security: [{ cookieAuth: [] }]
-    parameters:
-      - name: objectApiName
-        in: query
-        required: true
-        schema: { type: string }
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/backup-config/objects-count:
-  post:
-    tags: [Backup Config]
-    summary: Get the estimated record count for a backup configuration's object filters
-    security: [{ cookieAuth: [] }]
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      400:
-        $ref: '#/components/responses/BadRequest'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/backup-config/fields:
-  get:
-    tags: [Backup Config]
-    summary: List fields of an object usable as backup filter conditions
-    security: [{ cookieAuth: [] }]
-    parameters:
-      - name: objectApiName
-        in: query
-        required: true
-        schema: { type: string }
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
 /v1/backup-config/:
   post:
     tags: [Backup Config]
@@ -80,10 +18,10 @@
         $ref: '#/components/responses/Unauthorized'
   get:
     tags: [Backup Config]
-    summary: Get a single backup configuration by id
+    summary: Get a single backup configuration by slug
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: slug
         in: query
         required: true
         schema: { type: string }
@@ -99,7 +37,7 @@
     summary: Update a backup configuration
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: backupConfigId
         in: query
         required: true
         schema: { type: string }
@@ -121,7 +59,7 @@
     summary: Delete a backup configuration
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: backupConfigId
         in: query
         required: true
         schema: { type: string }
@@ -138,6 +76,35 @@
     tags: [Backup Config]
     summary: List backup configurations (paginated)
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: pagination
+        in: query
+        schema: { type: string, enum: ['true', 'false'] }
+        description: Set to "true" to page through results instead of returning up to 1000 unpaginated
+      - name: limit
+        in: query
+        schema: { type: integer, default: 10 }
+      - name: cursor
+        in: query
+        schema: { type: string }
+      - name: search
+        in: query
+        schema: { type: string }
+      - name: status
+        in: query
+        schema: { type: string }
+      - name: backupStatus
+        in: query
+        schema: { type: string }
+      - name: schedule
+        in: query
+        schema: { type: string }
+      - name: destinationId
+        in: query
+        schema: { type: string }
+      - name: withoutLastBackupAt
+        in: query
+        schema: { type: string, enum: ['true', 'false'] }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -150,7 +117,7 @@
     summary: Trigger an out-of-schedule backup run for a configuration
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: backupConfigId
         in: query
         required: true
         schema: { type: string }
@@ -163,12 +130,14 @@
 /v1/backup-config/stats:
   get:
     tags: [Backup Config]
-    summary: Get backup job success/failure stats for a configuration
+    summary: Get backup job success/failure stats
+    description: >
+      slug is optional — when omitted, stats are aggregated across every
+      backup configuration owned by the authenticated user.
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: slug
         in: query
-        required: true
         schema: { type: string }
     responses:
       200:
@@ -181,9 +150,16 @@
     tags: [Backup Config]
     summary: Initialize the payload transform used to build a backup run's job payload
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: slug
+        in: query
+        required: true
+        schema: { type: string }
     responses:
-      200:
-        $ref: '#/components/responses/Success'
+      201:
+        $ref: '#/components/responses/Created'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -193,29 +169,15 @@
     summary: Trigger a metadata sync for a backup configuration's objects
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: slug
         in: query
         required: true
         schema: { type: string }
     responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/backup-config/sync-schema-metadata:
-  get:
-    tags: [Backup Config]
-    summary: Sync the stored S3 schema metadata for a backup configuration
-    security: [{ cookieAuth: [] }]
-    parameters:
-      - name: id
-        in: query
-        required: true
-        schema: { type: string }
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
+      201:
+        $ref: '#/components/responses/Created'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -223,6 +185,9 @@
   post:
     tags: [Backup Config]
     summary: Recover/retry a backup configuration's failed scheduled trigger
+    description: >
+      Called once the client has prompted the user for a record Id of objectApiName,
+      so the Apex Trigger + Test Class recovery can build around a real record.
     security: [{ cookieAuth: [] }]
     requestBody:
       required: true
@@ -230,6 +195,11 @@
         application/json:
           schema:
             type: object
+            required: [backupConfigId, objectApiName, recordId]
+            properties:
+              backupConfigId: { type: string }
+              objectApiName: { type: string }
+              recordId: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'

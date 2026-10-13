@@ -26,20 +26,41 @@
 /v1/public/backup-trigger:
   post:
     tags: [Public]
-    summary: EventBridge scheduled-rule target that triggers a backup/archival run
+    summary: EventBridge scheduled-rule target for maintenance/backup/archival/restore triggers
+    description: >
+      Gated by an X-Api-Key header matching AWS_EVENT_DESTINATION_API_KEY, not session
+      auth — 401s otherwise. detail.purpose selects the branch: DAILY_MAINTENANCE (one
+      or more of isSyncSalesforceRefreshToken/isLogsArchive/isStaleObjects/isSyncPayment/
+      isSyncObject/isRetryBackupFailedJob), RUN_EMR, or BACKUP_JOB (default) keyed by
+      detail.backupConfigId/userId/id.
     security: []
+    parameters:
+      - name: X-Api-Key
+        in: header
+        required: true
+        schema: { type: string }
     requestBody:
       required: true
       content:
         application/json:
           schema:
             type: object
-            description: EventBridge envelope with detail.backupConfigId and detail.userId
+            description: EventBridge envelope with a detail object (see description for its shape)
     responses:
       200:
         $ref: '#/components/responses/Success'
-      400:
-        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/public/test:
+  post:
+    tags: [Public]
+    summary: No-op diagnostic endpoint
+    description: Internal scratch endpoint with no request body; always returns success.
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
 
 /v1/public/webhook/salesforce:
   put:

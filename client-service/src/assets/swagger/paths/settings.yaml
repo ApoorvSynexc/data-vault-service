@@ -32,7 +32,7 @@
     summary: Remove a standard object from the organization's settings
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: objectApiName
+      - name: name
         in: query
         required: true
         schema: { type: string }

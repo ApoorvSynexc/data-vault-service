@@ -3,9 +3,16 @@
     tags: [Internal]
     summary: Refresh a CRM's Salesforce access token (called by backup-service)
     security: [{ internalSecret: [] }]
+    parameters:
+      - name: backupConfigId
+        in: query
+        required: true
+        schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
