@@ -34,7 +34,6 @@ import { notifyJobOutcome } from '../../../utils/notification';
 import dayjs from 'dayjs';
 import { getSettingsByUser } from '../../settings';
 import { getUser } from '../../user';
-import { getCrmById } from '../../crm';
 
 const SALESFORCE_METADATA_API_VERSION = 'v66.0';
 const CONCURRENCY_LIMIT = 6;
@@ -880,8 +879,8 @@ const getSalesforceOrgLimits = async (
 };
 
 interface ISalesforceApiLimitUsageParams {
+  backupConfigId: string;
   userId?: string;
-  crmId?: string;
 
   instanceUrl?: string;
   tokens?: SalesforceTokens;
@@ -890,22 +889,23 @@ interface ISalesforceApiLimitUsageParams {
 }
 
 const checkSalesforceApiLimitUsage = async (params: ISalesforceApiLimitUsageParams) => {
-  let { instanceUrl, tokens, userId, crmId, thresholdPercentage = 80 } = params;
+  const { userId, backupConfigId } = params;
+  let { instanceUrl, tokens, thresholdPercentage = 80 } = params;
 
-  if (!instanceUrl && !tokens && (userId && crmId)) {
+  if (!instanceUrl && !tokens && userId) {
     const user = await getUser(userId);
-    if (!user || !user.crmId) {
+    if (!user || !user.crmId || !user.crmCredential || !user.crmProfile?.instanceUrl) {
       throw new Error('User not found');
     }
 
-    const crm = await getCrmById(crmId);
-    if (!crm) {
-      throw new Error('CRM not found');
-    }
-    instanceUrl = crm?.instanceUrl;
-    if (!instanceUrl) {
-      throw new Error('Instance URL not found');
-    }
+    const source = JSON.parse(decrypt(user.crmCredential)) as { access_token: string; refresh_token: string };
+    instanceUrl = user.crmProfile.instanceUrl;
+    tokens = {
+      accessToken: source.access_token,
+      refreshToken: source.refresh_token,
+      crmId: user.crmId,
+      backupConfigId,
+    };
   }
 
   if (userId) {
