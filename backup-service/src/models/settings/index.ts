@@ -7,10 +7,13 @@ export interface IStandardObject {
 }
 
 export interface ISettings {
-  settingId: string; // PK
+   settingId: string; // PK
   userId: string; // GSI: userId-index
   crmId?: string; // GSI: crmId-index
   standardObjects: IStandardObject[];
+  salesforceApiThreshold?: number;
+  rollbackWindow?: number;
+
   status: string;
   createdAt: string;
   updatedAt: string;

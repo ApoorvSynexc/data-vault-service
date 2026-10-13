@@ -1,4 +1,4 @@
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { CRM_TABLE } from '../../constant';
 
@@ -27,4 +27,14 @@ export const getCrmByOrgId = async (orgId: string): Promise<ICrm | null> => {
     })
   );
   return (result.Items?.[0] as ICrm) ?? null;
+};
+
+export const getCrmById = async (crmId: string): Promise<ICrm | null> => {
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: CRM_TABLE,
+      Key: { crmId },
+    })
+  );
+  return (result.Item as ICrm) ?? null;
 };
