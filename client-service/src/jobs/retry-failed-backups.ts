@@ -1,4 +1,3 @@
-import cron from 'node-cron';
 import { getFailedBackupJobs, getBackupConfigById, retryBackupJob, updateBackupJob } from '../services';
 import { logger } from '../middlewares';
 import { IBackupJob } from '../models';
@@ -8,7 +7,7 @@ const JOBS_PAGE_LIMIT = 100;
 
 const retryFailedJob = async (job: IBackupJob): Promise<'retried' | 'skipped'> => {
   const currentRetryCount = job.retryCount ?? 0;
-  if (currentRetryCount >= MAX_RETRY_COUNT) {
+  if (currentRetryCount >= MAX_RETRY_COUNT || (!job.modifiedSince && !job.modifiedUntil)) {
     return 'skipped';
   }
 
@@ -69,11 +68,4 @@ const runRetryFailedBackups = async (): Promise<void> => {
   }
 };
 
-const startRetryFailedBackupsCron = (): void => {
-  cron.schedule('*/30 * * * *', async () => {
-    await runRetryFailedBackups();
-  });
-  logger.info('[RETRY-FAILED-BACKUPS] cron registered | expression=*/30 * * * *');
-};
-
-export { startRetryFailedBackupsCron, runRetryFailedBackups };
+export { runRetryFailedBackups };
