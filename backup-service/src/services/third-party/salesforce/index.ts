@@ -20,7 +20,7 @@ import { getBackupJob, updateJobStatus } from '../../backup-job';
 import { getRestoreById, updateRestore } from '../../restore';
 import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
 
-import { SalesforceTokens } from './api-request';
+import { SalesforceTokens, salesforceRequest } from './api-request';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { runSalesforceRestore, runSalesforceRollback } from './restore';
 import { decrypt } from '../../../utils/encryption';
@@ -32,7 +32,11 @@ import {
 } from '../../../utils/helper';
 import { notifyJobOutcome } from '../../../utils/notification';
 import dayjs from 'dayjs';
+import { getSettingsByUser } from '../../settings';
+import { getUser } from '../../user';
+import { getCrmById } from '../../crm';
 
+const SALESFORCE_METADATA_API_VERSION = 'v66.0';
 const CONCURRENCY_LIMIT = 6;
 const MAX_RETRIES = 3;
 
@@ -851,4 +855,78 @@ const salesforceHandler: ICrmBackupHandler = {
   },
 };
 
-export { salesforceHandler, exportObjectToDestination, exportWithRetry };
+interface ISalesforceLimit {
+  Max: number;
+  Remaining: number;
+}
+
+type SalesforceOrgLimits = Record<string, ISalesforceLimit>;
+
+const getSalesforceOrgLimits = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens
+): Promise<SalesforceOrgLimits> => {
+  return salesforceRequest<SalesforceOrgLimits>(
+    { url: `${instanceUrl}/services/data/${SALESFORCE_METADATA_API_VERSION}/limits`, method: 'GET' },
+    tokens
+  );
+};
+
+interface ISalesforceApiLimitUsageParams {
+  userId?: string;
+  crmId?: string;
+
+  instanceUrl?: string;
+  tokens?: SalesforceTokens;
+
+  thresholdPercentage?: number;
+}
+
+const checkSalesforceApiLimitUsage = async (params: ISalesforceApiLimitUsageParams) => {
+  let { instanceUrl, tokens, userId, crmId, thresholdPercentage = 80 } = params;
+
+  if (!instanceUrl && !tokens && (userId && crmId)) {
+    const user = await getUser(userId);
+    if (!user || !user.crmId) {
+      throw new Error('User not found');
+    }
+
+    const crm = await getCrmById(crmId);
+    if (!crm) {
+      throw new Error('CRM not found');
+    }
+    instanceUrl = crm?.instanceUrl;
+    if (!instanceUrl) {
+      throw new Error('Instance URL not found');
+    }
+  }
+
+  if (userId) {
+    const settings = await getSettingsByUser(userId);
+    if (settings) {
+      thresholdPercentage = settings.salesforceApiThreshold ?? 80;
+    }
+  }
+
+  if (!instanceUrl || !tokens) {
+    throw new Error('[Salesforce API Limit Usage] Instance URL or tokens not provided');
+  }
+
+  const limits = await getSalesforceOrgLimits(instanceUrl, tokens);
+  const dailyApiRequests = limits.DailyApiRequests;
+  if (!dailyApiRequests) {
+    throw new Error('DailyApiRequests limit not returned by Salesforce');
+  }
+
+  const { Max: max, Remaining: remaining } = dailyApiRequests;
+  const used = max - remaining;
+  const percentageUsed = max > 0 ? Number(((used / max) * 100).toFixed(2)) : 0;
+
+  if (percentageUsed > thresholdPercentage) {
+    throw new Error(`Salesforce API limit exceeded (${percentageUsed}%)`);
+  }
+
+  return { max, remaining, used, percentageUsed };
+};
+
+export { salesforceHandler, exportObjectToDestination, exportWithRetry, checkSalesforceApiLimitUsage };
