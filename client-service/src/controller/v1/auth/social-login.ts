@@ -283,6 +283,11 @@ const socialLoginCallbackHandler = async (
     return;
   }
 
+  const permissions = user.role.permissions;
+  if (permissions && !permissions.length) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
+
   if (!userJustCreated) {
     await updateUser(
       { userId: user.userId },
