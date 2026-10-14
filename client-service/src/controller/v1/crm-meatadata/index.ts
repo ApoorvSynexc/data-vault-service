@@ -21,7 +21,7 @@ const filterChildRelationships = (
 
 type ISalesforceRelationshipChild = ReturnType<typeof filterChildRelationships>[number];
 
-interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
+export interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
   custom: boolean;
   children: ISalesforceChildTreeNode[];
   parent: ISalesforceCascadeDeleteField[];
@@ -40,7 +40,7 @@ interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild 
 
 const MAX_RELATIONSHIP_DEPTH = 5;
 
-const buildChildRelationshipTree = async (params: {
+export const buildChildRelationshipTree = async (params: {
   user: IUser;
   objectDescription: ISalesforceObjectDescribeResponse;
   objectName: string;
