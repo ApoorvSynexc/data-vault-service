@@ -125,6 +125,35 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
   return item;
 };
 
+const updateBackupJob = async (
+  payload: Partial<IBackupJob>
+): Promise<void> => {
+  const { backupJobId, ...fields } = payload;
+  const updates: Record<string, any> = { ...fields, updatedAt: new Date().toISOString() };
+
+  const names: Record<string, string> = {};
+  const values: Record<string, any> = {};
+  const setExpr = Object.keys(updates)
+    .map((key) => {
+      const alias = `#${key}`;
+      names[alias] = key;
+      values[`:${key}`] = updates[key];
+      return `${alias} = :${key}`;
+    })
+    .join(', ');
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId },
+      UpdateExpression: `SET ${setExpr}`,
+      ConditionExpression: 'attribute_exists(backupJobId)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    })
+  );
+};
+
 interface UpdateJobStatusParams {
   backupJobId: string;
   status: string;
@@ -506,6 +535,7 @@ const getStaleRunningJobs = async (
 export {
   createBackupJob,
   createArchivalJob,
+  updateBackupJob,
   updateJobStatus,
   recursivelyUpdateObjects,
   updateBackupObject,
