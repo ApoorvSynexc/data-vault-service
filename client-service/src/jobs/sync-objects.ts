@@ -69,10 +69,6 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
                     depth: 0,
                 });
                 const flattenChildren = flattenChildrenObjects(children)
-                // const masterObjects = flattenChildren.filter(child => child.cascadeDelete);
-                // const requiredLookupObjects = flattenChildren.filter(child => child.restrictedDelete && !child.cascadeDelete);
-                // allChildren.push(...masterObjects);
-                // allChildren.push(...requiredLookupObjects);
                 const masterAndRequiresLookupObjects = flattenChildren.filter(child => (child.cascadeDelete) || (child.cascadeDelete && child.restrictedDelete) || (child.restrictedDelete && !child.cascadeDelete));
                 allChildren.push(...masterAndRequiresLookupObjects);
             }
@@ -80,7 +76,7 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
             console.log(JSON.stringify({ allChildrenNames }))
 
             newObjects = allChildren?.filter((obj) => !existNames.includes(obj.name));
-            deletedObjects = backupConfig.objects?.filter((obj) => !allChildrenNames.includes(obj.name)) || [];
+            deletedObjects = backupConfig.objects?.filter((obj) => !allChildrenNames.includes(obj.name) && !obj.isUserSelected) || [];
         } else {
             newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
             deletedObjects = backupConfig.objects?.filter((obj) => !allObjectsNames.includes(obj.name)) || [];
