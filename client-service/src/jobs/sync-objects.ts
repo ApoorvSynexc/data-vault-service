@@ -76,10 +76,11 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
                 const masterAndRequiresLookupObjects = flattenChildren.filter(child => (child.cascadeDelete) || (child.cascadeDelete && child.restrictedDelete) || (child.restrictedDelete && !child.cascadeDelete));
                 allChildren.push(...masterAndRequiresLookupObjects);
             }
-            console.log(JSON.stringify({ allChildren: allChildren.map((obj) => obj.name) }))
+            const allChildrenNames = allChildren?.map((obj) => obj.name) || [];
+            console.log(JSON.stringify({ allChildrenNames }))
 
             newObjects = allChildren?.filter((obj) => !existNames.includes(obj.name));
-            deletedObjects = backupConfig.objects?.filter((obj) => !allObjectsNames.includes(obj.name)) || [];
+            deletedObjects = backupConfig.objects?.filter((obj) => !allChildrenNames.includes(obj.name)) || [];
         } else {
             newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
             deletedObjects = backupConfig.objects?.filter((obj) => !allObjectsNames.includes(obj.name)) || [];
