@@ -284,7 +284,6 @@ const socialLoginCallbackHandler = async (
   }
 
   const permissions = user.role.permissions;
-  console.log(JSON.stringify({user}))
   if (!permissions || !permissions.length) {
     return makeResponse(req, res, 401, false, 'unauthorized');
   }
