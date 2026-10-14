@@ -1,68 +1,20 @@
 import { STATUS } from "../constant";
 import { logger } from "../middlewares";
-import { IBackupConfig, IObject, IUser } from "../models";
+import { IBackupConfig, IBackupObject, IObject, IUser } from "../models";
 import { v4 as uuidv4 } from 'uuid';
 import { createTriggers, deleteTriggers, getCrmById, getDecryptedCrmCredential, getDecryptedDestinationConfig, getDestinationById, getSourceObjects, submitBackupJobRequest, SalesforceAuthExpiredError, SalesforceTokens, updateBackupConfig, getBackupConfigsInBatches, getUser, checkSalesforceApiLimitUsage } from "../services";
-import { salesforceObjectFilteredList } from "../services/third-party/salesforce/metadata/index";
+import { ISalesforceObjectResponse, salesforceObjectDescribe, salesforceObjectFilteredList } from "../services/third-party/salesforce/metadata/index";
+import { buildChildRelationshipTree, ISalesforceChildTreeNode } from "../controller";
 
 interface ISyncObject {
     backupConfig: IBackupConfig
     user: IUser
 }
 
-const syncObjectsForPartialDataset = async (params: ISyncObject) => {
-    const { backupConfig, user } = params;
-    const mode = backupConfig.type === 'NORMAL' ? 'backup' : 'archival';
-    const type = backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule';
-
-    try {
-        const [crm, destination] = await Promise.all([
-            getCrmById(backupConfig.crmId),
-            getDestinationById(backupConfig.destinationId),
-        ]);
-
-        if (!crm) throw new Error(`crm_not_found:${backupConfig.crmId}`);
-        if (!destination) throw new Error(`destination_not_found:${backupConfig.destinationId}`);
-
-        const credentials = getDecryptedCrmCredential(user);
-        if (!credentials) throw new SalesforceAuthExpiredError();
-
-        const instanceUrl = user.crmProfile?.instanceUrl;
-        if (!instanceUrl) { throw new Error(`instance_url_missing:${backupConfig.crmId}`); }
-
-        const tokens: SalesforceTokens = {
-            accessToken: credentials.access_token,
-            refreshToken: credentials.refresh_token,
-            userId: user.userId,
-            environment: crm.environment,
-            customUrl: user.customUrl,
-        };
-
-        const existObjectNames = backupConfig.objects?.map((obj) => obj.name) || [];
-        const existParentObject = backupConfig.objects?.filter(o => o.isUserSelected);
-        if (!existParentObject) return;
-
-        for (let index = 0; index < existParentObject.length; index++) {
-            const existObject = existParentObject[index];
-
-
-            // const { children } = await buildChildRelationshipTree({
-            //     user,
-            //     objectDescription,
-            //     objectName: String(objectName),
-            //     apexMode,
-            //     filteredObjectNames,
-            //     visitedObjectNames: new Set([String(objectName)]),
-            //     depth: 0,
-            //     maxDepth
-            // });
-        }
-
-
-    } catch (error) {
-        logger.error(`[SYNC-OBJECTS] backupConfigId=${backupConfig.backupConfigId} error=${error}`);
-    }
-}
+const flattenChildrenObjects = (objects: ISalesforceChildTreeNode[]): ISalesforceChildTreeNode[] => {
+    if (!objects.length) return [];
+    return objects.flatMap((obj) => [obj, ...(obj.children ? flattenChildrenObjects(obj.children) : [])]);
+};
 
 const syncObjectsForEntireDataset = async (params: ISyncObject) => {
     const { backupConfig, user } = params;
@@ -97,8 +49,40 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
         const allObjectsNames = allObjects?.map((obj) => obj.name) || [];
         const existNames = backupConfig.objects?.map((obj) => obj.name) || [];
 
-        const newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
-        const deletedObjects = backupConfig.objects?.filter((obj) => !allObjectsNames.includes(obj.name));
+        let newObjects: ISalesforceObjectResponse[] = [];
+        let deletedObjects: IBackupObject[] = [];
+        if (backupConfig.dataset === 'PARTIAL') {
+            const existParentObject = backupConfig.objects?.filter(o => o.isUserSelected);
+            if (!existParentObject) return;
+
+            let allChildrenNames = []
+            for (let index = 0; index < existParentObject.length; index++) {
+                const existObject = existParentObject[index];
+                const objectDescription = await salesforceObjectDescribe({ user, objectName: existObject.name });
+                const { children } = await buildChildRelationshipTree({
+                    user,
+                    objectDescription,
+                    objectName: existObject.name,
+                    apexMode: mode,
+                    filteredObjectNames: allObjectsNames,
+                    visitedObjectNames: new Set([existObject.name]),
+                    depth: 0,
+                });
+                const flattenChildren = flattenChildrenObjects(children)
+                const masterObjects = flattenChildren.filter(child => child.cascadeDelete);
+                const requiredLookupObjects = flattenChildren.filter(child => child.restrictedDelete && !child.cascadeDelete);
+                allChildrenNames.push(...masterObjects.map(obj => obj.name));
+                allChildrenNames.push(...requiredLookupObjects.map(obj => obj.name));
+            }
+            allChildrenNames = Array.from(new Set(allChildrenNames));
+
+            newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
+            deletedObjects = backupConfig.objects?.filter((obj) => !allObjectsNames.includes(obj.name)) || [];
+        } else {
+            newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
+            deletedObjects = backupConfig.objects?.filter((obj) => !allObjectsNames.includes(obj.name)) || [];
+        }
+
         if (newObjects?.length) {
             const allNewObject = newObjects.map((obj) => ({ name: obj.name, type: obj.custom ? 'CUSTOM' : 'STANDARD' }));
             logger.info(`[SYNC-OBJECTS] new objects found backupConfigId=${backupConfig.backupConfigId} newObjectCount=${newObjects.length}`);
@@ -181,21 +165,13 @@ const runSyncObjectJob = async () => {
                         continue;
                     }
 
-                    if (config.type === 'NORMAL' && config.dataset === 'ENTIRE') {
+                    if (config.type === 'NORMAL') {
                         try {
                             await checkSalesforceApiLimitUsage(user.userId, config.crmId);
                             await syncObjectsForEntireDataset({ backupConfig: config, user });
                             successBackups++;
                         } catch (error) {
                             logger.error(`[JOB SYNC OBJECT FOR ENTIRE DATASET - BACKUP - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
-                        }
-                    } else if (config.type === 'NORMAL' && config.dataset === 'PARTIAL') {
-                        try {
-                            // await checkSalesforceApiLimitUsage(user.userId, config.crmId);
-                            // await syncObjectsForPartialDataset({ backupConfig: config, user });
-                            // successBackups++;
-                        } catch (error) {
-                            logger.error(`[JOB SYNC OBJECT FOR PARTIAL DATASET - BACKUP - CRON] config ${config.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
                         }
                     }
                 }
