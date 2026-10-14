@@ -11,7 +11,7 @@ import {
 import { STATUS, JOB_OBJECT_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
-import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
+import { getBackupJob, updateArchivalObject, updateBackupJob, updateJobStatus } from '../backup-job';
 import { updateBackupConfig } from '../backup-config';
 import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
@@ -64,6 +64,7 @@ export const retryBackupJob = async (backupJobId: string): Promise<IBackupJob> =
     job.status === STATUS.failed ||
     job.status === STATUS.cancelled
   ) {
+    await updateBackupJob({ backupJobId, status: STATUS.pending, errorMessage: "", errorReason: "" });
     return job; // allow retry on any non-success terminal state
   }
   // status stays PENDING for a job's whole in-flight duration now — an

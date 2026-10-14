@@ -10,6 +10,60 @@ interface ISyncObject {
     user: IUser
 }
 
+const syncObjectsForPartialDataset = async (params: ISyncObject) => {
+    const { backupConfig, user } = params;
+    const mode = backupConfig.type === 'NORMAL' ? 'backup' : 'archival';
+    const type = backupConfig.schedule === 'REALTIME' ? 'realtime' : 'schedule';
+
+    try {
+        const [crm, destination] = await Promise.all([
+            getCrmById(backupConfig.crmId),
+            getDestinationById(backupConfig.destinationId),
+        ]);
+
+        if (!crm) throw new Error(`crm_not_found:${backupConfig.crmId}`);
+        if (!destination) throw new Error(`destination_not_found:${backupConfig.destinationId}`);
+
+        const credentials = getDecryptedCrmCredential(user);
+        if (!credentials) throw new SalesforceAuthExpiredError();
+
+        const instanceUrl = user.crmProfile?.instanceUrl;
+        if (!instanceUrl) { throw new Error(`instance_url_missing:${backupConfig.crmId}`); }
+
+        const tokens: SalesforceTokens = {
+            accessToken: credentials.access_token,
+            refreshToken: credentials.refresh_token,
+            userId: user.userId,
+            environment: crm.environment,
+            customUrl: user.customUrl,
+        };
+
+        const existObjectNames = backupConfig.objects?.map((obj) => obj.name) || [];
+        const existParentObject = backupConfig.objects?.filter(o => o.isUserSelected);
+        if (!existParentObject) return;
+
+        for (let index = 0; index < existParentObject.length; index++) {
+            const existObject = existParentObject[index];
+
+
+            // const { children } = await buildChildRelationshipTree({
+            //     user,
+            //     objectDescription,
+            //     objectName: String(objectName),
+            //     apexMode,
+            //     filteredObjectNames,
+            //     visitedObjectNames: new Set([String(objectName)]),
+            //     depth: 0,
+            //     maxDepth
+            // });
+        }
+
+
+    } catch (error) {
+        logger.error(`[SYNC-OBJECTS] backupConfigId=${backupConfig.backupConfigId} error=${error}`);
+    }
+}
+
 const syncObjectsForEntireDataset = async (params: ISyncObject) => {
     const { backupConfig, user } = params;
     const mode = backupConfig.type === 'NORMAL' ? 'backup' : 'archival';
@@ -120,7 +174,7 @@ const runSyncObjectJob = async () => {
                         );
                         continue;
                     }
-                    if(!user.isCrmConnected){
+                    if (!user.isCrmConnected) {
                         logger.warn(
                             `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=crm_not_connected`
                         );
