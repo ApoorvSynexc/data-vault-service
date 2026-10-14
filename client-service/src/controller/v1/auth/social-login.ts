@@ -26,6 +26,7 @@ import {
   createRole,
   getUsersByContactEmail,
   getDecryptedCrmCredential,
+  getRole,
 } from '../../../services';
 import { provisionEcaPermissionSet } from '../../../services/third-party/salesforce/eca-permission-set';
 import { ICrm, IUser } from '../../../models';
@@ -283,8 +284,13 @@ const socialLoginCallbackHandler = async (
     return;
   }
 
-  const permissions = user.role.permissions;
-  if (!permissions || !permissions.length) {
+  const roleId = user.role.roleId;
+  if (!roleId) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
+
+  const role = await getRole({ roleId: user.role.roleId });
+  if(!role?.permissions || !role.permissions.length) {
     return makeResponse(req, res, 401, false, 'unauthorized');
   }
 
