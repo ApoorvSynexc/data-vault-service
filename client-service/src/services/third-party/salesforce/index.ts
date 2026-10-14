@@ -16,6 +16,7 @@ import { logger } from '../../../middlewares';
 import { getCrmById } from '../../crm';
 import { getSettingsByUser } from '../../settings';
 import { notifyUserOutcome } from '../../../utils/notification';
+import { SalesforceApiLimitProcess } from '../../common/email';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -400,6 +401,7 @@ interface ICheckSalesforceApiLimitUsageParams {
   crmId: string;
   notify?: boolean;
   thresholdPercentage?: number;
+  notifyProcessName?: SalesforceApiLimitProcess;
 }
 
 const checkSalesforceApiLimitUsage = async ({
@@ -407,6 +409,7 @@ const checkSalesforceApiLimitUsage = async ({
   crmId,
   notify,
   thresholdPercentage,
+  notifyProcessName,
 }: ICheckSalesforceApiLimitUsageParams): Promise<ISalesforceApiLimitUsage> => {
 
   const user = await getUser({ userId });
@@ -452,15 +455,14 @@ const checkSalesforceApiLimitUsage = async ({
   const percentageUsed = max > 0 ? Number(((used / max) * 100).toFixed(2)) : 0;
 
   if (percentageUsed > thresholdPercentage) {
-    if (notify) {
-
+    if (notify && notifyProcessName) {
       await notifyUserOutcome({
         eventId: `${crmId}:api-limit`,
         notification: {
           userId: user.userId,
           crmId,
           title: `Salesforce API limit reached for ${crm.crmName}`,
-          body: `Salesforce API usage for "${crm.crmName}" has reached ${percentageUsed}% of its daily limit, crossing your ${thresholdPercentage}% threshold.`,
+          body: `This happened ${notifyProcessName} — Salesforce API usage for "${crm.crmName}" reached ${percentageUsed}% of its daily limit, crossing your ${thresholdPercentage}% threshold.`,
           targetScreen: 'settings',
           targetId: crmId,
         },
@@ -473,6 +475,7 @@ const checkSalesforceApiLimitUsage = async ({
             remaining,
             percentageUsed,
             thresholdPercentage,
+            processName: notifyProcessName,
           },
         },
       });
