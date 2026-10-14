@@ -59,7 +59,7 @@ const runEmrJob = async () => {
               }
 
               if (changedObjectNames.length) {
-                await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
+                await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId, notify: true, notifyProcessName: 'while compressing your backup data' });
                 await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
               } else {
                 await initalizePayloadTransform(config.backupConfigId);

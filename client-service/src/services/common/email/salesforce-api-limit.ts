@@ -1,6 +1,12 @@
 import { EMAIL_APP_URL } from '../../../constant';
 import { IEmailTemplate, renderEmail } from './render';
 
+export type SalesforceApiLimitProcess =
+  | 'while compressing your backup data'
+  | 'while retrying your failed backup objects'
+  | 'while syncing your object data'
+  | 'while starting your next scheduled backup';
+
 export interface ISalesforceApiLimitEmailParams {
   recipientName?: string;
   crmName: string;
@@ -9,10 +15,11 @@ export interface ISalesforceApiLimitEmailParams {
   remaining: number;
   percentageUsed: number;
   thresholdPercentage: number;
+  processName: SalesforceApiLimitProcess;
 }
 
 export const buildSalesforceApiLimitEmail = (params: ISalesforceApiLimitEmailParams): IEmailTemplate => {
-  const { recipientName, crmName, max, used, remaining, percentageUsed, thresholdPercentage } = params;
+  const { recipientName, crmName, max, used, remaining, percentageUsed, thresholdPercentage, processName } = params;
 
   return {
     subject: `Action needed: Salesforce API limit reached for ${crmName}`,
@@ -26,6 +33,7 @@ export const buildSalesforceApiLimitEmail = (params: ISalesforceApiLimitEmailPar
         remaining,
         percentageUsed,
         thresholdPercentage,
+        processName,
       },
       preheader: `Salesforce API usage for ${crmName} has crossed your ${thresholdPercentage}% threshold`,
       heading: 'Salesforce API limit reached',

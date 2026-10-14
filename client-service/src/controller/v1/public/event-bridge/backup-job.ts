@@ -44,7 +44,7 @@ const backupJob = async (params: { backupConfigId: string, userId: string, id?: 
             return;
         }
         try {
-            await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId, notify: true });
+            await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId, notify: true, notifyProcessName: 'while starting your next scheduled backup' });
             await triggerBackupJob({ user, config, type: config.type === 'NORMAL' ? 'backup' : 'archival', lastUpdatedAt: config.lastBackupAt });
         } catch (error) {
             logger.error('Salesforce API limit check failed: ', error);
