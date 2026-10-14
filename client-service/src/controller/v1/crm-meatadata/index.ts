@@ -27,9 +27,19 @@ export interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
   parent: ISalesforceCascadeDeleteField[];
 }
 
-const getCascadeDeleteFields = (fields: ISalesforceObjectDescribeResponse['fields']) =>
-  fields
-    .filter((field) => field.referenceTo.length && (field.cascadeDelete || (!field.nillable && field.updateable)))
+const CASCADE_DELETE_EXCLUDED_REFERENCE_TO = ['Group', 'User'];
+
+const getCascadeDeleteFields = (fields: ISalesforceObjectDescribeResponse['fields']) => {
+
+  let filtered = fields
+    .filter((field) =>
+      field.referenceTo.length &&
+      !field.referenceTo.some((ref) => CASCADE_DELETE_EXCLUDED_REFERENCE_TO.includes(ref)) &&
+      (field.cascadeDelete || (!field.nillable && field.updateable))
+    )
+
+  return filtered;
+}
 
 type ISalesforceCascadeDeleteField = ReturnType<typeof getCascadeDeleteFields>[number];
 interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild {
