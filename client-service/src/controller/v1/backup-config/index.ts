@@ -511,9 +511,7 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
   }
 
   makeResponse(req, res, 201, true, 'create');
-  if (config.dataset === 'ENTIRE') {
-    await syncObjectsForEntireDataset({ backupConfig: config, user: backupCreatedUser });
-  }
+  await syncObjectsForEntireDataset({ backupConfig: config, user: backupCreatedUser });
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
