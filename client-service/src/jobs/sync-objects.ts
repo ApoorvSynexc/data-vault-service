@@ -74,6 +74,7 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
                 allChildrenNames.push(...masterObjects.map(obj => obj.name));
                 allChildrenNames.push(...requiredLookupObjects.map(obj => obj.name));
             }
+            console.log(JSON.stringify({ allChildrenNames }))
             allChildrenNames = Array.from(new Set(allChildrenNames));
 
             newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
@@ -82,6 +83,7 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
             newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
             deletedObjects = backupConfig.objects?.filter((obj) => !allObjectsNames.includes(obj.name)) || [];
         }
+        console.log(JSON.stringify({ newObjects, deletedObjects }))
 
         if (newObjects?.length) {
             const allNewObject = newObjects.map((obj) => ({ name: obj.name, type: obj.custom ? 'CUSTOM' : 'STANDARD' }));
