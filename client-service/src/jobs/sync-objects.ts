@@ -171,7 +171,7 @@ const runSyncObjectJob = async () => {
 
                     if (config.type === 'NORMAL') {
                         try {
-                            await checkSalesforceApiLimitUsage(user.userId, config.crmId);
+                            await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
                             await syncObjectsForEntireDataset({ backupConfig: config, user });
                             successBackups++;
                         } catch (error) {

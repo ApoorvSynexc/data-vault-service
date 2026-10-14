@@ -1072,7 +1072,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId);
+  await checkSalesforceApiLimitUsage({ userId: user!.userId, crmId: backupConfig.crmId });
   const isDraft = body.status === VISIBILITY_STATUS.draft;
   const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? VISIBILITY_STATUS.draft : STATUS.pending };
   const created = await createRestore(payload);

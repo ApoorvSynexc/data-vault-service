@@ -81,7 +81,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      await checkSalesforceApiLimitUsage(userId, config.crmId);
+      await checkSalesforceApiLimitUsage({ userId, crmId: config.crmId });
       await triggerBackupJob({ user, config, type: 'backup', lastSchemaSyncAt: true });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
@@ -89,7 +89,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
-        await checkSalesforceApiLimitUsage(userId, config.crmId);
+        await checkSalesforceApiLimitUsage({ userId, crmId: config.crmId });
         await triggerBackupJob({ user, config, type: 'backup' });
       } else {
         await createAwsEventScheduler(buildEventScheduleInput(config));
@@ -410,7 +410,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return;
   }
 
-  await checkSalesforceApiLimitUsage(backupConfig.userId, backupConfig.crmId);
+  await checkSalesforceApiLimitUsage({ userId: backupConfig.userId, crmId: backupConfig.crmId });
   const result = await runBackupNow({ user: req.user, config: backupConfig });
   if (!result.ok) {
     // realtime_not_supported keeps the route's original error code
@@ -476,7 +476,7 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
           );
           return;
         }
-        await checkSalesforceApiLimitUsage(user.userId, config.crmId);
+        await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
         await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
       } else {
         await initalizePayloadTransform(config.backupConfigId);

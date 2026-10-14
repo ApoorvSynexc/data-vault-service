@@ -149,7 +149,7 @@ const createArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
 
         const { immediateObjects, scheduledObjects } = filtereObjects(req.body?.objects || []);
         if (immediateObjects.length > 0) {
-            await checkSalesforceApiLimitUsage(config.userId, config.crmId);
+            await checkSalesforceApiLimitUsage({ userId: config.userId, crmId: config.crmId });
             await triggerArchivalBackupJob({ user, config, objects: immediateObjects });
         }
 
@@ -417,7 +417,7 @@ const runNowArchivalConfigHandler = async (req: IRequest, res: IResponse): Promi
         return;
     }
 
-    await checkSalesforceApiLimitUsage(existing.userId, existing.crmId);
+    await checkSalesforceApiLimitUsage({ userId: existing.userId, crmId: existing.crmId });
     await triggerArchivalBackupJob({ user, config: existing, objects: objectsToRun });
 
     // A fired ONE_TIME object won't fire again — its AWS schedule is now dead weight.

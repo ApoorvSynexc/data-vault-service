@@ -35,7 +35,7 @@ const retryFailedJob = async (job: IBackupJob): Promise<'retried' | 'skipped'> =
   }
 
   try {
-    await checkSalesforceApiLimitUsage(config.userId, config.crmId);
+    await checkSalesforceApiLimitUsage({ userId: config.userId, crmId: config.crmId });
   } catch (error) {
     logger.error(
       `[RETRY-FAILED-BACKUPS] backupJobId=${job.backupJobId} skipped — checkSalesforceApiLimitUsage failed: ${(error as Error)?.message ?? String(error)}`

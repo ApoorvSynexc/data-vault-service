@@ -395,12 +395,19 @@ interface ISalesforceApiLimitUsage {
   percentageUsed: number;
 }
 
-const checkSalesforceApiLimitUsage = async (
-  userId: string,
-  crmId: string,
-  notify?: boolean,
-  thresholdPercentage?: number
-): Promise<ISalesforceApiLimitUsage> => {
+interface ICheckSalesforceApiLimitUsageParams {
+  userId: string;
+  crmId: string;
+  notify?: boolean;
+  thresholdPercentage?: number;
+}
+
+const checkSalesforceApiLimitUsage = async ({
+  userId,
+  crmId,
+  notify,
+  thresholdPercentage,
+}: ICheckSalesforceApiLimitUsageParams): Promise<ISalesforceApiLimitUsage> => {
 
   const user = await getUser({ userId });
   if (!user || !user.crmId) {
