@@ -49,13 +49,13 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
         const allObjectsNames = allObjects?.map((obj) => obj.name) || [];
         const existNames = backupConfig.objects?.map((obj) => obj.name) || [];
 
-        let newObjects: ISalesforceObjectResponse[] = [];
+        let newObjects: ISalesforceObjectResponse[] | ISalesforceChildTreeNode[] = [];
         let deletedObjects: IBackupObject[] = [];
         if (backupConfig.dataset === 'PARTIAL') {
             const existParentObject = backupConfig.objects?.filter(o => o.isUserSelected);
             if (!existParentObject) return;
 
-            let allChildrenNames = []
+            let allChildren = []
             for (let index = 0; index < existParentObject.length; index++) {
                 const existObject = existParentObject[index];
                 const objectDescription = await salesforceObjectDescribe({ user, objectName: existObject.name });
@@ -69,15 +69,16 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
                     depth: 0,
                 });
                 const flattenChildren = flattenChildrenObjects(children)
-                const masterObjects = flattenChildren.filter(child => child.cascadeDelete);
-                const requiredLookupObjects = flattenChildren.filter(child => child.restrictedDelete && !child.cascadeDelete);
-                allChildrenNames.push(...masterObjects.map(obj => obj.name));
-                allChildrenNames.push(...requiredLookupObjects.map(obj => obj.name));
+                // const masterObjects = flattenChildren.filter(child => child.cascadeDelete);
+                // const requiredLookupObjects = flattenChildren.filter(child => child.restrictedDelete && !child.cascadeDelete);
+                // allChildren.push(...masterObjects);
+                // allChildren.push(...requiredLookupObjects);
+                const masterAndRequiresLookupObjects = flattenChildren.filter(child => (child.cascadeDelete) || (child.cascadeDelete && child.restrictedDelete) || (child.restrictedDelete && !child.cascadeDelete));
+                allChildren.push(...masterAndRequiresLookupObjects);
             }
-            console.log(JSON.stringify({ allChildrenNames }))
-            allChildrenNames = Array.from(new Set(allChildrenNames));
+            console.log(JSON.stringify({ allChildren: allChildren.map((obj) => obj.name) }))
 
-            newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
+            newObjects = allChildren?.filter((obj) => !existNames.includes(obj.name));
             deletedObjects = backupConfig.objects?.filter((obj) => !allObjectsNames.includes(obj.name)) || [];
         } else {
             newObjects = allObjects?.filter((obj) => !existNames.includes(obj.name));
