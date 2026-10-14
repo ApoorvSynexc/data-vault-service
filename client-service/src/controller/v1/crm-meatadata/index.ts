@@ -29,7 +29,7 @@ export interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
 
 const getCascadeDeleteFields = (fields: ISalesforceObjectDescribeResponse['fields']) =>
   fields
-    .filter((field) => field.referenceTo.length && (field.cascadeDelete || !field.nillable))
+    .filter((field) => field.referenceTo.length && (field.cascadeDelete || (!field.nillable && field.updateable)))
 
 type ISalesforceCascadeDeleteField = ReturnType<typeof getCascadeDeleteFields>[number];
 interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild {
