@@ -7,6 +7,7 @@ import {
   SALESFORCE_REDIRECT_URI,
   SALESFORCE_METADATA_API_VERSION,
   USER_TABLE,
+  EMAIL_TEMPLATE,
 } from '../../../constant';
 import { docClient } from '../../../config';
 import { encrypt } from '../../../utils/encryption';
@@ -14,6 +15,7 @@ import { getDecryptedCrmCredential, getUser, updateUser } from '../../user';
 import { logger } from '../../../middlewares';
 import { getCrmById } from '../../crm';
 import { getSettingsByUser } from '../../settings';
+import { notifyUserOutcome } from '../../../utils/notification';
 
 const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
 const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
@@ -396,6 +398,7 @@ interface ISalesforceApiLimitUsage {
 const checkSalesforceApiLimitUsage = async (
   userId: string,
   crmId: string,
+  notify?: boolean,
   thresholdPercentage?: number
 ): Promise<ISalesforceApiLimitUsage> => {
 
@@ -442,6 +445,31 @@ const checkSalesforceApiLimitUsage = async (
   const percentageUsed = max > 0 ? Number(((used / max) * 100).toFixed(2)) : 0;
 
   if (percentageUsed > thresholdPercentage) {
+    if (notify) {
+
+      await notifyUserOutcome({
+        eventId: `${crmId}:api-limit`,
+        notification: {
+          userId: user.userId,
+          crmId,
+          title: `Salesforce API limit reached for ${crm.crmName}`,
+          body: `Salesforce API usage for "${crm.crmName}" has reached ${percentageUsed}% of its daily limit, crossing your ${thresholdPercentage}% threshold.`,
+          targetScreen: 'settings',
+          targetId: crmId,
+        },
+        email: {
+          template: EMAIL_TEMPLATE.salesforceApiLimitReached,
+          params: {
+            crmName: crm.crmName,
+            max,
+            used,
+            remaining,
+            percentageUsed,
+            thresholdPercentage,
+          },
+        },
+      });
+    }
     throw new Error(`Salesforce API limit exceeded (${percentageUsed}%)`);
   }
 

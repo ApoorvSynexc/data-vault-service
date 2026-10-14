@@ -1,0 +1,19 @@
+<p style="margin:0 0 8px;">Hi <%= recipientName %>,</p>
+<p style="margin:0 0 20px;">Salesforce API usage for your <strong style="color:#0f172a;"><%= crmName %></strong> org has reached <strong style="color:#0f172a;"><%= percentageUsed %>%</strong> of its daily limit, crossing your configured threshold of <strong style="color:#0f172a;"><%= thresholdPercentage %>%</strong>.</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Daily API requests used</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= used %> / <%= max %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Remaining</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= remaining %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;">Usage</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;"><%= percentageUsed %>%</td>
+  </tr>
+</table>
+
+<p style="margin:20px 0 0;">New requests against this org may be throttled by Salesforce until the daily limit resets. Please review your automation and integrations consuming API calls, or raise your threshold from settings if this is expected.</p>

@@ -275,6 +275,7 @@ const FILTER_OPERATOR = {
 // can't narrow `params` per-template and the switch loses type safety.
 const EMAIL_TEMPLATE = {
   realtimeTriggerFailure: 'REALTIME_TRIGGER_FAILURE',
+  salesforceApiLimitReached: 'SALESFORCE_API_LIMIT_REACHED',
 } as const;
 
 // Config lifecycle/visibility — backup-config, archival-config (same table),
