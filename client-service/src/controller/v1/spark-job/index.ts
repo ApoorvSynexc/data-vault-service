@@ -260,6 +260,19 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
+    // Anything that throws after EMR succeeded must still move the restore out of
+    // its in-progress state, otherwise it stays stuck with no visible cause.
+    const markRestoreFailed = async (stage: string, error: any): Promise<void> => {
+      const failureMessage = error?.message ?? String(error);
+      logger.error(`[restore-csv] ${stage} failed | restoreJobId=${restoreConfigId} err:${failureMessage}`);
+
+      const failedObjects = restoreJob.destination.objects.map(o => ({ ...o, status: STATUS.failed}));
+      await Promise.all([
+        updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage, replaceObjects: failedObjects }),
+        updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
+      ]);
+    };
+
     // EMR/Spark itself failed to produce the restore CSV — nothing to ingest.
     // Surfaces the real EMR error rather than proceeding as if it succeeded,
     // which is what this handler did before (success was read but never checked).
@@ -268,27 +281,14 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       logger.error(
         `[restore-csv] EMR reported failure | restoreJobId=${restoreConfigId} err:${failureMessage}`
       );
-      await Promise.all([
-        updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage }),
-        updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
-      ]);
+
+      await markRestoreFailed('EMR failure', failureMessage);
       return makeResponse(req, res, 200, true, 'update');
     }
 
     let objectsToBeAffected: IFlattenParentObjects[] = (decrypted as any).restore.objects || [];
     objectsToBeAffected = flattenParentObjects(objectsToBeAffected);
     const restoreJobObjectNames = restoreJob.destination.objects.map(o => o.name);
-
-    // Anything that throws after EMR succeeded must still move the restore out of
-    // its in-progress state, otherwise it stays stuck with no visible cause.
-    const markRestoreFailed = async (stage: string, error: any): Promise<void> => {
-      const failureMessage = error?.message ?? String(error);
-      logger.error(`[restore-csv] ${stage} failed | restoreJobId=${restoreConfigId} err:${failureMessage}`);
-      await Promise.all([
-        updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage }),
-        updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
-      ]);
-    };
 
     const objectToBeInsert = objectsToBeAffected.filter(o => !restoreJobObjectNames.includes(o.name));
     if (objectToBeInsert.length) {
@@ -320,7 +320,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       }
     }
 
-    if(restore.destination.type === 'EXPORT'){
+    if (restore.destination.type === 'EXPORT') {
       const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
         'cipherText' in restoreJob.source.encryptedKeys
           ? JSON.parse(decrypt(restoreJob.source.encryptedKeys))
@@ -349,11 +349,11 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
         })
       );
 
-        await Promise.all([
+      await Promise.all([
         updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.success, replaceObjects: objects }),
         updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.success }),
       ]);
-    }else {
+    } else {
       try {
         await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
       } catch (error: any) {

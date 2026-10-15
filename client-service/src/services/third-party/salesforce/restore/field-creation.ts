@@ -2,12 +2,13 @@ import { logger } from "../../../../middlewares";
 import { STATUS, RESTORE_TRACKING_FIELDS, IRestoreTrackingField } from "../../../../constant";
 import { flattenBackupObjects } from "../../../../utils/helper";
 import { getBackupConfigById } from "../../../backup-config";
-import { getRestoreById } from "../../../restore";
+import { getRestoreById, updateRestore } from "../../../restore";
 import { getRestoreJobById, updateRestoreJob } from "../../../restore-job";
 import { initalizeRestoreTransform } from "../../../payload";
 import { getDecryptedCrmCredential, getUser } from "../../../user";
 import { ensureRestoreTrackingFields } from "../restore-fields";
 import { provisionRestorePermissionSet } from "../restore-permission-set";
+import { IRestoreJobObject } from "../../../../models";
 
 // object API name -> the tracking fields to grant field-level permission for.
 // Set to the FULL RESTORE_TRACKING_FIELDS list for every object that resolved
@@ -142,7 +143,7 @@ export const salesforceFieldsPermission = async (params: { restoreJobId: string;
 // restore-fields.ts) existing on every restored object, so a failure in
 // either step must fail the restore job outright rather than let ingest run
 // against an org that's missing what it needs.
-export const runRestoreFieldSetupAndTransform = async (restoreJobId: string): Promise<void> => {
+export const runRestoreFieldSetupAndTransform = async (restoreId: string, restoreJobId: string, objects: IRestoreJobObject[]): Promise<void> => {
     try {
         const newFieldsByObject = await salesforceFieldCreation({ restoreJobId });
         console.log('runRestoreFieldSetupAndTransform newFieldsByObject', { restoreJobId, newFieldsByObject });
@@ -150,7 +151,9 @@ export const runRestoreFieldSetupAndTransform = async (restoreJobId: string): Pr
     } catch (error) {
         const errorMessage = (error as Error)?.message ?? String(error);
         logger.error(`[restore-field-setup] restoreJobId=${restoreJobId} failed, failing restore job: ${errorMessage}`);
-        await updateRestoreJob({ restoreJobId, status: STATUS.failed, errorMessage });
+        const failedObjects = objects.map(o => ({ ...o, status: STATUS.failed }));
+        await updateRestoreJob({ restoreJobId, status: STATUS.failed, errorMessage, replaceObjects: failedObjects });
+        await updateRestore({ restoreId: restoreId, status: STATUS.failed, errorMessage });
         return;
     }
     await initalizeRestoreTransform(restoreJobId);

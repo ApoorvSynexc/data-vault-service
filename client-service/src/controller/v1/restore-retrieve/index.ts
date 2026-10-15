@@ -1125,7 +1125,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
             ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
           });
         } else if (!hasComparisonError) {
-          await runRestoreFieldSetupAndTransform(restoreJob.restoreJobId);
+          await runRestoreFieldSetupAndTransform(restoreJob.restoreId, restoreJob.restoreJobId, restoreJob.destination.objects);
         }
       } else {
         await triggerBackupJob({
