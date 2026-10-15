@@ -1,4 +1,4 @@
-import { STATUS } from "../constant";
+import { STATUS, VISIBILITY_STATUS } from "../constant";
 import { logger } from "../middlewares";
 import { IBackupConfig, IBackupObject, IObject, IUser } from "../models";
 import { v4 as uuidv4 } from 'uuid';
@@ -150,6 +150,13 @@ const runSyncObjectJob = async () => {
                 for (let index = 0; index < configs.length; index++) {
                     const config = configs[index];
                     totalBackups++;
+
+                    if(config.status === VISIBILITY_STATUS.paused) {
+                        logger.warn(
+                            `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=backup_paused`
+                        );
+                        continue;
+                    }
 
                     const user = await getUser({ userId: config.userId });
                     if (!user) {
