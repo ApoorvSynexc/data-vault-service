@@ -155,7 +155,7 @@ export interface IRestoreMergeRule {
 }
 
 export interface IRestoreConflict {
-  restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
+  restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP | MERGE
   edgeCases?: IRestoreEdgeCases;
   mergeRule?: IRestoreMergeRule;
 }
