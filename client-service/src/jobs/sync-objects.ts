@@ -72,7 +72,17 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
                 const masterAndRequiresLookupObjects = flattenChildren.filter(child => (child.cascadeDelete) || (child.cascadeDelete && child.restrictedDelete) || (child.restrictedDelete && !child.cascadeDelete));
                 allChildren.push(...masterAndRequiresLookupObjects);
             }
-            const allChildrenNames = allChildren?.map((obj) => obj.name) || [];
+            const seenObject = new Set();
+            allChildren = allChildren.filter((obj) => {
+                if (seenObject.has(obj.name)) {
+                    return false;
+                }
+                seenObject.add(obj.name);
+                return true;
+            });
+
+
+            let allChildrenNames = allChildren?.map((obj) => obj.name) || [];
             console.log(JSON.stringify({ allChildrenNames }))
 
             newObjects = allChildren?.filter((obj) => !existNames.includes(obj.name));
@@ -151,7 +161,7 @@ const runSyncObjectJob = async () => {
                     const config = configs[index];
                     totalBackups++;
 
-                    if(config.status === VISIBILITY_STATUS.paused) {
+                    if (config.status === VISIBILITY_STATUS.paused) {
                         logger.warn(
                             `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=backup_paused`
                         );
