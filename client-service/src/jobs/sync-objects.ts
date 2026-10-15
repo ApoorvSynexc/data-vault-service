@@ -11,6 +11,22 @@ interface ISyncObject {
     user: IUser
 }
 
+function buildPayloadTree(nodes: ISalesforceChildTreeNode[] = [], objects: ISalesforceObjectResponse[]): ISalesforceChildTreeNode[] {
+  const result: ISalesforceChildTreeNode[] = [];
+  nodes.forEach((node) => {
+    if (node.cascadeDelete !== true && node.restrictedDelete !== true) return;
+    const obj = objects.find((o) => o.name === node.name);
+    if (!obj) return;
+    const nested = node.children?.length ? buildPayloadTree(node.children, objects) : [];
+    result.push({
+      ...node,
+      ...(nested.length ? { children: nested } : {}),
+    });
+  });
+  return result;
+}
+ 
+
 const flattenChildrenObjects = (objects: ISalesforceChildTreeNode[]): ISalesforceChildTreeNode[] => {
     if (!objects.length) return [];
     return objects.flatMap((obj) => [obj, ...(obj.children ? flattenChildrenObjects(obj.children) : [])]);
@@ -68,9 +84,9 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
                     visitedObjectNames: new Set([existObject.name]),
                     depth: 0,
                 });
-                const flattenChildren = flattenChildrenObjects(children)
-                const masterAndRequiresLookupObjects = flattenChildren.filter(child => (child.cascadeDelete) || (child.cascadeDelete && child.restrictedDelete) || (child.restrictedDelete && !child.cascadeDelete));
-                allChildren.push(...masterAndRequiresLookupObjects);
+                const filteredChildren = buildPayloadTree(children, allObjects);
+                const flattenChildren = flattenChildrenObjects(filteredChildren)
+                allChildren.push(...flattenChildren);
             }
             const seenObject = new Set();
             allChildren = allChildren.filter((obj) => {
