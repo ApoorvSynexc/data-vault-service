@@ -251,7 +251,7 @@ const mergeRuleObjectSchema = Joi.object({
 
 const mergeRuleSchema = Joi.object({
   default: Joi.string().required(), // NEWEST_LAST_MODIFIED_DATE_WINS | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
-  objects: Joi.array().items(mergeRuleObjectSchema).min(1).required(),
+  objects: Joi.array().items(mergeRuleObjectSchema).optional(),
 });
 
 const conflictSchema = Joi.object({
