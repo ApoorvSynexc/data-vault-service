@@ -143,7 +143,7 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
   if (errors !== undefined) {
     setParts.push(`#destination.#objects[${objectIndex}].#errors = :errors`);
     expressionNames['#errors'] = 'errors';
-    expressionValues[':errors'] = [...(currentObject.errors ?? []), ...errors];
+    expressionValues[':errors'] = errors;
   }
 
   const updateExpression = `SET ${setParts.join(', ')}`;
