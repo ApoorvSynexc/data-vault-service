@@ -31,8 +31,8 @@ const runEmrJob = async () => {
           try {
             void cleanupStaleRetrieveObjects(config);
 
-            if ([STATUS.pending].includes(config.backupStatus ?? '')) {
-              logger.info(`[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=backup_pending`);
+            if ([STATUS.pending, STATUS.failed].includes(config.backupStatus ?? '')) {
+              logger.info(`[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=backup_pending_or_failed`);
               continue;
             }
 

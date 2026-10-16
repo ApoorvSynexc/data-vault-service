@@ -890,9 +890,13 @@ const getStaleJobs = async (
         TableName: BACKUP_JOB_TABLE,
         Limit: limit,
         FilterExpression:
-          'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
+          'attribute_exists(processingStartedAt) AND (#status = :pending OR #status = :compressionInProgress) AND updatedAt < :cutoff',
         ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: { ':pending': STATUS.pending, ':cutoff': cutoff },
+        ExpressionAttributeValues: {
+          ':pending': STATUS.pending,
+          ':compressionInProgress': STATUS.compressionInProgress,
+          ':cutoff': cutoff,
+        },
         ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
       })
     );
