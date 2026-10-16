@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getBackupConfigById, getBackupJobOverview, getBackupJobsByUser, getBackupOverview, getRestoreJobsByUserId, getRestoreOverview } from '../../../services';
+import { getBackupConfigById, getBackupJobOverview, getBackupJobsByUser, getBackupOverview, getRestoreById, getRestoreJobsByUserId, getRestoreOverview } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 
 const getLastNBackupJobs = async (userId: string, limit: number, type?: 'NORMAL' | 'ARCHIVAL') => {
@@ -47,6 +47,11 @@ const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> =>
       for (let index = 0; index < jobs.length; index++) {
         let element = jobs[index];
         jobs[index] = { ...element, source: { ...element.source, encryptedKeys: (undefined as any) } }
+
+        const restore = await getRestoreById(element.restoreId);
+        if (restore) {
+          (jobs[index] as any).restore = { jobDetail: restore.jobDetail };
+        }
       }
       return makeResponse(req, res, 200, true, 'fetch', jobs);
     }
