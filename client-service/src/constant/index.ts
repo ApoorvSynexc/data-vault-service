@@ -340,6 +340,7 @@ const JOB_OBJECT_STATUS = {
 
 const ERROR_REASON = {
   serverCrashed: 'SERVER_CRASHED',
+  emrServerCrashed: 'EMR_SERVER_CRASHED',
 }
 
 const ENVIRONMENT_TYPE = {

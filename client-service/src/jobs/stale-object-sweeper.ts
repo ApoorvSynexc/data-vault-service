@@ -1,4 +1,4 @@
-import { ERROR_REASON, JOB_OBJECT_STATUS } from "../constant";
+import { ERROR_REASON, JOB_OBJECT_STATUS, STATUS } from "../constant";
 import { logger } from "../middlewares";
 import { getStaleJobs, updateBackupJob } from "../services";
 const STALE_THRESHOLD_MINUTES = 360;  // 6 hours
@@ -17,29 +17,41 @@ const staleObjectSweeperJob = async (): Promise<void> => {
                     const job = jobs[index];
                     totalJobs++;
 
-                    const objects = job.object?.map((obj) => {
-                        const lastStatus = obj.status;
-                        if([JOB_OBJECT_STATUS.deletionCompleted, JOB_OBJECT_STATUS.uploadCompleted, JOB_OBJECT_STATUS.restoreCompleted].includes(obj.status || '')) {
-                            return obj
-                        } else {
-                            return {
-                                ...obj,
-                                status: JOB_OBJECT_STATUS.failed,
-                                errorMessage: `It is failed when it was ${lastStatus} status`
+                    if (job.status === STATUS.pending) {
+                        const objects = job.object?.map((obj) => {
+                            const lastStatus = obj.status;
+                            if ([JOB_OBJECT_STATUS.deletionCompleted, JOB_OBJECT_STATUS.uploadCompleted, JOB_OBJECT_STATUS.restoreCompleted].includes(obj.status || '')) {
+                                return obj
+                            } else {
+                                return {
+                                    ...obj,
+                                    status: JOB_OBJECT_STATUS.failed,
+                                    errorMessage: `It is failed when it was ${lastStatus} status`
+                                }
                             }
-                        }
-                    });
+                        });
 
-                    if (objects?.length) {
+                        if (objects?.length) {
+                            await updateBackupJob(
+                                {
+                                    backupJobId: job.backupJobId,
+                                    object: objects,
+                                    status: STATUS.failed,
+                                    errorReason: ERROR_REASON.serverCrashed,
+                                    errorMessage: 'Job became stale — server crash or restart detected',
+                                    completedAt: new Date().toISOString(),
+                                });
+                            successJobs++;
+                        }
+                    } else if (job.status === STATUS.compressionInProgress) {
                         await updateBackupJob(
                             {
-                            backupJobId: job.backupJobId,
-                            object: objects,
-                            status: JOB_OBJECT_STATUS.failed,
-                            errorReason: ERROR_REASON.serverCrashed,
-                            errorMessage: 'Job became stale — server crash or restart detected',
-                            completedAt: new Date().toISOString(),
-                        });
+                                backupJobId: job.backupJobId,
+                                status: STATUS.compressionFailed,
+                                errorReason: ERROR_REASON.emrServerCrashed,
+                                errorMessage: 'Compression job became stale — Due to heavy server load or server crash',
+                                completedAt: new Date().toISOString(),
+                            });
                         successJobs++;
                     }
                 }

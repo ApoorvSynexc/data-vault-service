@@ -6,6 +6,7 @@ import {
   getUser,
   initalizePayloadTransform,
   getDecryptedCrmCredential,
+  getRestoreJobById,
 } from '../../../services';
 import { STATUS, VISIBILITY_STATUS } from '../../../constant';
 import {
@@ -110,8 +111,11 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
       case 'schema.sync.completed': {
         const { triggerSource } = req.body;
 
-        if(triggerSource?.name === 'CREATE_RESTORE') {
-          await runRestoreFieldSetupAndTransform(triggerSource.entityId);
+        if (triggerSource?.name === 'CREATE_RESTORE') {
+          const restoreJob = await getRestoreJobById(triggerSource.entityId);
+          if (restoreJob) {
+            await runRestoreFieldSetupAndTransform(restoreJob.restoreId, restoreJob.restoreJobId, restoreJob.destination.objects);
+          }
         } else {
           await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
         }
