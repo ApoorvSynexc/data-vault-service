@@ -621,6 +621,7 @@ const salesforceHandler: ICrmBackupHandler = {
         conflict,
       };
 
+      console.log(JSON.stringify({ hierarchy, objectHierarchy, recurvedObject }))
       for (let index = 0; index < hierarchy.length; index++) {
         const rootObject = hierarchy[index];
         await restoreObjectHierarchy(rootObject, hierarchyContext);
