@@ -357,12 +357,12 @@ export const runSalesforceRestore = async (
     `[restore] execution requested, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}, restoreMode=${conflict.restoreMode}`
   );
 
-  if (conflict.restoreMode === 'SKIP') {
-    logger.info(
-      `[restore] skipping object per restoreMode=SKIP, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectName=${object.name}`
-    );
-    return STATUS.success;
-  }
+  // if (conflict.restoreMode === 'SKIP') {
+  //   logger.info(
+  //     `[restore] skipping object per restoreMode=SKIP, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectName=${object.name}`
+  //   );
+  //   return STATUS.success;
+  // }
 
   // let operation: 'insert' | 'update' | 'upsert';
   // switch (conflict.restoreMode) {
