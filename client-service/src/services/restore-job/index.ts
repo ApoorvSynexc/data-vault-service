@@ -37,7 +37,13 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   const soruceBackupDestination = await getDestinationById(sourceBackupConfig.destinationId);
   if (!soruceBackupDestination) throw new Error(`destination_not_found:${sourceBackupConfig.destinationId}`);
   const sourceDecryptedDestination = getDecryptedDestinationConfig(soruceBackupDestination);
-  const sourceEncryptedKeys = encrypt(JSON.stringify({ accessKeyId: sourceDecryptedDestination.accessKeyId, secretAccessKey: sourceDecryptedDestination.secretAccessKey, }));
+  // Never store a temporary pass here: it could expire before a scheduled restore starts. For a role,
+  // keep only the role address; the job runner gets a fresh pass when it runs.
+  const sourceEncryptedKeys = encrypt(JSON.stringify(
+    sourceDecryptedDestination.authType === 'ASSUME_ROLE'
+      ? { authType: 'ASSUME_ROLE', roleArn: sourceDecryptedDestination.roleArn, externalId: sourceDecryptedDestination.externalId }
+      : { accessKeyId: sourceDecryptedDestination.accessKeyId, secretAccessKey: sourceDecryptedDestination.secretAccessKey }
+  ));
 
   const destinationUser = await getUser({ userId });
   if (!destinationUser) throw new Error(`user_not_found:${userId}`);

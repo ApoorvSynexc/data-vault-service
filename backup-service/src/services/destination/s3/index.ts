@@ -6,6 +6,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { IAwsCredentials, IDestinationConfig } from '../../../models';
+import { credentialIdentityKey, getAwsCredentials } from './credentials';
 
 // ---------------------------------------------------------------------------
 // One S3Client per unique destination (region + credentials + bucket).
@@ -15,19 +16,13 @@ import { IAwsCredentials, IDestinationConfig } from '../../../models';
 const clientCache = new Map<string, S3Client>();
 
 const getS3Client = (config: IDestinationConfig): S3Client => {
-  const cacheKey = `${config.region}:${config.accessKeyId}:${config.bucketName}`;
+  const cacheKey = `${config.region}:${credentialIdentityKey(config)}:${config.bucketName}`;
   let client = clientCache.get(cacheKey);
   if (!client) {
     const awsConfig: IAwsCredentials = {
       region: config.region,
+      credentials: getAwsCredentials(config),
     };
-
-    //if (NODE_ENV === 'dev' && config.accessKeyId && config.secretAccessKey) {
-    awsConfig.credentials = {
-      accessKeyId: config.accessKeyId,
-      secretAccessKey: config.secretAccessKey,
-    };
-    //}
 
     client = new S3Client(awsConfig);
     clientCache.set(cacheKey, client);
@@ -112,10 +107,7 @@ export const fetchCsvFromS3 = async (
 ): Promise<{ csvData: string; recordCount: number }> => {
   const client = new S3Client({
     region: config.region,
-    credentials: {
-      accessKeyId: config.accessKeyId,
-      secretAccessKey: config.secretAccessKey,
-    },
+    credentials: getAwsCredentials(config),
   });
 
   try {

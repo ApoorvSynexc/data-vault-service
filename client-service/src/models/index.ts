@@ -10,5 +10,5 @@ export * from './role';
 export * from './session';
 export * from './settings';
 export * from './notification';
-export type { IAddress, IMedia, IAwsCredentials } from './shared';
+export type { IAddress, IMedia, IAwsCredentials, IAwsCredentialIdentity } from './shared';
 export * from './user';
