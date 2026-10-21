@@ -133,13 +133,11 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
 
 interface UpdateRestoreObjectParams {
   name: string;
-  // Widened to string — each restore pipeline stage (field job, backup run,
-  // ingest, ...) writes its own object-level status vocabulary here.
   status?: string;
-  // Added to the object's running total, not overwritten — a single object
-  // can span multiple ingest chunks reported across multiple calls.
   processedRecordCount?: number;
   failedRecordCount?: number;
+  rollbackProcessedRecordCount?: number;
+  rollbackFailedRecordCount?: number;
   errorMessage?: string;
 }
 
@@ -294,6 +292,18 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
         expressionNames['#failedRecordCount'] = 'failedRecordCount';
         expressionValues[`:failedRecordCount${position}`] =
           (currentObject?.failedRecordCount ?? 0) + object.failedRecordCount;
+      }
+      if (object.rollbackProcessedRecordCount) {
+        setParts.push(`${objectPath}.#rollbackProcessedRecordCount = :rollbackProcessedRecordCount${position}`);
+        expressionNames['#rollbackProcessedRecordCount'] = 'rollbackProcessedRecordCount';
+        expressionValues[`:rollbackProcessedRecordCount${position}`] =
+          (currentObject?.rollbackProcessedRecordCount ?? 0) + object.rollbackProcessedRecordCount;
+      }
+      if (object.rollbackFailedRecordCount) {
+        setParts.push(`${objectPath}.#rollbackFailedRecordCount = :rollbackFailedRecordCount${position}`);
+        expressionNames['#rollbackFailedRecordCount'] = 'rollbackFailedRecordCount';
+        expressionValues[`:rollbackFailedRecordCount${position}`] =
+          (currentObject?.rollbackFailedRecordCount ?? 0) + object.rollbackFailedRecordCount;
       }
     });
   }

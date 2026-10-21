@@ -24,6 +24,8 @@ export interface IRestoreJobObject {
   status: string;
   processedRecordCount?: number;
   failedRecordCount?: number;
+  rollbackProcessedRecordCount?: number;
+  rollbackFailedRecordCount?: number;
   errorMessage?: string;
   errors?: string[];
   children?: IRestoreJobObject[];

@@ -260,8 +260,20 @@ const restoreObjectData = async (
     await updateRestoreObject({
       restoreJobId,
       objectName,
-      processedRecordCount: job.processed,
-      failedRecordCount: job.failed,
+      ...(
+        type === 'RESTORE'
+          ?
+          {
+            processedRecordCount: job.processed,
+            failedRecordCount: job.failed,
+          }
+          :
+          {
+            rollbackProcessedRecordCount: job.processed,
+            rollbackFailedRecordCount: job.failed,
+          }
+      ),
+
       status: jobFailed
         ? type === 'RESTORE'
           ? JOB_OBJECT_STATUS.restoreFailed
@@ -345,12 +357,12 @@ export const runSalesforceRestore = async (
     `[restore] execution requested, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}, restoreMode=${conflict.restoreMode}`
   );
 
-  if (conflict.restoreMode === 'SKIP') {
-    logger.info(
-      `[restore] skipping object per restoreMode=SKIP, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectName=${object.name}`
-    );
-    return STATUS.success;
-  }
+  // if (conflict.restoreMode === 'SKIP') {
+  //   logger.info(
+  //     `[restore] skipping object per restoreMode=SKIP, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectName=${object.name}`
+  //   );
+  //   return STATUS.success;
+  // }
 
   // let operation: 'insert' | 'update' | 'upsert';
   // switch (conflict.restoreMode) {

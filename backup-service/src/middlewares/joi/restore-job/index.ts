@@ -2,6 +2,8 @@ import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 
+const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP', 'MERGE'];
+
 const sourceSchema = Joi.object({
   backupConfigId: Joi.string().required(),
   crmId: Joi.string().required(),
@@ -130,11 +132,11 @@ const mergeRuleObjectSchema = Joi.object({
 
 const mergeRuleSchema = Joi.object({
   default: Joi.string().required(), // NEWEST_LAST_MODIFIED_DATE_WINS | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
-  objects: Joi.array().items(mergeRuleObjectSchema).min(1).required(),
+  objects: Joi.array().items(mergeRuleObjectSchema).optional(),
 });
 
 const conflictSchema = Joi.object({
-  restoreMode: Joi.string().valid('OVERWRITE', 'APPEND_NEW').required(),
+  restoreMode: Joi.string().valid(...RESTORE_CONFLICT_MODE).required(), 
   edgeCases: edgeCasesSchema.optional(),
   mergeRule: mergeRuleSchema.optional(),
 });

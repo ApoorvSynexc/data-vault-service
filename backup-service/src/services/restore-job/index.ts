@@ -84,6 +84,8 @@ interface UpdateRestoreObjectParams {
   status?: string;
   processedRecordCount?: number;
   failedRecordCount?: number;
+  rollbackProcessedRecordCount?: number;
+  rollbackFailedRecordCount?: number;
   errorMessage?: string;
   errors?: string[];
 }
@@ -95,6 +97,8 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     status,
     processedRecordCount,
     failedRecordCount,
+    rollbackProcessedRecordCount,
+    rollbackFailedRecordCount,
     errorMessage,
     errors,
   } = params;
@@ -139,6 +143,22 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     expressionNames['#failedRecordCount'] = 'failedRecordCount';
     expressionValues[':failedRecordCount'] =
       (currentObject.failedRecordCount ?? 0) + failedRecordCount;
+  }
+  if (rollbackProcessedRecordCount !== undefined) {
+    setParts.push(
+      `#destination.#objects[${objectIndex}].#rollbackProcessedRecordCount = :rollbackProcessedRecordCount`
+    );
+    expressionNames['#rollbackProcessedRecordCount'] = 'rollbackProcessedRecordCount';
+    expressionValues[':rollbackProcessedRecordCount'] =
+      (currentObject.rollbackProcessedRecordCount ?? 0) + rollbackProcessedRecordCount;
+  }
+  if (rollbackFailedRecordCount !== undefined) {
+    setParts.push(
+      `#destination.#objects[${objectIndex}].#rollbackFailedRecordCount = :rollbackFailedRecordCount`
+    );
+    expressionNames['#rollbackFailedRecordCount'] = 'rollbackFailedRecordCount';
+    expressionValues[':rollbackFailedRecordCount'] =
+      (currentObject.rollbackFailedRecordCount ?? 0) + rollbackFailedRecordCount;
   }
   if (errors !== undefined) {
     setParts.push(`#destination.#objects[${objectIndex}].#errors = :errors`);
@@ -206,6 +226,8 @@ interface RestoreJobObjectUpdate {
   status?: string;
   processedRecordCount?: number;
   failedRecordCount?: number;
+  rollbackProcessedRecordCount?: number;
+  rollbackFailedRecordCount?: number;
   errorMessage?: string;
 }
 
@@ -337,6 +359,18 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
         expressionNames['#failedRecordCount'] = 'failedRecordCount';
         expressionValues[`:failedRecordCount${position}`] =
           (currentObject?.failedRecordCount ?? 0) + object.failedRecordCount;
+      }
+      if (object.rollbackProcessedRecordCount) {
+        setParts.push(`${objectPath}.#rollbackProcessedRecordCount = :rollbackProcessedRecordCount${position}`);
+        expressionNames['#rollbackProcessedRecordCount'] = 'rollbackProcessedRecordCount';
+        expressionValues[`:rollbackProcessedRecordCount${position}`] =
+          (currentObject?.rollbackProcessedRecordCount ?? 0) + object.rollbackProcessedRecordCount;
+      }
+      if (object.rollbackFailedRecordCount) {
+        setParts.push(`${objectPath}.#rollbackFailedRecordCount = :rollbackFailedRecordCount${position}`);
+        expressionNames['#rollbackFailedRecordCount'] = 'rollbackFailedRecordCount';
+        expressionValues[`:rollbackFailedRecordCount${position}`] =
+          (currentObject?.rollbackFailedRecordCount ?? 0) + object.rollbackFailedRecordCount;
       }
     });
   }

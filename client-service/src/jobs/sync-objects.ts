@@ -1,10 +1,11 @@
-import { STATUS, VISIBILITY_STATUS } from "../constant";
+import { STATUS, VISIBILITY_STATUS, SCHEDULE_MODE } from "../constant";
 import { logger } from "../middlewares";
 import { IBackupConfig, IBackupObject, IObject, IUser } from "../models";
 import { v4 as uuidv4 } from 'uuid';
 import { createTriggers, deleteTriggers, getCrmById, getDecryptedCrmCredential, getDecryptedDestinationConfig, getDestinationById, getSourceObjects, submitBackupJobRequest, SalesforceAuthExpiredError, SalesforceTokens, updateBackupConfig, getBackupConfigsInBatches, getUser, checkSalesforceApiLimitUsage } from "../services";
 import { ISalesforceObjectResponse, salesforceObjectDescribe, salesforceObjectFilteredList } from "../services/third-party/salesforce/metadata/index";
 import { buildChildRelationshipTree, ISalesforceChildTreeNode } from "../controller";
+import { computeAwsScheduleWindow } from "../utils/event-bridge";
 
 interface ISyncObject {
     backupConfig: IBackupConfig
@@ -196,6 +197,16 @@ const runSyncObjectJob = async () => {
                             `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=crm_not_connected`
                         );
                         continue;
+                    }
+
+                    if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig?.scheduling?.frequency === 'CUSTOM') {
+                        const { endDate } = computeAwsScheduleWindow(config.scheduleConfig);
+                        if (endDate && endDate < new Date()) {
+                            logger.warn(
+                                `[JOB SYNC OBJECT - CRON] config ${config.backupConfigId} SKIP | reason=custom_schedule_ended`
+                            );
+                            continue;
+                        }
                     }
 
                     if (config.type === 'NORMAL') {
