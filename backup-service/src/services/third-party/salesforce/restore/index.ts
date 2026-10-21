@@ -260,8 +260,20 @@ const restoreObjectData = async (
     await updateRestoreObject({
       restoreJobId,
       objectName,
-      processedRecordCount: job.processed,
-      failedRecordCount: job.failed,
+      ...(
+        type === 'RESTORE'
+          ?
+          {
+            processedRecordCount: job.processed,
+            failedRecordCount: job.failed,
+          }
+          :
+          {
+            rollbackProcessedRecordCount: job.processed,
+            rollbackFailedRecordCount: job.failed,
+          }
+      ),
+
       status: jobFailed
         ? type === 'RESTORE'
           ? JOB_OBJECT_STATUS.restoreFailed
