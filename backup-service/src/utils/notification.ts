@@ -2,6 +2,7 @@ import { logger } from '../middlewares/logger';
 import { createNotification, CreateNotificationParams } from '../services/notification';
 import { getUser } from '../services/user';
 import { sendEmail, SendEmailPayload } from '../services/common/email';
+import { getSettingsByUser } from '../services';
 
 // Fires the in-app notification and (if the user has a verified email on
 // file) the matching email, in parallel — one failing must never block or
@@ -17,8 +18,6 @@ export const notifyJobOutcome = async (params: {
 
   const user = email ? await getUser(notification.userId).catch(() => null) : null;
   const recipientEmail = user?.crmProfile?.email;
-  // crmProfile.firstName, not the account's own firstName — matches whose
-  // mailbox recipientEmail actually is (the connected Salesforce user's).
   const recipientName = user?.crmProfile?.firstName;
   const emailWithRecipient: SendEmailPayload | undefined =
     email &&
@@ -26,6 +25,9 @@ export const notifyJobOutcome = async (params: {
       ...email,
       params: { ...email.params, recipientName: email.params.recipientName ?? recipientName },
     } as SendEmailPayload);
+
+  const setting = await getSettingsByUser(notification.userId);
+  if (!setting || !setting.notification?.email) return;
 
   const [notificationResult, emailResult] = await Promise.allSettled([
     createNotification(notification),
