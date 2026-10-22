@@ -264,7 +264,7 @@ const socialLoginCallbackHandler = async (
         userId: user.userId,
         crmId: user.crmId,
         salesforceApiThreshold: 80,
-        rollbackWindow: 24,
+        rollbackWindow: 7,
         notification: {
           email: true
         },

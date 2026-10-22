@@ -2,6 +2,7 @@ import { logger } from '../middlewares/logger';
 import { createNotification, CreateNotificationParams } from '../services/notification';
 import { getUser } from '../services/user';
 import { sendEmail, SendEmailPayload } from '../services/common/email';
+import { getSettingsByUser } from '../services';
 
 // Fires the in-app notification and (if the user has an email on file) the
 // matching email, in parallel — one failing must never block or skip the
@@ -28,8 +29,6 @@ export const notifyUserOutcome = async (params: {
 
   const user = email ? await getUser({ userId: notification.userId }).catch(() => null) : null;
   const recipientEmail = user?.contactEmail ?? user?.contact?.email;
-  // The account's own firstName — matches whose mailbox recipientEmail
-  // actually is (the account owner's, not the connected Salesforce user's).
   const recipientName = user?.firstName;
   const emailWithRecipient: SendEmailPayload | undefined =
     email &&
@@ -37,6 +36,9 @@ export const notifyUserOutcome = async (params: {
       ...email,
       params: { ...email.params, recipientName: email.params.recipientName ?? recipientName },
     } as SendEmailPayload);
+
+  const setting = await getSettingsByUser(notification.userId);
+  if (!setting || !setting.notification?.email) return;
 
   const [notificationResult, emailResult] = await Promise.allSettled([
     createNotification(notification),

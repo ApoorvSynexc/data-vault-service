@@ -132,9 +132,10 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
 
 const getBackupConfigsByCrm = async (crmId: string, limit?: number): Promise<IBackupConfig[]> => {
   const result = await docClient.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: BACKUP_CONFIG_TABLE,
-      FilterExpression: 'crmId = :crmId',
+      IndexName: 'crmId-index',
+      KeyConditionExpression: 'crmId = :crmId',
       ExpressionAttributeValues: { ':crmId': crmId },
       ...(limit && { Limit: limit }),
     })
