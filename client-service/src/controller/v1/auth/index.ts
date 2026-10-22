@@ -10,34 +10,11 @@ import {
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   createSession,
-  createUser,
   getSession,
   getUser,
   updateSession,
 } from '../../../services';
 import { generateTokens, parseExpiryToSeconds, wrapController } from '../../../utils/helper';
-import { defaultRoles } from '../../../assets';
-
-const SALT_ROUNDS = 10;
-
-const signupHandler = async (req: IRequest, res: IResponse) => {
-  const body = req.body;
-
-  const existing = await getUser({ 'contact.email': body.contact.email, status: VISIBILITY_STATUS.active });
-  if (existing) {
-    return makeResponse(req, res, 400, false, 'email_exit');
-  }
-
-  if (body.password) {
-    body.password = await bcrypt.hash(body.password, SALT_ROUNDS);
-  }
-
-  const userRole = defaultRoles.find((r) => r.name === 'user')!;
-  body.role = { name: userRole.name, roleId: userRole.roleId };
-
-  await createUser(body);
-  makeResponse(req, res, 201, true, 'create');
-};
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -143,7 +120,6 @@ const logoutHandler = async (req: IRequest, res: IResponse) => {
 };
 
 export const authController = wrapController({
-  signupHandler,
   loginHandler,
   refreshTokenHandler,
   logoutHandler,

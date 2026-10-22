@@ -46,7 +46,7 @@ const getLastBackupJob = async (req: IRequest, res: IResponse): Promise<void> =>
       const jobs = await getRestoreJobsByUserId(userId, { limit: 10 });
       for (let index = 0; index < jobs.length; index++) {
         let element = jobs[index];
-        jobs[index] = { ...element, source: { ...element.source, encryptedKeys: (undefined as any) } }
+        jobs[index] = { ...element, source: { ...element.source, encryptedKeys: (undefined as any) }, destination: {...element.destination, encryptedTokens: (undefined as any)} }
 
         const restore = await getRestoreById(element.restoreId);
         if (restore) {
