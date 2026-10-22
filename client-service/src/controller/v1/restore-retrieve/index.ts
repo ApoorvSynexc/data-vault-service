@@ -1160,7 +1160,7 @@ const createRollbackHandler = async (req: IRequest, res: IResponse): Promise<voi
   if (!isOwner(restore, req.user!.userId, req.user!.crmId)) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
-  const objectPayload = restoreJob.destination.objects.map((obj => ({ name: obj.name, id: obj.id, status: JOB_OBJECT_STATUS.rollbackInProgress })));
+  const objectPayload = restoreJob.destination.objects.map((obj => ({...obj, status: JOB_OBJECT_STATUS.rollbackInProgress })));
   await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload, status: STATUS.pending });
 
   makeResponse(req, res, 200, true, 'update');
