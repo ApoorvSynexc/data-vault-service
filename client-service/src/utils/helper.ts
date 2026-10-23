@@ -27,6 +27,15 @@ const randomNumber = (digits: number = 6): string => {
   return String(Math.floor(min + Math.random() * (max - min + 1)));
 };
 
+// req.secure reflects the real scheme (HTTP vs HTTPS), honoring X-Forwarded-Proto
+// via the app's `trust proxy` setting — unlike NODE_ENV, it can't go stale when an
+// env (e.g. QA) is served over HTTPS but isn't literally NODE_ENV=production.
+const getAuthCookieOptions = (req: IRequest) => ({
+  httpOnly: true,
+  secure: req.secure,
+  sameSite: 'strict' as const,
+});
+
 const generateTokens = (userId: string, sessionId: string) => {
   const payload = { userId, sessionId };
   const accessToken = jwt.sign(payload, JWT_ACCESS_SECRET, {
@@ -362,6 +371,7 @@ const schemasAreEqual = (existing: any[], latest: any[]): boolean => {
 export {
   filtereObjects,
   randomNumber,
+  getAuthCookieOptions,
   generateTokens,
   parseExpiryToSeconds,
   wrapController,
