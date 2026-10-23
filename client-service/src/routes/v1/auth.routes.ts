@@ -6,13 +6,11 @@ import { authorizeController } from '../../controller/v1/auth/authorize';
 import {
   authRateLimit,
   loginValidation,
-  signupValidation,
   authorizeOrganizationValidation,
 } from '../../middlewares';
 
 const router = Router();
 
-router.post('/signup', authRateLimit, signupValidation, authController.signupHandler);
 router.post('/login', authRateLimit, loginValidation, authController.loginHandler);
 router.post('/refresh-token', authController.refreshTokenHandler);
 router.post('/logout', authController.logoutHandler);

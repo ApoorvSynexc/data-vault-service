@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import { createServer, Server } from 'http';
@@ -20,6 +21,29 @@ const app = express();
 // Set to the number of proxies between client and app (typically 1 for single LB)
 // Set to the number of proxies between client and app (typically 1 for single LB)
 app.set('trust proxy', 1);
+
+app.use(
+  helmet({
+    // Only frame-ancestors — a full default CSP would block the SPA bundle's
+    // and Swagger UI's inline scripts/styles without a verified allowlist.
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        frameAncestors: ["'none'"],
+        defaultSrc: helmet.contentSecurityPolicy.dangerouslyDisableDefaultSrc,
+      },
+    },
+    frameguard: { action: 'deny' },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    // API is consumed cross-origin by the SPA (see ALLOWED_ORIGINS); the
+    // default same-origin CORP would block those requests outright.
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+app.use((_req, res, next) => {
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+  next();
+});
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(cookieParser());

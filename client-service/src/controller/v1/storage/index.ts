@@ -30,12 +30,11 @@ const lastNBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<
     const user = req.user!;
     const { type } = req.query as { type: "NORMAL" | "ARCHIVAL" };
 
-    const crmId = req.headers['crm-id'] ? String(req.headers['crm-id']) : user.crmId;
-    if (!crmId) {
-        return makeResponse(req, res, 400, false, 'crm_id_required');
+    if (!user.crmId) {
+        return makeResponse(req, res, 401, false, 'unauthorized');
     }
 
-    const backupConfigSizeRecord = await getLastNBackupConfigByCrm(crmId, 5, type ?? "NORMAL");
+    const backupConfigSizeRecord = await getLastNBackupConfigByCrm(user.crmId, 5, type ?? "NORMAL");
     makeResponse(req, res, 200, true, 'fetch', backupConfigSizeRecord);
 }
 

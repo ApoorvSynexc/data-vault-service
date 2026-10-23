@@ -47,16 +47,8 @@ const logoutHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'logout');
 };
 
-const updateProfileHandler = async (req: IRequest, res: IResponse) => {
-  const body = req.body;
-
-  await updateUser({ userId: req.user!.userId }, body);
-  makeResponse(req, res, 200, true, 'update', { ...req.user, ...body, password: undefined });
-};
-
 export const userController = wrapController({
   myProfileHandler,
   logoutHandler,
-  updateProfileHandler,
   permissionHandler
 });

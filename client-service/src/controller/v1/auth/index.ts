@@ -10,42 +10,11 @@ import {
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   createSession,
-  createUser,
   getSession,
   getUser,
   updateSession,
 } from '../../../services';
-import { generateTokens, parseExpiryToSeconds, wrapController } from '../../../utils/helper';
-import { defaultRoles } from '../../../assets';
-
-const SALT_ROUNDS = 10;
-
-const signupHandler = async (req: IRequest, res: IResponse) => {
-  const body = req.body;
-
-  const existing = await getUser({ 'contact.email': body.contact.email, status: VISIBILITY_STATUS.active });
-  if (existing) {
-    return makeResponse(req, res, 400, false, 'email_exit');
-  }
-
-  if (body.password) {
-    body.password = await bcrypt.hash(body.password, SALT_ROUNDS);
-  }
-
-  const userRole = defaultRoles.find((r) => r.name === 'user')!;
-  body.role = { name: userRole.name, roleId: userRole.roleId };
-
-  await createUser(body);
-  makeResponse(req, res, 201, true, 'create');
-};
-
-const isProduction = process.env.NODE_ENV === 'production';
-
-const baseCookieOptions = {
-  httpOnly: true,
-  secure: isProduction,
-  sameSite: 'strict' as const,
-};
+import { getAuthCookieOptions, generateTokens, parseExpiryToSeconds, wrapController } from '../../../utils/helper';
 
 const loginHandler = async (req: IRequest, res: IResponse) => {
   const { email, password } = req.body;
@@ -72,11 +41,11 @@ const loginHandler = async (req: IRequest, res: IResponse) => {
   const tokens = generateTokens(user.userId, session.sessionId);
 
   res.cookie('accessToken', tokens.accessToken, {
-    ...baseCookieOptions,
+    ...getAuthCookieOptions(req),
     maxAge: parseExpiryToSeconds(JWT_ACCESS_EXPIRY) * 1000,
   });
   res.cookie('refreshToken', tokens.refreshToken, {
-    ...baseCookieOptions,
+    ...getAuthCookieOptions(req),
     maxAge: parseExpiryToSeconds(JWT_REFRESH_EXPIRY) * 1000,
   });
 
@@ -113,11 +82,11 @@ const refreshTokenHandler = async (req: IRequest, res: IResponse) => {
   const tokens = generateTokens(user.userId, session.sessionId);
 
   res.cookie('accessToken', tokens.accessToken, {
-    ...baseCookieOptions,
+    ...getAuthCookieOptions(req),
     maxAge: parseExpiryToSeconds(JWT_ACCESS_EXPIRY) * 1000,
   });
   res.cookie('refreshToken', tokens.refreshToken, {
-    ...baseCookieOptions,
+    ...getAuthCookieOptions(req),
     maxAge: parseExpiryToSeconds(JWT_REFRESH_EXPIRY) * 1000,
   });
 
@@ -136,14 +105,13 @@ const logoutHandler = async (req: IRequest, res: IResponse) => {
     }
   }
 
-  res.clearCookie('accessToken', baseCookieOptions);
-  res.clearCookie('refreshToken', baseCookieOptions);
+  res.clearCookie('accessToken', getAuthCookieOptions(req));
+  res.clearCookie('refreshToken', getAuthCookieOptions(req));
 
   makeResponse(req, res, 200, true, 'logout');
 };
 
 export const authController = wrapController({
-  signupHandler,
   loginHandler,
   refreshTokenHandler,
   logoutHandler,
