@@ -189,22 +189,39 @@ const credentialIdentityKey = (config: IS3Config): string =>
 // External ID
 // The customer pastes this into their role's trust policy. AWS only lets us assume the role when we
 // present the same value, which stops one customer's role from being used by someone else's request
-// (the "confused deputy" problem). We stamp each ID so we can later prove it was issued to this user.
+// (the "confused deputy" problem). The ID is derived from the user, so it can later be proven to have
+// been issued to this user.
+//
+// The ID is STABLE: a user is always given the same one, so the customer pastes it into their role once
+// and never has to touch the trust policy again. Nothing is stored; it is recomputed on demand.
+//   current format : dc-v<version>-<stamp>          stamp = HMAC(secret, "<userId>:v<version>")
+//   legacy format  : dc-<random 16 hex>-<stamp>     issued before IDs became stable; still accepted so
+//                                                   destinations created with one keep working
+// To rotate, raise EXTERNAL_ID_VERSION. Older versions stay valid (the customer can list both IDs in
+// their trust policy while moving over), so a rotation never breaks an existing connection.
 // ---------------------------------------------------------------------------
-const stamp = (userId: string, nonce: string): string =>
-  crypto.createHmac('sha256', EXTERNAL_ID_SECRET).update(`${userId}:${nonce}`).digest('hex').slice(0, 16);
+const EXTERNAL_ID_VERSION = 1;
+
+const stamp = (userId: string, label: string): string =>
+  crypto.createHmac('sha256', EXTERNAL_ID_SECRET).update(`${userId}:${label}`).digest('hex').slice(0, 16);
+
+const stampMatches = (userId: string, label: string, actualStamp: string): boolean => {
+  const expected = Buffer.from(stamp(userId, label));
+  const actual = Buffer.from(actualStamp);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+};
 
 const createExternalId = (userId: string): string => {
-  const nonce = crypto.randomBytes(8).toString('hex');
-  return `dc-${nonce}-${stamp(userId, nonce)}`;
+  const label = `v${EXTERNAL_ID_VERSION}`;
+  return `dc-${label}-${stamp(userId, label)}`;
 };
 
 const isExternalIdIssuedTo = (userId: string, externalId: string | undefined): boolean => {
-  const match = /^dc-([0-9a-f]{16})-([0-9a-f]{16})$/.exec(externalId ?? '');
-  if (!match) {return false;}
-  const expected = Buffer.from(stamp(userId, match[1]));
-  const actual = Buffer.from(match[2]);
-  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  const id = externalId ?? '';
+  const current = /^dc-(v\d+)-([0-9a-f]{16})$/.exec(id);
+  if (current) {return stampMatches(userId, current[1], current[2]);}
+  const legacy = /^dc-([0-9a-f]{16})-([0-9a-f]{16})$/.exec(id);
+  return !!legacy && stampMatches(userId, legacy[1], legacy[2]);
 };
 
 export {

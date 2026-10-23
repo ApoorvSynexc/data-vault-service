@@ -178,8 +178,10 @@ const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 // S3_ROLE_SESSION_SECONDS     : how long each temporary pass lasts. 43200 = 12 hours, the AWS maximum.
 //                               The customer must set their role's "Maximum session duration" to 12 hours,
 //                               otherwise AWS refuses the request.
-// EXTERNAL_ID_SECRET          : stamps the External IDs we hand out, so an ID can only be used by the
-//                               user it was issued to. Falls back to ENCRYPTION_KEY if not set.
+// EXTERNAL_ID_SECRET          : every External ID we hand out is derived from it, so an ID can only be used by
+//                               the user it was issued to. Each user always gets the same ID, so changing
+//                               this secret invalidates every role connection. Set it explicitly and keep it
+//                               stable; it falls back to ENCRYPTION_KEY if not set.
 const DATACRAFT_AWS_ACCOUNT_ID = String(process.env.DATACRAFT_AWS_ACCOUNT_ID || '').trim();
 const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS || 43200);
 const EXTERNAL_ID_SECRET = String(process.env.EXTERNAL_ID_SECRET || ENCRYPTION_KEY);
