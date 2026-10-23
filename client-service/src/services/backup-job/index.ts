@@ -648,7 +648,7 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
             recordsLastWeek += jobRecordCount;
           }
         }
-      } else if (job.status === STATUS.pending) {
+      } else if (job.status === STATUS.pending || job.status === STATUS.compressionInProgress) {
         runningCount++;
       } else if (job.status === STATUS.failed || job.status === STATUS.partialFailure || job.status === STATUS.compressionFailed) {
         failedCount++;
