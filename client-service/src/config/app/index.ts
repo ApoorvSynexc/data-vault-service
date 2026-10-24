@@ -22,17 +22,19 @@ const app = express();
 // Set to the number of proxies between client and app (typically 1 for single LB)
 app.set('trust proxy', 1);
 
-// Redirect direct IP access to the QA app domain (do not serve the SPA on the raw IP).
-const RESTRICTED_IP_HOST = '3.149.183.240';
-const CANONICAL_LOGIN_URL = 'https://qa-app.360datacraft.com/login';
+// Redirect direct IP access to the canonical login URL (set in .env per env).
+const RESTRICTED_IP_HOST = (process.env.RESTRICTED_IP_HOST || '').trim();
+const CANONICAL_LOGIN_URL = (process.env.CANONICAL_LOGIN_URL || '').trim();
 
-app.use((req, res, next) => {
-  const host = (req.headers.host || '').split(':')[0];
-  if (host === RESTRICTED_IP_HOST) {
-    return res.redirect(301, CANONICAL_LOGIN_URL);
-  }
-  next();
-});
+if (RESTRICTED_IP_HOST && CANONICAL_LOGIN_URL) {
+  app.use((req, res, next) => {
+    const host = (req.headers.host || '').split(':')[0];
+    if (host === RESTRICTED_IP_HOST) {
+      return res.redirect(301, CANONICAL_LOGIN_URL);
+    }
+    next();
+  });
+}
 
 app.use(
   helmet({
