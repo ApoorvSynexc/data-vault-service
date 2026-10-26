@@ -29,16 +29,17 @@ const overview = async (req: IRequest, res: IResponse): Promise<void> => {
 const lastNBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
     const user = req.user!;
     const { type } = req.query as { type: "NORMAL" | "ARCHIVAL" };
-
+ 
     if (!user.crmId) {
         return makeResponse(req, res, 401, false, 'unauthorized');
     }
-
-    const backupConfigSizeRecord = await getLastNBackupConfigByCrm(user.crmId, 5, type ?? "NORMAL");
+ 
+    const backupConfigSizeRecord = await getLastNBackupConfigByCrm(user.crmId, user.userId, 5, type ?? "NORMAL");
     makeResponse(req, res, 200, true, 'fetch', backupConfigSizeRecord);
 }
-
+ 
 export const storageController = wrapController({
     overview,
     lastNBackupConfigHandler,
 })
+ 
