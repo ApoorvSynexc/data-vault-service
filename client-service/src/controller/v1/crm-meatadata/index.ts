@@ -2,7 +2,7 @@ import { IRequest, IResponse, makeResponse } from "../../../lib";
 import { toApexMode, toApexType, getUsersByContactEmail } from "../../../services";
 import { ISalesforceChildRelationship, ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
-import { EXCLUDE_OBJECT_SUFFIX, SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
+import { BULK_API_2_UNSUPPORTED_OBJECTS, EXCLUDE_OBJECT_SUFFIX, SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
 import { IUser } from "../../../models";
 
 // A child relationship is only in-scope for cascade traversal when its type
@@ -287,7 +287,8 @@ const getSalesforceObjectsHandler = async (req: IRequest, res: IResponse): Promi
     obj.keyPrefix !== null &&
     obj.queryable === true &&
     (obj.custom === false) &&
-    !EXCLUDE_OBJECT_SUFFIX.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+    !EXCLUDE_OBJECT_SUFFIX.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
+    !BULK_API_2_UNSUPPORTED_OBJECTS.includes(obj.name)
   );
   makeResponse(req, res, 200, true, 'delete', filteredObjects);
 };
