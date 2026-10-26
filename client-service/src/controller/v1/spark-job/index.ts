@@ -378,7 +378,7 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
  *
  * Queries the standard Data REST API (SELECT Id[, ManagerId] FROM User WHERE
  * IsActive = false) using that org's credentials. includeManagers=true
- * additionally returns the distinct set of ManagerId values off those records.
+ * additionally returns an ownerId -> ManagerId map off those records.
  */
 const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreConfigId, includeManagers } = req.query;
