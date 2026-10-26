@@ -65,6 +65,7 @@ export interface ISalesforceFieldSnapshot {
     relationshipName: string | null;
     relationshipOrder: number | null;
     restrictedDelete: boolean;
+    nillable: boolean;
     type: string;
 }
 
@@ -78,6 +79,7 @@ export const toFieldSnapshot = (field: ISalesforceFieldDescribe): ISalesforceFie
     relationshipOrder: field.relationshipOrder,
     restrictedDelete: field.restrictedDelete,
     type: field.type,
+    nillable: field.nillable,
 });
 
 export interface ISchemaFieldChange {
@@ -178,16 +180,18 @@ export const schemaHandler = async (
                 metadataType: 'fields',
             });
 
-            await uploadToS3(destConfig, s3Key, buffer);
+            if (params.isUpdateSchemaOnS3 !== false) {
+                await uploadToS3(destConfig, s3Key, buffer);
+            }
 
-            logger.info(
-                `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedFields.length}, removed=${diff.removedFields.length}, modified=${diff.modifiedFields.length}`
-            );
+            // logger.info(
+            //     `Object schema change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedFields.length}, removed=${diff.removedFields.length}, modified=${diff.modifiedFields.length}`
+            // );
         }
 
-        logger.info(
-            `Object schema comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, schemaChanged=${diff.schemaChanged}`
-        );
+        // logger.info(
+        //     `Object schema comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, schemaChanged=${diff.schemaChanged}`
+        // );
 
         return diff;
     } catch (error: any) {

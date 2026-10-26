@@ -24,7 +24,9 @@ export interface IMetadataComparisonResult {
 // Each metadataType wraps a differently-shaped diff (schemaChanged/childsChanged/
 // recordTypesChanged on a single object, valuesChanged per-field on an array for
 // picklist) — narrow on metadataType to read the right flag for each.
-export const hasMetadataChanged = (result: IMetadataComparisonResult['result']): boolean => {
+export const hasMetadataChanged = (
+  result: IMetadataComparisonResult['result']
+): result is NonNullable<IMetadataComparisonResult['result']> => {
   if (!result) {
     return false;
   }
@@ -40,6 +42,45 @@ export const hasMetadataChanged = (result: IMetadataComparisonResult['result']):
   }
 };
 
+// Same per-metadataType branching as hasMetadataChanged, but reports *which*
+// operations occurred instead of just whether anything changed. Lets a caller
+// tell "only new fields/childs/picklist values/record types appeared"
+// (inserts only — nothing already-synced was touched) apart from a change
+// that also modified or removed something the restore/backup already relies on.
+export const getMetadataChangeOperations = (
+  result: IMetadataComparisonResult['result']
+): Array<'inserts' | 'updates' | 'deletes'> => {
+  const operations: Array<'inserts' | 'updates' | 'deletes'> = [];
+  if (!result) {
+    return operations;
+  }
+
+  switch (result.metadataType) {
+    case 'fields':
+      if (result.diff.addedFields.length) operations.push('inserts');
+      if (result.diff.modifiedFields.length) operations.push('updates');
+      if (result.diff.removedFields.length) operations.push('deletes');
+      break;
+    case 'childs':
+      if (result.diff.addedChilds.length) operations.push('inserts');
+      if (result.diff.modifiedChilds.length) operations.push('updates');
+      if (result.diff.removedChilds.length) operations.push('deletes');
+      break;
+    case 'picklist':
+      if (result.diff.some((field) => field.addedValues.length)) operations.push('inserts');
+      if (result.diff.some((field) => field.modifiedValues.length)) operations.push('updates');
+      if (result.diff.some((field) => field.removedValues.length)) operations.push('deletes');
+      break;
+    case 'recordTypes':
+      if (result.diff.addedRecordTypes.length) operations.push('inserts');
+      if (result.diff.modifiedRecordTypes.length) operations.push('updates');
+      if (result.diff.removedRecordTypes.length) operations.push('deletes');
+      break;
+  }
+
+  return operations;
+};
+
 // Compares live Salesforce metadata against the last stored schema for every
 // object on a config, across all 4 metadataTypes. Used by the EMR cron
 // (run-emr-job.ts) to decide whether a realtime config needs a schema-sync
@@ -52,7 +93,8 @@ export const hasMetadataChanged = (result: IMetadataComparisonResult['result']):
 // given (objectName, metadataType) pair came back as `undefined` instead of a
 // real diff.
 export const runMetadataComparisonForConfig = async (
-  config: IBackupConfig
+  config: IBackupConfig,
+  isUpdateSchemaOnS3: boolean = true
 ): Promise<IMetadataComparisonResult[]> => {
   const objects = config.objects ?? [];
   if (!objects.length) {
@@ -77,7 +119,7 @@ export const runMetadataComparisonForConfig = async (
 
   const backupJobId = uuidv4();
 
-  return Promise.all(
+  const results = await Promise.all(
     objects.flatMap((object) =>
       METADATA_TYPES.map(async (metadataType) => ({
         objectName: object.name,
@@ -91,10 +133,30 @@ export const runMetadataComparisonForConfig = async (
             objectName: object.name,
             backupJobId,
             isInitialBackup: false,
+            isUpdateSchemaOnS3,
           },
           user
         ),
       }))
     )
   );
+
+  const logPrefix = `[metadata comparison] config=${config.backupConfigId} backupJobId=${backupJobId}`;
+  const changed = results.filter(
+    (entry): entry is typeof entry & { result: NonNullable<IMetadataComparisonResult['result']> } =>
+      hasMetadataChanged(entry.result)
+  );
+
+  if (!changed.length) {
+    logger.info(`${logPrefix} | NO_CHANGE across ${objects.length} objects`);
+  } else {
+    changed.forEach((entry) => {
+      const operations = getMetadataChangeOperations(entry.result).join(',') || 'none';
+      logger.info(
+        `${logPrefix} | CHANGED metadataType=${entry.result.metadataType} objectName=${entry.objectName} operations=${operations}`
+      );
+    });
+  }
+
+  return results;
 };

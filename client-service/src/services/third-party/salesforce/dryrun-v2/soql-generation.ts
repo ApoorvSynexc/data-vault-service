@@ -183,7 +183,6 @@ const buildWhereClause = (object: ISalesforceObject): string => {
   const filterMap = new Map<number, string>();
   field.forEach((f, idx) => {
     if (f.filter) {
-      console.log('FIELDS DETAILS ', JSON.stringify(f));
       const preformattedValue =
         formattedFields[idx]?.filter?.value ??
         formatSalesforceValueByDataType(f.filter.value, f.dataType);

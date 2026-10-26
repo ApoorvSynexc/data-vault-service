@@ -8,6 +8,7 @@ export interface IRestoreScopeRecord {
 }
 
 export interface IRestoreScopeField {
+  id: string;
   objectName: string;
   fieldNames: string[];
 }
@@ -35,6 +36,7 @@ export interface IRestoreBulkCsvIds {
 }
 
 export interface IRestoreScopeFilter {
+  id: string;
   objectName: string;
   filter: IRestoreFilters;
 }
@@ -57,6 +59,18 @@ export interface IRestoreScope {
   changeSince?: IRestoreChangeSince;
   bulkCsvIds?: IRestoreBulkCsvIds[];
   deletedOnly?: boolean;
+}
+
+// Mirrors client-service's models/restore/index.ts IRestoreSource — this is
+// the shape client-service sends as a restore's `source`, so it has to stay
+// in sync with that side.
+export interface IRestoreSource {
+  backupConfigId: string;
+  configType?: 'BACKUP' | 'ARCHIVAL';
+  type?: 'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN' | 'DELETED_BETWEEN';
+  startDate?: string;
+  endDate?: string;
+  backupJobIds: string[];
 }
 
 export interface IRestoreDestination {
@@ -159,9 +173,7 @@ export interface IRestore {
   status: string; // DRAFT | PENDING | RUNNING | SUCCESS | FAILED
   errorMessage?: string;
 
-  source: {
-    backupJobIds: string[];
-  };
+  source: IRestoreSource;
   selection: {
     restoreScope: IRestoreScope;
   };

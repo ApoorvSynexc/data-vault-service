@@ -153,7 +153,7 @@ export const defaultPermissions = [
     {
         label: "Settings",
         value: "settings",
-        description: "Org-wide DataVault configuration",
+        description: "Org-wide DataCraft configuration",
         permissions: [
             {
                 label: "View",

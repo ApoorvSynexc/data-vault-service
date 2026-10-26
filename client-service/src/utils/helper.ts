@@ -27,6 +27,15 @@ const randomNumber = (digits: number = 6): string => {
   return String(Math.floor(min + Math.random() * (max - min + 1)));
 };
 
+// req.secure reflects the real scheme (HTTP vs HTTPS), honoring X-Forwarded-Proto
+// via the app's `trust proxy` setting — unlike NODE_ENV, it can't go stale when an
+// env (e.g. QA) is served over HTTPS but isn't literally NODE_ENV=production.
+const getAuthCookieOptions = (req: IRequest) => ({
+  httpOnly: true,
+  secure: req.secure,
+  sameSite: 'strict' as const,
+});
+
 const generateTokens = (userId: string, sessionId: string) => {
   const payload = { userId, sessionId };
   const accessToken = jwt.sign(payload, JWT_ACCESS_SECRET, {
@@ -110,10 +119,6 @@ const formatFieldValuesForSOQL = (fields: any[]): any[] => {
   return fields.map(field => {
     if (!field.filter) {
       return field;
-    }
-
-    if(field.name == 'Currency__c') {
-      console.log('FIELD DATA ', JSON.stringify(field));
     }
 
     const formattedValue = formatSalesforceValueByDataType(field.filter.value, field.dataType);
@@ -206,7 +211,7 @@ const escapeSOQLString = (str: string): string => {
 };
 
 // Escapes a value for safe interpolation into template-literal HTML — used
-// by the email templates (services/common/email-templates) for any dynamic
+// by the email templates (services/common/email) for any dynamic
 // string they render (object/config names, error messages) that can
 // originate from user input, guarding against HTML/script injection.
 const escapeHtml = (value: string): string =>
@@ -366,6 +371,7 @@ const schemasAreEqual = (existing: any[], latest: any[]): boolean => {
 export {
   filtereObjects,
   randomNumber,
+  getAuthCookieOptions,
   generateTokens,
   parseExpiryToSeconds,
   wrapController,

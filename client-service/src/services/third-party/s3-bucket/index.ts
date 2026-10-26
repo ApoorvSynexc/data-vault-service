@@ -1,6 +1,7 @@
 import {
     DeleteObjectsCommand,
     GetObjectCommand,
+    HeadBucketCommand,
     ListObjectsV2Command,
     PutObjectCommand,
     S3Client,
@@ -31,6 +32,13 @@ const getS3Client = (config: IS3Config): S3Client => {
         clientCache.set(cacheKey, client);
     }
     return client;
+};
+
+// Confirms the given credentials/bucket are usable — throws if the bucket
+// doesn't exist or the credentials can't access it.
+const validateS3Credentials = async (config: IS3Config): Promise<void> => {
+    const client = getS3Client(config);
+    await client.send(new HeadBucketCommand({ Bucket: config.bucketName }));
 };
 
 const downloadFromS3 = async (
@@ -121,6 +129,39 @@ const listS3Objects = async (
     return keys.sort();
 };
 
+// Same pagination as listS3Objects, but sums Size/counts objects instead of
+// collecting keys — used for export CSV stats (count + total bytes under a
+// prefix) without materializing every key name just to throw them away.
+const getS3PrefixStats = async (
+    config: IS3Config,
+    prefix: string
+): Promise<{ count: number; sizeInBytes: number }> => {
+    const client = getS3Client(config);
+
+    let count = 0;
+    let sizeInBytes = 0;
+    let continuationToken: string | undefined;
+
+    do {
+        const result = await client.send(
+            new ListObjectsV2Command({
+                Bucket: config.bucketName,
+                Prefix: prefix,
+                ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
+            })
+        );
+        for (const obj of result.Contents ?? []) {
+            if (obj.Key && !obj.Key.endsWith('/')) {
+                count += 1;
+                sizeInBytes += obj.Size ?? 0;
+            }
+        }
+        continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (continuationToken !== undefined);
+
+    return { count, sizeInBytes };
+};
+
 // Same pagination as listS3Objects, but keeps LastModified to filter by age —
 // used for retention cleanup instead of a full listing + a HeadObject per key.
 const listStaleS3Objects = async (
@@ -171,9 +212,11 @@ const deleteS3Objects = async (config: IS3Config, keys: string[]): Promise<void>
 };
 
 export {
+    validateS3Credentials,
     downloadFromS3,
     getPresignedDownloadUrl,
     listS3Objects,
+    getS3PrefixStats,
     uploadToS3,
     listStaleS3Objects,
     deleteS3Objects,

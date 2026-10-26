@@ -4,27 +4,36 @@ const NODE_ENV_URL = String(process.env.NODE_ENV_URL);
 const HOST = process.env.HOST ? String(process.env.HOST) : '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
 
-// Email branding/contact info — shared across services/common/email-templates.
-// No real values existed anywhere in the service before this; update the
-// defaults (or set the env vars) with real values before these templates go
-// out to real users.
-const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || 'DataVault');
-const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@datavault.io');
-const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'no-reply@datavault.io');
-// Base URL for CTA links (e.g. "View backup configuration") — the
-// user-facing dashboard, not this API's own host.
-const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.datavault.io');
+// Email branding/contact info — shared across services/common/email.
+const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || '360 DataCraft');
+const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com');
+const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
+const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
+const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
+const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
 const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
 const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT; // optional: for DynamoDB Local
+
+// DynamoDB table names — every table this service reads/writes, kept together
+// regardless of which feature area owns it.
 const USER_TABLE = `${NODE_ENV_PREFIX}-${process.env.USER_TABLE || 'data-vault-users'}`;
 const SESSION_TABLE = `${NODE_ENV_PREFIX}-${process.env.SESSION_TABLE || 'data-vault-sessions'}`;
 const ROLE_TABLE = `${NODE_ENV_PREFIX}-${process.env.ROLE_TABLE || 'data-vault-roles'}`;
 const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters'}`;
 const COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.COUNTER_TABLE || 'data-vault-counters'}`;
+const OAUTH_STATE_TABLE = `${NODE_ENV_PREFIX}-${process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states'}`;
+const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
+const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
+const DESTINATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.DESTINATION_TABLE || 'data-vault-destinations'}`;
+const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
+const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
+const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
+const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
+const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
 
 // Event Bridge Scheduler Config
 const AWS_EVENT_DESTINATION_API_KEY = String(process.env.AWS_EVENT_DESTINATION_API_KEY);
@@ -46,6 +55,19 @@ const AWS_EMR_S3_FILE_PATH = String(process.env.AWS_EMR_S3_FILE_PATH);
 // (see submitEMR in services/payload/index.ts, same mechanism ENCRYPTION_KEY
 // already uses) so it can send it back on every callback.
 const SPARK_JOB_API_KEY = String(process.env.SPARK_JOB_API_KEY);
+
+// Full spark-submit --conf string submitEMR sends on every job (services/payload/index.ts).
+// Env-overridable so capacity/tuning changes (e.g. this app's pre-initialized
+// worker sizes) are an env change, not a code deploy — the default below is
+// just the last known-good baseline for this app's 1 driver + 2 executor,
+// 4 vCPU/16 GB/20 GB-disk pre-initialized capacity (12 vCPU maximumCapacity,
+// already fully consumed — see the driver/executor sizing comments here).
+const AWS_EMR_SPARK_SUBMIT_PARAMETERS = String(process.env.AWS_EMR_SPARK_SUBMIT_PARAMETERS);
+
+// Where submitEMR points EMR's managed S3 log delivery (monitoringConfiguration
+// .s3MonitoringConfiguration.logUri) — env-overridable per environment instead
+// of hardcoded to one bucket.
+const AWS_EMR_LOGS_S3_URI = String(process.env.AWS_EMR_LOGS_S3_URI || 's3://qa-data-vault-logs');
 
 // AWS Athena
 // IAM Role ARN that Athena assumes when reading from client S3 buckets.
@@ -78,6 +100,51 @@ const SALESFORCE_NAMESPACE = String(process.env.SALESFORCE_NAMESPACE || '').trim
 // Metadata API version for all metadata deploy/describe calls (permission sets,
 // triggers, external client apps, etc.) — see services/third-party/salesforce/metadata-api.ts.
 const SALESFORCE_METADATA_API_VERSION = String(process.env.SALESFORCE_METADATA_API_VERSION || '66.0').trim();
+// Packaged API/developer name of the ECA (External Client App) shipped with
+// the managed package (force-app/internal/360DV/externalClientApps/*.eca-meta.xml)
+// — see services/third-party/salesforce/eca-permission-set.ts's ECA_API_NAME.
+// Changing this without a matching change in the managed package breaks ECA
+// discovery in every already-installed subscriber org.
+const SALESFORCE_ECA_API_NAME = String(process.env.SALESFORCE_ECA_API_NAME || 'Data_Vault_Connected_App').trim();
+// Standard objects Salesforce's "Create Audit Fields" feature actually supports
+// (plus every custom object, which Spark treats as always-on — see the Spark
+// restore job's own handling). Setting CreatedById/CreatedDate/LastModifiedById/
+// LastModifiedDate on insert for any OTHER standard object always fails with
+// INVALID_FIELD_FOR_INSERT_UPDATE, regardless of permissions — a platform
+// restriction, not a config gap. Comma-separated string, forwarded to EMR/Spark
+// as-is (see services/payload/index.ts's submitEMR) so Spark can decide
+// per-object whether to keep or strip those four columns before restore ingest.
+const SALESFORCE_AUDIT_ENABLE_OBJECTS = String(
+  process.env.SALESFORCE_AUDIT_ENABLE_OBJECTS ||
+  'Account,ArticleVersion,Attachment,CampaignMember,Case,CaseComment,Contact,ContentVersion,Contract,Event,Idea,IdeaComment,Lead,Opportunity,Question,Task,Vote'
+).trim();
+// API/developer name + label of the Permission Set restore provisions on the
+// destination org to grant the connected user object/field access for
+// restored objects — see services/third-party/salesforce/restore-permission-set.ts.
+// Changing SALESFORCE_RESTORE_PERMISSION_SET_NAME without a matching cleanup
+// orphans the old permission set in every already-restored-to org.
+const SALESFORCE_RESTORE_PERMISSION_SET_NAME = String(
+  process.env.SALESFORCE_RESTORE_PERMISSION_SET_NAME || 'Data_Craft_Restore_Permission_Set'
+).trim();
+const SALESFORCE_RESTORE_PERMISSION_SET_LABEL = String(
+  process.env.SALESFORCE_RESTORE_PERMISSION_SET_LABEL || '360 Data Craft Restore Permission Set'
+).trim();
+
+// The 3 custom tracking fields restore creates on every object it touches —
+// see services/third-party/salesforce/restore-fields.ts's
+// ensureRestoreTrackingFields. DC_External_Id__c doubles as the ingest-stage
+// upsert key (marked externalId/unique there), so it's the one of the three
+// that must never be renamed without a matching restore-pipeline change.
+export interface IRestoreTrackingField {
+  apiName: string;
+  label: string;
+}
+
+export const RESTORE_TRACKING_FIELDS: IRestoreTrackingField[] = [
+  { apiName: 'DC_External_Id__c', label: '360 Data Craft External Id' },
+  { apiName: 'DC_Restore_Job_Name__c', label: '360 Data Craft Restore Job Name' },
+  { apiName: 'DC_Restore_Id__c', label: '360 Data Craft Restore Job Id' },
+];
 // Apex classes shipped with the managed package that must have Apex Class access
 // granted on the real-time trigger permission set — see trigger.ts's setupPermissionSet.
 // Comma-separated so ops can extend it without a code change.
@@ -103,12 +170,6 @@ const SALESFORCE_HANDLER_CLASS_NAME = String(
 const SALESFORCE_HANDLER_METHOD_NAME = String(
   process.env.SALESFORCE_HANDLER_METHOD_NAME || 'enqueueSync'
 ).trim();
-const OAUTH_STATE_TABLE = `${NODE_ENV_PREFIX}-${process.env.OAUTH_STATE_TABLE || 'data-vault-oauth-states'}`;
-const CRM_TABLE = `${NODE_ENV_PREFIX}-${process.env.CRM_TABLE || 'data-vault-crms'}`;
-const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
-const DESTINATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.DESTINATION_TABLE || 'data-vault-destinations'}`;
-const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
-const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
 
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
@@ -129,9 +190,6 @@ const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET);
 
 // Services
 const BACKUP_SERVICE = String(process.env.BACKUP_SERVICE);
-const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
-const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
-const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
 
 // S3 bucket this service's own operational logs (src/assets/logs/<date>/) get
 // archived to nightly, before the local copy is deleted — see jobs/logs-archive-cron.ts.
@@ -208,6 +266,18 @@ const FILTER_OPERATOR = {
   excludes: 'EXCLUDES',
 };
 
+// Every transactional email template services/common/email can render/send —
+// sendEmail(to, { template: EMAIL_TEMPLATE.x, params }) switches on this to
+// pick the right builder + params type. `as const` (unlike every other enum
+// in this file) is required here: send.ts's SendEmailPayload discriminated
+// union needs each member to be its own literal type, not the plain `string`
+// every other member of this object would otherwise widen to, or TypeScript
+// can't narrow `params` per-template and the switch loses type safety.
+const EMAIL_TEMPLATE = {
+  realtimeTriggerFailure: 'REALTIME_TRIGGER_FAILURE',
+  salesforceApiLimitReached: 'SALESFORCE_API_LIMIT_REACHED',
+} as const;
+
 // Config lifecycle/visibility — backup-config, archival-config (same table),
 // restore's initial draft state, plus user/crm/destination/settings (unrelated
 // entities that happen to share this same shape). Mirrors backup-service's own
@@ -241,13 +311,12 @@ const STATUS = {
   failed: 'FAILED',
   partialFailure: 'PARTIAL_FAILURE',
   cancelled: 'CANCELLED',
+ 
+  compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
+  compressed: 'COMPRESSED',
+  compressionFailed: 'COMPRESSION_JOB_FAILED',
 };
 // Per-object/per-item progress inside a job's object[]/objects[] array —
-// backup/archival object lifecycle, restore/rollback per-object phases, and
-// compression phases (written to a backupJob's objects[] entry, or overwrites
-// the job's own `status` field once compression starts — see the model
-// comment on IBackupJob.status for that known one-way-door quirk, unchanged
-// by this consolidation). Mirrors backup-service's own copy of this constant.
 const JOB_OBJECT_STATUS = {
   created: 'CREATED',
   bulkQueryInProgress: 'BULK_QUERY_IN_PROGRESS',
@@ -259,15 +328,21 @@ const JOB_OBJECT_STATUS = {
   deletionJobFailed: 'DELETION_JOB_FAILED',
   deletionRecordsFailed: 'DELETION_RECORDS_FAILED',
   restoreInProgress: 'RESTORE_IN_PROGRESS',
+  restoreCompleted: 'RESTORE_COMPLETED',
+  restoreFailed: 'RESTORE_FAILED',
   rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
   rollbackCompleted: 'ROLLBACK_COMPLETED',
-  compressionInProgress: 'COMPRESSION_JOB_IN_PROGRESS',
-  compressed: 'COMPRESSED',
-  compressionFailed: 'COMPRESSION_JOB_FAILED',
+  rollbackFailed: 'ROLLBACK_FAILED',
   restoreCsvCreating: 'CSV_CREATING',
   restoreIngestInProgress: 'INGEST_IN_PROGRESS',
   failed: 'FAILED',
 };
+
+const ERROR_REASON = {
+  serverCrashed: 'SERVER_CRASHED',
+  emrServerCrashed: 'EMR_SERVER_CRASHED',
+}
+
 const ENVIRONMENT_TYPE = {
   production: 'PRODUCTION',
   sandbox: 'SANDBOX',
@@ -351,6 +426,125 @@ const SALESFORCE_SYSTEM_FIELDS = [
 
 const EXCLUDE_OBJECT_SUFFIX = ['__x', '__hd', '__mdt', '__share', '__history', '__feed', '__tag', '__tagset', '__comment', '__changeevent', '__e', '__et', 'share', 'history', 'feed', 'tag', 'tagset', 'comment', 'changeevent'];
 
+// Named objects Bulk API 2.0 rejects outright (describeGlobal flags/suffix checks
+// above don't catch these — they're otherwise-ordinary-looking standard objects).
+// Attachment/Document specifically fail because Bulk API 2.0 ingest jobs can't carry
+// binary/blob data at all; most of the rest are Salesforce's documented Bulk API
+// exclusion list (virtual/read-only/report-style objects with no real sObject
+// backing, or setup/metadata objects Salesforce blocks from bulk DML). A handful
+// (User, Group, Profile, RecordType, ...) are DML-restricted rather than
+// unqueryable — excluded here because this list feeds both backup and restore
+// object pickers and restore does ingest.
+// Suffix-pattern exclusions (*History, *Feed, *Share, *Tag, *Comment, *ChangeEvent)
+// are handled by EXCLUDE_OBJECT_SUFFIX above and intentionally left out of this
+// list to avoid duplicating that check.
+// Sources: https://help.salesforce.com/s/articleView?id=000383508&type=1
+//          https://www.stitchdata.com/docs/integrations/saas/salesforce/
+const BULK_API_2_UNSUPPORTED_OBJECTS = [
+  'AcceptedEventRelation',
+  'Address',
+  'AggregateResult',
+  'Announcement',
+  'ApexClass',
+  'ApexComponent',
+  'ApexPage',
+  'ApexTrigger',
+  'AssetTokenEvent',
+  'Attachment',
+  'AttachedContentDocument',
+  'AttachedContentNote',
+  'BrandTemplate',
+  'BusinessHours',
+  'BusinessProcess',
+  'CallCenter',
+  'CaseStatus',
+  'CaseTeamMember',
+  'CaseTeamRole',
+  'CaseTeamTemplate',
+  'CaseTeamTemplateMember',
+  'CaseTeamTemplateRecord',
+  'CategoryNode',
+  'ChatterActivity',
+  'CollaborationGroupMember',
+  'CollaborationGroupRecord',
+  'CombinedAttachment',
+  'ContentBody',
+  'ContentDocumentLink',
+  'ContentFolderItem',
+  'ContentFolderMember',
+  'ContentNote',
+  'ContractStatus',
+  'DataStatistics',
+  'DeclinedEventRelation',
+  'DevopsActivityLog',
+  'DevopsRequestInfo',
+  'Document',
+  'EmailServicesAddress',
+  'EmailServicesFunction',
+  'EmailStatus',
+  'EmailTemplate',
+  'EntityParticle',
+  'EventWhoRelation',
+  'FeedLike',
+  'FeedSignal',
+  'FeedTrackedChange',
+  'FieldDefinition',
+  'FiscalYearSettings',
+  'FlexQueueItem',
+  'FlowVersionView',
+  'Folder',
+  'FolderedContentDocument',
+  'ForecastingAdjustment',
+  'ForecastingItem',
+  'ForecastingQuota',
+  'Group',
+  'GroupMember',
+  'GroupSubscription',
+  'Holiday',
+  'ListViewChartInstance',
+  'LookedUpFromActivity',
+  'Name',
+  'NoteAndAttachment',
+  'NotificationMember',
+  'OpenActivity',
+  'OrgEmailAddressSecurity',
+  'OrgWideEmailAddress',
+  'Organization',
+  'OutgoingEmail',
+  'OutgoingEmailRelation',
+  'OwnedContentDocument',
+  'OwnerChangeOptionInfo',
+  'PartnerRole',
+  'Period',
+  'PicklistValueInfo',
+  'PlatformAction',
+  'Profile',
+  'QueueSObject',
+  'QuoteTemplateRichTextData',
+  'RecentlyViewed',
+  'RecordType',
+  'RelationshipDomain',
+  'RelationshipInfo',
+  'SearchLayout',
+  'SfdcPartnerSbscrOffer',
+  'SfdcPartnerSbscrOfferItem',
+  'SiteDetail',
+  'SlackChannelRelatedRecord',
+  'SolutionStatus',
+  'StaticResource',
+  'TaskPriority',
+  'TaskStatus',
+  'TaskWhoRelation',
+  'Topic',
+  'UndecidedEventRelation',
+  'UserEntityAccess',
+  'UserFieldAccess',
+  'UserRecordAccess',
+  'UserRole',
+  'Vote',
+  'WebLink',
+];
+
 export {
   NODE_ENV,
   NODE_ENV_URL,
@@ -362,17 +556,30 @@ export {
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
   EMAIL_APP_URL,
+  EMAIL_SMTP_USER,
+  EMAIL_SMTP_APP_PASSWORD,
 
   // AWS / DynamoDB Config
   AWS_REGION,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
   DYNAMODB_ENDPOINT,
+
+  // DynamoDB table names
   USER_TABLE,
   SESSION_TABLE,
   ROLE_TABLE,
   TABLE_COUNTER_TABLE,
   COUNTER_TABLE,
+  OAUTH_STATE_TABLE,
+  CRM_TABLE,
+  BACKUP_CONFIG_TABLE,
+  DESTINATION_TABLE,
+  RESTORE_TABLE,
+  RESTORE_JOB_TABLE,
+  BACKUP_JOB_TABLE,
+  SETTINGS_TABLE,
+  NOTIFICATION_TABLE,
 
   // AWS EventBridge Scheduler Config
   AWS_EVENT_DESTINATION_API_KEY,
@@ -388,6 +595,8 @@ export {
   AWS_EMR_ENCRYPTION_KEY,
   SPARK_JOB_API_KEY,
   AWS_EMR_S3_FILE_PATH,
+  AWS_EMR_SPARK_SUBMIT_PARAMETERS,
+  AWS_EMR_LOGS_S3_URI,
 
   // AWS Athena
   AWS_ATHENA_ROLE_ARN,
@@ -410,16 +619,14 @@ export {
   SALESFORCE_LOGIN_REDIRECT_URI,
   SALESFORCE_NAMESPACE,
   SALESFORCE_METADATA_API_VERSION,
+  SALESFORCE_ECA_API_NAME,
+  SALESFORCE_AUDIT_ENABLE_OBJECTS,
+  SALESFORCE_RESTORE_PERMISSION_SET_NAME,
+  SALESFORCE_RESTORE_PERMISSION_SET_LABEL,
   SALESFORCE_PERMISSION_SET_APEX_CLASSES,
   SALESFORCE_EXTERNAL_CREDENTIAL_PRINCIPAL,
   SALESFORCE_HANDLER_CLASS_NAME,
   SALESFORCE_HANDLER_METHOD_NAME,
-  OAUTH_STATE_TABLE,
-  CRM_TABLE,
-  BACKUP_CONFIG_TABLE,
-  DESTINATION_TABLE,
-  RESTORE_TABLE,
-  RESTORE_JOB_TABLE,
   ENCRYPTION_KEY,
   SALESFORCE_ENCRYPTION_KEY,
 
@@ -430,9 +637,6 @@ export {
 
   // Services
   BACKUP_SERVICE,
-  BACKUP_JOB_TABLE,
-  SETTINGS_TABLE,
-  NOTIFICATION_TABLE,
   AWS_S3_LOGS_BUCKET,
 
   // 360 Data Craft payment/provisioning API
@@ -442,6 +646,7 @@ export {
   PAYMENT_SECRET_KEY,
 
   // Enums
+  EMAIL_TEMPLATE,
   VISIBILITY_STATUS,
   NOTIFICATION_STATUS,
   AUTH_PROVIDER,
@@ -464,5 +669,7 @@ export {
   ENVIRONMENT_TYPE,
   STANDARD_OBJECT_LIST,
   SALESFORCE_SYSTEM_FIELDS,
-  EXCLUDE_OBJECT_SUFFIX
+  EXCLUDE_OBJECT_SUFFIX,
+  BULK_API_2_UNSUPPORTED_OBJECTS,
+  ERROR_REASON,
 };

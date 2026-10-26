@@ -26,42 +26,74 @@
 /v1/public/backup-trigger:
   post:
     tags: [Public]
-    summary: EventBridge scheduled-rule target that triggers a backup/archival run
+    summary: EventBridge scheduled-rule target for maintenance/backup/archival/restore triggers
+    description: >
+      Gated by an X-Api-Key header matching AWS_EVENT_DESTINATION_API_KEY, not session
+      auth — 401s otherwise. detail.purpose selects the branch: DAILY_MAINTENANCE (one
+      or more of isSyncSalesforceRefreshToken/isLogsArchive/isStaleObjects/isSyncPayment/
+      isSyncObject/isRetryBackupFailedJob), RUN_EMR, or BACKUP_JOB (default) keyed by
+      detail.backupConfigId/userId/id.
     security: []
+    parameters:
+      - name: X-Api-Key
+        in: header
+        required: true
+        schema: { type: string }
     requestBody:
       required: true
       content:
         application/json:
           schema:
             type: object
-            description: EventBridge envelope with detail.backupConfigId and detail.userId
+            required: [detail]
+            properties:
+              detail:
+                type: object
+                required: [purpose]
+                properties:
+                  purpose: { type: string, enum: [DAILY_MAINTENANCE, BACKUP_JOB, RUN_EMR] }
+                  backupConfigId: { type: string, description: Required for BACKUP_JOB }
+                  userId: { type: string, description: Required for BACKUP_JOB }
+                  id: { type: string, description: Optional object id, for BACKUP_JOB }
+                  isSyncObject: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isSyncPayment: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isLogsArchive: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isSyncSalesforceRefreshToken: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isStaleObjects: { type: boolean, description: DAILY_MAINTENANCE only }
+                  isRetryBackupFailedJob: { type: boolean, description: DAILY_MAINTENANCE only }
     responses:
       200:
         $ref: '#/components/responses/Success'
-      400:
-        $ref: '#/components/responses/BadRequest'
+      401:
+        $ref: '#/components/responses/Unauthorized'
+
+/v1/public/test:
+  post:
+    tags: [Public]
+    summary: No-op diagnostic endpoint
+    description: Internal scratch endpoint with no request body; always returns success.
+    security: []
+    responses:
+      200:
+        $ref: '#/components/responses/Success'
 
 /v1/public/webhook/salesforce:
   put:
     tags: [Public]
     summary: Salesforce real-time change-event webhook (Data Vault managed package Apex trigger)
     description: >
-      Body arrives as an encrypted two-layer Salesforce envelope; decryption via the
-      attachDecryptedSalesforceRequest middleware is the sole authorization check.
-      Responds 200 immediately, then fans out to backup-service per matching
-      real-time backup config.
+      Body is a Salesforce envelope encrypted with the org's own key; decryption via the
+      attachDecryptedSalesforceRequest middleware (which also checks the two headers
+      below against the org's registered CRM) is the sole authorization check. Decrypts
+      to { transactionId, objectApiName, ... CDC record data }. Responds 200
+      immediately, then fans out to backup-service per matching real-time backup
+      config. Response is the standard ApiResponse envelope, not re-encrypted.
     security: []
+    parameters:
+      - $ref: '#/components/parameters/SalesforceOrgIdHeader'
+      - $ref: '#/components/parameters/SalesforceApiKeyHeader'
     requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required: [cipherText, iv, authTag]
-            properties:
-              cipherText: { type: string }
-              iv: { type: string }
-              authTag: { type: string }
+      $ref: '#/components/requestBodies/SalesforceEnvelopeBody'
     responses:
       200:
         $ref: '#/components/responses/Success'

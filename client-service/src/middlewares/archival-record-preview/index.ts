@@ -36,15 +36,19 @@ const asyncArchivalPreviewHandler =
         // as the message" fallback makeResponse already applies to any
         // unrecognised key, matching the pattern the shared asyncHandler in
         // utils/helper.ts already relies on.
+        // Debugging aid: the underlying error is returned in `meta` on every
+        // failure (it may carry SQL/table/bucket details — see the note above),
+        // not just logged.
+        const errorMeta = { error: message, errorName: error instanceof Error ? error.name : 'Error' };
         if (isAwsThrottling(error)) {
-          makeResponse(req, res, 429, false, 'too_many_requests' as Parameters<typeof makeResponse>[4]);
+          makeResponse(req, res, 429, false, 'too_many_requests' as Parameters<typeof makeResponse>[4], null, errorMeta);
           return;
         }
         if (isAwsAccessDenied(error)) {
-          makeResponse(req, res, 502, false, 'upstream_access_denied' as Parameters<typeof makeResponse>[4]);
+          makeResponse(req, res, 502, false, 'upstream_access_denied' as Parameters<typeof makeResponse>[4], null, errorMeta);
           return;
         }
-        makeResponse(req, res, 500, false, 'internal_error' as Parameters<typeof makeResponse>[4]);
+        makeResponse(req, res, 500, false, 'internal_error' as Parameters<typeof makeResponse>[4], null, errorMeta);
       }
     };
 

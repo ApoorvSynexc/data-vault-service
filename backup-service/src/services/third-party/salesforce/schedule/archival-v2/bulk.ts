@@ -142,7 +142,6 @@ const uploadBulkResultsByPage = async (
         : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
 
       const response = await fetchPage(url);
-      console.log('RESPONSE ==> ' + JSON.stringify(response));
       ++salesforceApiCount;
       if (!response.ok) {
         throw new Error(`Salesforce results fetch failed with status ${response.status}`);

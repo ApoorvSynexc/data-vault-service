@@ -132,9 +132,10 @@ const getBackupConfigsByUser = async (userId: string): Promise<IBackupConfig[]> 
 
 const getBackupConfigsByCrm = async (crmId: string, limit?: number): Promise<IBackupConfig[]> => {
   const result = await docClient.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: BACKUP_CONFIG_TABLE,
-      FilterExpression: 'crmId = :crmId',
+      IndexName: 'crmId-index',
+      KeyConditionExpression: 'crmId = :crmId',
       ExpressionAttributeValues: { ':crmId': crmId },
       ...(limit && { Limit: limit }),
     })
@@ -332,10 +333,11 @@ const getBackupConfigsWithPagination = async (
     schedule?: string;
     backupStatus?: string;
     search?: string;
+    withLastBackupAt?: boolean;
   },
   pagination?: { limit?: number; cursor?: string }
 ): Promise<{ documents: IBackupConfig[]; nextCursor: string | null }> => {
-  const { userId, crmId, type, name, status, destinationId, schedule, backupStatus, search } = filter;
+  const { userId, crmId, type, name, status, destinationId, schedule, backupStatus, search, withLastBackupAt } = filter;
   const { limit = 10, cursor } = pagination || {};
   const exclusiveStartKey = decodeCursor(cursor);
 
@@ -392,6 +394,9 @@ const getBackupConfigsWithPagination = async (
     if (destinationId) {
       expressionAttributeValues[':destinationId'] = destinationId;
       expressions.push('destinationId = :destinationId');
+    }
+    if (withLastBackupAt) {
+      expressions.push('attribute_exists(lastBackupAt)');
     }
 
     return expressions;
@@ -488,6 +493,7 @@ const getBackupConfigsWithPagination = async (
 
 
 const getLastNBackupConfigByCrm = async (
+  userId: string,
   crmId: string,
   limit: number = 10,
   type?: 'NORMAL' | 'ARCHIVAL'
@@ -496,13 +502,14 @@ const getLastNBackupConfigByCrm = async (
     TableName: BACKUP_CONFIG_TABLE,
     IndexName: 'crmId-sizeInBytes-index',
     KeyConditionExpression: 'crmId = :crmId',
-    ExpressionAttributeValues: { ':crmId': crmId },
+    FilterExpression: 'userId = :userId',
+    ExpressionAttributeValues: { ':crmId': crmId, ':userId': userId },
     Limit: limit,
     ScanIndexForward: false,
   };
 
   if (type) {
-    queryParams.FilterExpression = '#type = :type';
+    queryParams.FilterExpression += ' AND #type = :type';
     queryParams.ExpressionAttributeNames = { '#type': 'type' };
     queryParams.ExpressionAttributeValues[':type'] = type;
   }
@@ -588,6 +595,67 @@ const getBackupConfigBySlug = async (params: {
     })
   );
   return (result.Items?.[0] as IBackupConfig) ?? null;
+};
+
+const getBackupConfigByName = async (params: {
+  userId: string;
+  name: string;
+  type?: 'ARCHIVAL' | 'NORMAL';
+  pageSize?: number;
+}): Promise<IBackupConfig | null> => {
+  const { userId, name, type, pageSize = 100 } = params;
+
+  // DynamoDB expressions have no LOWER()/case-insensitive comparator, so an
+  // exact-match FilterExpression on #name would let "Daily Backup" and
+  // "daily backup" collide undetected. Instead: only filter server-side on
+  // #type (a plain enum, no case concerns) and do the case-insensitive name
+  // compare in-process.
+  const expressionNames: Record<string, string> = { '#name': 'name' };
+  const expressionValues: Record<string, any> = { ':uid': userId };
+
+  const filterParts: string[] = [];
+  if (type) {
+    filterParts.push('#type = :type');
+    expressionNames['#type'] = 'type';
+    expressionValues[':type'] = type;
+  }
+
+  const normalizedName = name.trim().toLowerCase();
+
+  // Walks the user's configs one page (pageSize items) at a time via
+  // ExclusiveStartKey/LastEvaluatedKey instead of loading every config this
+  // user owns into memory in one shot, and returns as soon as a page yields
+  // a match instead of always reading to the end. ProjectionExpression keeps
+  // each page small by pulling just the fields needed for the check instead
+  // of full config items (which can carry large `objects`/`scheduleConfig`
+  // payloads).
+  let lastEvaluatedKey: Record<string, any> | undefined;
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :uid',
+        ProjectionExpression: 'backupConfigId, #name, #type',
+        ...(filterParts.length && { FilterExpression: filterParts.join(' AND ') }),
+        ExpressionAttributeNames: expressionNames,
+        ExpressionAttributeValues: expressionValues,
+        Limit: pageSize,
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const match = ((result.Items ?? []) as Pick<IBackupConfig, 'backupConfigId' | 'name' | 'type'>[]).find(
+      (item) => item.name?.trim().toLowerCase() === normalizedName
+    );
+    if (match) {
+      return match as IBackupConfig;
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return null;
 };
 
 // Unscoped scan (no userId/crmId — every config in the table, unlike
@@ -709,6 +777,7 @@ export {
   createBackupConfig,
   getBackupConfigById,
   getBackupConfigBySlug,
+  getBackupConfigByName,
   getBackupConfigsByUser,
   getBackupOverview,
   getBackupConfigsByCrm,

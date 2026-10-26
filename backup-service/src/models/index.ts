@@ -5,3 +5,4 @@ export * from './restore-job';
 export * from './shared';
 export * from './settings';
 export * from './notification';
+export * from './user';

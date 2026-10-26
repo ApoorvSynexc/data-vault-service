@@ -4,7 +4,7 @@ import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig, getBackupJobsByConfigAndStatuses } from '../backup-job';
 import { getRestoreById } from '../restore';
-import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, STATUS, JOB_OBJECT_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL, SPARK_JOB_API_KEY } from '../../constant';
+import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, STATUS, JOB_OBJECT_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL, SPARK_JOB_API_KEY, AWS_EMR_SPARK_SUBMIT_PARAMETERS, AWS_EMR_LOGS_S3_URI, SALESFORCE_AUDIT_ENABLE_OBJECTS } from '../../constant';
 import { logger } from '../../middlewares';
 import { IAwsCredentials, IBackupConfig, IBackupJob, IObject, IObjectRelationshipNode, IRestoreScope, IRestoreSource } from '../../models';
 import { flattenBackupObjects } from '../../utils/helper';
@@ -178,7 +178,7 @@ async function fetchAllBackupJobs(backupConfigId: string) {
 const COMPRESSIBLE_STATUSES: string[] = [
     STATUS.success,
     STATUS.partialFailure,
-    JOB_OBJECT_STATUS.compressionFailed,
+    STATUS.compressionFailed,
 ];
 const isCompressible = (job: IBackupJob): boolean => COMPRESSIBLE_STATUSES.includes(job.status);
 
@@ -507,75 +507,11 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
         const configId = 'restoreConfigId' in payload ? payload.restoreConfigId : payload.backupConfigId;
         logger.info(`Initializing EMR job... executionRoleArn=${AWS_EMR_EXECUTION_ROLE_ARN} configId=${configId}`);
 
-        // Spark submit parameters — tuned for 100 GB / 200 objects in 5 minutes.
-        // Kept as an array + .join(' ') so each setting is reviewable in isolation;
-        // EMR receives the joined single-line string at submit time.
-        const sparkSubmitParameters = [
-            '--class com.example.Main',
-            '--conf spark.driver.userClassPathFirst=true',
-            '--conf spark.executor.userClassPathFirst=true',
-
-            // Driver
-            '--conf spark.driver.cores=2',
-            '--conf spark.driver.memory=8g',
-            '--conf spark.driver.memoryOverhead=2g',
-            '--conf spark.driver.maxResultSize=2g',
-            '--conf spark.emr-serverless.driver.disk=20g',
-
-            // Executors — fixed at 4, dynamic allocation OFF. Every job requests the
-            // full 4 executors (4 cores / 16g / 20g disk each) up front and holds them
-            // for the run's duration; no ramp-up/ramp-down, no scaling between a min
-            // and a max. executor.instances is the sole executor-count control here —
-            // it's a no-op while dynamicAllocation.enabled=true (below), so it only
-            // takes effect once dynamic allocation is off.
-            '--conf spark.executor.cores=4',
-            '--conf spark.executor.memory=16g',
-            '--conf spark.executor.memoryOverhead=3g',
-            '--conf spark.emr-serverless.executor.disk=20g',
-            '--conf spark.executor.instances=4',
-            '--conf spark.dynamicAllocation.enabled=false',
-
-            // Memory
-            '--conf spark.memory.fraction=0.7',
-            '--conf spark.memory.storageFraction=0.3',
-
-            // Serialization
-            '--conf spark.serializer=org.apache.spark.serializer.KryoSerializer',
-            '--conf spark.kryo.registrator=org.apache.spark.HoodieSparkKryoRegistrar',
-            '--conf spark.kryoserializer.buffer.max=512m',
-
-            // S3A
-            '--conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
-            '--conf spark.hadoop.fs.s3a.connection.maximum=200',
-            '--conf spark.hadoop.fs.s3a.threads.max=64',
-            '--conf spark.hadoop.fs.s3a.threads.keepalivetime=60',
-            '--conf spark.hadoop.fs.s3a.connection.timeout=60000',
-            '--conf spark.hadoop.fs.s3a.connection.establish.timeout=15000',
-            '--conf spark.hadoop.fs.s3a.attempts.maximum=5',
-            '--conf spark.hadoop.fs.s3a.retry.limit=5',
-            '--conf spark.hadoop.fs.s3a.retry.throttle.limit=20',
-            '--conf spark.hadoop.fs.s3a.paging.maximum=1000',
-
-            '--conf spark.hadoop.fs.s3a.multipart.size=67108864',
-            '--conf spark.hadoop.fs.s3a.block.size=67108864',
-            '--conf spark.hadoop.fs.s3a.multipart.threshold=134217728',
-
-            '--conf spark.hadoop.fs.s3a.fast.upload=true',
-            '--conf spark.hadoop.fs.s3a.fast.upload.buffer=disk',
-            '--conf spark.hadoop.fs.s3a.fast.upload.active.blocks=4',
-
-            '--conf spark.hadoop.fs.s3a.readahead.range=4194304',
-
-            // Network
-            '--conf spark.network.timeout=600s',
-            '--conf spark.executor.heartbeatInterval=60s',
-
-            // Scheduler
-            '--conf spark.scheduler.mode=FAIR',
-            '--conf spark.task.cpus=1',
-            '--conf spark.locality.wait=0s',
-            '--conf spark.speculation=false',
-        ].join(' ');
+        // Full --conf string, env-driven — see AWS_EMR_SPARK_SUBMIT_PARAMETERS
+        // (constant/index.ts) for the default baseline and the reasoning behind
+        // its driver/executor sizing (pinned to this app's pre-initialized
+        // capacity). Override via env to retune without a code deploy.
+        const sparkSubmitParameters = AWS_EMR_SPARK_SUBMIT_PARAMETERS;
 
         const command = new StartJobRunCommand({
             applicationId: AWS_EMR_APPLICATION_ID,
@@ -600,6 +536,13 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                             "spark.executor.extraJavaOptions": `-DENCRYPTION_KEY=${ENCRYPTION_KEY} -DSPARK_JOB_API_KEY=${SPARK_JOB_API_KEY} -DNODE_SERVER_URL=${NODE_ENV_URL} -Ddatavault.diagnostics.csvRowLoss=true`,
                             "spark.executorEnv.NODE_SERVER_URL": NODE_ENV_URL,
                             "spark.emr-serverless.driverEnv.NODE_SERVER_URL": NODE_ENV_URL,
+                            // Comma-separated standard-object allowlist for Salesforce's
+                            // "Create Audit Fields" feature — see constant/index.ts's
+                            // SALESFORCE_AUDIT_ENABLE_OBJECTS. Spark uses this to decide,
+                            // per object, whether to keep or strip CreatedById/CreatedDate/
+                            // LastModifiedById/LastModifiedDate before a restore insert.
+                            "spark.executorEnv.SALESFORCE_AUDIT_ENABLE_OBJECTS": SALESFORCE_AUDIT_ENABLE_OBJECTS,
+                            "spark.emr-serverless.driverEnv.SALESFORCE_AUDIT_ENABLE_OBJECTS": SALESFORCE_AUDIT_ENABLE_OBJECTS,
                         },
                     },
                 ],
@@ -608,7 +551,7 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
                         enabled: true
                     },
                     s3MonitoringConfiguration: {
-                        logUri: "s3://qa-data-vault-logs"
+                        logUri: AWS_EMR_LOGS_S3_URI
                     }
                 },
             },

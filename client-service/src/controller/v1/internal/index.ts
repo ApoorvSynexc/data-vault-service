@@ -6,17 +6,15 @@ import {
   getUser,
   initalizePayloadTransform,
   getDecryptedCrmCredential,
-  updateUser,
-  initalizeRestoreTransform,
+  getRestoreJobById,
 } from '../../../services';
 import { STATUS, VISIBILITY_STATUS } from '../../../constant';
 import {
-  refreashSalesforceToken,
+  refreshAndPersistSalesforceToken,
   SalesforceAuthExpiredError,
 } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
-import { encrypt } from '../../../utils/encryption';
-import { salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
+import { runRestoreFieldSetupAndTransform } from '../../../services/third-party/salesforce/restore';
 import { logger } from '../../../middlewares';
 
 const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -45,19 +43,12 @@ const crmRefreshTokenHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
   const tokens = getDecryptedCrmCredential(user) ?? {};
-  let refreshed: any;
+  let refreshed: { access_token: string; refresh_token: string };
   try {
-    refreshed = await refreashSalesforceToken(tokens.refresh_token, crm.environment);
+    refreshed = await refreshAndPersistSalesforceToken(user.userId, tokens.refresh_token, crm.environment);
   } catch {
     throw new SalesforceAuthExpiredError();
   }
-
-  const crmCredential = {
-    access_token: refreshed.access_token,
-    refresh_token: refreshed.refresh_token || tokens.refresh_token,
-  }
-  const encrptedCrm = encrypt(JSON.stringify(crmCredential));
-  await updateUser({ userId: user.userId }, { crmCredential: encrptedCrm });
 
   makeResponse(req, res, 200, true, 'update', refreshed);
 };
@@ -120,10 +111,11 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
       case 'schema.sync.completed': {
         const { triggerSource } = req.body;
 
-        if(triggerSource?.name === 'CREATE_RESTORE') {
-          const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: triggerSource.entityId });
-          await salesforceFieldsPermission({ restoreJobId: triggerSource.entityId, newFieldsByObject });
-          await initalizeRestoreTransform(triggerSource.entityId);
+        if (triggerSource?.name === 'CREATE_RESTORE') {
+          const restoreJob = await getRestoreJobById(triggerSource.entityId);
+          if (restoreJob) {
+            await runRestoreFieldSetupAndTransform(restoreJob.restoreId, restoreJob.restoreJobId, restoreJob.destination.objects);
+          }
         } else {
           await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
         }

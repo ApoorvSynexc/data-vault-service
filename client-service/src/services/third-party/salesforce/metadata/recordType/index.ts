@@ -108,9 +108,9 @@ export const recordTypeHandler = async (
             latestRecordTypes: recordTypeInfos,
         });
         if (diff.recordTypesChanged) {
-            logger.info(
-                `Object record type change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedRecordTypes.length}, removed=${diff.removedRecordTypes.length}, modified=${diff.modifiedRecordTypes.length}`
-            );
+            // logger.info(
+            //     `Object record type change detected, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, added=${diff.addedRecordTypes.length}, removed=${diff.removedRecordTypes.length}, modified=${diff.modifiedRecordTypes.length}`
+            // );
             const operations: Array<"inserts" | "updates" | "deletes"> = [];
             if (diff.addedRecordTypes.length) {
                 operations.push("inserts");
@@ -135,12 +135,14 @@ export const recordTypeHandler = async (
                 metadataType: 'recordTypes',
             });
 
-            await uploadToS3(destConfig, s3Key, buffer);
+            if (params.isUpdateSchemaOnS3 !== false) {
+                await uploadToS3(destConfig, s3Key, buffer);
+            }
         }
 
-        logger.info(
-            `Object record type comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, recordTypesChanged=${diff.recordTypesChanged}`
-        );
+        // logger.info(
+        //     `Object record type comparison complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, recordTypesChanged=${diff.recordTypesChanged}`
+        // );
 
         return diff;
     } catch (error: any) {

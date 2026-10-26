@@ -1,17 +1,9 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
-  getRestoreRetrieveJobById,
-  getRestoreRetrieveJobsByConfig,
-  getRestoreRetrieveJobsByUser,
-  getBackupJobIdsChangedBetween,
-  CHANGED_BETWEEN_JOBS_LIMIT,
-  CHANGED_BETWEEN_JOBS_MAX_LIMIT,
   retrieveRecords,
   fetchObjectFields,
-  getTableCounter,
   ConfigType,
   createRestore,
-  updateRestore,
   getRestoreById,
   IRetrieveRecordsParams,
   RetrieveType,
@@ -20,7 +12,6 @@ import {
   OPERATION_FIELD,
   fetchPicklistValues,
   createRestoreJob,
-  tiggerRestoreJob,
   getRestoresWithPagination,
   getRestoreJobsByRestoreId,
   computeRestoreJobStats,
@@ -38,74 +29,31 @@ import {
   IDryRunParams,
   DryRunSourceType,
   buildAthenaFilterWhere,
+  validateSoqlQuery,
   getBackupConfigById,
   runMetadataComparisonForConfig,
-  hasMetadataChanged,
+  getMetadataChangeOperations,
   triggerBackupJob,
-  initalizeRestoreTransform,
   getRestoreJobById,
   updateRestoreJob,
   listS3Objects,
   getPresignedDownloadUrl,
   checkSalesforceApiLimitUsage,
+  getCrmById,
+  hasMetadataChanged,
+  updateRestore,
 } from '../../../services';
-import { BACKUP_JOB_TABLE, STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
+import { STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
-import { IBackupJob, IRestoreScope, IRestoreFilters, IS3Config } from '../../../models';
+import { IRestoreScope, IRestoreFilters, IS3Config } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
 import { decrypt } from '../../../utils/encryption';
 import { parseCsvRow } from '../../../utils/restore-csv-format';
-import { createRollbackService, salesforceFieldCreation, salesforceFieldsPermission } from '../../../services/third-party/salesforce/restore';
+import { createRollbackService, runRestoreFieldSetupAndTransform } from '../../../services/third-party/salesforce/restore';
 
 const VALID_CONFIG_TYPES: ConfigType[] = ['BACKUP', 'ARCHIVAL'];
-
-// Strips encrypted fields before sending a job to the client.
-// source and destination contain ciphertext — exposing them would leak encrypted credentials.
-const sanitize = ({ source, destination, ...rest }: IBackupJob) => ({
-  ...rest,
-  destination: { type: destination.type },
-});
-
-/**
- * GET /list?backupConfigId=&limit=&cursor=&status=
- * Lists restore/retrieve jobs with cursor-based pagination.
- * When backupConfigId is provided, scopes results to that config.
- * When omitted, returns all jobs across all configs for the authenticated user.
- */
-const listRestoreRetrieveJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, limit, cursor, status } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
-  const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
-
-  if (backupConfigId) {
-    const [{ items, nextCursor }, counter] = await Promise.all([
-      getRestoreRetrieveJobsByConfig(backupConfigId, { limit: limitNum, cursor, status }),
-      getTableCounter(BACKUP_JOB_TABLE, backupConfigId),
-    ]);
-
-    makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
-      limit: limitNum,
-      nextCursor,
-      totalRecords: counter?.count ?? 0,
-      totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
-    });
-    return;
-  }
-
-  const [{ items, nextCursor }, counter] = await Promise.all([
-    getRestoreRetrieveJobsByUser(userId, { limit: limitNum, cursor, status }),
-    getTableCounter(BACKUP_JOB_TABLE, userId),
-  ]);
-
-  makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
-    limit: limitNum,
-    nextCursor,
-    totalRecords: counter?.count ?? 0,
-    totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
-  });
-};
 
 /**
  * GET /get-picklist-field-values?backupConfigId=&objectApiName=&fieldApiName=
@@ -141,30 +89,6 @@ const getPicklistFieldValuesHandler = async (req: IRequest, res: IResponse): Pro
 };
 
 /**
- * GET /?backupJobId=
- * Returns a single restore/retrieve job, sanitized to remove encrypted fields.
- * isOwner returns false for null jobs, so a missing job and a foreign job both return not_exist
- * — intentionally avoids leaking whether a given ID exists.
- */
-const getRestoreRetrieveJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupJobId } = req.query;
-
-  if (!backupJobId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const job = await getRestoreRetrieveJobById(String(backupJobId));
-
-  if (!isOwner(job, req.user!.userId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', sanitize(job!));
-};
-
-/**
  * GET /get-objectlist-by-configid?backupConfigId=&configType=
  * Returns the objects the user selected when creating the config, narrowed to
  * what a restore can actually write back to — the existing Object List API
@@ -195,87 +119,13 @@ const getObjectListByConfigIdHandler = async (req: IRequest, res: IResponse): Pr
   }
 
   let config = await getBackupConfigById(backupConfigId);
-  if (!config) {
+  // Only the config's own org (creator or another user of the same CRM) may read it.
+  // Same 'not_exist' as a missing config so other tenants' ids can't be probed.
+  if (!isOwner(config, req.user!.userId, req.user!.crmId)) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
   makeResponse(req, res, 200, true, 'fetch', config);
-};
-
-/**
- * GET /fetch-change-between-backup-jobs?backupConfigId=&startTime=&endTime=&limit=&cursor=
- *
- * Backup job ids for the config whose run started inside the window, newest
- * first — the job list to hand to /retrieve/fetch-records as
- * source.backupJobIds under a CHANGED_BETWEEN request.
- *
- * The window applies to when a job STARTED (startedAt), not when it was
- * created: a job created earlier but resumed inside the window recorded its
- * changes inside the window.
- *
- * Paginated with the same limit/cursor contract as the other list endpoints. A
- * page can come back shorter than `limit` and still carry a nextCursor — the
- * window filter is applied after the index read — so follow nextCursor rather
- * than a short page to decide when the list ends.
- *
- * Returns not_exist when the config doesn't exist or isn't owned by the caller
- * — same collapsing as the handlers above, which avoids confirming that another
- * user's config id exists.
- */
-const fetchChangeBetweenBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupConfigId, startTime, endTime, limit, cursor } = req.query as Record<string, string>;
-  const userId = req.user!.userId;
-  const limitNum = Math.min(
-    Math.max(1, parseInt(limit ?? String(CHANGED_BETWEEN_JOBS_LIMIT), 10) || CHANGED_BETWEEN_JOBS_LIMIT),
-    CHANGED_BETWEEN_JOBS_MAX_LIMIT
-  );
-
-  if (!backupConfigId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  if (!startTime || !endTime) {
-    makeResponse(req, res, 400, false, 'params_required');
-    return;
-  }
-
-  // Stored timestamps are ISO UTC and DynamoDB range-compares them as plain
-  // strings, so the window is canonicalised before it can be compared. `endTime`
-  // is resolved as an upper bound, which makes a date-only window inclusive of
-  // its final day — the same reading /fetch-records gives source.endDate, so a
-  // window picked here means the same thing when its job ids are passed on.
-  const from = toIsoDateString(startTime, 'start');
-  const to = toIsoDateString(endTime, 'end');
-
-  if (!from || !to) {
-    makeResponse(req, res, 400, false, 'invalid_time_format');
-    return;
-  }
-
-  if (from > to) {
-    makeResponse(req, res, 400, false, 'invalid_time_range');
-    return;
-  }
-
-  const result = await getBackupJobIdsChangedBetween({
-    backupConfigId,
-    startTime: from,
-    endTime: to,
-    userId,
-    limit: limitNum,
-    ...(cursor ? { cursor } : {}),
-  });
-
-  if (!result) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', result.backupJobIds, {
-    limit: limitNum,
-    ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
-  });
 };
 
 // De-duplicated, trimmed, non-empty strings. Returns null when the input is not
@@ -720,7 +570,7 @@ const dryRunHandler = async (req: IRequest, res: IResponse): Promise<void> => {
  *   source: { type: 'ENTIRE' | 'CHANGED_BETWEEN', startDate?, endDate? }
  *   selection: { restoreScope: IRestoreScope }
  *       (type: ALL | OBJECT | FIELD | FILTER | RECORD | BULK_CSV | DELETED_ONLY)
- *   limit?: number   (records per object; default 50, max 200)
+ *   limit?: number   (records per object; default 20, max 20)
  * }
  *
  * The record-level counterpart to /dry-run: instead of counting what a restore
@@ -763,6 +613,95 @@ const dryRunDiffHandler = async (req: IRequest, res: IResponse): Promise<void> =
   }
 
   const result = await dryRunDiff({ ...parsed.value, user: req.user!, limit });
+
+  if (!result.ok) {
+    makeResponse(req, res, 400, false, result.error);
+    return;
+  }
+
+  makeResponse(req, res, 200, true, 'fetch', result.value);
+};
+
+/**
+ * Parses the /retrieve/validate-query body: backupConfigId, configType,
+ * objectApiName, soqlQuery — the same per-object SOQL a restore's FILTER
+ * scope carries as selection.restoreScope.filters[].filter.soqlQuery (see
+ * validateFilterShape/VALID_FILTER_TYPES above).
+ */
+const parseValidateQueryParams = (
+  body: Record<string, unknown>,
+  userId: string
+):
+  | { ok: true; value: { backupConfigId: string; configType: ConfigType; objectApiName: string; filter: IRestoreFilters; userId: string } }
+  | { ok: false; error: Parameters<typeof makeResponse>[4] } => {
+  const { backupConfigId, configType, objectApiName, soqlQuery } = body;
+
+  if (typeof backupConfigId !== 'string' || !backupConfigId.trim()) {
+    return { ok: false, error: 'id_required' };
+  }
+  if (typeof configType !== 'string' || !VALID_CONFIG_TYPES.includes(configType as ConfigType)) {
+    return { ok: false, error: 'invalid_config_type' };
+  }
+  if (typeof objectApiName !== 'string' || !objectApiName.trim()) {
+    return { ok: false, error: 'object_api_name_required' };
+  }
+  if (typeof soqlQuery !== 'string' || !soqlQuery.trim()) {
+    return { ok: false, error: 'soql_query_required' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      backupConfigId: backupConfigId.trim(),
+      configType: configType as ConfigType,
+      objectApiName: objectApiName.trim(),
+      filter: { type: 'SOQL', soqlQuery: soqlQuery.trim() },
+      userId,
+    },
+  };
+};
+
+/**
+ * POST /retrieve/validate-query
+ * Body: { backupConfigId, configType, objectApiName, soqlQuery }
+ *
+ * Validates a restore FILTER scope's SOQL condition by actually running it:
+ * converts it to an Athena WHERE clause (buildAthenaFilterWhere — the same
+ * converter dry-run/dry-run-diff use for the FILTER scope), then runs
+ * `SELECT Id FROM <object's Hudi table> WHERE <clause> LIMIT 1` against the
+ * object's real compressed data — cheap enough to run while a user is still
+ * composing a query, but a real execution, so a field name that's
+ * structurally valid SOQL but doesn't exist on this object's actual schema
+ * fails here instead of silently passing.
+ *
+ * Response: { matched: boolean, valid: true } — matched is whether at least
+ * one record currently matches; valid confirms the query itself ran/compiled
+ * successfully, independent of matched (a valid filter can legitimately match
+ * zero rows — that's not a validation failure). When the object has no
+ * compressed Hudi table yet, matched is false rather than an error — the
+ * filter is still validated, there's just nothing to run it against, and
+ * valid is still true.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the
+ * caller.
+ */
+const validateQueryHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const parsed = parseValidateQueryParams(req.body as Record<string, unknown>, req.user!.userId);
+  if (!parsed.ok) {
+    makeResponse(req, res, 400, false, parsed.error);
+    return;
+  }
+
+  let result;
+  try {
+    result = await validateSoqlQuery({ ...parsed.value, user: req.user! });
+  } catch (e) {
+    if (e instanceof FilterError) {
+      makeResponse(req, res, 400, false, e.code as Parameters<typeof makeResponse>[4]);
+      return;
+    }
+    throw e;
+  }
 
   if (!result.ok) {
     makeResponse(req, res, 400, false, result.error);
@@ -1066,7 +1005,7 @@ const fetchObjectFieldsHandler = async (req: IRequest, res: IResponse): Promise<
   makeResponse(req, res, 200, true, 'fetch', fields);
 };
 
-const MAX_BULK_CSV_ROWS = 50000;
+const MAX_BULK_CSV_ROWS = 500000;
 const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const file = req.file;
   if (!file) {
@@ -1084,6 +1023,11 @@ const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<vo
   const backupConfig = await getBackupConfigById(backupConfigId);
   if (!backupConfig) {
     return makeResponse(req, res, 400, false, 'backup_config_not_found');
+  }
+
+  const crm = await getCrmById(backupConfig.crmId);
+  if (!crm) {
+    return makeResponse(req, res, 400, false, 'crm_not_found');
   }
 
   const destination = await getDestinationById(backupConfig.destinationId);
@@ -1112,7 +1056,7 @@ const parseBulkCsvIdsHandler = async (req: IRequest, res: IResponse): Promise<vo
   }
 
   const s3Config = getDecryptedDestinationConfig(destination) as IS3Config;
-  const s3Key = `bulk-csv-ids/${req.user!.userId}/${uuidv4()}.csv`;
+  const s3Key = `${crm.crmName}/${crm.crmId}/bulk-csv-ids/${req.user!.userId}/${uuidv4()}.csv`;
   await uploadToS3(s3Config, s3Key, file.buffer);
 
   makeResponse(req, res, 200, true, 'fetch', { objectName, s3Key });
@@ -1128,20 +1072,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  const changedObjectNames: string[] = [];
-  if (backupConfig.type === 'NORMAL') {
-    const result = await runMetadataComparisonForConfig(backupConfig);
-    for (const { objectName, result: metadataResult } of result) {
-      if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-        changedObjectNames.push(objectName);
-      }
-    }
-
-    if (changedObjectNames.length > 0) {
-      await checkSalesforceApiLimitUsage(user!.userId, backupConfig.crmId);
-    }
-  }
-
+  await checkSalesforceApiLimitUsage({ userId: user!.userId, crmId: backupConfig.crmId });
   const isDraft = body.status === VISIBILITY_STATUS.draft;
   const payload = { restoreId, userId: user!.userId, ...body, status: isDraft ? VISIBILITY_STATUS.draft : STATUS.pending };
   const created = await createRestore(payload);
@@ -1158,22 +1089,50 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
   }
 
   // Step 1: compare metadata comparison
-  // const changedObjectNames: string[] = [];
+  let hasComparisonError = false;
+  const changedObjectNames: string[] = [];
   try {
     if (backupConfig.type === 'NORMAL') {
-      // const result = await runMetadataComparisonForConfig(backupConfig);
-      // for (const { objectName, result: metadataResult } of result) {
-      //   if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-      //     changedObjectNames.push(objectName);
-      //   }
-      // }
+      if (backupConfig.schedule === 'REALTIME') {
+        const result = await runMetadataComparisonForConfig(backupConfig, false);
+        for (const { objectName, result: metadataResult } of result) {
+          // const operations = getMetadataChangeOperations(metadataResult);
+          // const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
 
-      if (changedObjectNames.length) {
+          if (!metadataResult) {
+            const failedObjects = restoreJob.destination.objects.filter((obj) => ({ ...obj, status: JOB_OBJECT_STATUS.failed, errorMessage: 'Metadata comparison failed, Please retry after reconnect your crm' }));
+            await updateRestoreJob({ restoreJobId: restoreJob.restoreJobId, replaceObjects: failedObjects, status: STATUS.failed });
+            await updateRestore({ restoreId, status: STATUS.failed });
+            hasComparisonError = true;
+          }
+
+          if (!hasComparisonError && hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+            changedObjectNames.push(objectName);
+          }
+        }
+
+        if (changedObjectNames.length) {
+          await triggerBackupJob({
+            user: backupConfigUser,
+            config: backupConfig,
+            type: 'backup',
+            lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+            schemaSync: true,
+            triggerSource: {
+              name: "CREATE_RESTORE",
+              entityId: restoreJob.restoreJobId,
+            },
+            ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
+          });
+        } else if (!hasComparisonError) {
+          await runRestoreFieldSetupAndTransform(restoreJob.restoreId, restoreJob.restoreJobId, restoreJob.destination.objects);
+        }
+      } else {
         await triggerBackupJob({
           user: backupConfigUser,
           config: backupConfig,
           type: 'backup',
-          lastUpdatedAt: backupConfig.lastSchemaSyncAt,
+          lastUpdatedAt: backupConfig.lastBackupAt,
           schemaSync: true,
           triggerSource: {
             name: "CREATE_RESTORE",
@@ -1181,15 +1140,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           },
           ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
         });
-      } else {
-        const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
-        await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
-        await initalizeRestoreTransform(restoreJob.restoreJobId);
       }
-    } else {
-      const newFieldsByObject = await salesforceFieldCreation({ restoreJobId: restoreJob.restoreJobId });
-      await salesforceFieldsPermission({ restoreJobId: restoreJob.restoreJobId, newFieldsByObject });
-      await initalizeRestoreTransform(restoreJob.restoreJobId);
     }
   } catch (error) {
     logger.error(`[Restore creation handler] config ${backupConfig.backupConfigId} threw error: ${(error as Error)?.message ?? String(error)}`);
@@ -1202,43 +1153,18 @@ const createRollbackHandler = async (req: IRequest, res: IResponse): Promise<voi
   if (!restoreJob) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
-  const objectPayload = restoreJob.destination.objects.map((obj => ({ name: obj.name, id: obj.id, status: JOB_OBJECT_STATUS.restoreInProgress })));
+  // Rollback writes back into the Salesforce org — only users of the restore's own org may
+  // trigger it (the creator, or another user of the same CRM). Same 'not_exist' response as a
+  // missing job so ids of other tenants can't be probed.
+  const restore = await getRestoreById(restoreJob.restoreId);
+  if (!isOwner(restore, req.user!.userId, req.user!.crmId)) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+  const objectPayload = restoreJob.destination.objects.map((obj => ({...obj, status: JOB_OBJECT_STATUS.rollbackInProgress })));
   await updateRestoreJob({ restoreJobId, replaceObjects: objectPayload, status: STATUS.pending });
 
   makeResponse(req, res, 200, true, 'update');
   await createRollbackService(restoreJob);
-};
-
-const activateRestoreHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { restoreId } = req.body as Record<string, string>;
-  const userId = req.user!.userId;
-
-  if (!restoreId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const restore = await getRestoreById(restoreId);
-  if (!isOwner(restore, userId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  if (restore!.status !== VISIBILITY_STATUS.draft) {
-    makeResponse(req, res, 400, false, 'restore_not_draft');
-    return;
-  }
-
-  await updateRestore({ restoreId, status: STATUS.pending });
-  const restoreJob = await createRestoreJob({ ...restore!, status: STATUS.pending });
-
-  makeResponse(req, res, 200, true, 'update');
-
-  tiggerRestoreJob(restoreJob).catch((error) => {
-    logger.error(
-      `[restore] restore workflow failed | restoreId=${restoreId} restoreJobId=${restoreJob.restoreJobId} err:${error?.message ?? error}`
-    );
-  });
 };
 
 const listRestoresHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -1272,14 +1198,53 @@ const getRestoreJobHandler = async (req: IRequest, res: IResponse): Promise<void
     return makeResponse(req, res, 400, false, 'id_required');
   }
 
-  const restoreJobs = await getRestoreJobsByRestoreId(restoreId);
+  const [restoreJobs, restore] = await Promise.all([
+    getRestoreJobsByRestoreId(restoreId),
+    getRestoreById(restoreId),
+  ]);
+
+  if (!isOwner(restore, req.user!.userId)) {
+    return makeResponse(req, res, 400, false, 'not_exist');
+  }
+
+  const backupConfig = await getBackupConfigById(restore?.source.backupConfigId!);
+
   const restoreJob = restoreJobs[0];
-  makeResponse(req, res, 200, true, 'fetch', { ...restoreJob, destination: { ...restoreJob.destination, encryptedTokens: undefined }, source: undefined });
+  makeResponse(req, res, 200, true, 'fetch', {
+    ...restoreJob,
+    name: restore?.jobDetail?.name,
+    destination: { ...restoreJob.destination, encryptedTokens: undefined },
+    source: {
+      backupConfig: {
+        name: backupConfig?.name,
+        type: backupConfig?.type,
+        dataset: backupConfig?.dataset,
+        schedule: backupConfig?.schedule,
+        createdAt: backupConfig?.createdAt,
+      },
+      type: restore?.source.type,
+      startDate: restore?.source.startDate,
+      endDate: restore?.source.endDate,
+    },
+    selection: {
+      restoreScope: {
+        type: restore?.selection.restoreScope.type,
+      }
+    }
+  });
 };
 
 const getRestoreJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreId } = req.query as Record<string, string>;
   const userId = req.user!.userId;
+
+  // A restoreId bypasses the userId-scoped query below, so confirm the caller's org owns it first.
+  if (restoreId) {
+    const restore = await getRestoreById(restoreId);
+    if (!isOwner(restore, userId, req.user!.crmId)) {
+      return makeResponse(req, res, 400, false, 'not_exist');
+    }
+  }
 
   const stats = restoreId
     ? await computeRestoreJobStats({ indexName: 'restoreId-index', keyName: 'restoreId', keyValue: restoreId })
@@ -1331,10 +1296,7 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
 }
 
 export const restoreRetrieveJobController = wrapController({
-  listRestoreRetrieveJobsHandler,
-  getRestoreRetrieveJobHandler,
   getObjectListByConfigIdHandler,
-  fetchChangeBetweenBackupJobsHandler,
   fetchRecordsHandler,
   fetchMissingFieldsHandler,
   fetchMissingRecordTypesHandler,
@@ -1342,7 +1304,7 @@ export const restoreRetrieveJobController = wrapController({
   fetchObjectFieldsHandler,
   dryRunHandler,
   dryRunDiffHandler,
-  activateRestoreHandler,
+  validateQueryHandler,
   getPicklistFieldValuesHandler,
   listRestoresHandler,
   getRestoreJobHandler,

@@ -5,6 +5,7 @@ import {
   createBackupConfig,
   getBackupConfigById,
   getBackupConfigBySlug,
+  getBackupConfigByName,
   getBackupConfigsByUser,
   getBackupConfigsWithPagination,
   updateBackupConfig,
@@ -24,7 +25,6 @@ import {
   computeJobStats,
   getSalesforceProfile,
   initalizePayloadTransform,
-  hasActiveBackupJob,
   getUser,
   getDecryptedCrmCredential,
   runMetadataComparisonForConfig,
@@ -46,7 +46,7 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils/event-bridge';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
-import { syncObjects } from '../../../jobs/sync-objects';
+import { syncObjectsForEntireDataset } from '../../../jobs/sync-objects';
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const user = req.user;
@@ -57,6 +57,14 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   if (!isOwner) {
     makeResponse(req, res, 400, false, 'not_exist');
     return;
+  }
+
+  if (req.body.name) {
+    const existing = await getBackupConfigByName({ userId, name: req.body.name.trim(), type: 'NORMAL' });
+    if (existing) {
+      makeResponse(req, res, 400, false, 'backup_config_name_already_exist');
+      return;
+    }
   }
 
   const config = await createBackupConfig({
@@ -73,7 +81,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
     }
 
     if (config.schedule === SCHEDULE_MODE.realtime) {
-      await checkSalesforceApiLimitUsage(userId, config.crmId);
+      await checkSalesforceApiLimitUsage({ userId, crmId: config.crmId });
       await triggerBackupJob({ user, config, type: 'backup', lastSchemaSyncAt: true });
     } else if (config.schedule === SCHEDULE_MODE.schedule && config.scheduleConfig) {
       const scheduleConfig = req.body.scheduleConfig;
@@ -81,7 +89,7 @@ const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
         && !scheduleConfig?.scheduling?.startDate
         && !scheduleConfig?.scheduling?.startTime;
       if (isOnceImmediate) {
-        await checkSalesforceApiLimitUsage(userId, config.crmId);
+        await checkSalesforceApiLimitUsage({ userId, crmId: config.crmId });
         await triggerBackupJob({ user, config, type: 'backup' });
       } else {
         await createAwsEventScheduler(buildEventScheduleInput(config));
@@ -123,7 +131,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
 
   if (pagination === 'true') {
     const limitNum = Math.max(1, parseInt(limit ?? '10', 10));
-    const { search, status, backupStatus, schedule, destinationId } = req.query as Record<string, string>;
+    const { search, status, backupStatus, schedule, destinationId, withoutLastBackupAt } = req.query as Record<string, string>;
 
     const result = await getBackupConfigsWithPagination(
       {
@@ -134,6 +142,7 @@ const listBackupConfigsHandler = async (req: IRequest, res: IResponse): Promise<
         ...(backupStatus && { backupStatus }),
         ...(schedule && { schedule }),
         ...(destinationId && { destinationId }),
+        ...(withoutLastBackupAt && { withLastBackupAt: withoutLastBackupAt === 'false' ? true : false }),
       },
       { limit: limitNum, cursor }
     );
@@ -206,6 +215,7 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     makeResponse(req, res, 400, false, 'destination_not_found');
     return;
   }
+  const decryptedDestinationDetail = getDecryptedDestinationConfig(destination)
 
   const crmDetail = {
     crmId: crmPayload.crmId,
@@ -218,6 +228,9 @@ const getBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<vo
     destinationId: destination.destinationId,
     destinationName: destination.name,
     type: destination.type,
+    provider: destination.provider,
+    bucketName: decryptedDestinationDetail.bucketName,
+    region: decryptedDestinationDetail.region
   };
   makeResponse(req, res, 200, true, 'fetch', { ...config, crmDetail, destinationDetail });
 };
@@ -281,7 +294,7 @@ const updateBackupConfigHandler = async (req: IRequest, res: IResponse): Promise
   } else if (updated?.scheduleConfig && updated!.schedule === SCHEDULE_MODE.schedule && updated?.scheduleConfig) {
     if (existing?.status === VISIBILITY_STATUS.draft && updated.status === VISIBILITY_STATUS.active) {
       await createAwsEventScheduler(buildEventScheduleInput(updated));
-    } else if ([VISIBILITY_STATUS.paused, VISIBILITY_STATUS.active, VISIBILITY_STATUS.resumed].includes(existing?.status ?? '')) {
+    } else if (req.body.scheduleConfig && [VISIBILITY_STATUS.paused, VISIBILITY_STATUS.active, VISIBILITY_STATUS.resumed].includes(existing?.status ?? '')) {
       await updateAwsEventSchedule(buildEventScheduleInput(updated!));
     }
   } else if (updated?.schedule === SCHEDULE_MODE.realtime && updated?.status === VISIBILITY_STATUS.active && !updated.lastBackupAt) {
@@ -397,7 +410,7 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return;
   }
 
-  await checkSalesforceApiLimitUsage(backupConfig.userId, backupConfig.crmId);
+  await checkSalesforceApiLimitUsage({ userId: backupConfig.userId, crmId: backupConfig.crmId });
   const result = await runBackupNow({ user: req.user, config: backupConfig });
   if (!result.ok) {
     // realtime_not_supported keeps the route's original error code
@@ -423,19 +436,60 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
     return;
   }
 
-  // Same dedup guard triggerBackupJob/triggerArchivalBackupJob already apply —
-  // without it, repeated triggers (retries, re-tests) stack concurrent EMR
-  // Serverless applications on top of each other, each demanding its own
-  // driver+executor vCPU allocation.
-  if (await hasActiveBackupJob(config.backupConfigId)) {
+  if (config.backupStatus === STATUS.pending) {
     makeResponse(req, res, 400, false, 'job_already_invoked');
     return;
   }
 
   makeResponse(req, res, 201, true, 'create');
-  initalizePayloadTransform(config.backupConfigId).catch((err) => {
-    logger.error('EMR job failed after response sent:', err?.message ?? err);
-  });
+
+  let hasComparisonError = false;
+  let user;
+  const changedObjectNames: string[] = [];
+  try {
+
+
+    if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
+      const result = await runMetadataComparisonForConfig(config, false);
+      for (const { objectName, result: metadataResult } of result) {
+        if (!metadataResult) {
+          hasComparisonError = true;
+          continue;
+        }
+        if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+          changedObjectNames.push(objectName);
+        }
+      }
+
+      if (hasComparisonError) {
+        logger.warn(
+          `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
+        );
+        return;
+      }
+
+      if (changedObjectNames.length) {
+        user = await getUser({ userId: config.userId });
+        if (!user) {
+          logger.warn(
+            `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+          );
+          return;
+        }
+        await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
+        await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
+      } else {
+        await initalizePayloadTransform(config.backupConfigId);
+      }
+    } else {
+      initalizePayloadTransform(config.backupConfigId).catch((err) => {
+        logger.error('EMR job failed after response sent:', err?.message ?? err);
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown_error';
+    console.log(`[initalizePayloadTransformHandler] error: ${message}`);
+  }
 };
 
 const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -456,15 +510,8 @@ const syncMetadataTriggerHandler = async (req: IRequest, res: IResponse): Promis
     return;
   }
 
-  const changedObjectNames: any = [];
-  const result = await runMetadataComparisonForConfig(config);
-  for (const { objectName, result: metadataResult } of result) {
-    if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-      changedObjectNames.push(objectName);
-    }
-  }
-  makeResponse(req, res, 201, true, 'create', result);
-  await syncObjects({ backupConfig: config, user: backupCreatedUser });
+  makeResponse(req, res, 201, true, 'create');
+  await syncObjectsForEntireDataset({ backupConfig: config, user: backupCreatedUser });
 };
 
 const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -493,59 +540,6 @@ const getBackupJobStatsHandler = async (req: IRequest, res: IResponse): Promise<
   const stats = await computeJobStats({ indexName, keyName, keyValue, type: 'NORMAL' });
   makeResponse(req, res, 200, true, 'fetch', stats);
 };
-
-const syncMetadataHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { slug } = req.query;
-
-  const config = await getBackupConfigBySlug({
-    userId: req.user!.userId,
-    slug: String(slug),
-  });
-  if (!config) {
-    makeResponse(req, res, 400, false, 'backup_config_not_found');
-    return;
-  }
-
-  const user = await getUser({ userId: config.userId });
-  if (!user) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  const crm = await getCrmById(config.crmId);
-  if (!crm) {
-    makeResponse(req, res, 400, false, 'crm_not_found');
-    return;
-  }
-
-  const objects = config.objects ?? [];
-  if (!objects.length) {
-    return;
-  }
-
-  const backupJobId = uuidv4();
-  await Promise.all(
-    objects.flatMap((object) =>
-      METADATA_TYPES.map((metadataType) =>
-        salesforceMetadataHandler(
-          {
-            metadataType,
-            policyConfigType: 'backup',
-            crmName: crm.crmName,
-            crmId: config.crmId,
-            backupConfigId: config.backupConfigId,
-            objectName: object.name,
-            backupJobId,
-            isInitialBackup: false,
-          },
-          user
-        )
-      )
-    )
-  );
-
-  return makeResponse(req, res, 200, true, 'update');
-}
 
 // Recovery path for a failed real-time trigger creation (Apex Trigger + Test
 // Class). Called once the client has prompted the user for a record Id of
@@ -658,7 +652,6 @@ export const backupConfigController = wrapController({
   initalizePayloadTransformHandler,
   syncMetadataTriggerHandler,
   getBackupJobStatsHandler,
-  syncMetadataHandler,
   runNowHandler,
   recoverTriggerHandler,
 });

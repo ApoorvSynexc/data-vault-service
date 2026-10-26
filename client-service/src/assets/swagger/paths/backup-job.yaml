@@ -2,38 +2,44 @@
   get:
     tags: [Backup Job]
     summary: List backup job runs (paginated, optionally filtered by config)
-    security: [{ cookieAuth: [] }]
-    responses:
-      200:
-        $ref: '#/components/responses/Success'
-      401:
-        $ref: '#/components/responses/Unauthorized'
-
-/v1/backup-job/:
-  get:
-    tags: [Backup Job]
-    summary: Get a single backup job by id
+    description: >
+      Pass slug to scope to one backup configuration's jobs (also accepting
+      startDate/endDate); omit it to list every job for the authenticated user.
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: slug
         in: query
-        required: true
         schema: { type: string }
+      - name: limit
+        in: query
+        schema: { type: integer, default: 10 }
+      - name: cursor
+        in: query
+        schema: { type: string }
+      - name: status
+        in: query
+        schema: { type: string }
+      - name: startDate
+        in: query
+        schema: { type: string, format: date-time }
+        description: Only applied when slug is present
+      - name: endDate
+        in: query
+        schema: { type: string, format: date-time }
+        description: Only applied when slug is present
     responses:
       200:
         $ref: '#/components/responses/Success'
       401:
         $ref: '#/components/responses/Unauthorized'
-      404:
-        $ref: '#/components/responses/NotFound'
 
-/v1/backup-job/resume:
+/v1/backup-job/retry:
   get:
     tags: [Backup Job]
-    summary: Resume a previously interrupted backup job
+    summary: Retry a failed or interrupted backup job
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: backupJobId
         in: query
         required: true
         schema: { type: string }

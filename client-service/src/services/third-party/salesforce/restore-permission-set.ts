@@ -1,16 +1,23 @@
 import { salesforceRequest, SalesforceTokens } from './index';
 import { deployMetadata, buildPackageXml, METADATA_API_VERSION } from './metadata-api';
-import { IRestoreTrackingField } from './restore-fields';
-
-// Label carries the '360 ...' branding; the API/developer name can't start
-// with a digit (Salesforce naming rule for any metadata fullName — the same
-// constraint eca-permission-set.ts documents for its own permission set),
-// hence the label/name split.
-export const RESTORE_PERMISSION_SET_LABEL = '360 Data Craft Restore Permission Set';
-export const RESTORE_PERMISSION_SET_NAME = 'Data_Craft_Restore_Permission_Set';
+import { logger } from '../../../middlewares';
+import {
+  IRestoreTrackingField,
+  SALESFORCE_RESTORE_PERMISSION_SET_NAME as RESTORE_PERMISSION_SET_NAME,
+  SALESFORCE_RESTORE_PERMISSION_SET_LABEL as RESTORE_PERMISSION_SET_LABEL,
+} from '../../../constant';
 
 const soqlUrl = (instanceUrl: string, soql: string): string =>
   `${instanceUrl}/services/data/v${METADATA_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
+
+// queryAll, not query: a PermissionSetAssignment past its ExpirationDate is
+// soft-deleted — invisible both to plain SOQL and to the Assigned Permission
+// Sets list in Setup — but its AssigneeId+PermissionSetId pair still blocks a
+// fresh insert for the same pair as a duplicate. Only queryAll (which
+// includes soft-deleted/archived rows) can tell "genuinely never assigned"
+// apart from "assigned once, then expired" — see assignPermissionSetToUser.
+const soqlAllRowsUrl = (instanceUrl: string, soql: string): string =>
+  `${instanceUrl}/services/data/v${METADATA_API_VERSION}/queryAll?q=${encodeURIComponent(soql)}`;
 
 const fetchRestorePermissionSetId = async (
   instanceUrl: string,
@@ -25,6 +32,14 @@ const fetchRestorePermissionSetId = async (
   );
   return data.totalSize > 0 ? data.records[0].Id : null;
 };
+
+// Deliberately no "what's already granted" check here — every provision call
+// deploys the full object/field set it's given, unconditionally, even if the
+// permission set already has some or all of it. deployRestorePermissions'
+// deploy is additive (merges into the existing PermissionSet by fullName
+// rather than replacing it), so re-granting an already-true permission is a
+// harmless no-op; this trades the extra Metadata API deploy call every
+// restore for not having to query ObjectPermissions/FieldPermissions first.
 
 // The permissionset XML element behind each verb Salesforce names in a
 // dependency error ("... depends on permission(s): Read Account"). Restore
@@ -129,6 +144,8 @@ const deployRestorePermissions = async (
     `${fieldPermissionsXml(newFieldsByObject)}\n` +
     `</PermissionSet>`;
 
+  logger.info(`[restore-permission-set] deploying ${RESTORE_PERMISSION_SET_NAME}:\n${permissionSetXml}`);
+
   await deployMetadata(instanceUrl, tokens, {
     files: [
       {
@@ -138,6 +155,125 @@ const deployRestorePermissions = async (
     ],
     packageXml: buildPackageXml('PermissionSet', [RESTORE_PERMISSION_SET_NAME]),
   });
+};
+
+// Raw describe, (instanceUrl, tokens)-keyed rather than IUser-keyed — same
+// local-interface-per-caller convention restore-fields.ts and trigger.ts
+// already use for this exact call, not a shared helper (a third near-
+// identical copy isn't worth factoring out).
+interface ISalesforceReferenceField {
+  type: string;
+  referenceTo?: string[];
+  cascadeDelete: boolean;
+}
+
+const describeObjectFields = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiName: string
+): Promise<ISalesforceReferenceField[]> => {
+  const { data } = await salesforceRequest<{ fields: ISalesforceReferenceField[] }>(
+    { url: `${instanceUrl}/services/data/v${METADATA_API_VERSION}/sobjects/${objectApiName}/describe`, method: 'GET' },
+    tokens
+  );
+  return data.fields;
+};
+
+// Discovers every master-detail parent standing between a selected object and
+// the top of its reference chain — not required lookups, which don't carry
+// the same object-permission dependency rule (see parseMissingPermissions
+// below) and are left entirely to the reactive fallback. True master-detail
+// is detected via cascadeDelete === true on a reference field, the same
+// convention controller/v1/crm-meatadata/index.ts already uses
+// (getCascadeDeleteFields) — not nillable, which a Required lookup also sets
+// false and would wrongly include here.
+//
+// Bounded to MAX_PARENT_DEPTH levels rather than walked to the literal top of
+// an arbitrarily deep chain. This exists to seed the first deploy attempt
+// correctly instead of relying solely on deployWithDependencies's reactive,
+// error-driven retry — a chain deeper than MAX_DEPENDENCY_ATTEMPTS levels
+// could otherwise exhaust that retry budget before converging. The reactive
+// loop stays in place unchanged as a fallback for anything this misses
+// (beyond the depth cap, or a describe failure here — swallowed per call, not
+// fatal — that object simply falls through to it, same as if this function
+// didn't exist).
+const MAX_PARENT_DEPTH = 5;
+
+// Depth-first walk of one object's master-detail ancestry: describes the
+// object, and for every master-detail field found (an object can have up to
+// two), recurses into that parent before moving to the object's next
+// master-detail field — "find the parent, find its parent, ... to the top,
+// then back out and check for another master on the same object, then hop to
+// the next object" is exactly this function's call structure, driven by
+// resolveRequiredParentObjects's fan-out over the original selection below.
+//
+// visited/discovered are shared, mutated in place across the whole walk (all
+// branches, all selected objects) — not per-branch-local — so an object
+// reachable from two different branches is still only ever described once.
+// Safe to share across concurrent branches: every has()-then-add() pair below
+// runs with no `await` in between, and JS's single-threaded event loop never
+// interleaves two synchronous blocks mid-way, so two branches racing to
+// discover the same ancestor still can't both describe it.
+const walkRequiredParentObjects = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiName: string,
+  depth: number,
+  selected: Set<string>,
+  visited: Set<string>,
+  discovered: Set<string>
+): Promise<void> => {
+  if (depth >= MAX_PARENT_DEPTH) return;
+
+  const fields = await describeObjectFields(instanceUrl, tokens, objectApiName).catch(() => []);
+
+  const parentsToWalk: string[] = [];
+  for (const field of fields) {
+    if (field.type !== 'reference' || !field.cascadeDelete) continue;
+    for (const parent of field.referenceTo ?? []) {
+      if (visited.has(parent)) continue;
+      visited.add(parent);
+      if (!selected.has(parent)) discovered.add(parent);
+      parentsToWalk.push(parent);
+    }
+  }
+
+  // Each parent's own ancestry is independent of its siblings' — walked
+  // concurrently rather than one full branch at a time. Still depth-first per
+  // branch (each call dives to its own top of chain before resolving); only
+  // unrelated branches are allowed to overlap in wall-clock time. This
+  // removes the level-boundary synchronization a batch-by-depth walk would
+  // have (every object at depth N blocking depth N+1 from starting), so a
+  // shallow branch finishes without waiting on an unrelated deep one.
+  await Promise.all(
+    parentsToWalk.map((parent) =>
+      walkRequiredParentObjects(instanceUrl, tokens, parent, depth + 1, selected, visited, discovered)
+    )
+  );
+};
+
+const resolveRequiredParentObjects = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  objectApiNames: string[]
+): Promise<Set<string>> => {
+  const selected = new Set(objectApiNames);
+  const visited = new Set(objectApiNames);
+  const discovered = new Set<string>();
+
+  // Fans out over the original selection the same way — no reason the first
+  // selected object's whole chain must finish before the second one starts.
+  await Promise.all(
+    objectApiNames.map((objectApiName) =>
+      walkRequiredParentObjects(instanceUrl, tokens, objectApiName, 0, selected, visited, discovered)
+    )
+  );
+
+  if (discovered.size) {
+    logger.info(`[restore-permission-set] required master-detail parent object(s) discovered: ${[...discovered].join(', ')}`);
+  }
+
+  return discovered;
 };
 
 // Deploys, and on a dependency rejection adds the parent permissions
@@ -151,10 +287,14 @@ const deployWithDependencies = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   objectApiNames: string[],
+  readOnlyObjects: Set<string>,
   newFieldsByObject: Map<string, IRestoreTrackingField[]>
 ): Promise<void> => {
   const permissions: ObjectPermissionMap = new Map(
-    objectApiNames.map((name) => [name, new Set(RESTORE_OBJECT_PERMISSIONS)])
+    objectApiNames.map((name) => [
+      name,
+      readOnlyObjects.has(name) ? new Set(['allowRead']) : new Set(RESTORE_OBJECT_PERMISSIONS),
+    ])
   );
 
   for (let attempt = 0; attempt < MAX_DEPENDENCY_ATTEMPTS; attempt++) {
@@ -168,6 +308,9 @@ const deployWithDependencies = async (
       if (!missing.length) {
         throw error;
       }
+      logger.warn(
+        `[restore-permission-set] reactive retry attempt ${attempt + 1}: granting ${missing.map((m) => `${m.element} on ${m.object}`).join(', ')}`
+      );
       for (const { object, element } of missing) {
         const granted = permissions.get(object) ?? new Set<string>();
         granted.add(element);
@@ -183,23 +326,54 @@ const deployWithDependencies = async (
 // deletePermissionSetAssignments), not a metadata component, so assigning it
 // is a plain Data API write — existence-checked first so re-running this
 // doesn't attempt, and fail on, a duplicate assignment.
+//
+// Uses queryAll, not query: a row whose ExpirationDate has passed is
+// soft-deleted by Salesforce — it won't show up in a plain query, and it
+// won't show up in the user's Assigned Permission Sets list in Setup either —
+// but the AssigneeId+PermissionSetId pair is still taken, so a plain insert
+// for that same pair fails with CANNOT_INSERT_UPDATE_ACTIVATE_ENTITY /
+// "entity type cannot be inserted: Permission Set Assignment" instead of the
+// friendlier DUPLICATE_VALUE a still-visible duplicate would get. Only
+// queryAll can see that row to tell the two cases apart. An expired row found
+// this way is reactivated (ExpirationDate cleared) rather than left alone,
+// since "assigned" has to mean "actually has effective access" — a still-
+// expired assignment left in place wouldn't.
 const assignPermissionSetToUser = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
   permissionSetId: string,
   salesforceUserId: string
 ): Promise<void> => {
-  const { data } = await salesforceRequest<{ totalSize: number }>(
+  const { data } = await salesforceRequest<{
+    totalSize: number;
+    records: { Id: string; ExpirationDate: string | null }[];
+  }>(
     {
-      url: soqlUrl(
+      url: soqlAllRowsUrl(
         instanceUrl,
-        `SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '${salesforceUserId}' AND PermissionSetId = '${permissionSetId}' LIMIT 1`
+        `SELECT Id, ExpirationDate FROM PermissionSetAssignment WHERE AssigneeId = '${salesforceUserId}' AND PermissionSetId = '${permissionSetId}'`
       ),
       method: 'GET',
     },
     tokens
   );
-  if (data.totalSize > 0) {
+
+  const now = new Date();
+  const active = data.records.find((r) => !r.ExpirationDate || new Date(r.ExpirationDate) > now);
+  if (active) {
+    return;
+  }
+
+  const expired = data.records[0];
+  if (expired) {
+    await salesforceRequest(
+      {
+        url: `${instanceUrl}/services/data/v${METADATA_API_VERSION}/sobjects/PermissionSetAssignment/${expired.Id}`,
+        method: 'PATCH',
+        body: JSON.stringify({ ExpirationDate: null }),
+      },
+      tokens
+    );
     return;
   }
 
@@ -222,12 +396,30 @@ const assignPermissionSetToUser = async (
 // Parent objects Salesforce requires as dependencies (Account for Contract,
 // etc.) are added automatically, with only the permissions it demands.
 //
-// newFieldsByObject names, per object, exactly which tracking fields
-// salesforceFieldCreation found missing (and created) this run — the caller
-// (salesforceFieldsPermission) passes through ensureRestoreTrackingFields's
-// own return value. An object salesforceFieldCreation never reached (or
-// failed for) simply has no entry, so it gets object permissions only, never
-// a field-permission grant for a field that might not exist.
+// newFieldsByObject names, per object, the tracking fields to grant field-
+// level permission for — the full RESTORE_TRACKING_FIELDS list for every
+// object salesforceFieldCreation successfully resolved (whether the fields
+// were pre-existing or newly created this run; ensureRestoreTrackingFields
+// guarantees all 3 exist either way). An object salesforceFieldCreation
+// never reached (or failed for) simply has no entry, so it gets object
+// permissions only, never a field-permission grant for a field that might
+// not exist.
+//
+// Deploys unconditionally, every call — no check of what the permission set
+// (if it already exists) currently grants, and no narrowing to only what's
+// "missing". The full object/field set given is always deployed, even if
+// some or all of it is already there; deployRestorePermissions' deploy is
+// additive (Salesforce merges into the existing PermissionSet by fullName
+// rather than replacing it), so re-granting an already-true permission is a
+// harmless no-op, not a regression.
+//
+// Also resolves every required (master-detail, or Required lookup) parent
+// object standing between a selected object and the top of its reference
+// chain — see resolveRequiredParentObjects — and seeds them into the same
+// deploy as read-only grants, so the common dependency case needs no retry at
+// all. Never added to newFieldsByObject, so a discovered parent never gets
+// tracking fields created or field-level permissions — only the objects
+// actually selected for restore do.
 export const provisionRestorePermissionSet = async (
   instanceUrl: string,
   tokens: SalesforceTokens,
@@ -239,7 +431,10 @@ export const provisionRestorePermissionSet = async (
     return;
   }
 
-  await deployWithDependencies(instanceUrl, tokens, objectApiNames, newFieldsByObject);
+  const requiredParents = await resolveRequiredParentObjects(instanceUrl, tokens, objectApiNames);
+  const allObjectApiNames = [...objectApiNames, ...requiredParents];
+
+  await deployWithDependencies(instanceUrl, tokens, allObjectApiNames, requiredParents, newFieldsByObject);
 
   const permissionSetId = await fetchRestorePermissionSetId(instanceUrl, tokens);
   if (!permissionSetId) {

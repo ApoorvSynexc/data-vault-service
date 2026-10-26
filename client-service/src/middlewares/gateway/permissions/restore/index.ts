@@ -100,8 +100,18 @@ const restorePermissions = [
         permissions: ['restore.write']
     },
     {
+        path: '/restore/bulk-csv/upload',
+        method: 'POST',
+        permissions: ['restore.write']
+    },
+    {
         path: '/restore/download-csv',
         method: 'GET',
+        permissions: ['restore.read']
+    },
+    {
+        path: '/restore/retrieve/validate-query',
+        method: 'POST',
         permissions: ['restore.read']
     }
 ];

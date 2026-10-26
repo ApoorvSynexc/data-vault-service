@@ -384,7 +384,7 @@ const escapeSOQLString = (str: string): string => {
 };
 
 // Escapes a value for safe interpolation into template-literal HTML — used
-// by the email templates (services/common/email-templates) for any dynamic
+// by the email templates (services/common/email) for any dynamic
 // string they render (object/config names, error messages) that can
 // originate from user input, guarding against HTML/script injection.
 const escapeHtml = (value: string): string =>
@@ -518,6 +518,7 @@ const withSystemFields = (fieldNames: string[]): string[] =>
 //     .map(convert);
 // }
 
+
 interface InputNode {
   name: string;
   parents?: InputNode[];
@@ -528,40 +529,65 @@ interface HierarchyNode {
   children: HierarchyNode[];
 }
 
-function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
-  // name -> possible parents
+function buildParentToChildHierarchy(
+  data: InputNode[]
+): HierarchyNode[] {
+  // Map each object to its possible parents.
   const parentMap = new Map<string, Set<string>>();
 
-  function collect(node: InputNode) {
+  function collect(node: InputNode, path = new Set<string>()): void {
     if (!parentMap.has(node.name)) {
-      parentMap.set(node.name, new Set());
+      parentMap.set(node.name, new Set<string>());
     }
 
+    // Prevent infinite recursion when input contains cycles.
+    if (path.has(node.name)) {
+      return;
+    }
+
+    const nextPath = new Set(path);
+    nextPath.add(node.name);
+
     for (const parent of node.parents ?? []) {
+      // Ignore direct self-referencing relationships.
+      if (parent.name === node.name) {
+        continue;
+      }
+
       parentMap.get(node.name)!.add(parent.name);
-      collect(parent);
+
+      // Always register the parent, even if it has no parents.
+      if (!parentMap.has(parent.name)) {
+        parentMap.set(parent.name, new Set<string>());
+      }
+
+      collect(parent, nextPath);
     }
   }
 
-  // Collect all relationships
   for (const item of data) {
     collect(item);
   }
 
-  // Calculate how deep a node can be from the root
+  // Calculate maximum depth while guarding against cycles.
   const depthCache = new Map<string, number>();
 
-  function getDepth(name: string, visiting = new Set<string>()): number {
-    if (depthCache.has(name)) {
-      return depthCache.get(name)!;
+  function getDepth(
+    name: string,
+    visiting = new Set<string>()
+  ): number {
+    const cached = depthCache.get(name);
+    if (cached !== undefined) {
+      return cached;
     }
 
-    // Protect against circular relationships
+    // Break cycles without caching a cycle-dependent result.
     if (visiting.has(name)) {
-      return 0;
+      return -1;
     }
 
-    visiting.add(name);
+    const nextVisiting = new Set(visiting);
+    nextVisiting.add(name);
 
     const parents = parentMap.get(name);
 
@@ -573,18 +599,18 @@ function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
     let maxDepth = 0;
 
     for (const parent of parents) {
-      maxDepth = Math.max(maxDepth, getDepth(parent, new Set(visiting)) + 1);
+      const depth = getDepth(parent, nextVisiting);
+
+      if (depth >= 0) {
+        maxDepth = Math.max(maxDepth, depth + 1);
+      }
     }
 
     depthCache.set(name, maxDepth);
-
     return maxDepth;
   }
 
-  // --------------------------------------------------
-  // Select the deepest parent for every node
-  // --------------------------------------------------
-
+  // Choose the deepest valid parent for each object.
   const selectedParent = new Map<string, string>();
 
   for (const [child, parents] of parentMap) {
@@ -592,6 +618,10 @@ function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
     let bestDepth = -1;
 
     for (const parent of parents) {
+      if (parent === child) {
+        continue;
+      }
+
       const depth = getDepth(parent);
 
       if (depth > bestDepth) {
@@ -600,50 +630,78 @@ function buildParentToChildHierarchy(data: InputNode[]): HierarchyNode[] {
       }
     }
 
-    if (bestParent) {
+    if (bestParent !== undefined) {
       selectedParent.set(child, bestParent);
     }
   }
 
-  // --------------------------------------------------
-  // Build final hierarchy
-  // --------------------------------------------------
+  // Remove any cycles introduced by the selected relationships.
+  // This ensures every node can belong to a valid tree.
+  function removeCycles(): void {
+    let changed = true;
 
+    while (changed) {
+      changed = false;
+
+      for (const [child, parent] of selectedParent) {
+        let current: string | undefined = parent;
+        const seen = new Set<string>([child]);
+
+        while (current !== undefined) {
+          if (seen.has(current)) {
+            selectedParent.delete(child);
+            changed = true;
+            break;
+          }
+
+          seen.add(current);
+          current = selectedParent.get(current);
+        }
+
+        if (changed) {
+          break;
+        }
+      }
+    }
+  }
+
+  removeCycles();
+
+  // Create one node instance per object name.
   const nodes = new Map<string, HierarchyNode>();
 
-  function getNode(name: string): HierarchyNode {
-    if (!nodes.has(name)) {
-      nodes.set(name, {
-        name,
-        children: [],
-      });
+  for (const name of parentMap.keys()) {
+    nodes.set(name, {
+      name,
+      children: [],
+    });
+  }
+
+  // Attach children to their selected parents.
+  for (const [child, parent] of selectedParent) {
+    const parentNode = nodes.get(parent);
+    const childNode = nodes.get(child);
+
+    if (!parentNode || !childNode) {
+      continue;
     }
 
-    return nodes.get(name)!;
-  }
-
-  // Ensure every collected node (including those without a parent) is
-  // represented, so a parentless node that no one else references is
-  // still returned as a root instead of being dropped.
-  for (const name of parentMap.keys()) {
-    getNode(name);
-  }
-
-  for (const [child, parent] of selectedParent) {
-    const parentNode = getNode(parent);
-    const childNode = getNode(child);
-
-    if (!parentNode.children.some((x) => x.name === child)) {
+    if (!parentNode.children.some((item) => item.name === child)) {
       parentNode.children.push(childNode);
     }
   }
 
-  // Find roots
-  const children = new Set(selectedParent.keys());
+  // Objects without selected parents are roots.
+  const roots: HierarchyNode[] = [];
 
-  return [...nodes.values()].filter((node) => !children.has(node.name));
+  for (const [name, node] of nodes) {
+    if (!selectedParent.has(name)) {
+      roots.push(node);
+    }
+  }
+
+  return roots;
 }
-
 // Flattens a parent→child hierarchy (buildParentToChildHierarchy's output) into a
 // single ordered list where every node appears only after all of its own
 // descendants — the reverse of the tree's natural parent-first order. A child's

@@ -13,10 +13,12 @@ interface CreateBackupJobParams {
   destination: { type: string; config: IDestinationConfig };
   lastUpdatedAt?: string;
   schemaSync?: boolean;
+  modifiedSince?: string;
+  modifiedUntil: string;
 }
 
 const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination, lastUpdatedAt, schemaSync } = params;
+  const { userId, backupConfigId, source, destination, lastUpdatedAt, schemaSync, modifiedSince, modifiedUntil } = params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
   // Minted up front so child schema written during expansion lands in this job's changes/.
@@ -54,6 +56,8 @@ const createBackupJob = async (params: CreateBackupJobParams): Promise<IBackupJo
     ...(schemaSync ? { schemaSync: true } : {}),
     createdAt: now,
     updatedAt: now,
+    ...(modifiedSince ? { modifiedSince } : {}),
+    modifiedUntil,
   };
 
   await Promise.all([
@@ -69,6 +73,8 @@ interface CreateArchivalJobParams {
   backupConfigId: string;
   source: ISource & { object?: IBackupObject[] };
   destination: { type: string; config: IDestinationConfig };
+  modifiedSince: string;
+  modifiedUntil: string
 }
 
 const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
@@ -86,7 +92,7 @@ const initializeNestedObjects = (objects: IBackupObject[]): IBackupObject[] => {
 };
 
 const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBackupJob> => {
-  const { userId, backupConfigId, source, destination } = params;
+  const { userId, backupConfigId, source, destination, modifiedSince, modifiedUntil } = params;
   const { object, crmId, ...sourceCredentials } = source;
   const now = new Date().toISOString();
 
@@ -107,6 +113,8 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
     status: STATUS.pending,
     createdAt: now,
     updatedAt: now,
+    modifiedSince,
+    modifiedUntil
   };
 
   await Promise.all([
@@ -115,6 +123,35 @@ const createArchivalJob = async (params: CreateArchivalJobParams): Promise<IBack
     incrementTableCounter(BACKUP_JOB_TABLE, backupConfigId),
   ]);
   return item;
+};
+
+const updateBackupJob = async (
+  payload: Partial<IBackupJob>
+): Promise<void> => {
+  const { backupJobId, ...fields } = payload;
+  const updates: Record<string, any> = { ...fields, updatedAt: new Date().toISOString() };
+
+  const names: Record<string, string> = {};
+  const values: Record<string, any> = {};
+  const setExpr = Object.keys(updates)
+    .map((key) => {
+      const alias = `#${key}`;
+      names[alias] = key;
+      values[`:${key}`] = updates[key];
+      return `${alias} = :${key}`;
+    })
+    .join(', ');
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId },
+      UpdateExpression: `SET ${setExpr}`,
+      ConditionExpression: 'attribute_exists(backupJobId)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    })
+  );
 };
 
 interface UpdateJobStatusParams {
@@ -337,7 +374,7 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
 
 const recursivelyUpdateObjects = async (
   objects: IBackupObject[],
-  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined }
+  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined }
 ): Promise<IBackupObject[]> => {
   const results = await Promise.all(
     objects.map(async (obj) => {
@@ -349,29 +386,29 @@ const recursivelyUpdateObjects = async (
           // Clear stale error fields when the object is reset for a retry run.
           ...(isReset
             ? {
-                errorMessage: '',
-                deletedfailedRecordCount: 0,
-                deletedSuccessRecordCount: 0,
-                errors: [],
-              }
+              errorMessage: '',
+              deletedfailedRecordCount: 0,
+              deletedSuccessRecordCount: 0,
+              errors: [],
+            }
             : {}),
           ...(!isReset && (object as any)?.salesforceApiCount
             ? {
-                salesforceApiCount:
-                  (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
-              }
+              salesforceApiCount:
+                (obj.salesforceApiCount ?? 0) + (object as any)?.salesforceApiCount,
+            }
             : {}),
           ...(!isReset && (object as any)?.deletedSuccessRecordCount
             ? {
-                deletedSuccessRecordCount:
-                  (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
-              }
+              deletedSuccessRecordCount:
+                (obj.deletedSuccessRecordCount ?? 0) + (object as any)?.deletedSuccessRecordCount,
+            }
             : {}),
           ...(!isReset && (object as any)?.deletedfailedRecordCount
             ? {
-                deletedfailedRecordCount:
-                  (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
-              }
+              deletedfailedRecordCount:
+                (obj.deletedfailedRecordCount ?? 0) + (object as any)?.deletedfailedRecordCount,
+            }
             : {}),
           // recordErrorsS3Prefix: last write wins (each bulk job gets its own prefix)
           ...(!isReset && (object as any)?.recordErrorsS3Prefix
@@ -398,7 +435,7 @@ const updateArchivalObject = async ({
   objects,
 }: {
   backupJobId: string;
-  object: { id: string; [key: string]: string | number | boolean | string[] | null | undefined };
+  object: { id: string;[key: string]: string | number | boolean | string[] | null | undefined };
   objects?: IBackupObject[];
 }): Promise<IBackupObject[] | []> => {
   // When `objects` is provided (caller already holds the array), use it directly
@@ -480,7 +517,8 @@ const getStaleRunningJobs = async (
         // a terminal status, and not touched in a while — status itself stays
         // PENDING for the whole in-flight duration, so it's no longer part of
         // this filter.
-        FilterExpression: 'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
+        FilterExpression:
+          'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
         ExpressionAttributeNames: { '#status': 'status' },
         ExpressionAttributeValues: { ':pending': STATUS.pending, ':cutoff': cutoff },
         ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
@@ -497,6 +535,7 @@ const getStaleRunningJobs = async (
 export {
   createBackupJob,
   createArchivalJob,
+  updateBackupJob,
   updateJobStatus,
   recursivelyUpdateObjects,
   updateBackupObject,

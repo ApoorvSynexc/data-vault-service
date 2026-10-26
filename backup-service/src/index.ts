@@ -50,9 +50,8 @@ process.on('unhandledRejection', (reason, promise) => {
 initializeDatabase()
   .then(() => {
     initializeApp();
-    startStaleJobSweeper();
+    // startStaleJobSweeper();
   })
-  .catch((error) => {
-    console.log(error);
+  .catch(() => {
     process.exit(1);
   });

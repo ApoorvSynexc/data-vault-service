@@ -4,20 +4,6 @@ import { AUTH_PROVIDER, GENDER } from '../../../constant';
 import { makeResponse } from '../../../lib';
 import { passwordJoiSchema } from '../shared';
 
-export const changePasswordValidation = (req: Request, res: Response, next: NextFunction) => {
-  const schema = Joi.object({
-    oldPassword: Joi.string().required(),
-    newPassword: passwordJoiSchema,
-  });
-
-  const { error } = schema.validate(req.body);
-  if (error) {
-    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
-    return;
-  }
-  next();
-};
-
 export const signupValidation = (req: Request, res: Response, next: NextFunction) => {
   const schema = Joi.object({
     firstName: Joi.string().trim().required(),

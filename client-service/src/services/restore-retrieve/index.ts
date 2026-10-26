@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, AWS_REGION } from '../../constant';
-import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser } from '../../models';
+import { IBackupJob, IBackupConfig, IObject, IRestoreScope, IRestoreFilters, IUser, IS3Config } from '../../models';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { logger } from '../../middlewares/logger';
 import { getCrmById } from '../crm';
@@ -11,7 +11,7 @@ import { getDestinationById, getDecryptedDestinationConfig } from '../destinatio
 import { getUser } from '../user';
 import { createNotification } from '../notification';
 import { listStaleS3Objects, deleteS3Objects } from '../third-party/s3-bucket';
-import { salesforceObjectFilteredList, salesforceObjectDescribe } from '../third-party/salesforce/metadata/index';
+import { salesforceObjectFilteredList, salesforceObjectDescribe, ISalesforceFieldDescribe } from '../third-party/salesforce/metadata/index';
 import { isQueryableField, diffSchemas, toFieldSnapshot, ISalesforceFieldSnapshot, isRestoreEligibleField, isRequiredField } from '../third-party/salesforce/metadata/field';
 import { ISalesforceRecordTypeInfo } from '../third-party/salesforce/metadata/recordType';
 import { runAthenaQuery, fetchStoredResults, IQueryResult } from '../third-party/athena/query';
@@ -19,11 +19,10 @@ import { tableExists } from '../third-party/athena/glue';
 import { readSchemaFile } from '../schema';
 import { type ISchemaS3KeyParams } from '../../utils/helper';
 import { IsoDateString } from '../../utils/iso-date';
-import { S3Config } from '../../utils/validate-aws-credentials';
 
-export { FilterError, buildAthenaFilterWhere } from './athena-filter';
+export { FilterError, buildAthenaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import { buildAthenaFilterWhere, buildDeltaFilterWhere } from './athena-filter';
+import { buildAthenaFilterWhere, buildDeltaFilterWhere, DELTA_RECORD_ID_ALIAS, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 import {
   pairedColumns,
   IPageKey,
@@ -39,189 +38,12 @@ import {
   buildFieldDeltaSql,
   buildHudiCountSql,
   buildDeltaCountSql,
+  buildDeltaScanWhere,
+  buildValidateQuerySql,
   recordIdsWhere,
   validateColumns,
 } from './athena-fetch';
 import { fetchSalesforceRecordsByIds } from '../third-party/salesforce/records-by-ids';
-
-const RESTORE_JOB_TYPE = 'RESTORE';
-
-// ---------------------------------------------------------------------------
-// Restore / Retrieve job queries
-// ---------------------------------------------------------------------------
-
-const getRestoreRetrieveJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
-  const result = await docClient.send(
-    new GetCommand({ TableName: BACKUP_JOB_TABLE, Key: { backupJobId } })
-  );
-
-  const item = result.Item as IBackupJob | undefined;
-  if (!item || item.type !== RESTORE_JOB_TYPE) return null;
-  return item;
-};
-
-const getRestoreRetrieveJobsByConfig = async (
-  backupConfigId: string,
-  options?: { limit?: number; cursor?: string; status?: string }
-): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
-  const limit = options?.limit ?? 10;
-  const exclusiveStartKey = decodeCursor(options?.cursor);
-
-  const queryParams: any = {
-    TableName: BACKUP_JOB_TABLE,
-    IndexName: 'backupConfigId-index',
-    KeyConditionExpression: 'backupConfigId = :backupConfigId',
-    FilterExpression: '#type = :type',
-    ExpressionAttributeNames: { '#type': 'type' },
-    ExpressionAttributeValues: {
-      ':backupConfigId': backupConfigId,
-      ':type': RESTORE_JOB_TYPE,
-    },
-    Limit: limit,
-    ScanIndexForward: false,
-    ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-  };
-
-  if (options?.status) {
-    queryParams.FilterExpression += ' AND #status = :status';
-    queryParams.ExpressionAttributeNames['#status'] = 'status';
-    queryParams.ExpressionAttributeValues[':status'] = options.status;
-  }
-
-  const result = await docClient.send(new QueryCommand(queryParams));
-  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
-  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
-};
-
-const getRestoreRetrieveJobsByUser = async (
-  userId: string,
-  options?: { limit?: number; cursor?: string; status?: string }
-): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
-  const limit = options?.limit ?? 10;
-  const exclusiveStartKey = decodeCursor(options?.cursor);
-
-  const queryParams: any = {
-    TableName: BACKUP_JOB_TABLE,
-    IndexName: 'userId-index',
-    KeyConditionExpression: 'userId = :userId',
-    FilterExpression: '#type = :type',
-    ExpressionAttributeNames: { '#type': 'type' },
-    ExpressionAttributeValues: {
-      ':userId': userId,
-      ':type': RESTORE_JOB_TYPE,
-    },
-    Limit: limit,
-    ScanIndexForward: false,
-    ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-  };
-
-  if (options?.status) {
-    queryParams.FilterExpression += ' AND #status = :status';
-    queryParams.ExpressionAttributeNames['#status'] = 'status';
-    queryParams.ExpressionAttributeValues[':status'] = options.status;
-  }
-
-  const result = await docClient.send(new QueryCommand(queryParams));
-  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
-  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
-};
-
-// ---------------------------------------------------------------------------
-// Backup jobs inside a time window
-// ---------------------------------------------------------------------------
-
-export interface IBackupJobsChangedBetweenParams {
-  backupConfigId: string;
-  // ISO UTC bounds, inclusive. Normalised by the controller so they compare
-  // correctly against the stored ISO timestamps (DynamoDB compares strings).
-  startTime: string;
-  endTime: string;
-  userId: string;
-  limit?: number;
-  cursor?: string;
-}
-
-// Page size when the caller doesn't ask for one, and the ceiling it may ask for
-// — the window is caller-chosen and can span an unbounded number of jobs, so
-// the response size is capped here rather than left to the request.
-export const CHANGED_BETWEEN_JOBS_LIMIT = 50;
-export const CHANGED_BETWEEN_JOBS_MAX_LIMIT = 200;
-
-// Most rows this query is allowed to evaluate before returning a short page.
-// `startedAt` is a filter, not a key condition, so a sparse window could
-// otherwise walk the whole partition inside one request. Hitting the cap
-// returns a cursor, so nothing is lost — the next call resumes where it stopped.
-const MAX_QUERY_ROUNDS = 5;
-
-/**
- * Backup job ids for a config whose run started inside [startTime, endTime],
- * newest first. Feeds the CHANGED_BETWEEN flow: the caller picks a window here
- * and passes the resulting ids to /retrieve/fetch-records as
- * source.backupJobIds.
- *
- * RESTORE jobs share this table but write no backup partitions, so they are
- * excluded. NORMAL and ARCHIVAL jobs need no filter — a config is one type, so
- * its jobs are all of that type.
- *
- * A page holds at most `limit` ids; `nextCursor` is present when more may
- * follow, and a short page carrying a cursor is normal (see MAX_QUERY_ROUNDS).
- *
- * Returns null when the config doesn't exist or isn't owned by the caller, so
- * the controller can collapse both into the same not_exist.
- */
-const getBackupJobIdsChangedBetween = async (
-  params: IBackupJobsChangedBetweenParams
-): Promise<{ backupJobIds: string[]; nextCursor?: string } | null> => {
-  const { backupConfigId, startTime, endTime, userId } = params;
-  const limit = Math.min(params.limit ?? CHANGED_BETWEEN_JOBS_LIMIT, CHANGED_BETWEEN_JOBS_MAX_LIMIT);
-
-  const config = await getBackupConfigById(backupConfigId);
-  if (!config || config.userId !== userId) return null;
-
-  const backupJobIds: string[] = [];
-  let exclusiveStartKey = decodeCursor(params.cursor);
-  let rounds = 0;
-
-  // The filter can drop a whole page, so one query does not necessarily fill
-  // one page. Keep asking for exactly what is still missing — never more, so a
-  // page can never overshoot `limit` and leave ids stranded behind the cursor.
-  do {
-    const result = await docClient.send(
-      new QueryCommand({
-        TableName: BACKUP_JOB_TABLE,
-        IndexName: 'backupConfigId-index',
-        // A job is created before it starts, so createdAt <= startedAt always —
-        // which makes the window's upper bound a sound prune on the index sort
-        // key. Its lower bound is not: a job created long ago can be resumed
-        // inside the window, so startTime stays a filter on startedAt only.
-        KeyConditionExpression: 'backupConfigId = :backupConfigId AND createdAt <= :endTime',
-        FilterExpression: '#type <> :restoreType AND startedAt BETWEEN :startTime AND :endTime',
-        ExpressionAttributeNames: { '#type': 'type' },
-        ExpressionAttributeValues: {
-          ':backupConfigId': backupConfigId,
-          ':restoreType': RESTORE_JOB_TYPE,
-          ':startTime': startTime,
-          ':endTime': endTime,
-        },
-        ProjectionExpression: 'backupJobId',
-        Limit: limit - backupJobIds.length,
-        ScanIndexForward: false,
-        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-      })
-    );
-
-    for (const item of (result.Items ?? []) as Pick<IBackupJob, 'backupJobId'>[]) {
-      backupJobIds.push(item.backupJobId);
-    }
-    exclusiveStartKey = result.LastEvaluatedKey;
-    rounds += 1;
-  } while (exclusiveStartKey && backupJobIds.length < limit && rounds < MAX_QUERY_ROUNDS);
-
-  return {
-    backupJobIds,
-    ...(exclusiveStartKey ? { nextCursor: encodeCursor(exclusiveStartKey) } : {}),
-  };
-};
 
 // ---------------------------------------------------------------------------
 // Object list helper
@@ -406,7 +228,7 @@ const buildRetrieveOutputLocation = async (config: IBackupConfig): Promise<IAthe
   const destination = await getDestinationById(config.destinationId);
   if (!destination) return { region: AWS_REGION };
 
-  const { bucketName, region } = getDecryptedDestinationConfig(destination) as S3Config;
+  const { bucketName, region } = getDecryptedDestinationConfig(destination) as IS3Config;
   return {
     region: region || AWS_REGION,
     outputLocation: bucketName ? `s3://${bucketName}/salesforce/${config.crmId}/retrieve/` : undefined,
@@ -419,7 +241,7 @@ export const cleanupStaleRetrieveObjects = async (config: IBackupConfig): Promis
     const destination = await getDestinationById(config.destinationId);
     if (!destination) return;
 
-    const s3Config = getDecryptedDestinationConfig(destination) as S3Config;
+    const s3Config = getDecryptedDestinationConfig(destination) as IS3Config;
     if (!s3Config.bucketName) return;
 
     const prefix = `salesforce/${config.crmId}/retrieve/`;
@@ -868,7 +690,7 @@ export interface IFetchMissingFieldsParams {
 export interface IMissingField {
   apiName: string;
   label: string;
-  type: string;
+  dataType: string;
 }
 
 export interface IFetchMissingFieldsResult {
@@ -901,7 +723,7 @@ const latestStoredRecordTypes = (schema: unknown): ISalesforceRecordTypeInfo[] |
 const missingFieldFromChangeData = (changeData: any): IMissingField | null => {
   const apiName = changeData?.apiName ?? changeData?.name;
   if (!apiName) return null;
-  return { apiName, label: changeData.label, type: changeData.dataType ?? changeData.type };
+  return { apiName, label: changeData.label, dataType: changeData.dataType ?? changeData.type };
 };
 
 /**
@@ -919,10 +741,14 @@ const missingFieldFromChangeData = (changeData: any): IMissingField | null => {
  *   ENTIRE archival (configType ARCHIVAL) — union of the unbounded FIELD
  *   delta scan (archival's schema-only delta table, once Glue registers it —
  *   see ensureDeltaTable/policyConfigType) and the S3 main field-schema
- *   snapshot compared against a live describe (diffSchemas) — the delta
- *   history only carries what a Spark run actually flagged, so the S3
- *   snapshot catches anything from before schema-delta tracking existed for
- *   this config.
+ *   snapshot compared against a live describe (diffSchemas).
+ *
+ *   The S3 snapshot-vs-live comparison runs for BACKUP too, not just
+ *   ARCHIVAL: the delta history only carries what a Spark run actually
+ *   flagged, so a field dropped from Salesforce before schema-delta tracking
+ *   existed for this config (or between compression runs) would otherwise
+ *   never surface. Any stored field missing from the live describe is
+ *   flagged regardless of config type.
  *
  * Every candidate is re-checked against a live describe before being
  * reported — a field a delta once flagged deleted but that's back today
@@ -934,7 +760,7 @@ const missingFieldFromChangeData = (changeData: any): IMissingField | null => {
 const retrieveMissingFields = async (
   params: IFetchMissingFieldsParams
 ): Promise<IFetchMissingFieldsResult | null> => {
-  const { backupConfigId, objectApiName, configType, userId, user, startDate, endDate } = params;
+  const { backupConfigId, objectApiName, userId, user, startDate, endDate } = params;
 
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) return null;
@@ -966,11 +792,8 @@ const retrieveMissingFields = async (
     }
   }
 
-  let storedFields: ISalesforceFieldSnapshot[] | null = null;
-  if (configType === 'ARCHIVAL') {
-    const stored = await fetchObjectFields({ objectApiName, backupConfigId, userId });
-    storedFields = stored.ok ? latestStoredFields(stored.schema) : null;
-  }
+  const stored = await fetchObjectFields({ objectApiName, backupConfigId, userId });
+  const storedFields: ISalesforceFieldSnapshot[] | null = stored.ok ? latestStoredFields(stored.schema) : null;
 
   if (candidates.size === 0 && !storedFields) return { hasMissingFields: false, missingFields: [] };
 
@@ -982,7 +805,7 @@ const retrieveMissingFields = async (
     const { removedFields } = diffSchemas(storedFields, liveFields);
     for (const field of storedFields) {
       if (removedFields.includes(field.name) && !candidates.has(field.name)) {
-        candidates.set(field.name, { apiName: field.name, label: field.label, type: field.type });
+        candidates.set(field.name, { apiName: field.name, label: field.label, dataType: field.type });
       }
     }
   }
@@ -1147,6 +970,137 @@ const resolveDryRunObjects = async (params: IDryRunParams): Promise<ICountTarget
   }
 };
 
+// ---------------------------------------------------------------------------
+// POST /retrieve/validate-query — SOQL-to-Athena filter validation
+// ---------------------------------------------------------------------------
+
+export interface IValidateQueryParams {
+  backupConfigId: string;
+  configType: ConfigType;
+  objectApiName: string;
+  // Same IRestoreFilters shape a restore's FILTER scope carries per object
+  // (selection.restoreScope.filters[].filter) — SOQL here, but AND/OR compile
+  // through the identical converter.
+  filter: IRestoreFilters;
+  userId: string;
+  // The authenticated caller, straight from req.user! — same two-field shape
+  // IFetchMissingFieldsParams already uses: userId for the ownership check
+  // above, user for the live describe call below (its crmCredential already
+  // resolves to whichever org the caller's session is connected to, same as
+  // retrieveMissingFields/retrieveRequiredFields/dryRunDiff).
+  user: IUser;
+}
+
+export type IValidateQueryOutcome =
+  // valid is always true here — reaching this branch at all means
+  // buildAthenaFilterWhere didn't throw FilterError and (when a real query
+  // ran) Athena didn't reject the compiled WHERE clause either, so the query
+  // itself is confirmed valid independent of whether any row matched. matched
+  // is a separate question: whether a row currently satisfies it. Exposed as
+  // its own field so a caller doesn't have to infer "valid" from "matched:
+  // false" — a valid filter that happens to match nothing is not an invalid one.
+  | { ok: true; value: { matched: boolean; valid: true } }
+  | { ok: false; error: 'not_exist' | 'crm_not_connected' };
+
+/**
+ * Validates one FILTER-scope condition by actually running it: converts it to
+ * an Athena WHERE clause (buildAthenaFilterWhere — the same converter
+ * dry-run/dry-run-diff use, so a query that validates here compiles
+ * identically wherever else it's used), then runs
+ * `SELECT Id FROM <object's Hudi table> WHERE <clause> LIMIT 1` against the
+ * object's real compressed data.
+ *
+ * Deliberately existence-only (LIMIT 1, Id-only projection) rather than a
+ * preview — this endpoint answers "is this query valid and does it match
+ * anything", not "show me the records". A field name that's structurally
+ * valid SOQL but doesn't exist on this object's actual schema surfaces here
+ * as a genuine Athena failure (COLUMN_NOT_FOUND) — buildAthenaFilterWhere's
+ * parse-time checks alone can't catch that, since they never see the real
+ * column set.
+ *
+ * A live Salesforce describe resolves each dotted SOQL field's real type, so
+ * an Address/Geolocation compound field (MailingAddress.City,
+ * Some_Location__c.Latitude) can be mapped to its real Hudi column instead of
+ * being rejected outright as a relationship traversal — see
+ * athena-filter.ts's FieldTypeResolver/mapCompoundSubField for the mapping
+ * rule and its own describe-backed re-validation.
+ *
+ * FilterError from buildAthenaFilterWhere propagates uncaught — the caller
+ * maps it to the same 400 dry-run's FILTER scope already uses for a bad
+ * filter.
+ *
+ * Returns not_exist when the config doesn't exist or isn't owned by the
+ * caller. Returns crm_not_connected when the caller has no usable Salesforce
+ * connection to describe the object with. When the object has no compressed
+ * Hudi table yet (nothing backed up for it), the filter is still validated
+ * above but the Athena query is skipped — there's nothing to run it against,
+ * so this reports matched: false rather than an error.
+ *
+ * valid is always true on the ok:true branch — it's reported explicitly
+ * rather than left implicit so a caller never has to infer "the query is
+ * valid" from "matched happens to be false". An actually invalid filter
+ * never reaches a return statement at all — it throws (FilterError, or
+ * Athena's COLUMN_NOT_FOUND) and the controller maps that to a 400.
+ */
+const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidateQueryOutcome> => {
+  const config = await getBackupConfigById(params.backupConfigId);
+  if (!config || config.userId !== params.userId) return { ok: false, error: 'not_exist' };
+
+  if (!params.user.crmCredential || !params.user.crmProfile?.instanceUrl) {
+    return { ok: false, error: 'crm_not_connected' };
+  }
+
+  const described = await salesforceObjectDescribe({ user: params.user, objectName: params.objectApiName });
+  // Same gate isQueryableField applies before building the Bulk API SELECT /
+  // schema snapshot (metadata/field/index.ts), plus FLS-accessible — a field
+  // the backup pipeline would never have stored, or the running user can't
+  // read, can't be filtered on either. accessible defaults true if describe
+  // ever omits it (every real describe response sets it; this is just belt
+  // and suspenders against a missing/undefined value).
+  const isFieldFilterable = (f: ISalesforceFieldDescribe): boolean =>
+    isQueryableField(f) && f.accessible !== false;
+  const fieldMetaByName = new Map<string, ISoqlFieldMeta>(
+    described.fields.map((f) => [f.name.toLowerCase(), { name: f.name, type: f.type, queryable: isFieldFilterable(f) }])
+  );
+  const resolver: FieldTypeResolver = {
+    resolve: (name) => fieldMetaByName.get(name.toLowerCase()),
+    // Real describe metadata, not a guessed naming convention — Salesforce's
+    // own compoundFieldName already links a compound field's flattened
+    // children back to it (e.g. "MailingCity".compoundFieldName ===
+    // "MailingAddress"), identically for a standard Address field and any
+    // custom Address/Geolocation field.
+    resolveCompoundSibling: (base, sub) => {
+      const baseLower = base.toLowerCase();
+      const subLower = sub.toLowerCase();
+      const sibling = described.fields.find(
+        (f) => f.compoundFieldName?.toLowerCase() === baseLower && f.name.toLowerCase().includes(subLower)
+      );
+      return sibling ? { name: sibling.name, type: sibling.type, queryable: isFieldFilterable(sibling) } : undefined;
+    },
+  };
+
+  // Thrown FilterError is intentionally not caught here — see doc above.
+  const whereBody = buildAthenaFilterWhere(params.filter, undefined, resolver);
+  console.log('Athena WHERE clause:', whereBody);
+
+  const databaseName = toGlueId(params.backupConfigId);
+  const hudiTable = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}_hudi`;
+
+  const { region, outputLocation } = await buildRetrieveOutputLocation(config);
+  // No compressed Hudi table yet (nothing backed up for this object) — the
+  // filter itself is already validated above, there's just nothing to run it
+  // against, so this is "no matches" rather than an error.
+  if (!(await tableExists(databaseName, hudiTable, region))) return { ok: true, value: { matched: false, valid: true } };
+
+  const result = await runAthenaQuery(buildValidateQuerySql(hudiTable, whereBody), databaseName, region, outputLocation, 1);
+
+  // Reaching here means Athena actually ran the compiled WHERE clause without
+  // erroring (a bad field name would have thrown COLUMN_NOT_FOUND before this
+  // line) — that's what "valid" reports. Zero rows back is a legitimate
+  // result of a valid query, not a sign the query itself failed.
+  return { ok: true, value: { matched: result.rows.length > 0, valid: true } };
+};
+
 /**
  * Counts, per object and in total, how many records a restore would touch —
  * read-only, no CSV, no Hudi/delta write, no restore execution.
@@ -1164,12 +1118,13 @@ const resolveDryRunObjects = async (params: IDryRunParams): Promise<ICountTarget
  *                   Hudi data only. Archival configs are ENTIRE-only (see
  *                   parseDryRunParams) since archival has no record-level
  *                   delta table.
- * CHANGED_BETWEEN — total/UPDATE/DELETE counts out of the delta table's
- *                   record-level rows (is_schema_change excluded) whose
- *                   change_time falls in [startDate, endDate], narrowed the
+ * CHANGED_BETWEEN — total/UPDATE/DELETE counts of DISTINCT records
+ *                   (is_schema_change excluded) whose change_time falls in
+ *                   [startDate, endDate] — deduped to one row per record
+ *                   before counting, see buildDeltaCountSql — narrowed the
  *                   same way by RECORD/BULK_CSV/FILTER (FILTER compiled
- *                   through buildDeltaFilterWhere instead — see its own
- *                   ponytail note for what it does and doesn't match).
+ *                   through buildDeltaFilterWhere instead, matching each
+ *                   record's PRE-WINDOW value — see its own doc comment).
  *                   DELETED_ONLY reports only the DELETE half of that count.
  *
  * Returns not_exist when the config doesn't exist or isn't owned by the caller.
@@ -1209,6 +1164,7 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
             : t.filter
               ? buildAthenaFilterWhere(t.filter)
               : null;
+          console.log('Athena WHERE clause:', whereBody);
           const hudiTable = `${tableFor(t.objectApiName)}_hudi`;
 
           const count = await runHudiCount(databaseName, hudiTable, buildHudiCountSql(hudiTable, whereBody), region, outputLocation);
@@ -1239,14 +1195,22 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
     targets.map(async (t): Promise<IDryRunObjectCount> => {
       try {
         const scopeWhere = t.recordIds
-          ? recordIdsWhere(t.recordIds, 'record_id')
+          ? recordIdsWhere(t.recordIds, `"${DELTA_RECORD_ID_ALIAS}"`)
           : t.filter
-            ? buildDeltaFilterWhere(t.filter)
+            ? buildDeltaFilterWhere(t.filter, {
+                deltaTable: `${tableFor(t.objectApiName)}_delta`,
+                scanWhere: buildDeltaScanWhere({
+                  startDate: params.startDate!,
+                  endDate: params.endDate!,
+                  deltaPartition,
+                }),
+              })
             : null;
+        console.log('Athena WHERE clause:', scopeWhere);
         const counts = await runDeltaCount(
           databaseName,
           `${tableFor(t.objectApiName)}_delta`,
-          buildDeltaCountSql(`${tableFor(t.objectApiName)}_delta`, {
+          buildDeltaCountSql(`${tableFor(t.objectApiName)}_delta`, `${tableFor(t.objectApiName)}_hudi`, {
             startDate: params.startDate!,
             endDate: params.endDate!,
             deltaPartition,
@@ -1291,8 +1255,8 @@ const dryRunRestore = async (params: IDryRunParams): Promise<IDryRunOutcome> => 
 // resolve — an ALL-scope restore spans every object at once. The response is
 // deliberately a SAMPLE: /dry-run remains the endpoint that answers "how many
 // records in total".
-export const DIFF_DEFAULT_LIMIT = 50;
-export const DIFF_MAX_LIMIT = 200;
+export const DIFF_DEFAULT_LIMIT = 20;
+export const DIFF_MAX_LIMIT = 20;
 
 export interface IDryRunDiffParams extends IDryRunParams {
   // The diff's second half is a live Salesforce read, so unlike the count-only
@@ -1899,7 +1863,7 @@ export type FetchObjectFieldsResult =
 const resolveSchemaS3 = async (
   backupConfigId: string,
   userId: string
-): Promise<{ destConfig: S3Config; keyParams: ISchemaS3KeyParams } | null> => {
+): Promise<{ destConfig: IS3Config; keyParams: ISchemaS3KeyParams } | null> => {
   const config = await getBackupConfigById(backupConfigId);
   if (!config || config.userId !== userId) {
     return null;
@@ -1915,7 +1879,7 @@ const resolveSchemaS3 = async (
     return null;
   }
 
-  const destConfig = getDecryptedDestinationConfig(destination) as S3Config;
+  const destConfig = getDecryptedDestinationConfig(destination) as IS3Config;
   return {
     destConfig,
     keyParams: {
@@ -1999,10 +1963,6 @@ const fetchPicklistValues = async (params: {
 };
 
 export {
-  getRestoreRetrieveJobById,
-  getRestoreRetrieveJobsByConfig,
-  getRestoreRetrieveJobsByUser,
-  getBackupJobIdsChangedBetween,
   getObjectListByConfigId,
   getRestoreObjectListByConfigId,
   toTreeSummary,
@@ -2015,4 +1975,5 @@ export {
   fetchPicklistValues,
   dryRunRestore,
   dryRunDiff,
+  validateSoqlQuery,
 };

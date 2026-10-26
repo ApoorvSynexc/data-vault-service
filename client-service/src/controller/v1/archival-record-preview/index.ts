@@ -4,11 +4,12 @@ import {
   resolveArchivalConfigsForObject,
   searchArchivalRecords,
   applyFieldSelection,
-  getField,
   validateFields,
   getArchivedRecordById,
-  getArchivedRelatedRecords,
+  compileArchivalCriteria,
+  type IArchivalCriteria,
   type IArchivalFilters,
+  type IArchivalDateFilters,
 } from '../../../services/archival-record-preview';
 import { toIsoDateString, IsoDateString } from '../../../utils/iso-date';
 import { wrapArchivalPreviewController } from '../../../middlewares/archival-record-preview';
@@ -38,12 +39,13 @@ const resolveOrgAndConfigs = async (
     return null;
   }
 
-  return { objName, configs: resolved.configs };
+  // The config tree's own spelling of the object ("Product2" for "product2").
+  return { objName: resolved.objName, configs: resolved.configs };
 };
 
 /**
  * POST /archival-preview/salesforce/preview
- * Body: { orgId, objName, fields?, startDate?, endDate?, filters?, limit?, page? }
+ * Body: { orgId (or organizationId), objName, fields?, startDate?, endDate?, filters?, limit?, page?, cursor? }
  *
  * Only orgId + objName are required — everything else is optional.
  * Searches every archival config covering objName in this org and merges the
@@ -52,13 +54,26 @@ const resolveOrgAndConfigs = async (
  * column is returned. `filters` is a plain object, one key per field, ANDed
  * together — e.g. { "Status": "Active", "Email_ne": "x@y.com" } means
  * Status = 'Active' AND Email <> 'x@y.com' (a "_ne" suffix on the key means
- * NOT_EQUALS; a plain key means EQUALS). `page` is 1-based, defaults to 1.
+ * NOT_EQUALS; a plain key means EQUALS). An array value is IN, with "_ne" NOT IN:
+ * { "Stage": ["Won", "Lost"] }. A { from, to } value is a date range:
+ * { "CreatedDate": { "from": "2026-01-01", "to": "2026-03-31" } }.
+ * "AND" / "OR" keys take an array of filter objects (each ANDed inside, nestable)
+ * — { "Status": "Active", "OR": [ { "Type": "A" }, { "Type": "B", "Rating": "Hot" } ] }
+ * means Status = 'Active' AND (Type = 'A' OR (Type = 'B' AND Rating = 'Hot')).
+ * Legacy: an "OR" holding a plain object ORs its conditions with the top-level
+ * ones — { "OwnerId": "005…", "OR": { "Id": "001…", "Name": "sfd" } } means
+ * OwnerId = '005…' OR Id = '001…' OR Name = 'sfd'. `page` is 1-based,
+ * defaults to 1. Prefer `cursor` (the previous response's `nextCursor`, the
+ * last Id of that page): it fetches the next rows directly instead of
+ * skipping earlier ones, so later pages are as fast as the first.
+ * `dateFilters` ranges any datetime column, time included:
+ * { "LastModifiedDate": { "from": "2026-07-03T11:00:00Z", "to": "2026-07-03" } }.
  */
 const searchArchivalRecordsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { orgId, objName, fields, startDate, endDate, filters, limit, page } = (req.body ?? {}) as Record<string, unknown>;
-console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, fields=${JSON.stringify(fields)}, startDate=${startDate}, endDate=${endDate}, filters=${JSON.stringify(filters)}, limit=${limit}, page=${page}`);
+  const { objName, fields, startDate, endDate, dateFilters, limit, page, cursor, ...body } = (req.body ?? {}) as Record<string, unknown>;
+  const orgId = body.orgId ?? body.organizationId;
+  const filters = body.filters ?? body.filter;
   const resolved = await resolveOrgAndConfigs(req, res, orgId, objName);
-  console.log('resolve', resolved);
   if (!resolved) return;
 
   let start: IsoDateString | undefined;
@@ -83,16 +98,17 @@ console.log(`[searchArchivalRecordsHandler] orgId=${orgId}, objName=${objName}, 
     startDate: start,
     endDate: end,
     filters: filters as IArchivalFilters | undefined,
+    dateFilters: dateFilters as IArchivalDateFilters | undefined,
     limit: limit as number | undefined,
     page: page as number | undefined,
+    cursor: cursor as string | undefined,
   });
-console.log('searched', searched);
   if (!searched.ok) {
     return makeResponse(req, res, 400, false, searched.error as Parameters<typeof makeResponse>[4]);
   }
 
-  const { records, hasMore, page: currentPage } = searched.result;
-  makeResponse(req, res, 200, true, 'fetch', records, { hasMore, page: currentPage });
+  const { records, hasMore, page: currentPage, nextCursor } = searched.result;
+  makeResponse(req, res, 200, true, 'fetch', records, { hasMore, page: currentPage, nextCursor });
 };
 
 // Depth-first search over a config's object tree (root objects + nested
@@ -126,28 +142,43 @@ const findParentEdge = (nodes: any[] | undefined, targetName: string): { parentN
   return null;
 };
 
-/**
- * POST /archival-preview/salesforce/record-detail
- * Body: { orgId, objName, recordId, fields? }
- *
- * Only orgId + objName + recordId are required — fields is optional.
- *
- * One record's own fields plus every related object the record's config
- * actually knows about — child/junction objects (this object's `children[]`
- * in the tree) and the parent/master object (found by walking the tree for
- * whoever lists this object as a child). An object never selected for this
- * config's archival simply has no Hudi table, so it's silently left out
- * rather than surfaced as an error or fetched live from Salesforce.
- *
- * `fields`, when given, trims BOTH the main record and every related
- * record's rows to just those columns — omitted, full rows are returned.
- *
- * Tries every archival policy covering objName (there can be more than one)
- * and uses the first one that actually has this record.
- */
+interface IRelatedObject {
+  objectName: string;
+  relationship: 'child';
+  fieldApiName: string;
+}
+
+// Concurrent callers with the same key share one in-flight load; a finished
+// result is reused for `ttlMs`. Rejections are never cached, so a failed load
+// is retried by the next call. Bounded so it can't grow without limit.
+const createSharedLoadCache = <T>(ttlMs: number, maxEntries: number) => {
+  const entries = new Map<string, { value: Promise<T>; expiresAt: number }>();
+
+  const get = (key: string, load: () => Promise<T>): Promise<T> => {
+    const now = Date.now();
+    const hit = entries.get(key);
+    if (hit && hit.expiresAt > now) return hit.value;
+
+    if (entries.size >= maxEntries) {
+      for (const [k, v] of entries) if (v.expiresAt <= now) entries.delete(k);
+      if (entries.size >= maxEntries) entries.delete(entries.keys().next().value as string);
+    }
+
+    const value = load();
+    entries.set(key, { value, expiresAt: now + ttlMs });
+    value.catch(() => entries.delete(key));
+    return value;
+  };
+
+  return { get };
+};
+
+const recordDetailCache = createSharedLoadCache<Record<string, unknown> | null>(60_000, 500);
+
 const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  // Same defensive default as searchArchivalRecordsHandler — see comment there.
-  const { orgId, objName, recordId, fields } = (req.body ?? {}) as Record<string, unknown>;
+  const { objName, fields, ...rest } = (req.body ?? {}) as Record<string, unknown>;
+  const orgId = rest.orgId ?? rest.organizationId;
+  const recordId = rest.recordId ?? rest.Id ?? rest.id;
   if (typeof recordId !== 'string' || !recordId) {
     return makeResponse(req, res, 400, false, 'params_required');
   }
@@ -160,54 +191,58 @@ const getArchivedRecordDetailHandler = async (req: IRequest, res: IResponse): Pr
     return makeResponse(req, res, 400, false, 'invalid_fields' as Parameters<typeof makeResponse>[4]);
   }
 
-  for (const config of resolved.configs) {
-    const record = await getArchivedRecordById(config, resolved.objName, recordId);
-    if (!record) continue;
-
-    const node = findObjectNode(config.objects, resolved.objName);
-    const relatedObjects: { objectName: string; relationship: 'child' | 'parent'; fieldApiName: string; records: Record<string, string>[] }[] = [];
-
-    for (const child of node?.children ?? []) {
-      if (!child?.name || !child?.fieldApiName) continue;
-      const childRecords = await getArchivedRelatedRecords(config, child.name, child.fieldApiName, recordId);
-      if (childRecords.length) {
-        relatedObjects.push({
-          objectName: child.name,
-          relationship: 'child',
-          fieldApiName: child.fieldApiName,
-          records: childRecords.map((r) => applyFieldSelection(r, fieldsCheck.fields)),
-        });
-      }
-    }
-
-    const parentEdge = findParentEdge(config.objects, resolved.objName);
-    if (parentEdge) {
-      const parentId = getField(record, parentEdge.fieldApiName);
-      if (parentId) {
-        const parentRecord = await getArchivedRecordById(config, parentEdge.parentNode.name, parentId);
-        if (parentRecord) {
-          relatedObjects.push({
-            objectName: parentEdge.parentNode.name,
-            relationship: 'parent',
-            fieldApiName: parentEdge.fieldApiName,
-            records: [applyFieldSelection(parentRecord, fieldsCheck.fields)],
-          });
-        }
-      }
-    }
-
-    makeResponse(req, res, 200, true, 'fetch', {
-      configId: config.backupConfigId,
-      policyName: config.name,
-      objName: resolved.objName,
-      recordId,
-      record: applyFieldSelection(record, fieldsCheck.fields),
-      relatedObjects,
-    });
-    return;
+  // Optional extra conditions the record must also satisfy (same shape as the search API).
+  const criteriaCheck = compileArchivalCriteria(rest.filters ?? rest.filter, rest.dateFilters);
+  if (!criteriaCheck.ok) {
+    return makeResponse(req, res, 400, false, criteriaCheck.error as Parameters<typeof makeResponse>[4]);
   }
 
-  makeResponse(req, res, 400, false, 'not_exist');
+  // Same record asked again (client/gateway retry, double click) shares the
+  // running Athena work or a just-finished result instead of re-querying —
+  // every uncached lookup is billed and queues behind other queries.
+  // includeRelated lists the child objects (no records, no extra queries); callers that
+  // only need the record itself can opt out with includeRelated:false.
+  const includeRelated = rest.includeRelated !== false;
+  const cacheKey = JSON.stringify([orgId, resolved.objName, recordId, fieldsCheck.fields, includeRelated, criteriaCheck.criteria]);
+  const payload = await recordDetailCache.get(cacheKey, () =>
+    loadRecordDetail(resolved.configs, resolved.objName, recordId, fieldsCheck.fields, includeRelated, criteriaCheck.criteria)
+  );
+
+  if (!payload) return makeResponse(req, res, 400, false, 'not_exist');
+  makeResponse(req, res, 200, true, 'fetch', payload);
+};
+
+// The record is one Athena query. With includeRelated, its child objects are
+// only listed from the config tree (name + FK field) — their records are not
+// fetched, so no Athena query per child.
+const loadRecordDetail = async (
+  configs: IBackupConfig[],
+  objName: string,
+  recordId: string,
+  fields: string[] | null,
+  includeRelated = true,
+  criteria?: IArchivalCriteria
+): Promise<Record<string, unknown> | null> => {
+  for (const config of configs) {
+    const record = await getArchivedRecordById(config, objName, recordId, null, [], criteria);
+    if (!record) continue;
+
+    const children = includeRelated ? findObjectNode(config.objects, objName)?.children ?? [] : [];
+    const relatedObjects: IRelatedObject[] = children
+      .filter((child: any) => child?.name && child?.fieldApiName)
+      .map((child: any) => ({ objectName: child.name, relationship: 'child', fieldApiName: child.fieldApiName }));
+
+    return {
+      configId: config.backupConfigId,
+      policyName: config.name,
+      objName,
+      recordId,
+      record: applyFieldSelection(record, fields),
+      relatedObjects,
+    };
+  }
+
+  return null;
 };
 
 export const archivalRecordPreviewController = wrapArchivalPreviewController({

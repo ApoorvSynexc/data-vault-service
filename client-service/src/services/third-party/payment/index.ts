@@ -199,7 +199,6 @@ const setupPayment = async ({
       body,
     });
   } catch (err: any) {
-    console.log(`[payment] getSetupResponse failed for org ${orgId} `, err);
     throw new Error(extractVendorErrorMessage(err) ?? err?.message ?? 'getSetupResponse request failed');
   }
 
@@ -218,14 +217,9 @@ const setupPayment = async ({
 const testDecrypt = (orgId: string, createAccountEncyption: string, encryption: string, newToken: string) => {
   const decrypted = decryptPayload(orgId, createAccountEncyption);
   const paredDecypted = JSON.parse(decrypted);
-  console.log({ paredDecypted })
   const { key, iv } = parseSfSecret(paredDecypted.sf_secret);
-  const decrypte = aesCbc128Decrypt(key, iv, encryption);
-
-  const decryptedtoken = aesCbc128Decrypt(key, iv, newToken);
-  console.log({ decryptedtoken })
-
-  console.log(JSON.stringify({ decrypte }));
+  aesCbc128Decrypt(key, iv, encryption);
+  aesCbc128Decrypt(key, iv, newToken);
 }
 
 export { createPaymentAccount, setupPayment, testDecrypt };

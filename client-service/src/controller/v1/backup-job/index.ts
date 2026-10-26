@@ -6,14 +6,15 @@ import {
   getBackupConfigBySlug,
   getBackupConfigById,
   getTableCounter,
-  resumeBackupJob,
+  retryBackupJob,
 } from '../../../services';
 import { BACKUP_JOB_TABLE } from '../../../constant';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { IBackupJob } from '../../../models';
 
-const sanitize = ({ destination, ...rest }: IBackupJob) => ({
+const sanitizeEncryption = ({ destination, ...rest }: IBackupJob) => ({
   ...rest,
+  source : undefined,
   destination: { type: destination.type },
 });
 
@@ -39,7 +40,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
       getTableCounter(BACKUP_JOB_TABLE, config.backupConfigId),
     ]);
 
-    makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
+    makeResponse(req, res, 200, true, 'fetch', items.map(sanitizeEncryption), {
       limit: limitNum,
       nextCursor,
       totalRecords: counter?.count ?? 0,
@@ -53,7 +54,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
     getTableCounter(BACKUP_JOB_TABLE, userId),
   ]);
 
-  makeResponse(req, res, 200, true, 'fetch', items.map(sanitize), {
+  makeResponse(req, res, 200, true, 'fetch', items.map(sanitizeEncryption), {
     limit: limitNum,
     nextCursor,
     totalRecords: counter?.count ?? 0,
@@ -61,23 +62,7 @@ const listBackupJobsHandler = async (req: IRequest, res: IResponse): Promise<voi
   });
 };
 
-const getBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  const { backupJobId } = req.query;
-  if (!backupJobId) {
-    makeResponse(req, res, 400, false, 'id_required');
-    return;
-  }
-
-  const job = await getBackupJobById(String(backupJobId));
-  if (!isOwner(job, req.user!.userId, req.user!.crmId)) {
-    makeResponse(req, res, 400, false, 'not_exist');
-    return;
-  }
-
-  makeResponse(req, res, 200, true, 'fetch', sanitize(job!));
-};
-
-const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+const retryBackupJobHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { backupJobId } = req.query;
   if (!backupJobId) {
     makeResponse(req, res, 400, false, 'id_required');
@@ -96,12 +81,11 @@ const resumeBackupJobHandler = async (req: IRequest, res: IResponse): Promise<vo
     return;
   }
 
-  await resumeBackupJob(String(backupJobId), config);
+  await retryBackupJob(String(backupJobId), config);
   makeResponse(req, res, 200, true, 'resume');
 };
 
 export const backupJobController = wrapController({
   listBackupJobsHandler,
-  getBackupJobHandler,
-  resumeBackupJobHandler,
+  retryBackupJobHandler,
 });

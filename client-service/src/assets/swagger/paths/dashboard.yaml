@@ -1,21 +1,35 @@
 /v1/dashboard/overview:
   get:
     tags: [Dashboard]
-    summary: Get aggregated dashboard overview widgets (backup/archival/storage summary)
+    summary: Get aggregated dashboard overview widgets (backup/archival/restore summary)
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: module
+        in: query
+        required: true
+        schema: { type: string, enum: [backup, archival, restore] }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
 /v1/dashboard/last-jobs:
   get:
     tags: [Dashboard]
-    summary: Get the most recent backup job runs
+    summary: Get the most recent job runs for a module
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: module
+        in: query
+        required: true
+        schema: { type: string, enum: [backup, archival, restore] }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'

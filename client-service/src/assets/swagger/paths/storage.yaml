@@ -3,9 +3,16 @@
     tags: [Storage]
     summary: Get storage usage overview for the authenticated organization
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: crm-id
+        in: header
+        schema: { type: string }
+        description: Overrides the authenticated user's own crmId
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'
 
@@ -14,8 +21,18 @@
     tags: [Storage]
     summary: Get storage usage for the most recently used backup configurations
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: crm-id
+        in: header
+        schema: { type: string }
+        description: Overrides the authenticated user's own crmId
+      - name: type
+        in: query
+        schema: { type: string, enum: [NORMAL, ARCHIVAL], default: NORMAL }
     responses:
       200:
         $ref: '#/components/responses/Success'
+      400:
+        $ref: '#/components/responses/BadRequest'
       401:
         $ref: '#/components/responses/Unauthorized'

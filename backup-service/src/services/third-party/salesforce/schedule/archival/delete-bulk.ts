@@ -4,15 +4,15 @@ import { updateArchivalObject } from '../../../../backup-job';
 import { incrementBackupConfigCounters } from '../../../../backup-config';
 import {
   fetchCsvFromS3,
-  listAndDeleteS3Prefix,
+  // listAndDeleteS3Prefix,
   listS3Objects,
-  uploadToS3,
+  // uploadToS3,
 } from '../../../../destination/s3';
 import { parseCSVLine, splitCSVRows, buildErrorLogsS3Prefix } from '../../../../../utils/helper';
 import { SalesforceTokens } from '../../api-request';
 import { logger } from '../../../../../middlewares/logger';
 
-const RECORD_ERROR_BATCH_SIZE = 200;
+// const RECORD_ERROR_BATCH_SIZE = 200;
 
 const SF_API_VERSION = 'v65.0';
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000;
@@ -266,54 +266,54 @@ const getJobErrors = async (
 // Path: {crmName}/{crmId}/{type}/{backupConfigId}/error_logs/{objectName}/{objectId}/batch_NNNNN.csv
 // (sibling of raw_data within the same config bucket layout).
 // Before uploading, wipes any existing files at that prefix (replace-on-retry).
-const uploadErrorsToS3 = async (
-  errors: Array<{ recordId: string; reason: string }>,
-  destConfig: IDestinationConfig,
-  crmId: string,
-  crmName: string,
-  backupConfigId: string,
-  backupJobId: string,
-  objectName: string,
-  objectId: string
-): Promise<string | null> => {
-  const prefix = buildErrorLogsS3Prefix({
-    crmId,
-    crmName,
-    backupConfigId,
-    backupJobId,
-    objectName,
-    objectId,
-  });
+// const uploadErrorsToS3 = async (
+//   errors: Array<{ recordId: string; reason: string }>,
+//   destConfig: IDestinationConfig,
+//   crmId: string,
+//   crmName: string,
+//   backupConfigId: string,
+//   backupJobId: string,
+//   objectName: string,
+//   objectId: string
+// ): Promise<string | null> => {
+//   const prefix = buildErrorLogsS3Prefix({
+//     crmId,
+//     crmName,
+//     backupConfigId,
+//     backupJobId,
+//     objectName,
+//     objectId,
+//   });
 
-  if (errors.length === 0) {
-    // Clear any stale error files from a previous run that had failures.
-    await listAndDeleteS3Prefix(destConfig, prefix);
-    return null;
-  }
+//   if (errors.length === 0) {
+//     // Clear any stale error files from a previous run that had failures.
+//     await listAndDeleteS3Prefix(destConfig, prefix);
+//     return null;
+//   }
 
-  // Delete stale batch files before writing new ones so shrinking error counts
-  // don't leave orphan batch files from prior runs.
-  await listAndDeleteS3Prefix(destConfig, prefix);
+//   // Delete stale batch files before writing new ones so shrinking error counts
+//   // don't leave orphan batch files from prior runs.
+//   await listAndDeleteS3Prefix(destConfig, prefix);
 
-  const batches: Array<Array<{ recordId: string; reason: string }>> = [];
-  for (let i = 0; i < errors.length; i += RECORD_ERROR_BATCH_SIZE) {
-    batches.push(errors.slice(i, i + RECORD_ERROR_BATCH_SIZE));
-  }
-  await Promise.all(
-    batches.map((batch, idx) => {
-      const csv = [
-        'recordId,error',
-        ...batch.map((e) => `${e.recordId},${JSON.stringify(e.reason)}`),
-      ].join('\n');
-      const key = `${prefix}/batch_${String(idx + 1).padStart(5, '0')}.csv`;
-      return uploadToS3(destConfig, key, Buffer.from(csv, 'utf-8'));
-    })
-  );
-  logger.info(
-    `[archival:delete:errors-s3] uploaded ${batches.length} batch file(s) | backupJobId:${backupJobId} objectName:${objectName} objectId:${objectId} prefix:${prefix}`
-  );
-  return prefix;
-};
+//   const batches: Array<Array<{ recordId: string; reason: string }>> = [];
+//   for (let i = 0; i < errors.length; i += RECORD_ERROR_BATCH_SIZE) {
+//     batches.push(errors.slice(i, i + RECORD_ERROR_BATCH_SIZE));
+//   }
+//   await Promise.all(
+//     batches.map((batch, idx) => {
+//       const csv = [
+//         'recordId,error',
+//         ...batch.map((e) => `${e.recordId},${JSON.stringify(e.reason)}`),
+//       ].join('\n');
+//       const key = `${prefix}/batch_${String(idx + 1).padStart(5, '0')}.csv`;
+//       return uploadToS3(destConfig, key, Buffer.from(csv, 'utf-8'));
+//     })
+//   );
+//   logger.info(
+//     `[archival:delete:errors-s3] uploaded ${batches.length} batch file(s) | backupJobId:${backupJobId} objectName:${objectName} objectId:${objectId} prefix:${prefix}`
+//   );
+//   return prefix;
+// };
 
 // Reads failed record IDs from the error log prefix for a DELETION_RECORDS_FAILED retry.
 // Returns an Id-only CSV string ready to submit to a new Salesforce delete job.
@@ -355,8 +355,6 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
   const {
     backupJobId,
     backupConfigId,
-    crmId,
-    crmName,
     instanceUrl,
     tokens,
     object,
@@ -525,7 +523,11 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
     );
     await updateArchivalObject({
       backupJobId,
-      object: { id: object.id, status: JOB_OBJECT_STATUS.deletionJobFailed, errorMessage: errorMsg },
+      object: {
+        id: object.id,
+        status: JOB_OBJECT_STATUS.deletionJobFailed,
+        errorMessage: errorMsg,
+      },
     });
     throw err;
   }
@@ -562,7 +564,7 @@ export const bulkDeleteRecords = async (payload: IBulkDeletePayload): Promise<st
       status: objectFinalStatus,
       errors: storedErrors,
     },
-  }); 
+  });
 
   return objectFinalStatus;
 };

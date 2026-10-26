@@ -3,13 +3,12 @@ import {
   getScheduledIncrementalBackupConfigs,
   triggerArchivalBackupJob,
   triggerBackupJob,
-  hasActiveBackupJob,
   getUser,
   checkSalesforceApiLimitUsage
 } from '../services';
 import { logger } from '../middlewares';
 import { filtereObjects } from '../utils/helper';
-import { IBackupConfig } from '../models';
+import { STATUS } from '../constant';
 
 const runScheduledIncrementalBackups = async (): Promise<void> => {
   const tickStartMs = Date.now();
@@ -33,12 +32,11 @@ const runScheduledIncrementalBackups = async (): Promise<void> => {
         const user = await getUser({ userId: config.userId });
         if (!user) continue;
 
-        await checkSalesforceApiLimitUsage(config.userId, config.crmId);
+        await checkSalesforceApiLimitUsage({ userId: config.userId, crmId: config.crmId });
         if (config.type === "ARCHIVAL" && config.scheduleConfig?.type === 'ONE_TIME') {
           const { scheduledObjects } = filtereObjects(config.objects || []);
           if (scheduledObjects.length) {
-            const active = await hasActiveBackupJob(config.backupConfigId);
-            if (!active) {
+            if (config.backupStatus !== STATUS.pending) {
               // One job log per scheduled object — bypassDedup because we already checked above
               await Promise.all(
                 scheduledObjects.map(obj => triggerArchivalBackupJob({ user, config, objects: [obj], lastUpdatedAt: config.lastBackupAt, bypassDedup: true }))

@@ -5,9 +5,9 @@ import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
 import { JOB_OBJECT_STATUS, STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
 import { flattenBackupObjects, wrapController } from '../../../utils/helper';
-import { decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
+import { decrypt, decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUsersByCrmId, getUser, toTreeSummary, filterObjectTree } from '../../../services';
+import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUser, toTreeSummary, filterObjectTree, getS3PrefixStats } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 import { sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
@@ -90,7 +90,7 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
   const jobIds = Object.keys(built.details.objectOperations);
   const { failed } = await setCompressionStatusBulk({
     backupConfigId,
-    jobs: jobIds.map((backupJobId) => ({ backupJobId, status: JOB_OBJECT_STATUS.compressionInProgress })),
+    jobs: jobIds.map((backupJobId) => ({ backupJobId, status: STATUS.compressionInProgress })),
   });
 
   if (failed.length) {
@@ -98,7 +98,7 @@ const buildPayloadHandler = async (req: IRequest, res: IResponse): Promise<void>
     return makeResponse(req, res, 400, false, 'compression_status_update_failed');
   }
 
-  logger.info(`[COMPRESSION] build-payload complete | configId=${backupConfigId} jobs=${jobIds.length} status=${JOB_OBJECT_STATUS.compressionInProgress}`);
+  logger.info(`[COMPRESSION] build-payload complete | configId=${backupConfigId} jobs=${jobIds.length} status=${STATUS.compressionInProgress}`);
 
   return sendSparkPayload(res, built);
 };
@@ -173,7 +173,7 @@ const applyCompressionStatus = async (
     return makeResponse(req, res, 400, false, 'backup_config_not_found');
   }
 
-  const status = success ? JOB_OBJECT_STATUS.compressed : JOB_OBJECT_STATUS.compressionFailed;
+  const status = success ? STATUS.compressed : STATUS.compressionFailed;
   logger.info(`[COMPRESSION] applying ${status} to ${backupJobIds.length} job(s) | configId=${backupConfigId}`);
 
   const { updated, failed } = await setCompressionStatusBulk({
@@ -260,6 +260,19 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       return makeResponse(req, res, 400, false, 'not_exist');
     }
 
+    // Anything that throws after EMR succeeded must still move the restore out of
+    // its in-progress state, otherwise it stays stuck with no visible cause.
+    const markRestoreFailed = async (stage: string, error: any): Promise<void> => {
+      const failureMessage = error?.message ?? String(error);
+      logger.error(`[restore-csv] ${stage} failed | restoreJobId=${restoreConfigId} err:${failureMessage}`);
+
+      const failedObjects = restoreJob.destination.objects.map(o => ({ ...o, status: STATUS.failed}));
+      await Promise.all([
+        updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage, replaceObjects: failedObjects }),
+        updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
+      ]);
+    };
+
     // EMR/Spark itself failed to produce the restore CSV — nothing to ingest.
     // Surfaces the real EMR error rather than proceeding as if it succeeded,
     // which is what this handler did before (success was read but never checked).
@@ -268,10 +281,8 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
       logger.error(
         `[restore-csv] EMR reported failure | restoreJobId=${restoreConfigId} err:${failureMessage}`
       );
-      await Promise.all([
-        updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.failed, errorMessage: failureMessage }),
-        updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.failed, errorMessage: failureMessage }),
-      ]);
+
+      await markRestoreFailed('EMR failure', failureMessage);
       return makeResponse(req, res, 200, true, 'update');
     }
 
@@ -281,104 +292,113 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
 
     const objectToBeInsert = objectsToBeAffected.filter(o => !restoreJobObjectNames.includes(o.name));
     if (objectToBeInsert.length) {
-      const backupConfig = await getBackupConfigById(restoreJob.source.backupConfigId);
-      if (backupConfig) {
-        const backupConfigObjects = flattenBackupObjects(backupConfig.objects || []);
+      try {
+        const backupConfig = await getBackupConfigById(restoreJob.source.backupConfigId);
+        if (backupConfig) {
+          const backupConfigObjects = flattenBackupObjects(backupConfig.objects || []);
 
-        const objectPayload = objectToBeInsert.map(obj => {
-          const backupConfigObject = backupConfigObjects.find(o => o.name === obj.name);
-          if (backupConfigObject) {
-            return {
-              ...obj,
-              id: backupConfigObject.id || uuidv4(),
-              status: JOB_OBJECT_STATUS.restoreInProgress
-            };
-          }
-          return { ...obj, id: uuidv4(), status: JOB_OBJECT_STATUS.restoreInProgress };
-        });
+          const objectPayload = objectToBeInsert.map(obj => {
+            const backupConfigObject = backupConfigObjects.find(o => o.name === obj.name);
+            if (backupConfigObject) {
+              return {
+                ...obj,
+                id: backupConfigObject.id || uuidv4(),
+                status: JOB_OBJECT_STATUS.restoreInProgress
+              };
+            }
+            return { ...obj, id: uuidv4(), status: JOB_OBJECT_STATUS.restoreInProgress };
+          });
 
-        await updateRestoreJob({
-          restoreJobId: restoreConfigId,
-          replaceObjects: [...restoreJob.destination.objects, ...objectPayload]
-        });
+          await updateRestoreJob({
+            restoreJobId: restoreConfigId,
+            replaceObjects: [...restoreJob.destination.objects, ...objectPayload]
+          });
+        }
+      } catch (error: any) {
+        await markRestoreFailed('updating restore objects', error);
+        return makeResponse(req, res, 400, false, 'restore_trigger_failed');
       }
     }
 
-    console.log(JSON.stringify({restore}));
-    if(restore.destination.type === 'EXPORT'){
-      const objects = restoreJob.destination.objects.map(o => ({...o, status: STATUS.success}));
-        await Promise.all([
+    if (restore.destination.type === 'EXPORT') {
+      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+        'cipherText' in restoreJob.source.encryptedKeys
+          ? JSON.parse(decrypt(restoreJob.source.encryptedKeys))
+          : restoreJob.source.encryptedKeys;
+      const s3Config = {
+        ...sourceS3Credentials,
+        bucketName: restoreJob.source.bucketName,
+        region: restoreJob.source.region,
+      };
+
+      // Each object's CSVs live under `${csvFilePath}/<objectName>/csv` — count
+      // and total size of that folder are surfaced per object so the UI can
+      // show what the export actually produced.
+      const objects = await Promise.all(
+        restoreJob.destination.objects.map(async (o) => {
+          const path = `${restoreJob.source.csvFilePath}/${o.name}/csv`;
+          try {
+            const { count, sizeInBytes } = await getS3PrefixStats(s3Config, path);
+            return { ...o, status: STATUS.success, csvCount: count, sizeInBytes };
+          } catch (error: any) {
+            logger.error(
+              `[restore-export] failed to compute CSV stats | restoreJobId=${restoreConfigId} object=${o.name} err:${error?.message ?? error}`
+            );
+            return { ...o, status: STATUS.success };
+          }
+        })
+      );
+
+      await Promise.all([
         updateRestoreJob({ restoreJobId: restoreConfigId, status: STATUS.success, replaceObjects: objects }),
         updateRestore({ restoreId: restoreJob.restoreId, status: STATUS.success }),
       ]);
-    }else {
-      await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
+    } else {
+      try {
+        await sendRestoreToBackupService({ ...restoreJob, objectHierarchy: (decrypted as any).restore.objects });
+      } catch (error: any) {
+        await markRestoreFailed('triggering backup-service restore', error);
+        return makeResponse(req, res, 400, false, 'restore_trigger_failed');
+      }
     }
 
     return makeResponse(req, res, 200, true, 'update');
   }
 };
 
-// Resolves the connected Salesforce user for a restore's destination org:
-// DIFFERENT names the target org directly on destination.crmId; SAME restores
-// into the requesting user's own connected org, so crmId comes from that
-// user's record instead — i.e. this always resolves the destination org,
-// never the source. Shared by restore-objects and get-inactive-owner-ids,
-// both of which need the destination org's credentials.
-const resolveDestinationCrmUser = async (restore: NonNullable<Awaited<ReturnType<typeof getRestoreById>>>) => {
-  let crmId = restore.destination?.crmId;
-  if (restore.destination?.type !== 'DIFFERENT') {
-    const restoreUser = await getUser({ userId: restore.userId });
-    crmId = restoreUser?.crmId;
-  }
-  if (!crmId) return null;
-
-  const crmUsers = await getUsersByCrmId(crmId);
-  return crmUsers.find((u) => u.crmCredential && u.crmProfile?.instanceUrl) ?? null;
-};
-
 /**
  * GET /spark-job/get-inactive-owner-ids?restoreConfigId=<uuid>&includeManagers=<boolean>
  * restoreConfigId is the RESTORE_JOB_TABLE PK (same id restore-fields and
- * restore-objects read via getRestoreJobById). Credentials resolve to the
- * restore's destination org via resolveDestinationCrmUser — same SAME/DIFFERENT
- * split restore-objects uses — since that's the org Spark needs inactive-owner
- * data for, not the source.
+ * restore-objects read via getRestoreJobById). Credentials come straight off
+ * restoreJob.userId — createRestoreJob already resolves and stores that as
+ * the destination-org user (see getRestoreFieldsHandler's own comment on the
+ * same invariant), so a second, indirect crmId-based lookup isn't needed and
+ * risks picking a different connected user than the one this restore job was
+ * actually created under.
  *
  * Queries the standard Data REST API (SELECT Id[, ManagerId] FROM User WHERE
  * IsActive = false) using that org's credentials. includeManagers=true
- * additionally returns the distinct set of ManagerId values off those records.
+ * additionally returns an ownerId -> ManagerId map off those records.
  */
 const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreConfigId, includeManagers } = req.query;
-  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers });
 
   if (!restoreConfigId || typeof restoreConfigId !== 'string') {
     return makeResponse(req, res, 400, false, 'id_required');
   }
-  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers });
 
   const restoreJob = await getRestoreJobById(restoreConfigId);
   if (!restoreJob) {
     return makeResponse(req, res, 400, false, 'not_exist');
   }
-  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers, restoreJob });
 
-  const restore = await getRestoreById(restoreJob.restoreId);
-  if (!restore) {
-    return makeResponse(req, res, 400, false, 'not_exist');
-  }
-  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers, restoreJob, restore });
-
-  const crmUser = await resolveDestinationCrmUser(restore);
-  if (!crmUser) {
+  const user = await getUser({ userId: restoreJob.userId });
+  if (!user?.crmCredential || !user.crmProfile?.instanceUrl) {
     return makeResponse(req, res, 400, false, 'crm_not_connected');
   }
-  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers, restoreJob, restore, crmUser });
 
-  const data = await getInactiveOwnerIds({ user: crmUser, includeManagers: includeManagers === 'true' });
-  console.log('getInactiveOwnerIdsHandler', { restoreConfigId, includeManagers, restoreJob, restore, crmUser, data });
-  
+  const data = await getInactiveOwnerIds({ user, includeManagers: includeManagers === 'true' });
+
   return makeResponse(req, res, 200, true, 'fetch', data);
 };
 
@@ -394,11 +414,12 @@ const getInactiveOwnerIdsHandler = async (req: IRequest, res: IResponse): Promis
  * salesforceObjectDescribe is the same describe call the crm-metadata Fields API
  * (getSalesforceFields) is built on, so describe-level behavior stays identical.
  * Narrows the result to just the field API names Spark can write during a restore:
- * fields with updateable = true, minus every standard system/audit field (see
- * SALESFORCE_SYSTEM_FIELDS — describe's updateable flag alone isn't a safe system-field
- * check, since some orgs report CreatedDate/CreatedById/etc as updateable via API),
- * plus Id unconditionally (it's the match/upsert key, itself a system field and never
- * itself updateable).
+ * fields with updateable = true, minus formula/roll-up summary fields (calculated —
+ * computed by Salesforce, never actually writable regardless of what updateable
+ * reports) and every standard system/audit field (see SALESFORCE_SYSTEM_FIELDS —
+ * describe's updateable flag alone isn't a safe system-field check, since some orgs
+ * report CreatedDate/CreatedById/etc as updateable via API), plus Id unconditionally
+ * (it's the match/upsert key, itself a system field and never itself updateable).
  */
 const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { restoreConfigId, objectApiName } = req.query;
@@ -430,13 +451,17 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
   // Order.StatusCode mirrors the Status picklist value rather than being
   // independently writable — Salesforce manages it off Status, so it's
   // excluded from Order's restore field list specifically (describe still
-  // reports it updateable/createable in many orgs).
-  const excludedFieldNames = objectApiName === 'Order' ? ['StatusCode'] : [];
+  // reports it updateable/createable in many orgs). Case.IsClosedOnCreate is
+  // set by Salesforce from the record type's default close behavior at
+  // creation time, not independently writable afterward, same reasoning.
+  const excludedFieldNames =
+    objectApiName === 'Order' ? ['StatusCode'] : objectApiName === 'Case' ? ['IsClosedOnCreate'] : [];
 
   const updateableFieldNames = described.fields
     .filter(
       (field) =>
         (field.updateable || field.createable) &&
+        !field.calculated &&
         !SALESFORCE_SYSTEM_FIELDS.includes(field.name) &&
         !excludedFieldNames.includes(field.name)
     )
@@ -451,7 +476,9 @@ const getRestoreFieldsHandler = async (req: IRequest, res: IResponse): Promise<v
  * GET /spark-job/restore-objects?restoreConfigId=<uuid>
  * restoreConfigId is the RESTORE_JOB_TABLE PK (same id restore-fields and
  * update-spark-job-status's RESTORE branch read via getRestoreJobById).
- * Credentials resolve to the destination org via resolveDestinationCrmUser.
+ * Credentials come straight off restoreJob.userId, same as restore-fields —
+ * see getRestoreFieldsHandler's comment on why that's already the correctly
+ * resolved destination-org user, with no separate crmId lookup needed.
  *
  * Reuses the same Object List API backup/archival and get-objectlist-by-configid
  * are built on (salesforceObjectFilteredList), with apexMode: 'restore' — already
@@ -486,12 +513,12 @@ const getRestoreObjectsHandler = async (req: IRequest, res: IResponse): Promise<
     return makeResponse(req, res, 400, false, 'not_exist');
   }
 
-  const crmUser = await resolveDestinationCrmUser(restore);
-  if (!crmUser) {
+  const user = await getUser({ userId: restoreJob.userId });
+  if (!user?.crmCredential || !user.crmProfile?.instanceUrl) {
     return makeResponse(req, res, 400, false, 'crm_not_connected');
   }
 
-  const restorable = await salesforceObjectFilteredList({ user: crmUser, apexMode: 'restore' });
+  const restorable = await salesforceObjectFilteredList({ user, apexMode: 'restore' });
 
   if (restore.source.configType === 'ARCHIVAL') {
     const archivalConfig = await getBackupConfigById(restore.source.backupConfigId);

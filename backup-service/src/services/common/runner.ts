@@ -11,7 +11,7 @@ import {
 import { STATUS, JOB_OBJECT_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
-import { getBackupJob, updateArchivalObject, updateJobStatus } from '../backup-job';
+import { getBackupJob, updateArchivalObject, updateBackupJob, updateJobStatus } from '../backup-job';
 import { updateBackupConfig } from '../backup-config';
 import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
@@ -51,7 +51,7 @@ const activeJobs = new Set<string>();
 // Validate and return a job that is eligible for resume.
 // Throws if the job does not exist or cannot be resumed.
 // ---------------------------------------------------------------------------
-export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> => {
+export const retryBackupJob = async (backupJobId: string): Promise<IBackupJob> => {
   const job = await getBackupJob(backupJobId);
   if (!job) {
     throw new HttpError(404, `Backup job ${backupJobId} not found`);
@@ -59,7 +59,12 @@ export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> 
   if (job.status === STATUS.success) {
     throw new HttpError(409, `Backup job ${backupJobId} already completed successfully`);
   }
-  if (job.status === STATUS.partialFailure || job.status === STATUS.failed || job.status === STATUS.cancelled) {
+  if (
+    job.status === STATUS.partialFailure ||
+    job.status === STATUS.failed ||
+    job.status === STATUS.cancelled
+  ) {
+    await updateBackupJob({ backupJobId, status: STATUS.pending, errorMessage: "", errorReason: "" });
     return job; // allow retry on any non-success terminal state
   }
   // status stays PENDING for a job's whole in-flight duration now — an
@@ -73,7 +78,11 @@ export const resumeBackupJob = async (backupJobId: string): Promise<IBackupJob> 
 // ---------------------------------------------------------------------------
 // Entry point — call this fire-and-forget from the controller
 // ---------------------------------------------------------------------------
-export const runBackupJob = async (job: IBackupJob): Promise<void> => {
+interface IRunBackupJobParams extends IBackupJob {
+  executionType: 'RETRY' | 'NEW';
+}
+
+export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
   const {
     backupConfigId,
     backupJobId,
@@ -81,16 +90,11 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
     destination,
     object,
     triggerSource,
+    executionType
   } = job;
   const startedAt = dayjs().toISOString();
-
   activeJobs.add(backupJobId);
 
-  // Atomically claim this job for processing only if it's not already claimed.
-  // Two concurrent resume calls will both pass the in-memory check in
-  // resumeBackupJob, but only one will win this conditional write — the other
-  // gets ConditionalCheckFailedException and stops without double-processing.
-  // status itself stays PENDING for the whole in-flight duration; processingStartedAt is the lock.
   try {
     await updateJobStatus({
       backupJobId,
@@ -110,19 +114,16 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
     if (!encryptedSource) {
       throw new Error(`Backup job ${backupJobId}: source credentials are missing`);
     }
+
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
-    // crmId is stored top-level on the job (createBackupJob strips it out of the
-    // encrypted source), so restore it here — glue table/partition naming needs it.
     source.crmId = source.crmId ?? (job.crmId as string);
-    // Fail loud before any S3/Glue work — a missing id would otherwise silently
-    // produce `undefined/` S3 paths and a cryptic toLowerCase crash in Glue.
     if (!source.crmId || !backupConfigId) {
       throw new Error(
         `Backup job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
       );
     }
-    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
 
+    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
     const handler = getCrmHandler(source.crmName);
     await handler.runBackup(
       backupConfigId,
@@ -130,15 +131,10 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       source,
       destination.type,
       destConfig,
+      executionType,
       object,
       job.lastUpdatedAt
     );
-
-    // await updateJobStatus({
-    //   backupJobId,
-    //   status: STATUS.success,
-    //   completedAt: dayjs().toISOString(),
-    // });
 
     if (job.schemaSync) {
       await notifySchemaSyncCompleted(backupConfigId, triggerSource);
@@ -150,7 +146,7 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
       status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
   } finally {
     activeJobs.delete(backupJobId);
   }
@@ -159,8 +155,11 @@ export const runBackupJob = async (job: IBackupJob): Promise<void> => {
 // ---------------------------------------------------------------------------
 // Entry point for archival jobs — call this fire-and-forget from the controller
 // ---------------------------------------------------------------------------
-export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
-  const { backupConfigId, backupJobId, source: encryptedSource, destination, object } = job;
+interface IRunArchivalJobParams extends IBackupJob {
+  executionType: 'RETRY' | 'NEW';
+}
+export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
+  const { backupConfigId, backupJobId, source: encryptedSource, destination, object, triggerSource, executionType } = job;
   const startedAt = dayjs().toISOString();
 
   activeJobs.add(backupJobId);
@@ -184,23 +183,16 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
     if (!encryptedSource) {
       throw new Error(`Archival job ${backupJobId}: source credentials are missing`);
     }
+
     const source = JSON.parse(decrypt(encryptedSource)) as ISource;
-    // crmId is stored top-level on the job (createArchivalJob strips it out of the
-    // encrypted source), so restore it here — glue table/partition naming needs it.
     source.crmId = source.crmId ?? (job.crmId as string);
-    // Fail loud before any S3/Glue work — a missing id would otherwise silently
-    // produce `undefined/` S3 paths and a cryptic toLowerCase crash in Glue.
     if (!source.crmId || !backupConfigId) {
       throw new Error(
         `Archival job ${backupJobId}: missing identifiers (crmId:${source.crmId} backupConfigId:${backupConfigId})`
       );
     }
-    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
 
-    // For objects that failed during or before the delete phase, clear stale error
-    // fields so they don't persist into the retry run. Objects that already reached
-    // UPLOAD_COMPLETED are NOT reset — the orchestrator will skip straight to Phase 3
-    // (delete-only) for them, avoiding a redundant re-upload.
+    const destConfig = JSON.parse(decrypt(destination)) as IDestinationConfig;
     const clearObjectError = async (obj: IBackupObject) => {
       const st = obj.status;
       if (
@@ -218,7 +210,9 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
             id: obj.id,
             errorMessage: '',
             deletedfailedRecordCount: 0,
-            ...(st !== JOB_OBJECT_STATUS.deletionRecordsFailed ? { deletedSuccessRecordCount: 0 } : {}),
+            ...(st !== JOB_OBJECT_STATUS.deletionRecordsFailed
+              ? { deletedSuccessRecordCount: 0 }
+              : {}),
           },
         });
       }
@@ -237,19 +231,14 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
       source,
       destination.type,
       destConfig,
+      executionType,
       object,
       job.lastUpdatedAt
     );
 
-    // const finalJobStatus =
-    //   archivalResult === STATUS.partialFailure ? STATUS.partialFailure : STATUS.success;
-
-    // await updateJobStatus({
-    //   backupJobId,
-    //   status: finalJobStatus,
-    //   completedAt: dayjs().toISOString(),
-    // });
-
+    if (job.schemaSync) {
+      await notifySchemaSyncCompleted(backupConfigId, triggerSource);
+    }
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
     await Promise.all([
@@ -258,8 +247,8 @@ export const runArchivalJob = async (job: IBackupJob): Promise<void> => {
         status: STATUS.failed,
         completedAt: dayjs().toISOString(),
         errorMessage: err?.message ?? 'Unknown error',
-      }).catch(() => {}),
-      updateBackupConfig(backupConfigId, { backupStatus: STATUS.failed }).catch(() => {}),
+      }).catch(() => { }),
+      updateBackupConfig(backupConfigId, { backupStatus: STATUS.failed }).catch(() => { }),
     ]);
   } finally {
     activeJobs.delete(backupJobId);
@@ -306,7 +295,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
     const restoreDestination = destination as unknown as IRestoreJobDestination;
 
     const handler = getRestoreCrmHandler(restoreDestination.crmName);
-    const result = await handler.runRestore(
+    await handler.runRestore(
       restoreId,
       restoreJobId,
       restoreSource,
@@ -315,15 +304,15 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       objectHierarchy
     );
 
-    await updateRestoreJobStatus({
-      restoreJobId,
-      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
-      completedAt: dayjs().toISOString(),
-    });
-    await updateRestore({
-      restoreId,
-      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
-    });
+    // await updateRestoreJobStatus({
+    //   restoreJobId,
+    //   status: result === STATUS.failed ? STATUS.failed : STATUS.success,
+    //   completedAt: dayjs().toISOString(),
+    // });
+    // await updateRestore({
+    //   restoreId,
+    //   status: result === STATUS.failed ? STATUS.failed : STATUS.success,
+    // });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
     await updateRestoreJobStatus({
@@ -331,12 +320,14 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
     await updateRestore({
       restoreId,
       status: STATUS.failed,
       errorMessage: err?.message ?? 'Unknown error',
-    });
+    }).catch((updateErr: any) =>
+      logger.error(`Restore ${restoreId}: could not mark restore as FAILED: ${updateErr?.message}`)
+    );
   } finally {
     activeJobs.delete(restoreJobId);
   }
@@ -384,7 +375,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
     const restoreDestination = destination as unknown as IRestoreJobDestination;
 
     const handler = getRestoreCrmHandler(restoreDestination.crmName);
-    const result = await handler.runRollback(
+    await handler.runRollback(
       restoreId,
       restoreJobId,
       restoreSource,
@@ -393,15 +384,15 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       hierarchy
     );
 
-    await updateRestoreJobStatus({
-      restoreJobId,
-      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
-      completedAt: dayjs().toISOString(),
-    });
-    await updateRestore({
-      restoreId,
-      status: result === STATUS.failed ? STATUS.failed : STATUS.success,
-    });
+    // await updateRestoreJobStatus({
+    //   restoreJobId,
+    //   status: result === STATUS.failed ? STATUS.failed : STATUS.success,
+    //   completedAt: dayjs().toISOString(),
+    // });
+    // await updateRestore({
+    //   restoreId,
+    //   status: result === STATUS.failed ? STATUS.failed : STATUS.success,
+    // });
   } catch (err: any) {
     logger.error(`Restore job ${restoreJobId} failed: ${err?.message}`);
     await updateRestoreJobStatus({
@@ -409,12 +400,14 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       status: STATUS.failed,
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
-    }).catch(() => {});
+    }).catch(() => { });
     await updateRestore({
       restoreId,
       status: STATUS.failed,
       errorMessage: err?.message ?? 'Unknown error',
-    });
+    }).catch((updateErr: any) =>
+      logger.error(`Restore ${restoreId}: could not mark restore as FAILED: ${updateErr?.message}`)
+    );
   } finally {
     activeJobs.delete(restoreJobId);
   }

@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 import { makeResponse } from '../../../lib';
 import { CLOUD_PROVIDER, DESTINATION_TYPE } from '../../../constant';
-import { validateS3Credentials } from '../../../utils/validate-aws-credentials';
+import { validateS3Credentials } from '../../../services';
 
 const s3ConfigSchema = Joi.object({
   bucketName: Joi.string().required(),

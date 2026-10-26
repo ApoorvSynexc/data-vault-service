@@ -3,6 +3,16 @@
     tags: [Notification]
     summary: List in-app notifications for the authenticated user
     security: [{ cookieAuth: [] }]
+    parameters:
+      - name: limit
+        in: query
+        schema: { type: integer, default: 10 }
+      - name: cursor
+        in: query
+        schema: { type: string }
+      - name: status
+        in: query
+        schema: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'
@@ -23,10 +33,10 @@
 /v1/notification/:
   put:
     tags: [Notification]
-    summary: Mark a single notification as read/unread
+    summary: Mark a single notification as read/unread (or soft-deleted)
     security: [{ cookieAuth: [] }]
     parameters:
-      - name: id
+      - name: notificationId
         in: query
         required: true
         schema: { type: string }
@@ -36,6 +46,9 @@
         application/json:
           schema:
             type: object
+            required: [status]
+            properties:
+              status: { type: string }
     responses:
       200:
         $ref: '#/components/responses/Success'

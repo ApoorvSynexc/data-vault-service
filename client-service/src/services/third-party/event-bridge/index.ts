@@ -4,6 +4,8 @@ import {
     UpdateScheduleCommand,
     DeleteScheduleCommand,
     DeleteScheduleCommandOutput,
+    GetScheduleCommand,
+    GetScheduleCommandOutput,
     FlexibleTimeWindowMode,
     ScheduleState,
     CreateScheduleCommandOutput,
@@ -79,4 +81,16 @@ const deleteAwsEventScheduler = async (name: string): Promise<DeleteScheduleComm
     }
 };
 
-export { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler };
+// Existence check used to keep schedule creation idempotent — returns
+// undefined (rather than throwing) when the schedule isn't there yet, so
+// callers can branch on it instead of parsing SDK error names themselves.
+const getAwsEventSchedule = async (name: string): Promise<GetScheduleCommandOutput | undefined> => {
+    try {
+        return await scheduler.send(new GetScheduleCommand({ Name: name }));
+    } catch (err: any) {
+        if (err.name === "ResourceNotFoundException") return undefined;
+        throw err;
+    }
+};
+
+export { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler, getAwsEventSchedule };

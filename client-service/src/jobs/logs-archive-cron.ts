@@ -46,33 +46,41 @@ const archiveLogFolder = async (folderName: string): Promise<void> => {
 const runLogsArchive = async (): Promise<void> => {
   logger.info('[LOGS-CRON] tick START');
 
-  if (!fs.existsSync(LOGS_ROOT)) {
-    logger.info('[LOGS-CRON] tick END | no logs directory found');
-    return;
-  }
-
-  const activeFolder = activeLogFolderName();
-  const folders = fs
-    .readdirSync(LOGS_ROOT, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name !== activeFolder)
-    .map((entry) => entry.name);
-
-  if (!folders.length) {
-    logger.info('[LOGS-CRON] tick END | nothing to archive');
-    return;
-  }
-
-  let archived = 0;
-  for (const folder of folders) {
-    try {
-      await archiveLogFolder(folder);
-      archived++;
-    } catch (error: any) {
-      logger.error(`[LOGS-CRON] failed to archive ${folder}: ${error?.message ?? error}`);
+  try {
+    if (!fs.existsSync(LOGS_ROOT)) {
+      logger.info('[LOGS-CRON] tick END | no logs directory found');
+      return;
     }
-  }
 
-  logger.info(`[LOGS-CRON] tick END | archived ${archived}/${folders.length} folder(s)`);
+    const activeFolder = activeLogFolderName();
+    const folders = fs
+      .readdirSync(LOGS_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== activeFolder)
+      .map((entry) => entry.name);
+
+    if (!folders.length) {
+      logger.info('[LOGS-CRON] tick END | nothing to archive');
+      return;
+    }
+
+    let archived = 0;
+    for (const folder of folders) {
+      try {
+        await archiveLogFolder(folder);
+        archived++;
+      } catch (error: any) {
+        logger.error(`[LOGS-CRON] failed to archive ${folder}: ${error?.message ?? error}`);
+      }
+    }
+
+    logger.info(`[LOGS-CRON] tick END | archived ${archived}/${folders.length} folder(s)`);
+  } catch (error: any) {
+    // Same self-contained error handling as the other DAILY_MAINTENANCE jobs
+    // (runEmrJob, runPaymentSyncJob, runSyncSalesforceRefreshTokenJob) — a
+    // failure here must never escape to eventBridgeHandler's caller, which has
+    // no catch-all response path and would otherwise leave the request hanging.
+    logger.error(`[LOGS-CRON] tick threw error: ${error?.message ?? error}`);
+  }
 };
 
 export { runLogsArchive };

@@ -381,10 +381,8 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
       throw err;
     }
 
-    console.log(`Creating table: ${def.TableName}`);
     await client.send(new CreateTableCommand(def));
     await waitUntilTableExists({ client, maxWaitTime: 60 }, { TableName: def.TableName });
-    console.log(`Table ready: ${def.TableName}`);
   }
 
   const ttlAttr = TTL_CONFIG[def.TableName!];
@@ -396,7 +394,6 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
           TimeToLiveSpecification: { AttributeName: ttlAttr, Enabled: true },
         })
       );
-      console.log(`TTL enabled on ${def.TableName} (attr: ${ttlAttr})`);
     } catch (err: any) {
       if (err.name !== 'ValidationException') {
         throw err;
@@ -410,7 +407,6 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
 
 const initializeDatabase = async () => {
   await Promise.all(TABLE_DEFINITIONS.map(ensureTable));
-  console.log(`DynamoDB ready (region: ${AWS_REGION})`);
   return docClient;
 };
 

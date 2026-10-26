@@ -81,9 +81,11 @@ const updateRestoreJobStatus = async (params: UpdateRestoreJobStatusParams): Pro
 interface UpdateRestoreObjectParams {
   restoreJobId: string;
   objectName: string;
-  status?: 'FAILED' | 'SUCCESS';
+  status?: string;
   processedRecordCount?: number;
   failedRecordCount?: number;
+  rollbackProcessedRecordCount?: number;
+  rollbackFailedRecordCount?: number;
   errorMessage?: string;
   errors?: string[];
 }
@@ -95,6 +97,8 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     status,
     processedRecordCount,
     failedRecordCount,
+    rollbackProcessedRecordCount,
+    rollbackFailedRecordCount,
     errorMessage,
     errors,
   } = params;
@@ -114,7 +118,9 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
   };
   const expressionValues: Record<string, any> = { ':updatedAt': now };
 
-  if (status !== undefined) {
+  // A restore can now write this object's status twice (once per insert/update
+  // operation) — don't let a later SUCCESS overwrite an earlier FAILED.
+  if (status !== undefined && !(status === 'SUCCESS' && currentObject.status === 'FAILED')) {
     setParts.push(`#destination.#objects[${objectIndex}].#status = :status`);
     expressionNames['#status'] = 'status';
     expressionValues[':status'] = status;
@@ -138,10 +144,26 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
     expressionValues[':failedRecordCount'] =
       (currentObject.failedRecordCount ?? 0) + failedRecordCount;
   }
+  if (rollbackProcessedRecordCount !== undefined) {
+    setParts.push(
+      `#destination.#objects[${objectIndex}].#rollbackProcessedRecordCount = :rollbackProcessedRecordCount`
+    );
+    expressionNames['#rollbackProcessedRecordCount'] = 'rollbackProcessedRecordCount';
+    expressionValues[':rollbackProcessedRecordCount'] =
+      (currentObject.rollbackProcessedRecordCount ?? 0) + rollbackProcessedRecordCount;
+  }
+  if (rollbackFailedRecordCount !== undefined) {
+    setParts.push(
+      `#destination.#objects[${objectIndex}].#rollbackFailedRecordCount = :rollbackFailedRecordCount`
+    );
+    expressionNames['#rollbackFailedRecordCount'] = 'rollbackFailedRecordCount';
+    expressionValues[':rollbackFailedRecordCount'] =
+      (currentObject.rollbackFailedRecordCount ?? 0) + rollbackFailedRecordCount;
+  }
   if (errors !== undefined) {
     setParts.push(`#destination.#objects[${objectIndex}].#errors = :errors`);
     expressionNames['#errors'] = 'errors';
-    expressionValues[':errors'] = [...(currentObject.errors ?? []), ...errors];
+    expressionValues[':errors'] = errors;
   }
 
   const updateExpression = `SET ${setParts.join(', ')}`;
@@ -204,6 +226,8 @@ interface RestoreJobObjectUpdate {
   status?: string;
   processedRecordCount?: number;
   failedRecordCount?: number;
+  rollbackProcessedRecordCount?: number;
+  rollbackFailedRecordCount?: number;
   errorMessage?: string;
 }
 
@@ -335,6 +359,18 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
         expressionNames['#failedRecordCount'] = 'failedRecordCount';
         expressionValues[`:failedRecordCount${position}`] =
           (currentObject?.failedRecordCount ?? 0) + object.failedRecordCount;
+      }
+      if (object.rollbackProcessedRecordCount) {
+        setParts.push(`${objectPath}.#rollbackProcessedRecordCount = :rollbackProcessedRecordCount${position}`);
+        expressionNames['#rollbackProcessedRecordCount'] = 'rollbackProcessedRecordCount';
+        expressionValues[`:rollbackProcessedRecordCount${position}`] =
+          (currentObject?.rollbackProcessedRecordCount ?? 0) + object.rollbackProcessedRecordCount;
+      }
+      if (object.rollbackFailedRecordCount) {
+        setParts.push(`${objectPath}.#rollbackFailedRecordCount = :rollbackFailedRecordCount${position}`);
+        expressionNames['#rollbackFailedRecordCount'] = 'rollbackFailedRecordCount';
+        expressionValues[`:rollbackFailedRecordCount${position}`] =
+          (currentObject?.rollbackFailedRecordCount ?? 0) + object.rollbackFailedRecordCount;
       }
     });
   }

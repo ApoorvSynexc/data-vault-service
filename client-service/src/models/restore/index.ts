@@ -9,6 +9,7 @@ export interface IRestoreScopeRecord {
 }
 
 export interface IRestoreScopeField {
+  id: string;
   objectName: string;
   fieldNames: string[];
 }
@@ -33,10 +34,12 @@ export interface IRestoreChangeSince {
 export interface IRestoreBulkCsvIds {
   objectName: string;
   ids: string[];
+  csvFilePath?: string;
   children?: IRestoreBulkCsvIds[];
 }
 
 export interface IRestoreScopeFilter {
+  id: string;
   objectName: string;
   filter: IRestoreFilters;
   children?: IRestoreScopeFilter[];
@@ -60,13 +63,7 @@ export interface IRestoreScope {
 
 export interface IRestoreSource {
   backupConfigId: string;
-  // BACKUP | ARCHIVAL — which config type backupConfigId belongs to. Optional here
-  // only to tolerate records written before this field existed; the create-restore
-  // Joi schema requires it on every new request.
   configType?: 'BACKUP' | 'ARCHIVAL';
-  // New creates: BACKUP -> ENTIRE | CHANGED_BETWEEN; ARCHIVAL -> ENTIRE | DELETED_BETWEEN
-  // (enforced by the create-restore Joi schema). PARTIAL stays in the union only to
-  // type legacy stored records — the schema no longer accepts it on new requests.
   type?: 'ENTIRE' | 'PARTIAL' | 'CHANGED_BETWEEN' | 'DELETED_BETWEEN';
   startDate?: string;
   endDate?: string;
@@ -158,7 +155,7 @@ export interface IRestoreMergeRule {
 }
 
 export interface IRestoreConflict {
-  restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP
+  restoreMode: string; // OVERWRITE | APPEND_NEW | REPLACE_ENTIRE_OBJECT | SKIP | MERGE
   edgeCases?: IRestoreEdgeCases;
   mergeRule?: IRestoreMergeRule;
 }

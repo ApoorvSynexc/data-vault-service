@@ -1,5 +1,5 @@
 import { logger } from '../../../../middlewares/logger';
-import { STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
+import { STATUS, JOB_OBJECT_STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
 import { listS3Objects, streamCsvLinesFromS3, uploadToS3 } from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
@@ -11,6 +11,7 @@ import {
   pollBulkJobUntilDone,
   getFailedResults,
   getSuccessfulResults,
+  BulkJobState,
 } from './bulk';
 
 interface RunSalesforceRestorePayload {
@@ -130,7 +131,13 @@ const submitIngestChunk = async (
   s3Config: IDestinationConfig,
   successfulResultsPath: string,
   type: 'RESTORE' | 'ROLLBACK'
-): Promise<{ processed: number; failed: number; jobId: string; errors: string[] }> => {
+): Promise<{
+  processed: number;
+  failed: number;
+  jobId: string;
+  errors: string[];
+  status: BulkJobState;
+}> => {
   const csvBody = [chunk.header, ...chunk.rows].join('\n');
   const job = await createBulkJob({
     instanceUrl,
@@ -150,13 +157,16 @@ const submitIngestChunk = async (
   const failed = status.numberRecordsFailed ?? 0;
 
   let errors: string[] = [];
-  if (failed > 0 || status.state === 'Failed') {
+  if (failed > 0 || status.state === 'Failed' || status.state === 'Aborted') {
     const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
     errors = parseFirstNErrors(failedCsv, MAX_STORED_ERRORS_COUNT);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
 
-  if (type === 'RESTORE' && processed - failed > 0) {
+  // ponytail: update has no pre-change snapshot to roll back to (only ids are
+  // captured), so it can't safely produce a rollback artifact — revisit if
+  // update rollback becomes a real requirement.
+  if (type === 'RESTORE' && operation === 'insert' && processed - failed > 0) {
     const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, job.id);
     const idsOnlyCsv = extractSuccessfulIdsCsv(successfulCsv);
     await uploadToS3(
@@ -169,6 +179,7 @@ const submitIngestChunk = async (
   return {
     jobId: job.id,
     processed,
+    status: status.state,
     failed,
     errors,
   };
@@ -192,7 +203,7 @@ const restoreObjectData = async (
 ): Promise<string[]> => {
   let csvFilePath = baseCsvFilePath;
   if (type === 'RESTORE') {
-    csvFilePath = `${baseCsvFilePath}/${objectName}/csv`;
+    csvFilePath = `${baseCsvFilePath}/${objectName}/csv/${operation}`;
   }
   const keys = await listS3Objects(s3Config, `${csvFilePath}`);
 
@@ -202,13 +213,12 @@ const restoreObjectData = async (
       objectName,
       processedRecordCount: 0,
       failedRecordCount: 0,
-      // Cast needed: updateRestoreObject's status param is still the narrow
-      // 'FAILED' | 'SUCCESS' literal union (left as-is, out of scope) while
-      // STATUS's members are typed as plain string.
-      status: STATUS.success as 'SUCCESS',
+      status:
+        type === 'RESTORE'
+          ? JOB_OBJECT_STATUS.restoreCompleted
+          : JOB_OBJECT_STATUS.rollbackCompleted,
     });
 
-    console.log(`[Restore] No backed-up data found for object ${objectName} under ${csvFilePath}`);
     return [];
   }
 
@@ -246,14 +256,31 @@ const restoreObjectData = async (
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
     // chunk rather than once at the very end of the object.
+    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed;
     await updateRestoreObject({
       restoreJobId,
       objectName,
-      processedRecordCount: job.processed,
-      failedRecordCount: job.failed,
-      // Same cast as above — updateRestoreObject's status param type is
-      // intentionally left as its own narrow literal union.
-      status: job.failed ? (STATUS.failed as 'FAILED') : (STATUS.success as 'SUCCESS'),
+      ...(
+        type === 'RESTORE'
+          ?
+          {
+            processedRecordCount: job.processed,
+            failedRecordCount: job.failed,
+          }
+          :
+          {
+            rollbackProcessedRecordCount: job.processed,
+            rollbackFailedRecordCount: job.failed,
+          }
+      ),
+
+      status: jobFailed
+        ? type === 'RESTORE'
+          ? JOB_OBJECT_STATUS.restoreFailed
+          : JOB_OBJECT_STATUS.rollbackFailed
+        : type === 'RESTORE'
+          ? JOB_OBJECT_STATUS.restoreCompleted
+          : JOB_OBJECT_STATUS.rollbackCompleted,
       errors: job.errors.length ? job.errors : undefined,
     });
     logger.info(
@@ -330,12 +357,12 @@ export const runSalesforceRestore = async (
     `[restore] execution requested, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectId=${object.id}, objectName=${object.name}, restoreMode=${conflict.restoreMode}`
   );
 
-  if (conflict.restoreMode === 'SKIP') {
-    logger.info(
-      `[restore] skipping object per restoreMode=SKIP, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectName=${object.name}`
-    );
-    return STATUS.success;
-  }
+  // if (conflict.restoreMode === 'SKIP') {
+  //   logger.info(
+  //     `[restore] skipping object per restoreMode=SKIP, restoreId=${restoreId}, restoreJobId=${restoreJobId}, objectName=${object.name}`
+  //   );
+  //   return STATUS.success;
+  // }
 
   // let operation: 'insert' | 'update' | 'upsert';
   // switch (conflict.restoreMode) {
@@ -366,24 +393,24 @@ export const runSalesforceRestore = async (
     backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
   };
 
-  // const path = `${sourceS3Credentials.csvFilePath}/${object.name}/csv`;
-  // console.log(JSON.stringify({ path }));
+  for (const operation of ['insert', 'update'] as const) {
+    await restoreObjectData(
+      restoreJobId,
+      s3Config,
+      sourceS3Credentials.csvFilePath,
+      object.name,
+      destinationSalesforceCredentials.instanceUrl,
+      tokens,
+      operation,
+      externalIdFieldName,
+      'RESTORE'
+    );
 
-  await restoreObjectData(
-    restoreJobId,
-    s3Config,
-    sourceS3Credentials.csvFilePath,
-    object.name,
-    destinationSalesforceCredentials.instanceUrl,
-    tokens,
-    'upsert',
-    externalIdFieldName,
-    'RESTORE'
-  );
+    logger.info(
+      `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${operation}`
+    );
+  }
 
-  logger.info(
-    `[restore] bulk ingest jobs submitted, objectName: ${object.name}, restoreJobId: ${restoreJobId}, operation: ${'upsert'}`
-  );
   return STATUS.success;
 };
 
@@ -424,8 +451,6 @@ export const runSalesforceRollback = async (
       if (!['update', 'delete'].includes(operation)) {
         operation = splitKeys[splitKeys.length - 2] as 'update' | 'delete';
       }
-
-      console.log(JSON.stringify({ operation, splitKeys, key }));
 
       await restoreObjectData(
         restoreJobId,

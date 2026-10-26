@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import { createServer, Server } from 'http';
@@ -21,6 +22,43 @@ const app = express();
 // Set to the number of proxies between client and app (typically 1 for single LB)
 app.set('trust proxy', 1);
 
+// Redirect direct IP access to the canonical login URL (set in .env per env).
+const RESTRICTED_IP_HOST = (process.env.RESTRICTED_IP_HOST || '').trim();
+const CANONICAL_LOGIN_URL = (process.env.CANONICAL_LOGIN_URL || '').trim();
+
+if (RESTRICTED_IP_HOST && CANONICAL_LOGIN_URL) {
+  app.use((req, res, next) => {
+    const host = (req.headers.host || '').split(':')[0];
+    if (host === RESTRICTED_IP_HOST) {
+      return res.redirect(301, CANONICAL_LOGIN_URL);
+    }
+    next();
+  });
+}
+
+app.use(
+  helmet({
+    // Only frame-ancestors — a full default CSP would block the SPA bundle's
+    // and Swagger UI's inline scripts/styles without a verified allowlist.
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        frameAncestors: ["'none'"],
+        defaultSrc: helmet.contentSecurityPolicy.dangerouslyDisableDefaultSrc,
+      },
+    },
+    frameguard: { action: 'deny' },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    // API is consumed cross-origin by the SPA (see ALLOWED_ORIGINS); the
+    // default same-origin CORP would block those requests outright.
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+app.use((_req, res, next) => {
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+  next();
+});
+
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(cookieParser());
 app.use(express.json({ limit: "10mb" }));
@@ -41,7 +79,7 @@ app.use((req, res) => {
 export const initializeApp = () => {
   const server: Server = createServer(app);
   server.listen(PORT, HOST, async () => {
-    startCron();
     console.log(`* App is running at PORT: ${PORT} *`);
+    startCron();
   });
 };

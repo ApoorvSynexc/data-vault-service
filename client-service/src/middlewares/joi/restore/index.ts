@@ -7,7 +7,7 @@ import { objectSchema } from '../shared';
 const RESTORE_SCOPE_TYPE = ['ALL', 'OBJECT', 'RECORD', 'FIELD', 'FILTER', 'DELETED_ONLY', 'INSERTS_ONLY', 'CHANGE_SINCE', 'BULK_CSV', 'OBJECT_TREE'];
 const RESTORE_FILTER_TYPE = ['AND', 'OR', 'SOQL'];
 const RESTORE_DESTINATION_TYPE = ['SAME', 'DIFFERENT', 'EXPORT'];
-const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP'];
+const RESTORE_CONFLICT_MODE = ['OVERWRITE', 'APPEND_NEW', 'REPLACE_ENTIRE_OBJECT', 'SKIP', 'MERGE'];
 // MASTER_DETAIL_ONLY: Include Master-Detail Child Objects
 // REQUIRED_AND_MASTER_DETAIL: Include Required AND Master-Detail Child Objects
 // SKIP_CHILDREN: Skip Child Objects
@@ -27,6 +27,7 @@ const scopeRecordSchema = Joi.object({
 }).id('scopeRecord');
 
 const scopeFieldSchema = Joi.object({
+  id: Joi.string().optional(),
   objectName: Joi.string().required(),
   fieldNames: Joi.array().items(Joi.string()).min(1).required(),
 });
@@ -62,11 +63,13 @@ const changeSinceSchema = Joi.object({
 
 const bulkCsvIdsSchema = Joi.object({
   objectName: Joi.string().required(),
-  ids: Joi.array().items(Joi.string()).min(1).required(),
+  ids: Joi.array().items(Joi.string()).optional(),
+  csvFilePath: Joi.string().optional(),
   children: Joi.array().items(Joi.link('#bulkCsvIds')).optional(),
 }).id('bulkCsvIds');
 
 const scopeFilterSchema = Joi.object({
+  id: Joi.string().optional(),
   objectName: Joi.string().required(),
   filter: filtersSchema.required(),
   children: Joi.array().items(Joi.link('#scopeFilter')).optional(),
@@ -248,7 +251,7 @@ const mergeRuleObjectSchema = Joi.object({
 
 const mergeRuleSchema = Joi.object({
   default: Joi.string().required(), // NEWEST_LAST_MODIFIED_DATE_WINS | SOURCE_ALWAYS_WINS | DESTINATION_ALWAYS_WINS
-  objects: Joi.array().items(mergeRuleObjectSchema).min(1).required(),
+  objects: Joi.array().items(mergeRuleObjectSchema).optional(),
 });
 
 const conflictSchema = Joi.object({

@@ -54,7 +54,13 @@ assert.deepStrictEqual(pickMainTableColumns(afterRemoval, key), [
 // ─── Salesforce datetime → Glue timestamp (matches native Parquet timestamps);
 // everything else, including a missing type, stays string ─────────────────────
 const typed = [
-  { context: [{ name: 'CreatedDate', type: 'datetime' }, { name: 'Name', type: 'string' }, { name: 'X' }] },
+  {
+    context: [
+      { name: 'CreatedDate', type: 'datetime' },
+      { name: 'Name', type: 'string' },
+      { name: 'X' },
+    ],
+  },
 ];
 assert.deepStrictEqual(pickMainTableColumns(typed, key, 'archival-parquet'), [
   { name: 'CreatedDate', type: 'timestamp' },

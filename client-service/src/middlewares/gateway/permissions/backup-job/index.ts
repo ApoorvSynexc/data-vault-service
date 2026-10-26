@@ -10,7 +10,7 @@ const backupJobPermissions = [
         permissions: ['backup.read']
     },
     {
-        path: '/backup-job/resume',
+        path: '/backup-job/retry',
         method: 'GET',
         permissions: ['backup.execute']
     }

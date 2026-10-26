@@ -53,7 +53,6 @@ initializeDatabase()
   .then(() => {
     initializeApp();
   })
-  .catch((error) => {
-    console.log(error);
+  .catch(() => {
     process.exit(1);
   });

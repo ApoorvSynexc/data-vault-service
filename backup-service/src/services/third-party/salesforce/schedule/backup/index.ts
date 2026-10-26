@@ -1,10 +1,11 @@
 import { JOB_OBJECT_STATUS } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../../models';
-import { updateBackupObject } from '../../../../backup-job';
+import { getBackupJob, updateBackupObject } from '../../../../backup-job';
 import { buildS3KeyPrefix, withSystemFields } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
 import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
+import { SalesforceApiLimitExceededError } from '../../api-limit';
 import { updateBackupConfigObject } from '../../../../backup-config';
 import { salesforceMetadataHandler } from '../../metadata';
 
@@ -136,14 +137,19 @@ export const exportFirstTime = async (
   objectNames: Array<string>,
   object: IBackupObject,
   objectIndex: number,
-  destConfig: IDestinationConfig
+  destConfig: IDestinationConfig,
+  executionType: 'RETRY' | 'NEW'
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
   const backupConfigId = backupConfig.backupConfigId;
   let salesforceApiCount: number = 0;
-  let totalRecordCount: number = 0;
+  let totalRecordCount: number;
   let jobId: string;
+
+  if (executionType === 'RETRY' && object.status === JOB_OBJECT_STATUS.uploadCompleted) {
+    return;
+  }
 
   try {
     const fieldsMetadata = await salesforceMetadataHandler(
@@ -162,7 +168,8 @@ export const exportFirstTime = async (
     );
 
     if (!fieldsMetadata?.fields) {
-      return;
+      // Throw so the catch below marks the object FAILED instead of leaving it at CREATED.
+      throw new Error(`Unable to read field metadata from Salesforce for object ${objectName}`);
     }
 
     const fieldNames: string[] = [];
@@ -226,6 +233,7 @@ export const exportFirstTime = async (
     if (object.bulkJobId) {
       jobId = object.bulkJobId;
       salesforceApiCount += object.salesforceApiCount ?? 0;
+      totalRecordCount = object.totalRecordCount ?? 0;
     } else {
       await updateBackupObject({
         backupJobId,
@@ -234,9 +242,21 @@ export const exportFirstTime = async (
       });
 
       const whereClause = buildWhereClause(object);
-      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
 
-      console.log(JSON.stringify({ soql }));
+      let dateFilter = '';
+      if (executionType === 'RETRY' && !whereClause.includes('LastModifiedDate')) {
+        const backupJob = await getBackupJob(backupJobId);
+        if (backupJob && backupJob.modifiedUntil) {
+          if (whereClause.length) {
+            dateFilter = `AND LastModifiedDate < ${backupJob.modifiedUntil}`;
+          } else {
+            dateFilter = `WHERE LastModifiedDate < ${backupJob.modifiedUntil}`;
+          }
+        }
+      }
+
+      const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ${dateFilter.length ? ` ${dateFilter}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
+
       try {
         jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
         salesforceApiCount += 2;
@@ -249,18 +269,25 @@ export const exportFirstTime = async (
           instanceUrl,
           tokens,
           jobId,
+          backupConfigId: backupConfig.backupConfigId,
+          userId: backupConfig.userId,
           backupJobId,
           objectIndex,
           salesforceApiCount,
         });
       } catch (err: any) {
+        if (err instanceof SalesforceApiLimitExceededError) {
+          throw err;
+        }
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
 
       await updateBackupObject({
         backupJobId,
         objectIndex,
-        status: totalRecordCount ? JOB_OBJECT_STATUS.bulkQueryCompleted : JOB_OBJECT_STATUS.uploadCompleted,
+        status: totalRecordCount
+          ? JOB_OBJECT_STATUS.bulkQueryCompleted
+          : JOB_OBJECT_STATUS.uploadCompleted,
         bulkJobId: jobId,
         salesforceApiCount,
       });
@@ -284,6 +311,8 @@ export const exportFirstTime = async (
         instanceUrl,
         tokens,
         jobId,
+        backupConfigId,
+        userId: backupConfig.userId,
         backupJobId,
         objectIndex,
         destConfig,
@@ -299,25 +328,12 @@ export const exportFirstTime = async (
         sizeInBytes,
         completedRecordCount,
       });
-      // backupConfig = await getBackupConfigById(backupConfigId);
-      // if (backupConfig?.objects) {
-      //   const updateParams: any = { sizeInBytes };
-      //   updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-      //   updateParams.uploadedRecords = (backupConfig.uploadedRecords ?? 0) + completedRecordCount;
 
-      //   await updateBackupConfig(backupConfigId, updateParams);
-      // }
     } else {
       logger.info(
         `Object changes not found, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
       );
     }
-
-    // await writeSchemaFile(
-    //   destConfig,
-    //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
-    //   schema
-    // );
 
     logger.info(
       `Object first-time backup complete, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}`
@@ -353,13 +369,17 @@ export const exportIncremental = async (
   object: IBackupObject,
   objectIndex: number,
   destConfig: IDestinationConfig,
-  lastUpdatedAt: string
+  lastUpdatedAt: string,
+  executionType: 'RETRY' | 'NEW'
 ): Promise<void> => {
   const { crmId } = tokens;
   const objectName = object.name;
   const backupConfigId = backupConfig.backupConfigId;
   let salesforceApiCount = 0;
-  // let backupConfig;
+
+  if (executionType === 'RETRY' && object.status === JOB_OBJECT_STATUS.uploadCompleted) {
+    return;
+  }
 
   try {
     const fieldsMetadata = await salesforceMetadataHandler(
@@ -378,7 +398,8 @@ export const exportIncremental = async (
     );
 
     if (!fieldsMetadata?.fields) {
-      return;
+      // Throw so the catch below marks the object FAILED instead of leaving it at CREATED.
+      throw new Error(`Unable to read field metadata from Salesforce for object ${objectName}`);
     }
 
     const fieldNames: string[] = [];
@@ -412,7 +433,21 @@ export const exportIncremental = async (
       // IsDeleted (needed for classify/delete split) is already in allFieldNames
       // via withSystemFields, same as every other system field.
       const userWhere = buildWhereClause(object);
-      const dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
+
+      let dateFilter = `LastModifiedDate >= ${lastUpdatedAt}`;
+      if (executionType === 'RETRY' && !userWhere.includes('LastModifiedDate')) {
+        const backupJob = await getBackupJob(backupJobId);
+        if (backupJob) {
+          if (backupJob.modifiedSince) {
+            dateFilter = `LastModifiedDate >= ${backupJob.modifiedSince}`;
+          }
+
+          if (backupJob.modifiedUntil) {
+            dateFilter = `${dateFilter} AND LastModifiedDate < ${backupJob.modifiedUntil}`;
+          }
+        }
+      }
+
       const where = userWhere ? `${userWhere} AND ${dateFilter}` : `WHERE ${dateFilter}`;
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} WITH USER_MODE ORDER BY Id ASC`;
 
@@ -429,18 +464,25 @@ export const exportIncremental = async (
           instanceUrl,
           tokens,
           jobId: bulkJobId,
+          backupConfigId,
+          userId: backupConfig.userId,
           backupJobId,
           objectIndex,
           salesforceApiCount,
         });
       } catch (err: any) {
+        if (err instanceof SalesforceApiLimitExceededError) {
+          throw err;
+        }
         throw new Error(`[poll-bulk-job] ${err.message}`, { cause: err });
       }
 
       await updateBackupObject({
         backupJobId,
         objectIndex,
-        status: totalRecordCount ? JOB_OBJECT_STATUS.bulkQueryCompleted : JOB_OBJECT_STATUS.uploadCompleted,
+        status: totalRecordCount
+          ? JOB_OBJECT_STATUS.bulkQueryCompleted
+          : JOB_OBJECT_STATUS.uploadCompleted,
         bulkJobId,
         salesforceApiCount,
       });
@@ -486,6 +528,8 @@ export const exportIncremental = async (
         instanceUrl,
         tokens,
         jobId: bulkJobId,
+        backupConfigId,
+        userId: backupConfig.userId,
         backupJobId,
         objectIndex,
         destConfig,
@@ -498,16 +542,6 @@ export const exportIncremental = async (
         startCompletedRecordCount: object.completedRecordCount ?? 0,
       });
 
-      // backupConfig = await getBackupConfigById(backupConfigId);
-      // if (backupConfig?.objects) {
-      //   const updateParams: any = { sizeInBytes };
-      //   const updatedObjects = backupConfig.objects.map((obj) =>
-      //     obj.name === objectName ? { ...obj, sizeInBytes } : obj
-      //   );
-      //   updateParams.sizeInBytes = (backupConfig.sizeInBytes ?? 0) + sizeInBytes;
-      //   updateParams.objects = updatedObjects;
-      //   await updateBackupConfig(backupConfigId, updateParams);
-      // }
 
       await updateBackupConfigObject({
         backupConfigId,
@@ -573,29 +607,8 @@ export const exportIncremental = async (
       },
       { instanceUrl, tokens }
     );
-    // const storedSchema = await readLatestSchema(destConfig, {
-    //   crmId,
-    //   crmName,
-    //   backupConfigId,
-    //   objectName,
-    //   type: 'backup',
-    // });
-    // const schemaChanged = !storedSchema || !schemasAreEqual(storedSchema, latestSchema);
-
-    // await writeSchemaFile(
-    //   destConfig,
-    //   { crmId, crmName, backupConfigId, objectName, type: 'backup', kind: 'fields', backupJobId },
-    //   latestSchema
-    // );
 
     if (fieldsMetadata?.metadataType === 'fields' && fieldsMetadata?.diff.schemaChanged) {
-      // if (backupConfig?.objects) {
-      //   const updatedObjects = backupConfig.objects.map((obj) =>
-      //     obj.name === objectName ? { ...obj, schemaChange: true } : obj
-      //   );
-      //   await updateBackupConfig(backupConfigId, { objects: updatedObjects });
-      // }
-
       await updateBackupConfigObject({
         backupConfigId,
         objectName,

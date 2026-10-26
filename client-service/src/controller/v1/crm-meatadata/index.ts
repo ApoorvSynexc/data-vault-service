@@ -1,8 +1,8 @@
 import { IRequest, IResponse, makeResponse } from "../../../lib";
-import { toApexMode, toApexType, getBackupConfigById, getCrmById, getDecryptedDestinationConfig, getDestinationById, getUsersByContactEmail, readSchemaFile } from "../../../services";
+import { toApexMode, toApexType, getUsersByContactEmail } from "../../../services";
 import { ISalesforceChildRelationship, ISalesforceObjectDescribeResponse, salesforceObjectDescribe, salesforceObjectFilteredList, salesforceObjectList, salesforceObjectsCount } from "../../../services/third-party/salesforce/metadata/index";
 import { wrapController } from "../../../utils/helper";
-import { EXCLUDE_OBJECT_SUFFIX, SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
+import { BULK_API_2_UNSUPPORTED_OBJECTS, EXCLUDE_OBJECT_SUFFIX, SALESFORCE_SYSTEM_FIELDS } from "../../../constant";
 import { IUser } from "../../../models";
 
 // A child relationship is only in-scope for cascade traversal when its type
@@ -21,32 +21,36 @@ const filterChildRelationships = (
 
 type ISalesforceRelationshipChild = ReturnType<typeof filterChildRelationships>[number];
 
-interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
+export interface ISalesforceChildTreeNode extends ISalesforceRelationshipChild {
+  custom: boolean;
   children: ISalesforceChildTreeNode[];
+  parent: ISalesforceCascadeDeleteField[];
 }
 
-// A child object's own master-detail fields (cascadeDelete === true) — i.e. the
-// fields making it a cascade-delete child in some other relationship, not the one
-// it was just reached through.
-const getCascadeDeleteFields = (fields: ISalesforceObjectDescribeResponse['fields']) =>
-  fields
-    .filter((field) => field.cascadeDelete)
+const CASCADE_DELETE_EXCLUDED_REFERENCE_TO = ['Group', 'User'];
+
+const getCascadeDeleteFields = (fields: ISalesforceObjectDescribeResponse['fields']) => {
+
+  let filtered = fields
+    .filter((field) =>
+      field.referenceTo.length &&
+      !field.referenceTo.some((ref) => CASCADE_DELETE_EXCLUDED_REFERENCE_TO.includes(ref)) &&
+      (field.cascadeDelete || (!field.nillable && field.updateable))
+    )
+
+  return filtered;
+}
 
 type ISalesforceCascadeDeleteField = ReturnType<typeof getCascadeDeleteFields>[number];
-
-// Archival-only node shape — kept separate from ISalesforceChildTreeNode so this
-// doesn't change buildChildRelationshipTree/backup's response shape.
 interface ISalesforceArchivalChildTreeNode extends ISalesforceRelationshipChild {
+  custom: boolean;
   children: ISalesforceArchivalChildTreeNode[];
-  // Of this node's own children, the cascadeDelete fields on the ones that are
-  // themselves a cascade-delete child in another master-detail relationship —
-  // archiving/restoring them needs that other parent chain accounted for too.
   parent: ISalesforceCascadeDeleteField[];
 }
 
 const MAX_RELATIONSHIP_DEPTH = 5;
 
-const buildChildRelationshipTree = async (params: {
+export const buildChildRelationshipTree = async (params: {
   user: IUser;
   objectDescription: ISalesforceObjectDescribeResponse;
   objectName: string;
@@ -55,18 +59,15 @@ const buildChildRelationshipTree = async (params: {
   visitedObjectNames: Set<string>;
   depth: number;
   maxDepth?: number;
-}): Promise<ISalesforceChildTreeNode[]> => {
+}): Promise<{ children: ISalesforceChildTreeNode[]; parent: ISalesforceCascadeDeleteField[] }> => {
   const { user, objectDescription, objectName, apexMode, filteredObjectNames, visitedObjectNames, depth } = params;
   const maxDepth = Math.min(params.maxDepth ?? MAX_RELATIONSHIP_DEPTH, MAX_RELATIONSHIP_DEPTH);
 
-  if (depth >= maxDepth) return [];
+  if (depth >= maxDepth) return { children: [], parent: [] };
 
   const rawChildren = filterChildRelationships(objectDescription.childRelationships, objectName, apexMode, filteredObjectNames);
-  if (!rawChildren.length) return [];
+  if (!rawChildren.length) return { children: [], parent: [] };
 
-  // Multiple relationships can point at the same child object type — describe
-  // each distinct one once and reuse it both for the polymorphic check below
-  // and as the next level's own objectDescription.
   const uniqueChildNames = Array.from(new Set(rawChildren.map((child) => child.name)));
   const childDescriptions = await Promise.all(
     uniqueChildNames.map((name) => salesforceObjectDescribe({ user, objectName: name }))
@@ -74,20 +75,20 @@ const buildChildRelationshipTree = async (params: {
   const descriptionByName = new Map(uniqueChildNames.map((name, index) => [name, childDescriptions[index]]));
 
   const childNodes = await Promise.all(
-    rawChildren.map(async (child): Promise<ISalesforceChildTreeNode | null> => {
+    rawChildren.map(async (child): Promise<ISalesforceChildTreeNode> => {
       const childDescription = descriptionByName.get(child.name)!;
+      const parent = child.cascadeDelete ? getCascadeDeleteFields(childDescription.fields) : [];
+      const custom = childDescription.custom;
+
       if (visitedObjectNames.has(child.name)) {
-        return { ...child, children: [] };
+        return { ...child, custom, children: [], parent };
       }
 
-      // restrictedDelete blocks deleting the parent while this child still has
-      // records, and without cascadeDelete the child isn't removed alongside
-      // it either — so there's no cascade edge to keep walking past this node.
       if (child.restrictedDelete && !child.cascadeDelete) {
-        return { ...child, children: [] };
+        return { ...child, custom, children: [], parent };
       }
 
-      const children = await buildChildRelationshipTree({
+      const { children } = await buildChildRelationshipTree({
         user,
         objectDescription: childDescription,
         objectName: child.name,
@@ -98,34 +99,17 @@ const buildChildRelationshipTree = async (params: {
         maxDepth,
       });
 
-      return { ...child, children };
+      return { ...child, custom, children, parent };
     })
   );
 
-  return childNodes.filter((node): node is ISalesforceChildTreeNode => node !== null);
+  // Each child's own cascade-field exposure now lives on that child's node
+  // above — this level has nothing further of its own to report.
+  return { children: childNodes, parent: [] };
 };
 
-// --- Archival-only traversal ---
-// Archival mode keeps every child relationship (filterChildRelationships never
-// restricts it to filteredObjectNames the way backup mode is), so the object graph
-// it walks is far wider and denser than backup's. Reusing buildChildRelationshipTree
-// as-is for archival caused two production issues: cloning visitedObjectNames per
-// branch let the same near-universal child (Task, Event, ContentDocumentLink, …) be
-// re-described and re-expanded under every branch that reached it, fanning out
-// exponentially across depth; and firing every describe call unbounded blew past the
-// outbound connection pool ("fetch failed"). This traversal is kept as its own
-// function, separate from buildChildRelationshipTree, so those archival-specific
-// fixes can never change backup's behavior.
-
-// Recursion branches run concurrently (see the Promise.all below), so the number of
-// in-flight salesforceObjectDescribe calls isn't bounded by depth or by any single
-// level — it's bounded only by the total number of distinct objects being described
-// at once. This queue caches each object's describe by name (so it's only ever
-// fetched once across the whole traversal) and caps how many of those fetches run at
-// the same time.
-const MAX_CONCURRENT_ARCHIVAL_DESCRIBES = 6;
-
-const createSalesforceDescribeQueue = (
+export const MAX_CONCURRENT_ARCHIVAL_DESCRIBES = 6;
+export const createSalesforceDescribeQueue = (
   user: IUser,
   concurrency: number,
   seed?: Iterable<[string, ISalesforceObjectDescribeResponse]>
@@ -165,16 +149,13 @@ const createSalesforceDescribeQueue = (
   };
 };
 
-type ISalesforceDescribeQueue = ReturnType<typeof createSalesforceDescribeQueue>;
+export type ISalesforceDescribeQueue = ReturnType<typeof createSalesforceDescribeQueue>;
 
-const buildArchivalChildRelationshipTree = async (params: {
+export const buildArchivalChildRelationshipTree = async (params: {
   user: IUser;
   objectDescription: ISalesforceObjectDescribeResponse;
   objectName: string;
   filteredObjectNames: string[];
-  // Objects already expanded anywhere in this traversal — shared and mutated across
-  // the whole call (not cloned per branch), so each distinct object is expanded at
-  // most once for the whole tree instead of once per branch that reaches it.
   visitedObjectNames: Set<string>;
   describeQueue: ISalesforceDescribeQueue;
   depth: number;
@@ -204,35 +185,31 @@ const buildArchivalChildRelationshipTree = async (params: {
   });
   if (!cascadeChildren.length) return { children: [], parent: [] };
 
-  // Archival deletes the source record after it's exported, so a child object
-  // the connected user can't delete has no business being offered here at
-  // all — excluded outright, not just left unexpanded, the same way the
-  // polymorphic filter above drops a relationship rather than stubbing it.
-  // filteredObjectNames (salesforceObjectFilteredList's own deletable===true
-  // filter for apexMode='archival') already keeps most of these out upstream;
-  // this is a direct, explicit check on each child's own describe response so
-  // the guarantee doesn't rest solely on that list staying in sync.
   const deletableChildren = cascadeChildren.filter(
     (child) => descriptionByName.get(child.name)?.deletable === true
   );
+
   if (!deletableChildren.length) return { children: [], parent: [] };
 
   const childNodes = await Promise.all(
     deletableChildren.map(async (child): Promise<ISalesforceArchivalChildTreeNode> => {
       const childDescription = descriptionByName.get(child.name)!;
+      const parent = child.cascadeDelete ? getCascadeDeleteFields(childDescription.fields) : [];
+      const custom = childDescription.custom;
+
       if (visitedObjectNames.has(child.name)) {
-        return { ...child, children: [], parent: [] };
+        return { ...child, custom, children: [], parent };
       }
 
       // restrictedDelete blocks deleting the parent while this child still has
       // records, and without cascadeDelete the child isn't removed alongside
       // it either — so there's no cascade edge to keep walking past this node.
       if (child.restrictedDelete && !child.cascadeDelete) {
-        return { ...child, children: [], parent: [] };
+        return { ...child, custom, children: [], parent };
       }
 
       visitedObjectNames.add(child.name);
-      const { children, parent } = await buildArchivalChildRelationshipTree({
+      const { children } = await buildArchivalChildRelationshipTree({
         user,
         objectDescription: childDescription,
         objectName: child.name,
@@ -243,62 +220,15 @@ const buildArchivalChildRelationshipTree = async (params: {
         maxDepth,
       });
 
-      return { ...child, children, parent };
+      return { ...child, custom, children, parent };
     })
   );
 
-  // Of this level's own children, the cascadeDelete fields on the ones that are
-  // themselves a cascade-delete child in another master-detail relationship —
-  // mirrors getSalesforceDescribeObject's parent-detection, reusing the
-  // description already fetched above instead of re-describing. Scoped to
-  // deletableChildren, not cascadeChildren — a child excluded for lacking
-  // delete access isn't in the tree, so it shouldn't surface here either.
-  const parent = deletableChildren
-    .filter((child) => child.cascadeDelete)
-    .flatMap((child) => getCascadeDeleteFields(descriptionByName.get(child.name)!.fields));
-
-  return { children: childNodes, parent };
+  // Each child's own cascade-field exposure now lives on that child's node
+  // above — this level has nothing further of its own to report.
+  return { children: childNodes, parent: [] };
 };
 
-
-const getSalesforceObjectSchema = async (req: IRequest, res: IResponse) => {
-  const user = req.user!;
-  const { backupConfigId, objetName } = req.query;
-
-  const crm = await getCrmById(user.crmId!);
-  if (!crm) {
-    return makeResponse(req, res, 400, false, 'not_exist');
-  }
-
-  const backupConfig = await getBackupConfigById(String(backupConfigId));
-  if (!backupConfig) {
-    return makeResponse(req, res, 400, false, 'not_exist');
-  }
-
-  const destination = await getDestinationById(backupConfig.destinationId);
-  if (!destination) {
-    return makeResponse(req, res, 400, false, 'not_exist');
-  }
-
-  const destConfig = getDecryptedDestinationConfig(destination);
-  const s3Config = {
-    bucketName: destConfig.bucketName,
-    region: destConfig.region,
-    accessKeyId: destConfig.accessKeyId,
-    secretAccessKey: destConfig.secretAccessKey,
-  };
-
-  // Latest version from schema/main/{object}/fields/, legacy folder as fallback.
-  const schemaJson = await readSchemaFile(s3Config, {
-    crmId: user.crmId!,
-    objectName: String(objetName),
-    crmName: String(crm.name),
-    backupConfigId: String(backupConfigId),
-    type: backupConfig.type === 'NORMAL' ? 'backup' : 'archival',
-    kind: 'fields',
-  });
-  makeResponse(req, res, 200, true, 'fetch', schemaJson ?? {});
-};
 
 const getsalesfroceObjects = async (req: IRequest, res: IResponse) => {
   let user = req.user!;
@@ -357,7 +287,8 @@ const getSalesforceObjectsHandler = async (req: IRequest, res: IResponse): Promi
     obj.keyPrefix !== null &&
     obj.queryable === true &&
     (obj.custom === false) &&
-    !EXCLUDE_OBJECT_SUFFIX.some((suffix) => obj.name.toLowerCase().endsWith(suffix))
+    !EXCLUDE_OBJECT_SUFFIX.some((suffix) => obj.name.toLowerCase().endsWith(suffix)) &&
+    !BULK_API_2_UNSUPPORTED_OBJECTS.includes(obj.name)
   );
   makeResponse(req, res, 200, true, 'delete', filteredObjects);
 };
@@ -398,40 +329,22 @@ const getSalesforceDescribeObject = async (req: IRequest, res: IResponse) => {
     const linkingField = childFieldsByObject.get(child.name)?.find((field) => field.name === child.field);
     return !linkingField?.polymorphicForeignKey;
   });
-  
+
   const parent = [];
 
   for (let index = 0; index < children.length; index++) {
     const child = children[index];
-    
-    if(child.cascadeDelete){
+
+    if (child.cascadeDelete) {
       const describedObject = await salesforceObjectDescribe({ user, objectName: child.name });
       const fieldIsCascade = describedObject.fields.find(field => field.cascadeDelete);
-      if(fieldIsCascade){
+      if (fieldIsCascade) {
         parent.push(child);
       }
     }
   }
 
   return makeResponse(req, res, 200, true, 'fetch', { children, fields, });
-}
-
-const getSalesforceMasterObjects = async (req: IRequest, res: IResponse) => {
-  const user = req.user!;
-  const { objectNames } = req.body;
-
-  const notAllowedNames = ['ownerid', 'createdbyid', 'lastmodifiedbyid', 'lastreferencedid', 'lastviewedid'];
-
-  const objectDescriptions = await Promise.all<ISalesforceObjectDescribeResponse>(
-    objectNames.map((objectName: string) => salesforceObjectDescribe({ user, objectName }))
-  );
-
-  const masterObjects = objectDescriptions.filter((objectDescription) => {
-    const field = objectDescription.fields.find((f) => f.type === 'reference' && (f.relationshipOrder !== null) && !notAllowedNames.includes(f.name.toLowerCase()));
-    return !field;
-  });
-
-  return makeResponse(req, res, 200, true, 'fetch', masterObjects);
 }
 
 const getSalesforceFields = async (req: IRequest, res: IResponse) => {
@@ -526,8 +439,10 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
   const filteredObjectNames = filteredObjects.map((obj) => obj.name);
   const objectDescription = await salesforceObjectDescribe({ user, objectName: String(objectName) });
 
+  const parent = getCascadeDeleteFields(objectDescription.fields);
+
   if (apexMode === 'archival') {
-    const { children, parent } = await buildArchivalChildRelationshipTree({
+    const { children } = await buildArchivalChildRelationshipTree({
       user,
       objectDescription,
       objectName: String(objectName),
@@ -541,7 +456,7 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
     return makeResponse(req, res, 200, true, 'fetch', { children, parent });
   }
 
-  const children = await buildChildRelationshipTree({
+  const { children } = await buildChildRelationshipTree({
     user,
     objectDescription,
     objectName: String(objectName),
@@ -552,15 +467,13 @@ const getSalesforceDepthChildren = async (req: IRequest, res: IResponse) => {
     maxDepth
   });
 
-  return makeResponse(req, res, 200, true, 'fetch', { children });
+  return makeResponse(req, res, 200, true, 'fetch', { children, parent });
 }
 
 export const crmMetadataController = wrapController({
-  getSalesforceObjectSchema,
   getsalesfroceObjects,
   getSalesforceFields,
   getSalesforceRecordTypes,
-  getSalesforceMasterObjects,
   getSalesforceDescribeObject,
   getSalesforceDepthChildren,
   getSalesforceObjectsHandler

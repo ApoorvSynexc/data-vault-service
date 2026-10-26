@@ -5,7 +5,7 @@ import { NOTIFICATION_TABLE, NOTIFICATION_STATUS } from '../../constant';
 import { INotification } from '../../models';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 
-interface CreateNotificationParams {
+export interface CreateNotificationParams {
   userId: string;
   crmId: string;
   title: string;

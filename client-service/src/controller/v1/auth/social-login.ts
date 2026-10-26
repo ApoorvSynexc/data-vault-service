@@ -26,11 +26,13 @@ import {
   createRole,
   getUsersByContactEmail,
   getDecryptedCrmCredential,
+  getRole,
 } from '../../../services';
 import { provisionEcaPermissionSet } from '../../../services/third-party/salesforce/eca-permission-set';
 import { ICrm, IUser } from '../../../models';
 import { encrypt } from '../../../utils/encryption';
 import {
+  getAuthCookieOptions,
   generateTokens,
   parseExpiryToSeconds,
   wrapController,
@@ -71,14 +73,6 @@ const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> 
   }
 
   makeResponse(req, res, 200, true, 'fetch', { authorizationUrl });
-};
-
-const isProduction = process.env.NODE_ENV === 'production';
-
-const baseCookieOptions = {
-  httpOnly: true,
-  secure: isProduction,
-  sameSite: 'strict' as const,
 };
 
 const socialLoginCallbackHandler = async (
@@ -263,7 +257,7 @@ const socialLoginCallbackHandler = async (
         userId: user.userId,
         crmId: user.crmId,
         salesforceApiThreshold: 80,
-        rollbackWindow: 24,
+        rollbackWindow: 7,
         notification: {
           email: true
         },
@@ -281,6 +275,16 @@ const socialLoginCallbackHandler = async (
   if (user.status === VISIBILITY_STATUS.inactive) {
     makeResponse(req, res, 403, false, 'blocked_or_removed');
     return;
+  }
+
+  const roleId = user.role.roleId;
+  if (!roleId) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
+  }
+
+  const role = await getRole({ roleId: user.role.roleId });
+  if(!role?.permissions || !role.permissions.length) {
+    return makeResponse(req, res, 401, false, 'unauthorized');
   }
 
   if (!userJustCreated) {
@@ -334,11 +338,11 @@ const socialLoginCallbackHandler = async (
 
   // Set cookies
   res.cookie('accessToken', tokens.accessToken, {
-    ...baseCookieOptions,
+    ...getAuthCookieOptions(req),
     maxAge: parseExpiryToSeconds(JWT_ACCESS_EXPIRY) * 1000,
   });
   res.cookie('refreshToken', tokens.refreshToken, {
-    ...baseCookieOptions,
+    ...getAuthCookieOptions(req),
     maxAge: parseExpiryToSeconds(JWT_REFRESH_EXPIRY) * 1000,
   });
 

@@ -28,9 +28,9 @@ export const salesforceMetadataHandler = async (
 ) => {
     const { metadataType, backupConfigId, backupJobId, objectName } = params;
     try {
-        logger.info(
-            `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
-        );
+        // logger.info(
+        //     `Object metadata comparison started, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}`
+        // );
 
         const backupConfig = await getBackupConfigById(backupConfigId);
         if (!backupConfig) {
@@ -263,6 +263,7 @@ export interface ISalesforcePicklistValue {
 }
 
 export interface ISalesforceFieldDescribe {
+    accessible: boolean;
     aggregatable: boolean;
     aiPredictionField: boolean;
     autoNumber: boolean;
@@ -449,7 +450,7 @@ interface ISalesforceUserQueryRecord {
 
 export interface IInactiveOwnerIdsResult {
     ownerIds: string[];
-    managerIds?: string[];
+    managerIds?: Record<string, string>; // ownerId (userId) -> ManagerId
 }
 
 // Standard Data REST query (not a custom Apex endpoint) — ManagerId is a
@@ -486,6 +487,10 @@ export const getInactiveOwnerIds = async ({ user, includeManagers }: { user: IUs
         return { ownerIds };
     }
 
-    const managerIds = [...new Set(records.map((record) => record.ManagerId).filter((id): id is string => !!id))];
+    const managerIds = Object.fromEntries(
+        records
+            .filter((record): record is ISalesforceUserQueryRecord & { ManagerId: string } => !!record.ManagerId)
+            .map((record) => [record.Id, record.ManagerId])
+    );
     return { ownerIds, managerIds };
 };

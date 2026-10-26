@@ -1,8 +1,8 @@
 import dayjs from 'dayjs';
-import { BatchWriteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchWriteCommand, GetCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { encodeCursor, decodeCursor } from '../../utils/cursor';
 import { docClient } from '../../config';
-import { BACKUP_SERVICE, BACKUP_JOB_TABLE, STATUS, JOB_OBJECT_STATUS, INTERNAL_SECRET, SCHEDULE_MODE, VISIBILITY_STATUS } from '../../constant';
+import { BACKUP_SERVICE, BACKUP_JOB_TABLE, BACKUP_TYPE, STATUS, JOB_OBJECT_STATUS, INTERNAL_SECRET, SCHEDULE_MODE, VISIBILITY_STATUS } from '../../constant';
 import { IBackupConfig, IBackupJob, IObject, IUser } from '../../models';
 import { httpRequest } from '../../utils/http-request';
 import { updateBackupConfig } from '../backup-config';
@@ -32,36 +32,19 @@ export const getSourceObjects = (objects?: IObject[], includeChildren = false) =
   }
 };
 
-// Returns true if a PENDING (in-flight) job already exists for this config —
-// a job's own status has no separate "now actively running" value, it stays
-// PENDING for its entire in-flight duration (see STATUS in constant/index.ts).
-// Used to prevent duplicate concurrent backup jobs on the same config.
-const hasActiveBackupJob = async (backupConfigId: string): Promise<boolean> => {
-  const startedAt = Date.now();
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: BACKUP_JOB_TABLE,
-      IndexName: 'backupConfigId-index',
-      KeyConditionExpression: 'backupConfigId = :backupConfigId',
-      FilterExpression: '#status = :pending',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: {
-        ':backupConfigId': backupConfigId,
-        ':pending': STATUS.pending,
-      },
-      Limit: 1,
-    })
-  );
-  const active = (result.Count ?? 0) > 0;
-  logger.info(`[ARCH-DEDUP] hasActiveBackupJob | configId=${backupConfigId} active=${active} count=${result.Count ?? 0} durationMs=${Date.now() - startedAt}`);
-  return active;
-};
+interface ISubmitBackupJobResponse {
+  data: {
+    backupJobId: string;
+    status: string;
+    modifiedUntil: string;
+  }
+}
 
 const submitBackupJobRequest = async (params: {
   backupConfigId: string;
   endpoint: string;
   body: string;
-}): Promise<any> => {
+}): Promise<ISubmitBackupJobResponse> => {
   const { backupConfigId, endpoint, body } = params;
   try {
     return await httpRequest({
@@ -82,18 +65,22 @@ const triggerArchivalBackupJob = async (params: {
   objects?: IObject[];
   lastUpdatedAt?: string;
   bypassDedup?: boolean;
+  lastSchemaSyncAt?: boolean;
+  triggerSource?: {
+    name: string;
+    entityId: string;
+  }
 }) => {
   const triggerStart = Date.now();
-  const { config, objects, lastUpdatedAt, bypassDedup, user } = params;
+  const { config, objects, lastUpdatedAt, bypassDedup, lastSchemaSyncAt, user } = params;
   const objectNames = (objects ?? []).map(o => o.name).join(',') || 'none';
 
   if (!user) return null;
 
   if (!bypassDedup) {
     logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} dedup check (bypassDedup=false)`);
-    const active = await hasActiveBackupJob(config.backupConfigId);
-    if (active) {
-      logger.warn(`[ARCH-TRIG] EXIT short-circuit | configId=${config.backupConfigId} reason=already_active durationMs=${Date.now() - triggerStart}`);
+    if (config.backupStatus === STATUS.pending) {
+      logger.warn(`[Backup Service Trigger] EXIT short-circuit | Ms=${Date.now() - triggerStart} configId=${config.backupConfigId} reason=already_pending`);
       return null;
     }
   } else {
@@ -140,22 +127,17 @@ const triggerArchivalBackupJob = async (params: {
   const bodyStr = JSON.stringify(payload);
   logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ${BACKUP_SERVICE}/v1/backup-job${endpoint} | payloadBytes=${bodyStr.length} objects=[${objectNames}]`);
 
-  let result;
   const postStart = Date.now();
+  const currentDate = new Date().toISOString();
   try {
-    result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: bodyStr });
-    logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} POST ok | durationMs=${Date.now() - postStart}`);
+    const result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: bodyStr });
+    await updateBackupConfig(config.backupConfigId, { lastBackupAt: result.data.modifiedUntil ?? currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
+    logger.info(`[ARCH-TRIG] EXIT ok | configId=${config.backupConfigId} totalDurationMs=${Date.now() - triggerStart}`);
   } catch (error) {
+    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.failed });
     logger.error(`[ARCH-TRIG] configId=${config.backupConfigId} POST FAILED | durationMs=${Date.now() - postStart} error=${(error as Error)?.message ?? String(error)}`);
     throw error;
   }
-
-  const newLastBackupAt = new Date().toISOString();
-  logger.info(`[ARCH-TRIG] configId=${config.backupConfigId} set lastBackupAt=${newLastBackupAt}`);
-  await updateBackupConfig(config.backupConfigId, { lastBackupAt: newLastBackupAt });
-
-  logger.info(`[ARCH-TRIG] EXIT ok | configId=${config.backupConfigId} totalDurationMs=${Date.now() - triggerStart}`);
-  return result;
 };
 
 const triggerBackupJob = async (params: {
@@ -172,8 +154,8 @@ const triggerBackupJob = async (params: {
 }) => {
   const { config, lastUpdatedAt, type = 'backup', user, lastSchemaSyncAt, schemaSync, triggerSource } = params;
   try {
-    const active = await hasActiveBackupJob(config.backupConfigId);
-    if (active) {
+    if (config.backupStatus === STATUS.pending) {
+      logger.warn(`[Backup Service Trigger] EXIT short-circuit | configId=${config.backupConfigId} reason=already_pending`);
       return null;
     }
 
@@ -213,11 +195,11 @@ const triggerBackupJob = async (params: {
 
     const endpoint = type === 'archival' ? '/archival' : '';
     const result = await submitBackupJobRequest({ backupConfigId: config.backupConfigId, endpoint, body: JSON.stringify(payload) });
-
-    await updateBackupConfig(config.backupConfigId, { lastBackupAt: currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
+    await updateBackupConfig(config.backupConfigId, { lastBackupAt: result.data.modifiedUntil ?? currentDate, ...(lastSchemaSyncAt && { lastSchemaSyncAt: currentDate }) });
     return result;
   } catch (error) {
     logger.error(`triggerBackupJob failed configId=${config.backupConfigId} type=${type} error=${(error as Error)?.message ?? String(error)}`);
+    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.failed });
     throw error
   }
 };
@@ -272,9 +254,7 @@ const runBackupNow = async (params: { user?: IUser; config: IBackupConfig }): Pr
 // `status`, so without this the stats readers below would stop counting compressed jobs.
 // Note: a job that FAILED its backup and was then compressed also lands here — the
 // original outcome is no longer on the record to distinguish it.
-const isBackupCompleted = (status: string): boolean =>
-  status === STATUS.success ||
-  [JOB_OBJECT_STATUS.compressionInProgress, JOB_OBJECT_STATUS.compressed, JOB_OBJECT_STATUS.compressionFailed].includes(status);
+const isBackupCompleted = (status: string): boolean => [STATUS.success, STATUS.compressed].includes(status);
 
 // Single writer for the compression lifecycle. The condition is what makes an unknown
 // or foreign backupJobId fail loudly: UpdateCommand upserts by default, so without it a
@@ -287,11 +267,18 @@ const setCompressionStatus = async (params: {
 }): Promise<void> => {
   const { backupJobId, backupConfigId, status, errorMessage } = params;
 
+  // A job that previously failed compression carries a stale errorMessage —
+  // on a later success (no new errorMessage given), REMOVE it rather than
+  // leaving it stranded next to a COMPRESSED status. REMOVE is a no-op if the
+  // attribute was never set, so this is safe for every success case, not just
+  // a prior-failure one.
   await docClient.send(
     new UpdateCommand({
       TableName: BACKUP_JOB_TABLE,
       Key: { backupJobId },
-      UpdateExpression: `SET #status = :status, lastUpdatedAt = :now${errorMessage ? ', errorMessage = :errorMessage' : ''}`,
+      UpdateExpression: errorMessage
+        ? 'SET #status = :status, lastUpdatedAt = :now, errorMessage = :errorMessage'
+        : 'SET #status = :status, lastUpdatedAt = :now REMOVE errorMessage',
       ConditionExpression: 'attribute_exists(backupJobId) AND backupConfigId = :backupConfigId',
       ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: {
@@ -337,6 +324,35 @@ const setCompressionStatusBulk = async (params: {
   return { updated, failed };
 };
 
+const updateBackupJob = async (
+  payload: Partial<IBackupJob>
+): Promise<void> => {
+  const { backupJobId, ...fields } = payload;
+  const updates: Record<string, any> = { ...fields, updatedAt: new Date().toISOString() };
+
+  const names: Record<string, string> = {};
+  const values: Record<string, any> = {};
+  const setExpr = Object.keys(updates)
+    .map((key) => {
+      const alias = `#${key}`;
+      names[alias] = key;
+      values[`:${key}`] = updates[key];
+      return `${alias} = :${key}`;
+    })
+    .join(', ');
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: BACKUP_JOB_TABLE,
+      Key: { backupJobId },
+      UpdateExpression: `SET ${setExpr}`,
+      ConditionExpression: 'attribute_exists(backupJobId)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    })
+  );
+};
+
 const getBackupJobById = async (backupJobId: string): Promise<IBackupJob | null> => {
   const result = await docClient.send(
     new GetCommand({ TableName: BACKUP_JOB_TABLE, Key: { backupJobId } })
@@ -349,7 +365,6 @@ const getBackupJobsByUser = async (
   options?: { limit?: number; cursor?: string; status?: string; type?: string }
 ): Promise<{ items: IBackupJob[]; nextCursor?: string }> => {
   const limit = options?.limit ?? 10;
-  const exclusiveStartKey = decodeCursor(options?.cursor);
 
   const filterParts: string[] = [];
   const expressionNames: Record<string, string> = {};
@@ -367,24 +382,32 @@ const getBackupJobsByUser = async (
     expressionValues[':type'] = options.type;
   }
 
-  const queryParams: any = {
-    TableName: BACKUP_JOB_TABLE,
-    IndexName: 'userId-index',
-    KeyConditionExpression: 'userId = :userId',
-    ExpressionAttributeValues: expressionValues,
-    Limit: limit,
-    ScanIndexForward: false,
-    ...(filterParts.length && {
-      FilterExpression: filterParts.join(' AND '),
-      ExpressionAttributeNames: expressionNames,
-    }),
-    ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
-  };
+  const items: IBackupJob[] = [];
+  let lastKey = decodeCursor(options?.cursor);
 
-  const result = await docClient.send(new QueryCommand(queryParams));
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_JOB_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: expressionValues,
+        Limit: limit - items.length,
+        ScanIndexForward: false,
+        ...(filterParts.length && {
+          FilterExpression: filterParts.join(' AND '),
+          ExpressionAttributeNames: expressionNames,
+        }),
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      })
+    );
 
-  const nextCursor = result.LastEvaluatedKey ? encodeCursor(result.LastEvaluatedKey) : undefined;
-  return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
+    items.push(...((result.Items ?? []) as IBackupJob[]));
+    lastKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (items.length < limit && lastKey);
+
+  const nextCursor = lastKey ? encodeCursor(lastKey) : undefined;
+  return { items, nextCursor };
 };
 
 const getBackupJobsByConfig = async (
@@ -501,10 +524,10 @@ const getBackupJobsByConfigAndStatuses = async (
   return { items: (result.Items ?? []) as IBackupJob[], nextCursor };
 };
 
-const resumeBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
+const retryBackupJob = async (backupJobId: string, config: IBackupConfig, type: 'backup' | 'archival' = 'backup') => {
   await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending });
 
-  const endpoint = config.type === 'ARCHIVAL' ? '/archival/resume' : '/resume';
+  const endpoint = config.type === 'ARCHIVAL' ? '/archival/retry' : '/retry';
   const url = `${BACKUP_SERVICE}/v1/backup-job${endpoint}?id=${backupJobId}`
 
   return httpRequest({
@@ -625,9 +648,9 @@ const computeJobStats = async (query: { indexName: string; keyName: string; keyV
             recordsLastWeek += jobRecordCount;
           }
         }
-      } else if (job.status === STATUS.pending) {
+      } else if (job.status === STATUS.pending || job.status === STATUS.compressionInProgress) {
         runningCount++;
-      } else if (job.status === STATUS.failed || job.status === JOB_OBJECT_STATUS.compressionFailed) {
+      } else if (job.status === STATUS.failed || job.status === STATUS.partialFailure || job.status === STATUS.compressionFailed) {
         failedCount++;
       }
     }
@@ -788,6 +811,10 @@ interface IBackupJobOverview {
   pendingStatus: number;
   successStatus: number;
   failedStatus: number;
+  partialFailureStatus: number;
+  compressionInProgressStatus: number;
+  compressedStatus: number;
+  compressionFailedStatus: number;
 }
 
 // Dashboard overview for a user's backup jobs of one type (NORMAL/backup or
@@ -802,6 +829,10 @@ const getBackupJobOverview = async (
     pendingStatus: 0,
     successStatus: 0,
     failedStatus: 0,
+    partialFailureStatus: 0,
+    compressionInProgressStatus: 0,
+    compressedStatus: 0,
+    compressionFailedStatus: 0,
   };
 
   let lastEvaluatedKey: Record<string, any> | undefined;
@@ -826,8 +857,16 @@ const getBackupJobOverview = async (
         overview.pendingStatus += 1;
       } else if (item.status === STATUS.success) {
         overview.successStatus += 1;
-      } else if (item.status === STATUS.failed || item.status === STATUS.partialFailure) {
+      } else if (item.status === STATUS.failed) {
         overview.failedStatus += 1;
+      } else if (item.status === STATUS.partialFailure) {
+        overview.partialFailureStatus += 1;
+      } else if (item.status === STATUS.compressionInProgress) {
+        overview.compressionInProgressStatus += 1;
+      } else if (item.status === STATUS.compressed) {
+        overview.compressedStatus += 1;
+      } else if (item.status === STATUS.compressionFailed) {
+        overview.compressionFailedStatus += 1;
       }
     }
 
@@ -837,13 +876,78 @@ const getBackupJobOverview = async (
   return overview;
 };
 
+const getStaleJobs = async (
+  thresholdMinutes: number,
+  limit: number = 100,
+  onPage: (jobs: IBackupJob[]) => Promise<void>,
+): Promise<void> => {
+  const cutoff = new Date(Date.now() - thresholdMinutes * 60 * 1000).toISOString();
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Limit: limit,
+        FilterExpression:
+          'attribute_exists(processingStartedAt) AND (#status = :pending OR #status = :compressionInProgress) AND updatedAt < :cutoff',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: {
+          ':pending': STATUS.pending,
+          ':compressionInProgress': STATUS.compressionInProgress,
+          ':cutoff': cutoff,
+        },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const jobs = (result.Items as IBackupJob[] | undefined) ?? [];
+    if (jobs.length) {
+      await onPage(jobs);
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastEvaluatedKey !== undefined);
+};
+
+const getFailedBackupJobs = async (
+  limit: number = 100,
+  onPage: (jobs: IBackupJob[]) => Promise<void>
+): Promise<void> => {
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Limit: limit,
+        FilterExpression: '#status IN (:failed, :partialFailure) AND #type = :normal',
+        ExpressionAttributeNames: { '#status': 'status', '#type': 'type' },
+        ExpressionAttributeValues: {
+          ':failed': STATUS.failed,
+          ':partialFailure': STATUS.partialFailure,
+          ':normal': BACKUP_TYPE.normal,
+        },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const jobs = (result.Items as IBackupJob[] | undefined) ?? [];
+    if (jobs.length) {
+      await onPage(jobs);
+    }
+
+    lastEvaluatedKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastEvaluatedKey !== undefined);
+};
+
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
   submitBackupJobRequest,
   runBackupNow,
-  hasActiveBackupJob,
-  resumeBackupJob,
+  retryBackupJob,
+  updateBackupJob,
   getBackupJobById,
   getBackupJobsByUser,
   getBackupJobsByConfig,
@@ -857,4 +961,6 @@ export {
   computeArchivalJobStats,
   getMonthlyStatsByCrmCurrentYear,
   getBackupJobOverview,
+  getStaleJobs,
+  getFailedBackupJobs,
 };
