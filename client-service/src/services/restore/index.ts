@@ -275,6 +275,7 @@ const getRestoresWithPagination = async (
         ExpressionAttributeValues: expressionAttributeValues,
         ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
         Limit: pageLimit,
+        ScanIndexForward: false,
         ...(startKey && { ExclusiveStartKey: startKey }),
       })
     )
