@@ -144,11 +144,11 @@ const getBackupConfigsByCrm = async (crmId: string, limit?: number): Promise<IBa
 };
 
 // Global search (dashboard) — matches by backupConfigId or name, scoped to the
-// requesting user. A Scan (not Query) because the match is a free-text/partial
-// check against two different attributes (id OR name), which DynamoDB can't
-// express as a single index key condition; userId is still enforced as a
-// FilterExpression so this never reads across users. Keeps paging with
-// ExclusiveStartKey until `limit` matches are found or the table is exhausted.
+// requesting user via a Query on userId-index (not a table Scan), so this only
+// ever reads that user's own items. id/name matching is a free-text/partial
+// check against two different attributes, which DynamoDB can't express as a
+// single key condition, so it still happens client-side; paging continues with
+// ExclusiveStartKey until `limit` matches are found or the user's items are exhausted.
 const searchBackupConfigs = async (userId: string, term: string, limit: number = 20): Promise<IBackupConfig[]> => {
   const termLower = term.toLowerCase();
   const matches: IBackupConfig[] = [];
@@ -156,9 +156,10 @@ const searchBackupConfigs = async (userId: string, term: string, limit: number =
 
   do {
     const result = await docClient.send(
-      new ScanCommand({
+      new QueryCommand({
         TableName: BACKUP_CONFIG_TABLE,
-        FilterExpression: 'userId = :userId',
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
         ExpressionAttributeValues: { ':userId': userId },
         ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
       })

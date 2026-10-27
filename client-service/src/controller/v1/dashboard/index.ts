@@ -85,12 +85,17 @@ const overviewV2Handler = async (req: IRequest, res: IResponse): Promise<void> =
   }
 }
 
+const GLOBAL_SEARCH_MIN_LENGTH = 3;
+
 const globalSearchHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const userId = req.user!.userId;
   const { search } = req.query as Record<string, string>;
 
   if (!search || search.length === 0) {
     return makeResponse(req, res, 400, false, 'params_required');
+  }
+  if (search.trim().length < GLOBAL_SEARCH_MIN_LENGTH) {
+    return makeResponse(req, res, 400, false, 'search_too_short');
   }
 
   const [backupConfigs, restores] = await Promise.all([

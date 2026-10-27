@@ -127,10 +127,9 @@ const getRestoreById = async (restoreId: string): Promise<IRestore | null> => {
 };
 
 // Global search (dashboard) — matches by restoreId or jobDetail.name, scoped
-// to the requesting user. A Scan (not Query), same reasoning as
-// backup-config's searchBackupConfigs: matching id OR name isn't expressible
-// as a single index key condition, so userId is enforced as a
-// FilterExpression instead to keep this from reading across users.
+// to the requesting user via a Query on userId-index (not a table Scan) so
+// this only ever reads that user's own items; id/name matching still happens
+// client-side since it isn't expressible as a single key condition.
 const searchRestores = async (userId: string, term: string, limit: number = 20): Promise<IRestore[]> => {
   const termLower = term.toLowerCase();
   const matches: IRestore[] = [];
@@ -138,9 +137,10 @@ const searchRestores = async (userId: string, term: string, limit: number = 20):
 
   do {
     const result = await docClient.send(
-      new ScanCommand({
+      new QueryCommand({
         TableName: RESTORE_TABLE,
-        FilterExpression: 'userId = :userId',
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
         ExpressionAttributeValues: { ':userId': userId },
         ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
       })
