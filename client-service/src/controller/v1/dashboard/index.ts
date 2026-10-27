@@ -1,5 +1,5 @@
 import { IRequest, IResponse, makeResponse } from '../../../lib';
-import { getBackupConfigById, getBackupJobOverview, getBackupJobsByUser, getBackupOverview, getRestoreById, getRestoreJobsByUserId, getRestoreOverview } from '../../../services';
+import { getBackupConfigById, getBackupJobOverview, getBackupJobsByUser, getBackupOverview, getRestoreById, getRestoreJobsByUserId, getRestoreOverview, searchBackupConfigs, searchRestores } from '../../../services';
 import { wrapController } from '../../../utils/helper';
 
 const getLastNBackupJobs = async (userId: string, limit: number, type?: 'NORMAL' | 'ARCHIVAL') => {
@@ -85,7 +85,24 @@ const overviewV2Handler = async (req: IRequest, res: IResponse): Promise<void> =
   }
 }
 
+const globalSearchHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const userId = req.user!.userId;
+  const { search } = req.query as Record<string, string>;
+
+  if (!search || search.length === 0) {
+    return makeResponse(req, res, 400, false, 'params_required');
+  }
+
+  const [backupConfigs, restores] = await Promise.all([
+    searchBackupConfigs(userId, search),
+    searchRestores(userId, search),
+  ]);
+
+  return makeResponse(req, res, 200, true, 'fetch', { backupConfigs, restores });
+};
+
 export const dashboardController = wrapController({
   getLastBackupJob,
   overviewV2Handler,
+  globalSearchHandler,
 });

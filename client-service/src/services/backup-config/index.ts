@@ -143,6 +143,41 @@ const getBackupConfigsByCrm = async (crmId: string, limit?: number): Promise<IBa
   return (result.Items as IBackupConfig[] | undefined) ?? [];
 };
 
+// Global search (dashboard) — matches by backupConfigId or name, scoped to the
+// requesting user. A Scan (not Query) because the match is a free-text/partial
+// check against two different attributes (id OR name), which DynamoDB can't
+// express as a single index key condition; userId is still enforced as a
+// FilterExpression so this never reads across users. Keeps paging with
+// ExclusiveStartKey until `limit` matches are found or the table is exhausted.
+const searchBackupConfigs = async (userId: string, term: string, limit: number = 20): Promise<IBackupConfig[]> => {
+  const termLower = term.toLowerCase();
+  const matches: IBackupConfig[] = [];
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: BACKUP_CONFIG_TABLE,
+        FilterExpression: 'userId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const items = (result.Items as IBackupConfig[] | undefined) ?? [];
+    matches.push(
+      ...items.filter(
+        (item) =>
+          item.backupConfigId.toLowerCase().includes(termLower) || (item.name ?? '').toLowerCase().includes(termLower)
+      )
+    );
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (matches.length < limit && lastEvaluatedKey);
+
+  return matches.slice(0, limit);
+};
+
 const getScheduledIncrementalBackupConfigs = async (): Promise<IBackupConfig[]> => {
   const result = await docClient.send(
     new ScanCommand({
@@ -716,6 +751,9 @@ interface IBackupOverview {
   failedBackupStatus: number;
   successBackupStatus: number;
   pendingBackupStatus: number;
+  draftBackupConfigs: number;
+  pausedBackupConfigs: number;
+  partialFailureBackupConfigs: number;
 }
 
 // Dashboard overview for one config type (NORMAL/backup or ARCHIVAL). A single
@@ -732,6 +770,9 @@ const getBackupOverview = async (
     failedBackupStatus: 0,
     successBackupStatus: 0,
     pendingBackupStatus: 0,
+    draftBackupConfigs: 0,
+    pausedBackupConfigs: 0,
+    partialFailureBackupConfigs: 0,
   };
 
   let lastEvaluatedKey: Record<string, any> | undefined;
@@ -757,13 +798,20 @@ const getBackupOverview = async (
 
       if (item.status === VISIBILITY_STATUS.active) {
         overview.activeBackupConfigs += 1;
+      } else if (item.status === VISIBILITY_STATUS.draft) {
+        overview.draftBackupConfigs += 1;
+      } else if (item.status === VISIBILITY_STATUS.paused) {
+        overview.pausedBackupConfigs += 1;
       }
-      if (item.backupStatus === STATUS.failed || item.status === STATUS.partialFailure) {
+
+      if (item.backupStatus === STATUS.failed) {
         overview.failedBackupStatus += 1;
       } else if (item.backupStatus === STATUS.success) {
         overview.successBackupStatus += 1;
       } else if (item.backupStatus === STATUS.pending) {
         overview.pendingBackupStatus += 1;
+      } else if (item.backupStatus === STATUS.partialFailure) {
+        overview.partialFailureBackupConfigs += 1;
       }
     }
 
@@ -781,6 +829,7 @@ export {
   getBackupConfigsByUser,
   getBackupOverview,
   getBackupConfigsByCrm,
+  searchBackupConfigs,
   getBackupConfigsInBatches,
   getLastNBackupConfigByCrm,
   getBackupConfigSizeRecordByCrmId,

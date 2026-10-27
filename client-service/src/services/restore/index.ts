@@ -126,6 +126,40 @@ const getRestoreById = async (restoreId: string): Promise<IRestore | null> => {
   return (result.Item as IRestore) ?? null;
 };
 
+// Global search (dashboard) — matches by restoreId or jobDetail.name, scoped
+// to the requesting user. A Scan (not Query), same reasoning as
+// backup-config's searchBackupConfigs: matching id OR name isn't expressible
+// as a single index key condition, so userId is enforced as a
+// FilterExpression instead to keep this from reading across users.
+const searchRestores = async (userId: string, term: string, limit: number = 20): Promise<IRestore[]> => {
+  const termLower = term.toLowerCase();
+  const matches: IRestore[] = [];
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: RESTORE_TABLE,
+        FilterExpression: 'userId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const items = (result.Items as IRestore[] | undefined) ?? [];
+    matches.push(
+      ...items.filter(
+        (item) =>
+          item.restoreId.toLowerCase().includes(termLower) || (item.jobDetail?.name ?? '').toLowerCase().includes(termLower)
+      )
+    );
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (matches.length < limit && lastEvaluatedKey);
+
+  return matches.slice(0, limit);
+};
+
 const getRestoresWithPagination = async (
   filter: {
     userId?: string;
@@ -282,4 +316,4 @@ const getRestoresWithPagination = async (
   );
 };
 
-export { createRestore, updateRestore, getRestoreById, getRestoresWithPagination };
+export { createRestore, updateRestore, getRestoreById, getRestoresWithPagination, searchRestores };
