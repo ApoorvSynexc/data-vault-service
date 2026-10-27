@@ -541,6 +541,7 @@ const BULK_API_2_UNSUPPORTED_OBJECTS = [
   'UserFieldAccess',
   'UserRecordAccess',
   'UserRole',
+  'User',
   'Vote',
   'WebLink',
 ];

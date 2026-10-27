@@ -118,6 +118,9 @@ export interface ISalesforceFieldSnapshot {
   restrictedDelete: boolean;
   nillable: boolean;
   type: string;
+  createable: boolean;
+  updateable: boolean;
+  defaultedOnCreate: boolean;
 }
 
 const toFieldSnapshot = (field: ISalesforceFieldDescribe): ISalesforceFieldSnapshot => ({
@@ -131,6 +134,9 @@ const toFieldSnapshot = (field: ISalesforceFieldDescribe): ISalesforceFieldSnaps
   restrictedDelete: field.restrictedDelete,
   type: field.type,
   nillable: field.nillable,
+  createable: field.createable,
+  updateable: field.updateable,
+  defaultedOnCreate: field.defaultedOnCreate,
 });
 
 export interface ISchemaFieldChange {

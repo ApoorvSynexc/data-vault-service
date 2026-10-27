@@ -256,7 +256,7 @@ const restoreObjectData = async (
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
     // chunk rather than once at the very end of the object.
-    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed;
+    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed || job.errors.length;
     await updateRestoreObject({
       restoreJobId,
       objectName,
