@@ -493,6 +493,7 @@ const getBackupConfigsWithPagination = async (
 
 
 const getLastNBackupConfigByCrm = async (
+  userId: string,
   crmId: string,
   limit: number = 10,
   type?: 'NORMAL' | 'ARCHIVAL'
@@ -501,13 +502,14 @@ const getLastNBackupConfigByCrm = async (
     TableName: BACKUP_CONFIG_TABLE,
     IndexName: 'crmId-sizeInBytes-index',
     KeyConditionExpression: 'crmId = :crmId',
-    ExpressionAttributeValues: { ':crmId': crmId },
+    FilterExpression: 'userId = :userId',
+    ExpressionAttributeValues: { ':crmId': crmId, ':userId': userId },
     Limit: limit,
     ScanIndexForward: false,
   };
 
   if (type) {
-    queryParams.FilterExpression = '#type = :type';
+    queryParams.FilterExpression += ' AND #type = :type';
     queryParams.ExpressionAttributeNames = { '#type': 'type' };
     queryParams.ExpressionAttributeValues[':type'] = type;
   }

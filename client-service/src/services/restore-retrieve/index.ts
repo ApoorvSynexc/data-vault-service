@@ -22,7 +22,7 @@ import { IsoDateString } from '../../utils/iso-date';
 
 export { FilterError, buildAthenaFilterWhere, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 export { validateColumns } from './athena-fetch';
-import { buildAthenaFilterWhere, buildDeltaFilterWhere, DELTA_RECORD_ID_ALIAS, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
+import { buildAthenaFilterWhere, buildDeltaFilterWhere, DELTA_RECORD_ID_ALIAS, FilterError, ISoqlFieldMeta, FieldTypeResolver } from './athena-filter';
 import {
   pairedColumns,
   IPageKey,
@@ -1082,6 +1082,16 @@ const validateSoqlQuery = async (params: IValidateQueryParams): Promise<IValidat
   // Thrown FilterError is intentionally not caught here — see doc above.
   const whereBody = buildAthenaFilterWhere(params.filter, undefined, resolver);
   console.log('Athena WHERE clause:', whereBody);
+
+  // parseValidateQueryParams already rejects an empty/whitespace soqlQuery
+  // before this function is ever called, so a non-empty query that still
+  // compiles to no WHERE clause (e.g. "SELECT Id FROM Account") means the
+  // caller wrote a condition-less query — not a legal FILTER-scope condition
+  // for this endpoint, which validates a single object's filter, not an
+  // unfiltered full-table query.
+  if (whereBody === null) {
+    throw new FilterError('soql_where_clause_required');
+  }
 
   const databaseName = toGlueId(params.backupConfigId);
   const hudiTable = `cfg_${toGlueId(params.backupConfigId)}_${toGlueId(params.objectApiName)}_hudi`;

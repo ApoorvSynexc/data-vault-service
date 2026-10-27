@@ -32,6 +32,7 @@ import { provisionEcaPermissionSet } from '../../../services/third-party/salesfo
 import { ICrm, IUser } from '../../../models';
 import { encrypt } from '../../../utils/encryption';
 import {
+  getAuthCookieOptions,
   generateTokens,
   parseExpiryToSeconds,
   wrapController,
@@ -72,14 +73,6 @@ const socialLoginHandler = async (req: IRequest, res: IResponse): Promise<void> 
   }
 
   makeResponse(req, res, 200, true, 'fetch', { authorizationUrl });
-};
-
-const isProduction = process.env.NODE_ENV === 'production';
-
-const baseCookieOptions = {
-  httpOnly: true,
-  secure: isProduction,
-  sameSite: 'strict' as const,
 };
 
 const socialLoginCallbackHandler = async (
@@ -345,11 +338,11 @@ const socialLoginCallbackHandler = async (
 
   // Set cookies
   res.cookie('accessToken', tokens.accessToken, {
-    ...baseCookieOptions,
+    ...getAuthCookieOptions(req),
     maxAge: parseExpiryToSeconds(JWT_ACCESS_EXPIRY) * 1000,
   });
   res.cookie('refreshToken', tokens.refreshToken, {
-    ...baseCookieOptions,
+    ...getAuthCookieOptions(req),
     maxAge: parseExpiryToSeconds(JWT_REFRESH_EXPIRY) * 1000,
   });
 
