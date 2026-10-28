@@ -264,8 +264,7 @@ const redeemRefreshToken = (
 // ---------------------------------------------------------------------------
 
 // Every conditional write below is "only if the stored refresh token is still
-// the one we sent". Users connected before RTR have no fingerprint yet.
-// Users connected before RTR have no fingerprint yet — they pass only while a
+// the one we sent". Users connected before RTR have no fingerprint yet — they pass only while a
 // credential is still stored. Disconnect and EXPIRE remove both crmCredential
 // and refreshTokenFp, so a refresh still in flight can never write a removed
 // credential back as Ready.
@@ -406,10 +405,12 @@ const describeError = (classified: ClassifiedTokenError) =>
   [classified.sfError, classified.sfErrorDescription].filter(Boolean).join(': ') ||
   `HTTP ${classified.httpStatus ?? 'no response'}`;
 
-// A previous REFRESH_ATTEMPT with no outcome (crash) or with a lost response
-// may have rotated the token without us saving it. An invalid_grant now is
-// then most likely our own fault — keep the credential and word the email
-// cautiously instead of declaring it expired.
+// An earlier redeem may have rotated the token without us saving it: a
+// REFRESH_ATTEMPT with no outcome (crash), one whose response was lost
+// (timeout — including an earlier stage-A attempt of this same refresh), or a
+// success whose save failed. An invalid_grant now is then most likely our own
+// fault — keep the credential and word the email cautiously instead of
+// declaring it expired.
 const previousRotationMayBeLost = async (userId: string, beforeKey?: string): Promise<boolean> => {
   try {
     const latest = await getLatestTokenEvent(
@@ -418,13 +419,18 @@ const previousRotationMayBeLost = async (userId: string, beforeKey?: string): Pr
         TOKEN_EVENT_TYPE.refreshAttempt,
         TOKEN_EVENT_TYPE.refreshSuccess,
         TOKEN_EVENT_TYPE.refreshFailed,
+        TOKEN_EVENT_TYPE.persistFailed,
       ],
       beforeKey
     );
     if (!latest) {
       return false;
     }
-    return latest.eventType === TOKEN_EVENT_TYPE.refreshAttempt || latest.lostResponse === true;
+    return (
+      latest.eventType === TOKEN_EVENT_TYPE.refreshAttempt ||
+      latest.eventType === TOKEN_EVENT_TYPE.persistFailed ||
+      latest.lostResponse === true
+    );
   } catch {
     return false;
   }
@@ -490,9 +496,10 @@ interface RefreshContext {
   sentFp: string;
   environment?: SalesforceEnvironment;
   options: GetFreshTokensOptions;
-  // eventKey of this refresh's first REFRESH_ATTEMPT — the §6 lost-rotation
-  // check looks only at events before it.
-  firstAttemptKey?: string;
+  // eventKey of this refresh's latest REFRESH_ATTEMPT — the §6 lost-rotation
+  // check looks at events before the attempt that failed, which includes an
+  // earlier stage-A attempt of this same refresh.
+  lastAttemptKey?: string;
 }
 
 type AttemptOutcome =
@@ -514,7 +521,7 @@ const attemptRedeem = async (ctx: RefreshContext, attempt: number): Promise<Atte
     ...eventBase,
     eventType: TOKEN_EVENT_TYPE.refreshAttempt,
   });
-  ctx.firstAttemptKey = ctx.firstAttemptKey ?? attemptKey;
+  ctx.lastAttemptKey = attemptKey;
 
   const startedAt = Date.now();
   let response: SalesforceTokenResponse;
@@ -733,10 +740,10 @@ const handleFailure = async (
   }
 
   // Only an EXPIRE is worth the extra lookup; it reads events written before
-  // this refresh's own first attempt.
+  // the attempt that just failed.
   const kind =
     classified.kind === TOKEN_ERROR_KIND.expire &&
-    (await previousRotationMayBeLost(ctx.user.userId, ctx.firstAttemptKey))
+    (await previousRotationMayBeLost(ctx.user.userId, ctx.lastAttemptKey))
       ? TOKEN_ERROR_KIND.expireUnconfirmed
       : classified.kind;
   const terminal = terminalChange(kind, lastError)!;
