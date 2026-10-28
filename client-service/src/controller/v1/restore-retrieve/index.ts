@@ -32,7 +32,6 @@ import {
   validateSoqlQuery,
   getBackupConfigById,
   runMetadataComparisonForConfig,
-  getMetadataChangeOperations,
   triggerBackupJob,
   getRestoreJobById,
   updateRestoreJob,
@@ -42,8 +41,9 @@ import {
   getCrmById,
   hasMetadataChanged,
   updateRestore,
+  getTableCounter,
 } from '../../../services';
-import { STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS } from '../../../constant';
+import { STATUS, VISIBILITY_STATUS, JOB_OBJECT_STATUS, RESTORE_TABLE } from '../../../constant';
 import { logger } from '../../../middlewares';
 import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
@@ -1186,9 +1186,12 @@ const listRestoresHandler = async (req: IRequest, res: IResponse): Promise<void>
   );
 
   const { documents, nextCursor } = result;
+  const counter = await getTableCounter(RESTORE_TABLE, userId);
   makeResponse(req, res, 200, true, 'fetch', documents, {
     limit: limitNum,
     nextCursor,
+    totalRecords: counter?.count ?? 0,
+    totalPages: Math.ceil((counter?.count ?? 0) / limitNum),
   });
 };
 

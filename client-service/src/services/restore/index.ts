@@ -12,6 +12,7 @@ import {
   IScheduleConfig,
 } from '../../models';
 import { decodeCursor, encodeCursor } from '../../utils/cursor';
+import { incrementTableCounter } from '../counter';
 
 interface CreateRestoreParams {
   restoreId?: string;
@@ -59,6 +60,7 @@ const createRestore = async (params: CreateRestoreParams): Promise<IRestore> => 
   };
 
   await docClient.send(new PutCommand({ TableName: RESTORE_TABLE, Item: item }));
+  await incrementTableCounter(RESTORE_TABLE, userId);
   return item;
 };
 
