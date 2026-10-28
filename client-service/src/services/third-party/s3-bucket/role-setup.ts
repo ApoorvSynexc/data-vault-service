@@ -1,5 +1,4 @@
 import { DATACRAFT_AWS_ACCOUNT_ID, S3_ROLE_SESSION_SECONDS } from '../../../constant';
-import { getAthenaBucketPolicyStatement } from '../athena';
 import { createExternalId } from './credentials';
 
 // Everything the "Connect to AWS" screen shows a customer so they can create their IAM role:
@@ -23,6 +22,93 @@ const isValidKmsKeyArn = (arn: string | undefined): boolean => !!arn && KMS_KEY_
 // The setup guide is useless until DataCraft's own AWS account number is configured.
 const isRoleSetupConfigured = (): boolean => /^\d{12}$/.test(DATACRAFT_AWS_ACCOUNT_ID);
 
+const buildCloudFormationTemplate = (params: {
+  dataCraftAccountId: string;
+  externalId: string;
+  bucketName: string;
+  folderPath?: string;
+  maxSessionSeconds: number;
+}): string => {
+  const folder = params.folderPath ? params.folderPath.replace(/^\/+|\/+$/g, '') : '';
+  return `AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  DataCraft S3 access role for keyless destination connect.
+  Customer deploys this in their AWS account. DataCraft assumes the role
+  with ExternalId — no IAM user access keys required.
+
+Parameters:
+  DataCraftAwsAccountId:
+    Type: String
+    Default: '${params.dataCraftAccountId}'
+  ExternalId:
+    Type: String
+    Default: '${params.externalId}'
+  BucketName:
+    Type: String
+    Default: '${params.bucketName}'
+  RoleName:
+    Type: String
+    Default: DataCraftS3AccessRole
+  MaxSessionDurationSeconds:
+    Type: Number
+    Default: ${params.maxSessionSeconds}
+  FolderPrefix:
+    Type: String
+    Default: '${folder}'
+
+Conditions:
+  HasFolderPrefix: !Not [!Equals [!Ref FolderPrefix, '']]
+
+Resources:
+  DataCraftS3AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      MaxSessionDuration: !Ref MaxSessionDurationSeconds
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::\${DataCraftAwsAccountId}:root'
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Policies:
+        - PolicyName: DataCraftS3BucketAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DataCraftBucketAccess
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketPolicy
+                  - s3:GetEncryptionConfiguration
+                  - s3:ListBucketMultipartUploads
+                Resource: !Sub 'arn:aws:s3:::\${BucketName}'
+              - Sid: DataCraftObjectAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !If
+                  - HasFolderPrefix
+                  - !Sub 'arn:aws:s3:::\${BucketName}/\${FolderPrefix}*'
+                  - !Sub 'arn:aws:s3:::\${BucketName}/*'
+
+Outputs:
+  RoleArn:
+    Description: Paste this Role ARN into DataCraft Connect to AWS
+    Value: !GetAtt DataCraftS3AccessRole.Arn
+`;
+};
+
 const buildRoleSetup = ({ userId, bucketName, folderPath, kmsKeyArn }: IRoleSetupInput) => {
   const externalId = createExternalId(userId);
   const bucketArn = `arn:aws:s3:::${bucketName}`;
@@ -41,24 +127,34 @@ const buildRoleSetup = ({ userId, bucketName, folderPath, kmsKeyArn }: IRoleSetu
     ],
   };
 
-  // What the role may do: only this bucket. s3:GetBucketPolicy lets DataCraft verify the Athena
-  // statement; it cannot change the policy.
+  // What the role may do: only this bucket.
   const permissionsPolicy = {
     Version: '2012-10-17',
     Statement: [
       {
         Sid: 'DataCraftBucketAccess',
         Effect: 'Allow',
-        Action: ['s3:ListBucket', 's3:GetBucketLocation', 's3:GetBucketPolicy', 's3:GetEncryptionConfiguration', 's3:ListBucketMultipartUploads'],
+        Action: [
+          's3:ListBucket',
+          's3:GetBucketLocation',
+          's3:GetBucketPolicy',
+          's3:GetEncryptionConfiguration',
+          's3:ListBucketMultipartUploads',
+        ],
         Resource: bucketArn,
       },
       {
         Sid: 'DataCraftObjectAccess',
         Effect: 'Allow',
-        Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload', 's3:ListMultipartUploadParts'],
+        Action: [
+          's3:GetObject',
+          's3:PutObject',
+          's3:DeleteObject',
+          's3:AbortMultipartUpload',
+          's3:ListMultipartUploadParts',
+        ],
         Resource: `${bucketArn}/${prefix}*`,
       },
-      // Added only when the customer gave us their own KMS key, so the one policy they copy is complete.
       ...(kmsKeyArn
         ? [
             {
@@ -72,27 +168,31 @@ const buildRoleSetup = ({ userId, bucketName, folderPath, kmsKeyArn }: IRoleSetu
     ],
   };
 
-  // Only needed when the bucket is encrypted with the customer's own KMS key (CMK).
-  // The same role must ALSO be allowed in that key's own key policy.
-  // const kmsStatementTemplate = {
-  //   Sid: 'DataCraftKmsAccess',
-  //   Effect: 'Allow',
-  //   Action: ['kms:Encrypt', 'kms:Decrypt', 'kms:GenerateDataKey', 'kms:DescribeKey'],
-  //   Resource: '<YOUR_KMS_KEY_ARN>',
-  // };
+  const maxSessionSeconds = Math.max(3600, Math.min(43200, S3_ROLE_SESSION_SECONDS || 3600));
 
   return {
     dataCraftAccountId: DATACRAFT_AWS_ACCOUNT_ID,
     externalId,
-    // The customer must set the role's "Maximum session duration" to at least this many hours
-    // (AWS defaults it to 1). Otherwise AWS refuses our request for a long pass.
-    requiredMaxSessionHours: Math.ceil(S3_ROLE_SESSION_SECONDS / 3600),
+    // Informational only — UI no longer instructs customers to raise session duration above 1 hour.
+    requiredMaxSessionHours: Math.ceil(maxSessionSeconds / 3600),
     trustPolicy,
     permissionsPolicy,
-    // kmsStatementTemplate,
     usesCustomerKmsKey: Boolean(kmsKeyArn),
-    // Pasted by the customer into their bucket policy so Athena can search their backups.
-    athenaBucketPolicyStatement: getAthenaBucketPolicyStatement(bucketName),
+    cloudFormationTemplate: buildCloudFormationTemplate({
+      dataCraftAccountId: DATACRAFT_AWS_ACCOUNT_ID,
+      externalId,
+      bucketName,
+      folderPath,
+      maxSessionSeconds,
+    }),
+    cloudFormationParameters: {
+      DataCraftAwsAccountId: DATACRAFT_AWS_ACCOUNT_ID,
+      ExternalId: externalId,
+      BucketName: bucketName,
+      RoleName: 'DataCraftS3AccessRole',
+      MaxSessionDurationSeconds: maxSessionSeconds,
+      ...(folderPath ? { FolderPrefix: folderPath.replace(/^\/+|\/+$/g, '') } : {}),
+    },
   };
 };
 

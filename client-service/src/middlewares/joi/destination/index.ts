@@ -62,30 +62,51 @@ const testConnection = async (config: any, userId: string | undefined): Promise<
   }
 };
 
+const destinationBodySchema = Joi.object({
+  name: Joi.string().required(),
+  provider: Joi.string()
+    .valid(...Object.values(CLOUD_PROVIDER))
+    .required(),
+  type: Joi.when('provider', {
+    is: CLOUD_PROVIDER.aws,
+    then: Joi.string().valid(DESTINATION_TYPE.s3).required(),
+    otherwise: Joi.string().required(),
+  }),
+  config: Joi.when('provider', {
+    is: CLOUD_PROVIDER.aws,
+    then: createS3ConfigSchema.required(),
+    otherwise: Joi.object().required(),
+  }),
+  is_already_granted: Joi.boolean().optional(),
+});
+
+// Schema + role-shape checks only (no live AWS calls). Used by staged test-connection.
+export const testConnectionValidation = async (req: Request, res: Response, next: NextFunction) => {
+  const { error } = destinationBodySchema.validate(req.body, { abortEarly: false });
+  if (error) {
+    makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
+    return;
+  }
+
+  if (req.body.provider === CLOUD_PROVIDER.aws) {
+    const userId = (req as any).user?.userId;
+    const roleError = checkRoleConfig(req.body.config, userId);
+    if (roleError) {
+      logger.warn(`[destination] role config rejected | reason:${roleError} userId:${userId} bucket:${req.body.config?.bucketName}`);
+      makeResponse(req, res, 400, false, roleError as any);
+      return;
+    }
+  }
+
+  next();
+};
+
 export const createDestinationValidation = async (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
-  const schema = Joi.object({
-    name: Joi.string().required(),
-    provider: Joi.string()
-      .valid(...Object.values(CLOUD_PROVIDER))
-      .required(),
-    type: Joi.when('provider', {
-      is: CLOUD_PROVIDER.aws,
-      then: Joi.string().valid(DESTINATION_TYPE.s3).required(),
-      otherwise: Joi.string().required(),
-    }),
-    config: Joi.when('provider', {
-      is: CLOUD_PROVIDER.aws,
-      then: createS3ConfigSchema.required(),
-      otherwise: Joi.object().required(),
-    }),
-    is_already_granted: Joi.boolean().optional(),
-  });
-
-  const { error } = schema.validate(req.body, { abortEarly: false });
+  const { error } = destinationBodySchema.validate(req.body, { abortEarly: false });
   if (error) {
     makeResponse(req, res, 400, false, error.details.map((d) => d.message).join(', ') as any);
     return;

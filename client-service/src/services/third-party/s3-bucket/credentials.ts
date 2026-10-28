@@ -10,8 +10,8 @@ import { logger } from '../../../middlewares/logger';
 //
 //  ACCESS_KEYS (legacy): the customer's own access key + secret are stored. We just use them.
 //  ASSUME_ROLE         : the customer's AWS account trusts ours. We ask AWS (STS) for a temporary
-//                        pass (up to 12 hours) for their role, and use that. Nothing secret of the
-//                        customer's is ever stored.
+//                        pass (default 1 hour under role chaining) for their role, and renew it
+//                        before expiry. Nothing secret of the customer's is ever stored.
 //
 // Everything that needs S3 credentials should come through this file.
 // ---------------------------------------------------------------------------
@@ -22,7 +22,8 @@ const ROLE_SESSION_NAME = 'datacraft-s3';
 const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000;
 // A Spark job cannot renew its pass, so it must start with a pass that outlives the job. A cached
 // pass with less than this left is replaced by a fresh one before it is handed to Spark.
-const SPARK_MIN_REMAINING_MS = 2 * 60 * 60 * 1000;
+// Prefer a pass that outlives short Spark steps; under role chaining AWS still caps at 1 hour.
+const SPARK_MIN_REMAINING_MS = 50 * 60 * 1000;
 
 const isRoleAuth = (config: Pick<IS3Config, 'authType'>): boolean => config.authType === 'ASSUME_ROLE';
 

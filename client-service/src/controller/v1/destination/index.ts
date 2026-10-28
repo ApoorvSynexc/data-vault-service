@@ -12,6 +12,12 @@ import { grantAthenaRoleS3Access, checkAthenaRoleS3Access } from '../../../servi
 import { logger } from '../../../middlewares';
 import { IS3Config } from '../../../models';
 import { buildRoleSetup, isRoleSetupConfigured } from '../../../services/third-party/s3-bucket/role-setup';
+import {
+  resolveBucketRegion,
+  runStagedRoleConnectionTest,
+  validateS3Credentials,
+} from '../../../services/third-party/s3-bucket';
+
 
 const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { name, provider, type, config, is_already_granted } = req.body;
@@ -72,7 +78,7 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
 
 // GET /destination/role-setup?bucketName=...&folderPath=...
 // Gives the setup guide everything to show: DataCraft's account, a fresh External ID, and the
-// policies to paste into the customer's AWS console.
+// policies / CloudFormation template to use in the customer's AWS account.
 const getRoleSetupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const bucketName = String(req.query.bucketName ?? '').trim();
   const folderPath = req.query.folderPath ? String(req.query.folderPath) : undefined;
@@ -90,11 +96,66 @@ const getRoleSetupHandler = async (req: IRequest, res: IResponse): Promise<void>
   makeResponse(req, res, 200, true, 'fetch', buildRoleSetup({ userId: req.user!.userId, bucketName, folderPath }));
 };
 
+// GET /destination/resolve-bucket-region?bucketName=...&region=...
+const resolveBucketRegionHandler = async (req: IRequest, res: IResponse): Promise<void> => {
+  const bucketName = String(req.query.bucketName ?? '').trim();
+  const claimedRegion = req.query.region ? String(req.query.region).trim() : undefined;
+
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucketName)) {
+    makeResponse(req, res, 400, false, 'invalid_bucket_name');
+    return;
+  }
+
+  try {
+    const result = await resolveBucketRegion(bucketName, claimedRegion);
+    makeResponse(req, res, 200, true, 'fetch', result);
+  } catch (err) {
+    logger.warn(
+      `[destination] bucket region resolve failed | bucket:${bucketName} claimed:${claimedRegion ?? '-'} err:${(err as Error)?.message}`
+    );
+    makeResponse(req, res, 400, false, 'bucket_region_unresolved');
+  }
+};
+
 // POST /destination/test-connection  (same body as create)
-// The create validation middleware already tries the role (or keys) against the bucket, so by the
-// time this runs the connection works. Nothing is saved.
+// Runs assume-role → bucket → write → read checks in order; nothing is saved.
 const testConnectionHandler = async (req: IRequest, res: IResponse): Promise<void> => {
-  makeResponse(req, res, 200, true, 'fetch', { connected: true });
+  const userId = req.user!.userId;
+  const config = req.body.config as IS3Config;
+
+  if (config?.authType === 'ASSUME_ROLE') {
+    const result = await runStagedRoleConnectionTest(config, userId);
+    if (!result.connected) {
+      makeResponse(
+        req,
+        res,
+        400,
+        false,
+        (result.failureReason || 'connection_test_failed') as any,
+        result
+      );
+      return;
+    }
+    makeResponse(req, res, 200, true, 'fetch', result);
+    return;
+  }
+
+  // Legacy access-key destinations: single validate, no staged UI.
+  try {
+    await validateS3Credentials(config);
+    makeResponse(req, res, 200, true, 'fetch', {
+      connected: true,
+      checks: [
+        { id: 'assume_role', status: 'skipped' },
+        { id: 'bucket_access', status: 'passed' },
+        { id: 'write_object', status: 'skipped' },
+        { id: 'read_object', status: 'skipped' },
+      ],
+    });
+  } catch {
+    logger.warn(`[destination] key connection failed | userId:${userId} bucket:${config?.bucketName}`);
+    makeResponse(req, res, 400, false, 'invalid_aws_credentials');
+  }
 };
 
 const listDestinationsHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -216,6 +277,7 @@ const deleteDestinationHandler = async (req: IRequest, res: IResponse): Promise<
 
 export const destinationController = wrapController({
   getRoleSetupHandler,
+  resolveBucketRegionHandler,
   testConnectionHandler,
   createDestinationHandler,
   listDestinationsHandler,

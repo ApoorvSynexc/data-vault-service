@@ -20,6 +20,11 @@ const destinationPermissions = [
         permissions: ['destinationConnection.write']
     },
     {
+        path: '/destination/resolve-bucket-region',
+        method: 'GET',
+        permissions: ['destinationConnection.write']
+    },
+    {
         path: '/destination/test-connection',
         method: 'POST',
         permissions: ['destinationConnection.write']

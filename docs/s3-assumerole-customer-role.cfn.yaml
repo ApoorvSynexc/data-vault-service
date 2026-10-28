@@ -21,10 +21,10 @@ Parameters:
     Default: DataCraftS3AccessRole
   MaxSessionDurationSeconds:
     Type: Number
-    Default: 43200
+    Default: 3600
     MinValue: 3600
     MaxValue: 43200
-    Description: Must be >= DataCraft required session (default 12 hours)
+    Description: AWS default 1 hour is enough; DataCraft renews the session before it expires
   FolderPrefix:
     Type: String
     Default: ''

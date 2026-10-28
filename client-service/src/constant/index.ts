@@ -175,15 +175,16 @@ const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
 // S3 destinations that use a customer IAM role (no stored access keys).
 // DATACRAFT_AWS_ACCOUNT_ID    : the AWS account the customer's role must trust. Shown in the setup guide.
-// S3_ROLE_SESSION_SECONDS     : how long each temporary pass lasts. 43200 = 12 hours, the AWS maximum.
-//                               The customer must set their role's "Maximum session duration" to 12 hours,
-//                               otherwise AWS refuses the request.
+// S3_ROLE_SESSION_SECONDS     : how long each temporary STS pass lasts. Default 3600 (1 hour) because
+//                               EC2/ECS callers are already on an assumed role (role chaining caps
+//                               DurationSeconds at 1 hour). The S3 client refreshes the pass before expiry,
+//                               so long backups are not limited by this window.
 // EXTERNAL_ID_SECRET          : every External ID we hand out is derived from it, so an ID can only be used by
 //                               the user it was issued to. Each user always gets the same ID, so changing
 //                               this secret invalidates every role connection. Set it explicitly and keep it
 //                               stable; it falls back to ENCRYPTION_KEY if not set.
 const DATACRAFT_AWS_ACCOUNT_ID = String(process.env.DATACRAFT_AWS_ACCOUNT_ID || '').trim();
-const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS || 43200);
+const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS || 3600);
 const EXTERNAL_ID_SECRET = String(process.env.EXTERNAL_ID_SECRET || ENCRYPTION_KEY);
 
 // Bootstrap-layer key for the Salesforce org-registration handshake only —
