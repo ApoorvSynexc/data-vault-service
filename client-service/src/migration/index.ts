@@ -6,13 +6,14 @@ import { runCreateRole } from './create-role';
 import { runCreateAdmin } from './create-admin';
 import { runBackfillCrmOrganizationId } from './backfill-crm-organizationid';
 import { deleteUserTrigger } from './delete-apex-trigger';
+import { runBackfillRestoreCounter } from './backfill-restore-counter';
 
 const [, , command] = process.argv;
 
 const run = async (): Promise<void> => {
   if (!command) {
     console.error('Usage: node dist/migration/index.js <COMMAND>');
-    console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, BACKFILL_CRM_ORGANIZATIONID, DELETE_TRIGGER');
+    console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, BACKFILL_CRM_ORGANIZATIONID, DELETE_TRIGGER, BACKFILL_RESTORE_COUNTER');
     process.exit(1);
   }
 
@@ -35,9 +36,13 @@ const run = async (): Promise<void> => {
       await deleteUserTrigger();
       break;
     }
+    case 'BACKFILL_RESTORE_COUNTER': {
+      await runBackfillRestoreCounter();
+      break;
+    }
     default:
       console.error(`Unknown migration command: ${command}`);
-      console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, BACKFILL_CRM_ORGANIZATIONID, DELETE_TRIGGER');
+      console.error('Available commands: CREATE_ROLE, CREATE_ADMIN, BACKFILL_CRM_ORGANIZATIONID, DELETE_TRIGGER, BACKFILL_RESTORE_COUNTER');
       process.exit(1);
   }
 
