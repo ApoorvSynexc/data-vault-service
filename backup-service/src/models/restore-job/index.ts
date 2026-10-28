@@ -52,13 +52,16 @@ export interface IRestoreObjectHierarchyTreeNode {
 export interface IRestoreJobDestination {
   crmId: string;
   crmName: string;
+  // DataCraft user whose Salesforce credential the restore writes with —
+  // token refreshes go to this user. Missing on jobs created before RTR.
+  userId?: string;
   objects: IRestoreJobObject[];
 
   instanceUrl: string;
   encryptedTokens:
     | {
         access_token: string;
-        refresh_token: string;
+        refresh_token?: string; // no longer sent — kept for jobs created before RTR
       }
     | EncryptedPayload;
 }
@@ -76,6 +79,9 @@ export interface IRestoreJob {
   objectHierarchy?: IRestoreObjectHierarchyNode[];
   hierarchy?: IRestoreObjectHierarchyTreeNode[];
   status: string; // PENDING | SUCCESS | FAILED | PARTIAL_FAILURE | CANCELLED
+  errorReason?: string; // e.g. SALESFORCE_TOKEN_WAITING — see TOKEN_GATE_CLOSE_REASON
+  heartbeatAt?: string; // runner liveness ping
+  stoppedRunType?: 'RESTORE' | 'ROLLBACK'; // which run a token stop interrupted
   startedAt?: string;
   // Concurrency lock: set when a runner claims this job (conditional write —
   // fails if already present), cleared on every terminal write. Distinct from

@@ -7,5 +7,7 @@ const router = Router();
 router.get('/', settingsController.getSettingsHandler);
 router.put('/', upsertSettingsValidation, settingsController.upsertSettingsHandler);
 router.delete('/standard-object', settingsController.deleteStandardObjectHandler);
+router.get('/salesforce-connection', settingsController.getSalesforceConnectionHandler);
+router.get('/salesforce-connection/org', settingsController.getOrgSalesforceConnectionsHandler);
 
 export const settingsRouter = router;

@@ -1,13 +1,20 @@
 import { logger } from '../../../../middlewares/logger';
 import { STATUS, JOB_OBJECT_STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
-import { listS3Objects, streamCsvLinesFromS3, uploadToS3 } from '../../../destination/s3';
+import {
+  downloadFromS3,
+  listS3Objects,
+  streamCsvLinesFromS3,
+  uploadToS3,
+} from '../../../destination/s3';
 import { updateRestoreObject } from '../../../restore-job';
 import { SalesforceTokens } from '../api-request';
 import {
   createBulkJob,
   uploadDataToJob,
   closeBulkJob,
+  abortBulkJob,
+  getBulkJobStatus,
   pollBulkJobUntilDone,
   getFailedResults,
   getSuccessfulResults,
@@ -28,8 +35,9 @@ interface RunSalesforceRestorePayload {
   };
   destinationSalesforceCredentials: {
     access_token: string;
-    refresh_token: string;
+    refresh_token?: string;
     instanceUrl: string;
+    userId?: string;
   };
   conflict: IRestoreConflict;
 }
@@ -120,6 +128,84 @@ const extractSuccessfulIdsCsv = (successfulCsv: string): string => {
   return ['Id', ...ids].join('\n');
 };
 
+// ---------------------------------------------------------------------------
+// Chunk checkpoints — make a restore safe to resume (design doc §10.5).
+//
+// Chunks are deterministic: the same sorted S3 keys split at the same byte
+// limit always yield the same chunk N. Each chunk's ingest job is recorded in
+// S3 next to the restore's CSVs:
+//   CREATED — job created; it may or may not have processed rows yet
+//   DONE    — job reached a terminal state; counts already recorded
+// On a re-run a DONE chunk is skipped, and a CREATED one is reconciled
+// against Salesforce instead of being resubmitted, so a resumed insert can
+// never create the same records twice.
+// ---------------------------------------------------------------------------
+
+interface ChunkCheckpoint {
+  jobId: string;
+  phase: 'CREATED' | 'DONE';
+  state?: BulkJobState;
+  processed?: number;
+  failed?: number;
+  errors?: string[];
+}
+
+// Own root, outside every data prefix restoreObjectData lists — a checkpoint
+// must never be read back as a CSV data file.
+const chunkCheckpointKey = (
+  restoreJobId: string,
+  type: 'RESTORE' | 'ROLLBACK',
+  objectName: string,
+  operation: string,
+  chunkIndex: number
+) =>
+  `checkpoints/restore-jobs/${restoreJobId}/${type.toLowerCase()}/${objectName}/${operation}/chunk-${String(chunkIndex).padStart(5, '0')}.json`;
+
+const readChunkCheckpoint = async (
+  s3Config: IDestinationConfig,
+  key: string
+): Promise<ChunkCheckpoint | null> => {
+  const body = await downloadFromS3(s3Config, key);
+  return body ? (JSON.parse(body.toString('utf8')) as ChunkCheckpoint) : null;
+};
+
+const writeChunkCheckpoint = (
+  s3Config: IDestinationConfig,
+  key: string,
+  checkpoint: ChunkCheckpoint
+) => uploadToS3(s3Config, key, Buffer.from(JSON.stringify(checkpoint), 'utf8'));
+
+const isNotFound = (error: any) => String(error?.message ?? '').startsWith('HTTP Error 404');
+
+// For a chunk whose job was created in an earlier run: returns the job id to
+// keep polling, or null when the chunk must be resubmitted (the job never got
+// past Open, so nothing was processed). Throws when the job can no longer be
+// checked — resubmitting blindly could duplicate records.
+const reconcileCreatedChunk = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  checkpoint: ChunkCheckpoint
+): Promise<string | null> => {
+  let state: BulkJobState;
+  try {
+    state = (await getBulkJobStatus(instanceUrl, tokens, checkpoint.jobId)).state;
+  } catch (error) {
+    if (isNotFound(error)) {
+      throw new Error(
+        `Ingest job ${checkpoint.jobId} from an earlier run no longer exists in Salesforce; stopped to avoid duplicating records. Verify the data and start a new restore.`,
+        { cause: error }
+      );
+    }
+    throw error;
+  }
+
+  if (state === 'Open') {
+    await abortBulkJob(instanceUrl, tokens, checkpoint.jobId);
+    return null;
+  }
+  return state === 'Aborted' ? null : checkpoint.jobId;
+};
+
 // Submits one closed Bulk API 2.0 ingest job for a single ≤MAX_CHUNK_BYTES CSV chunk.
 const submitIngestChunk = async (
   instanceUrl: string,
@@ -130,25 +216,49 @@ const submitIngestChunk = async (
   chunk: CsvChunk,
   s3Config: IDestinationConfig,
   successfulResultsPath: string,
-  type: 'RESTORE' | 'ROLLBACK'
+  type: 'RESTORE' | 'ROLLBACK',
+  checkpointKey: string
 ): Promise<{
   processed: number;
   failed: number;
   jobId: string;
   errors: string[];
   status: BulkJobState;
+  // Already DONE in an earlier run — its counts were recorded then.
+  skipped: boolean;
 }> => {
-  const csvBody = [chunk.header, ...chunk.rows].join('\n');
-  const job = await createBulkJob({
-    instanceUrl,
-    tokens,
-    objectName,
-    operation,
-    externalIdFieldName,
-  });
-  await uploadDataToJob(instanceUrl, tokens, job.id, csvBody);
-  await closeBulkJob(instanceUrl, tokens, job.id);
-  const status = await pollBulkJobUntilDone(instanceUrl, tokens, job.id);
+  const existing = await readChunkCheckpoint(s3Config, checkpointKey);
+  if (existing?.phase === 'DONE') {
+    return {
+      jobId: existing.jobId,
+      processed: existing.processed ?? 0,
+      failed: existing.failed ?? 0,
+      errors: existing.errors ?? [],
+      status: existing.state ?? 'JobComplete',
+      skipped: true,
+    };
+  }
+
+  let jobId = existing ? await reconcileCreatedChunk(instanceUrl, tokens, existing) : null;
+  if (jobId) {
+    logger.info(
+      `[Restore] Resuming ingest job ${jobId} for object ${objectName} from an earlier run`
+    );
+  } else {
+    const csvBody = [chunk.header, ...chunk.rows].join('\n');
+    const created = await createBulkJob({
+      instanceUrl,
+      tokens,
+      objectName,
+      operation,
+      externalIdFieldName,
+    });
+    jobId = created.id;
+    await writeChunkCheckpoint(s3Config, checkpointKey, { jobId, phase: 'CREATED' });
+    await uploadDataToJob(instanceUrl, tokens, jobId, csvBody);
+    await closeBulkJob(instanceUrl, tokens, jobId);
+  }
+  const status = await pollBulkJobUntilDone(instanceUrl, tokens, jobId);
 
   logger.info(
     `[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({ status: status })}`
@@ -158,7 +268,7 @@ const submitIngestChunk = async (
 
   let errors: string[] = [];
   if (failed > 0 || status.state === 'Failed' || status.state === 'Aborted') {
-    const failedCsv = await getFailedResults(instanceUrl, tokens, job.id);
+    const failedCsv = await getFailedResults(instanceUrl, tokens, jobId);
     errors = parseFirstNErrors(failedCsv, MAX_STORED_ERRORS_COUNT);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
@@ -167,21 +277,31 @@ const submitIngestChunk = async (
   // captured), so it can't safely produce a rollback artifact — revisit if
   // update rollback becomes a real requirement.
   if (type === 'RESTORE' && operation === 'insert' && processed - failed > 0) {
-    const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, job.id);
+    const successfulCsv = await getSuccessfulResults(instanceUrl, tokens, jobId);
     const idsOnlyCsv = extractSuccessfulIdsCsv(successfulCsv);
     await uploadToS3(
       s3Config,
-      `${successfulResultsPath}/${job.id}.csv`,
+      `${successfulResultsPath}/${jobId}.csv`,
       Buffer.from(idsOnlyCsv, 'utf8')
     );
   }
 
+  await writeChunkCheckpoint(s3Config, checkpointKey, {
+    jobId: jobId,
+    phase: 'DONE',
+    state: status.state,
+    processed,
+    failed,
+    errors,
+  });
+
   return {
-    jobId: job.id,
+    jobId: jobId,
     processed,
     status: status.state,
     failed,
     errors,
+    skipped: false,
   };
 };
 
@@ -237,6 +357,8 @@ const restoreObjectData = async (
   // upsert which pass the CSV through unchanged.
   let idColumnIndex = -1;
 
+  let chunkIndex = 0;
+
   const flushChunk = async () => {
     if (!chunk || !chunk.rows.length) {
       return;
@@ -250,29 +372,34 @@ const restoreObjectData = async (
       chunk,
       s3Config,
       successfulResultsPath,
-      type
+      type,
+      chunkCheckpointKey(restoreJobId, type, objectName, operation, chunkIndex++)
     );
     submittedJobIds.push(job.jobId);
+    if (job.skipped) {
+      logger.info(
+        `[Restore] Skipping chunk already ingested in an earlier run, object ${objectName}, jobId=${job.jobId}`
+      );
+      chunk = newChunk(header!);
+      return;
+    }
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
     // chunk rather than once at the very end of the object.
-    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed || job.errors.length;
+    const jobFailed =
+      job.status === 'Failed' || job.status === 'Aborted' || job.failed || job.errors.length;
     await updateRestoreObject({
       restoreJobId,
       objectName,
-      ...(
-        type === 'RESTORE'
-          ?
-          {
+      ...(type === 'RESTORE'
+        ? {
             processedRecordCount: job.processed,
             failedRecordCount: job.failed,
           }
-          :
-          {
+        : {
             rollbackProcessedRecordCount: job.processed,
             rollbackFailedRecordCount: job.failed,
-          }
-      ),
+          }),
 
       status: jobFailed
         ? type === 'RESTORE'
@@ -390,7 +517,12 @@ export const runSalesforceRestore = async (
     accessToken: destinationSalesforceCredentials.access_token,
     refreshToken: destinationSalesforceCredentials.refresh_token,
     crmId: '', // not carried on this payload — unused by the plain-fetch calls below
-    backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
+    backupConfigId: sourceS3Credentials.backupConfigId,
+    // Refreshes go to the destination org's user; the gate is shared by every
+    // object in this restore job.
+    userId: destinationSalesforceCredentials.userId,
+    jobId: restoreJobId,
+    jobType: 'RESTORE',
   };
 
   for (const operation of ['insert', 'update'] as const) {
@@ -436,7 +568,10 @@ export const runSalesforceRollback = async (
     accessToken: destinationSalesforceCredentials.access_token,
     refreshToken: destinationSalesforceCredentials.refresh_token,
     crmId: '', // not carried on this payload — unused by the plain-fetch calls below
-    backupConfigId: sourceS3Credentials.backupConfigId, // placeholder — no refresh path scoped to restores yet
+    backupConfigId: sourceS3Credentials.backupConfigId,
+    userId: destinationSalesforceCredentials.userId,
+    jobId: restoreJobId,
+    jobType: 'ROLLBACK',
   };
 
   const path = `${sourceS3Credentials.csvFilePath}/rollback/${object.name}`;

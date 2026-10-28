@@ -47,7 +47,8 @@ const objectSchema = Joi.object({
 
 const sourceSchema = Joi.object({
   access_token: Joi.string().required(),
-  refresh_token: Joi.string().required(),
+  // No longer sent by client-service (RTR) — accepted for older callers.
+  refresh_token: Joi.string().optional(),
   instanceUrl: Joi.string().uri().required(),
   crmName: Joi.string().required(),
   crmId: Joi.string().required(),

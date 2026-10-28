@@ -55,16 +55,21 @@ export interface IRestoreObjectHierarchyTreeNode {
 export interface IRestoreJobDestination {
   crmId: string;
   crmName: string;
+  // DataCraft user whose Salesforce credential the restore writes with —
+  // backup-service refreshes this user's token mid-restore.
+  userId?: string;
   objects: IRestoreJobObject[];
 
   instanceUrl: string;
   encryptedTokens: {
     access_token: string;
-    refresh_token: string;
+    refresh_token?: string; // no longer sent — kept for jobs created before RTR
   } | EncryptedPayload;
 }
 
 export interface IRestoreJob {
+  errorReason?: string; // set by backup-service when a run stops on the Salesforce token
+  stoppedRunType?: 'RESTORE' | 'ROLLBACK';
   restoreJobId: string; // PK
   restoreId: string; // GSI: restoreId-index — parent restore request this job belongs to
   userId: string; // GSI: userId-index

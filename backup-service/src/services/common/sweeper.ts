@@ -4,7 +4,12 @@ import { IBackupJob } from '../../models';
 import { updateBackupConfig } from '../backup-config';
 import { getStaleRunningJobs, updateBackupObject, updateJobStatus } from '../backup-job';
 
-const STALE_THRESHOLD_MINUTES = 360;
+// Running jobs ping heartbeatAt (and so updatedAt) every minute — see
+// startHeartbeat in runner.ts — so 30 quiet minutes means the runner is gone.
+const STALE_THRESHOLD_MINUTES = 30;
+// Jobs without a heartbeat (started by a task on older code, e.g. during a
+// rolling deploy) keep the old, generous threshold.
+const LEGACY_STALE_THRESHOLD_MINUTES = 360;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 const STUCK_STATUSES = new Set([
@@ -53,7 +58,7 @@ const processStaleJobPage = async (jobs: IBackupJob[]): Promise<void> => {
 const sweepStaleJobs = async (): Promise<void> => {
   logger.info('Stale job sweeper: started...');
   try {
-    await getStaleRunningJobs(STALE_THRESHOLD_MINUTES, processStaleJobPage);
+    await getStaleRunningJobs(STALE_THRESHOLD_MINUTES, LEGACY_STALE_THRESHOLD_MINUTES, processStaleJobPage);
   } catch (err: any) {
     logger.error(`Stale job sweeper error: ${err?.message}`);
   }
