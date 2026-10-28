@@ -12,6 +12,7 @@ import {
   IScheduleConfig,
 } from '../../models';
 import { decodeCursor, encodeCursor } from '../../utils/cursor';
+import { incrementTableCounter } from '../counter';
 
 interface CreateRestoreParams {
   restoreId?: string;
@@ -59,6 +60,7 @@ const createRestore = async (params: CreateRestoreParams): Promise<IRestore> => 
   };
 
   await docClient.send(new PutCommand({ TableName: RESTORE_TABLE, Item: item }));
+  await incrementTableCounter(RESTORE_TABLE, userId);
   return item;
 };
 
@@ -124,6 +126,40 @@ const getRestoreById = async (restoreId: string): Promise<IRestore | null> => {
     })
   );
   return (result.Item as IRestore) ?? null;
+};
+
+// Global search (dashboard) — matches by restoreId or jobDetail.name, scoped
+// to the requesting user via a Query on userId-index (not a table Scan) so
+// this only ever reads that user's own items; id/name matching still happens
+// client-side since it isn't expressible as a single key condition.
+const searchRestores = async (userId: string, term: string, limit: number = 20): Promise<IRestore[]> => {
+  const termLower = term.toLowerCase();
+  const matches: IRestore[] = [];
+  let lastEvaluatedKey: Record<string, any> | undefined;
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: RESTORE_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }),
+      })
+    );
+
+    const items = (result.Items as IRestore[] | undefined) ?? [];
+    matches.push(
+      ...items.filter(
+        (item) =>
+          item.restoreId.toLowerCase().includes(termLower) || (item.jobDetail?.name ?? '').toLowerCase().includes(termLower)
+      )
+    );
+
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (matches.length < limit && lastEvaluatedKey);
+
+  return matches.slice(0, limit);
 };
 
 const getRestoresWithPagination = async (
@@ -275,10 +311,11 @@ const getRestoresWithPagination = async (
         ExpressionAttributeValues: expressionAttributeValues,
         ...(filterExpressions.length > 0 && { FilterExpression: filterExpressions.join(' AND ') }),
         Limit: pageLimit,
+        ScanIndexForward: false,
         ...(startKey && { ExclusiveStartKey: startKey }),
       })
     )
   );
 };
 
-export { createRestore, updateRestore, getRestoreById, getRestoresWithPagination };
+export { createRestore, updateRestore, getRestoreById, getRestoresWithPagination, searchRestores };
