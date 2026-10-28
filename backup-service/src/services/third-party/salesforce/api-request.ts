@@ -3,7 +3,7 @@ import { SALESFORCE_BULK_API_VERSION } from '../../../constant';
 import {
   awaitTokenGate,
   onUnauthorized,
-  SalesforceAuthExpiredError,
+  SalesforceTokenUnavailableError,
   SalesforceTokens,
   TOKEN_GATE_CLOSE_REASON,
 } from './token-gate';
@@ -28,7 +28,7 @@ const isUnauthorized = (error: any) => error?.message?.startsWith('HTTP Error 40
 // A 401 on the replay means Salesforce rejects even a freshly issued token —
 // not something another refresh will fix.
 const rejectedAfterRefresh = () =>
-  new SalesforceAuthExpiredError(TOKEN_GATE_CLOSE_REASON.reauthRequired, 'rejected after refresh');
+  new SalesforceTokenUnavailableError(TOKEN_GATE_CLOSE_REASON.reauthRequired, 'rejected after refresh');
 
 const salesforceRequest = async <T = any>(
   options: SalesforceRequestOptions,
@@ -136,6 +136,6 @@ export {
   salesforceFetch,
   makePageFetcher,
   createBulkQueryJob,
-  SalesforceAuthExpiredError,
+  SalesforceTokenUnavailableError,
 };
 export type { SalesforceTokens };

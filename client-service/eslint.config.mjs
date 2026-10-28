@@ -52,6 +52,12 @@ export default defineConfig([
           message:
             'Build Salesforce requests with salesforceRequest/salesforceFetch — never a raw Bearer header (breaks token refresh/rotation).',
         },
+        {
+          // Also catches 'Bearer ' + token and ['Bearer', token].join(' ').
+          selector: 'Literal[value=/^Bearer( |$)/]',
+          message:
+            'Build Salesforce requests with salesforceRequest/salesforceFetch — never a raw Bearer header (breaks token refresh/rotation).',
+        },
       ],
     },
   },

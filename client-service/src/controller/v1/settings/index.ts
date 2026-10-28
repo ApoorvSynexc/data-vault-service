@@ -62,6 +62,10 @@ const getSalesforceConnectionHandler = async (req: IRequest, res: IResponse): Pr
     lastRefreshAt: user.lastRefreshAt,
     refreshCount: user.refreshCount ?? 0,
     expiredAt: user.expiredAt,
+    // Expired but the credential was kept (EXPIRE_UNCONFIRMED): we could not
+    // confirm the token is dead, so the UI words it as "couldn't verify".
+    expiryUnconfirmed:
+      (user.tokenStatus ?? SALESFORCE_TOKEN_STATUS.ready) === SALESFORCE_TOKEN_STATUS.expired && !!user.crmCredential,
     events,
   });
 };

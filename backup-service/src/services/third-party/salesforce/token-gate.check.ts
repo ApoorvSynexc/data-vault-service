@@ -15,7 +15,7 @@ import {
   awaitTokenGate,
   consumeTokenGateClosure,
   onUnauthorized,
-  SalesforceAuthExpiredError,
+  SalesforceTokenUnavailableError,
   SalesforceTokens,
   TOKEN_GATE_CLOSE_REASON,
 } from './token-gate';
@@ -100,18 +100,18 @@ const main = async () => {
   reset([fail(401, 'salesforce_reauth_required')]);
   const closedJob = tokensFor('job-3');
   await assert.rejects(onUnauthorized(closedJob, 'old-token'), (err: unknown) => {
-    assert.ok(err instanceof SalesforceAuthExpiredError);
+    assert.ok(err instanceof SalesforceTokenUnavailableError);
     assert.strictEqual(err.reason, TOKEN_GATE_CLOSE_REASON.reauthRequired);
     return true;
   });
-  await assert.rejects(awaitTokenGate(closedJob), SalesforceAuthExpiredError);
-  await assert.rejects(onUnauthorized(tokensFor('job-3'), 'old-token'), SalesforceAuthExpiredError);
+  await assert.rejects(awaitTokenGate(closedJob), SalesforceTokenUnavailableError);
+  await assert.rejects(onUnauthorized(tokensFor('job-3'), 'old-token'), SalesforceTokenUnavailableError);
   assert.strictEqual(calls.length, 1, 'a closed gate sends no further refresh requests');
 
   // A long durable retry (5 min) closes the gate as "waiting", not "reauth".
   reset([fail(503, 'token_refresh_in_progress', 300)]);
   await assert.rejects(onUnauthorized(tokensFor('job-4'), 'old-token'), (err: unknown) => {
-    assert.ok(err instanceof SalesforceAuthExpiredError);
+    assert.ok(err instanceof SalesforceTokenUnavailableError);
     assert.strictEqual(err.reason, TOKEN_GATE_CLOSE_REASON.waitingToken);
     return true;
   });

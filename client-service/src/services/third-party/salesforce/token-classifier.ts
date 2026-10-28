@@ -17,7 +17,12 @@ const EXPIRE_DESCRIPTIONS = [
   'authentication failure',
   'inactive user',
   "user hasn't approved this consumer",
+  'activation secret',
 ];
+
+// invalid_grant descriptions that mean "try again", not "token is dead" —
+// e.g. Salesforce is still processing a concurrent request for this token.
+const RETRY_GRANT_DESCRIPTIONS = ['already being processed'];
 
 const parseOAuthBody = (body?: string): { error?: string; error_description?: string } => {
   if (!body) {
@@ -56,11 +61,17 @@ const classifyTokenError = (error: unknown): ClassifiedTokenError => {
   if (sfError === 'invalid_client_id' || sfError === 'invalid_client') {
     return { ...base, kind: TOKEN_ERROR_KIND.platform };
   }
+  // unknown_error is retried whatever its description: the default below is
+  // RETRY too, and five failed durable retries still end in
+  // EXPIRE_UNCONFIRMED, so a persistent one cannot retry forever.
   if (sfError === 'unknown_error') {
     return { ...base, kind: TOKEN_ERROR_KIND.retry };
   }
 
   if (sfError === 'invalid_grant') {
+    if (RETRY_GRANT_DESCRIPTIONS.some((d) => description.includes(d))) {
+      return { ...base, kind: TOKEN_ERROR_KIND.retry };
+    }
     if (description.includes('inactive organization')) {
       return { ...base, kind: TOKEN_ERROR_KIND.expireSupport };
     }

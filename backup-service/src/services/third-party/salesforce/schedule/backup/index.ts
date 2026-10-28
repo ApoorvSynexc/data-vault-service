@@ -4,7 +4,7 @@ import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../..
 import { getBackupJob, updateBackupObject } from '../../../../backup-job';
 import { buildS3KeyPrefix, withSystemFields } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
-import { createBulkQueryJob, salesforceRequest, SalesforceAuthExpiredError, SalesforceTokens } from '../../api-request';
+import { createBulkQueryJob, salesforceRequest, SalesforceTokenUnavailableError, SalesforceTokens } from '../../api-request';
 import { SalesforceApiLimitExceededError } from '../../api-limit';
 import { updateBackupConfigObject } from '../../../../backup-config';
 import { salesforceMetadataHandler } from '../../metadata';
@@ -154,7 +154,7 @@ const createOrResumeBulkQueryJob = async (params: {
         return { jobId: pendingBulkJobId, apiCalls: 1 };
       }
     } catch (err: any) {
-      if (err instanceof SalesforceAuthExpiredError) {
+      if (err instanceof SalesforceTokenUnavailableError) {
         throw err;
       }
       logger.warn(`Earlier Bulk query job ${pendingBulkJobId} is not usable (${err?.message}); starting a new one`);

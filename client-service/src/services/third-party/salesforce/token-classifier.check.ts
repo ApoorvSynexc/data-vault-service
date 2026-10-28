@@ -69,6 +69,15 @@ assert.strictEqual(
   classifyTokenError(oauthError(400, 'invalid_grant', 'Expired Access/Refresh Token')).kind,
   'EXPIRE'
 );
+assert.strictEqual(
+  classifyTokenError(oauthError(400, 'invalid_grant', 'invalid activation secret')).kind,
+  'EXPIRE'
+);
+// "Already being processed" is Salesforce mid-flight on this token — retry, never expire.
+assert.strictEqual(
+  classifyTokenError(oauthError(400, 'invalid_grant', 'token request is already being processed')).kind,
+  'RETRY'
+);
 // An invalid_grant we don't recognise is never treated as a clean expiry.
 assert.strictEqual(
   classifyTokenError(oauthError(400, 'invalid_grant', 'something new')).kind,

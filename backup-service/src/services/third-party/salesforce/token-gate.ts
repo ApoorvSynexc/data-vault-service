@@ -39,19 +39,27 @@ const CLOSE_REASON_BY_CODE: Record<string, TokenGateCloseReason> = {
   salesforce_ip_restricted: TOKEN_GATE_CLOSE_REASON.ipRestricted,
 };
 
-class SalesforceAuthExpiredError extends Error {
+const CLOSE_REASON_MESSAGE: Record<TokenGateCloseReason, string> = {
+  SALESFORCE_TOKEN_WAITING:
+    'Salesforce token refresh is pending. The job will resume once a token is available.',
+  SALESFORCE_REAUTH_REQUIRED: 'Salesforce connection expired. The user must reconnect Salesforce.',
+  SALESFORCE_ORG_INACTIVE: 'The Salesforce organization is inactive. Support has been notified.',
+  SALESFORCE_IP_RESTRICTED:
+    'Salesforce blocked the connection because of login IP restrictions. The Salesforce admin must allow our IP addresses.',
+};
+
+// Why a job could not get a usable Salesforce access token (gate closed).
+// `reason` drives what happens next: WAITING jobs resume on their own,
+// the others wait for a reconnect or support.
+class SalesforceTokenUnavailableError extends Error {
   readonly reason: TokenGateCloseReason;
 
   constructor(
     reason: TokenGateCloseReason = TOKEN_GATE_CLOSE_REASON.reauthRequired,
     detail?: string
   ) {
-    super(
-      reason === TOKEN_GATE_CLOSE_REASON.waitingToken
-        ? `Salesforce token refresh is pending${detail ? ` (${detail})` : ''}. The job will resume once a token is available.`
-        : `Salesforce session unavailable: ${reason}${detail ? ` (${detail})` : ''}. User must re-authenticate.`
-    );
-    this.name = 'SalesforceAuthExpiredError';
+    super(`${CLOSE_REASON_MESSAGE[reason]}${detail ? ` (${detail})` : ''}`);
+    this.name = 'SalesforceTokenUnavailableError';
     this.reason = reason;
   }
 }
@@ -73,7 +81,7 @@ interface GateState {
   // pick it up instead of each hitting a 401 with the old one.
   accessToken: string | null;
   refreshing: Promise<string> | null;
-  closed: SalesforceAuthExpiredError | null;
+  closed: SalesforceTokenUnavailableError | null;
 }
 
 const gatesByJob = new Map<string, GateState>();
@@ -105,7 +113,7 @@ const fingerprintToken = (token: string): string =>
   crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
 
 // One call to client-service's internal refresh API (P3). Returns the access
-// token, or throws SalesforceAuthExpiredError carrying the close reason.
+// token, or throws SalesforceTokenUnavailableError carrying the close reason.
 // Network errors are returned as `null` so the caller can retry.
 const callRefreshApi = async (
   tokens: SalesforceTokens,
@@ -150,7 +158,7 @@ const callRefreshApi = async (
   if (reason === TOKEN_GATE_CLOSE_REASON.waitingToken && body?.data?.retryAfterSec) {
     return { retryAfterMs: body.data.retryAfterSec * 1000 };
   }
-  throw new SalesforceAuthExpiredError(reason, code || `HTTP ${response.status}`);
+  throw new SalesforceTokenUnavailableError(reason, code || `HTTP ${response.status}`);
 };
 
 // Keeps asking for a token until one arrives or JOB_GATE_MAX_HOLD_MS passes.
@@ -179,7 +187,7 @@ const obtainFreshToken = async (
     }
     await sleep(waitMs);
   }
-  throw new SalesforceAuthExpiredError(
+  throw new SalesforceTokenUnavailableError(
     TOKEN_GATE_CLOSE_REASON.waitingToken,
     'refresh did not complete in time'
   );
@@ -226,9 +234,9 @@ const onUnauthorized = async (
       })
       .catch((error) => {
         gate.closed =
-          error instanceof SalesforceAuthExpiredError
+          error instanceof SalesforceTokenUnavailableError
             ? error
-            : new SalesforceAuthExpiredError(undefined, error?.message);
+            : new SalesforceTokenUnavailableError(undefined, error?.message);
         logger.warn(`[token-gate] closed for job ${tokens.jobId ?? 'n/a'}: ${gate.closed.reason}`);
         throw gate.closed;
       })
@@ -263,14 +271,14 @@ const getCurrentAccessToken = async (userId?: string): Promise<string | null> =>
 
 // For the job runner, once the run ends: why the gate closed (if it did), and
 // frees the job's gate.
-const consumeTokenGateClosure = (jobId: string): SalesforceAuthExpiredError | null => {
+const consumeTokenGateClosure = (jobId: string): SalesforceTokenUnavailableError | null => {
   const gate = gatesByJob.get(jobId);
   gatesByJob.delete(jobId);
   return gate?.closed ?? null;
 };
 
 export {
-  SalesforceAuthExpiredError,
+  SalesforceTokenUnavailableError,
   TOKEN_GATE_CLOSE_REASON,
   awaitTokenGate,
   onUnauthorized,
