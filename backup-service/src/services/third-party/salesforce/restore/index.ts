@@ -256,7 +256,13 @@ const restoreObjectData = async (
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
     // chunk rather than once at the very end of the object.
-    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed || job.errors.length;
+    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed > 0 || job.errors.length > 0;
+    let restoreStatus = type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted;
+    if (jobFailed) {
+      restoreStatus = type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreFailed : JOB_OBJECT_STATUS.rollbackFailed;
+    }
+
+    console.log(`[Restore] Ingested chunk for object ${objectName}, jobId=${job.jobId}, Processed=${job.processed}, failed=${job.failed}, jobFailed=${jobFailed}`);
     await updateRestoreObject({
       restoreJobId,
       objectName,
@@ -274,13 +280,7 @@ const restoreObjectData = async (
           }
       ),
 
-      status: jobFailed
-        ? type === 'RESTORE'
-          ? JOB_OBJECT_STATUS.restoreFailed
-          : JOB_OBJECT_STATUS.rollbackFailed
-        : type === 'RESTORE'
-          ? JOB_OBJECT_STATUS.restoreCompleted
-          : JOB_OBJECT_STATUS.rollbackCompleted,
+      status: restoreStatus,
       errors: job.errors.length ? job.errors : undefined,
     });
     logger.info(
