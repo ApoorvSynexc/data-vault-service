@@ -10,9 +10,14 @@ export interface IRestoreJobSource {
   region: string;
   folderPath?: string;
   csvFilePath?: string;
+  // A role destination stores only the role address; whoever runs the job asks AWS for a fresh pass.
   encryptedKeys: {
     accessKeyId: string;
     secretAccessKey: string;
+  } | {
+    authType: 'ASSUME_ROLE';
+    roleArn: string;
+    externalId: string;
   } | EncryptedPayload;
 }
 

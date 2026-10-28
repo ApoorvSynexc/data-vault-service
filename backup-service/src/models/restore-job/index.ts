@@ -1,5 +1,12 @@
 import { EncryptedPayload } from '../../utils/encryption';
 import { IRestoreConflict } from '../restore';
+import { IDestinationConfig } from '../backup-job';
+
+// What a restore needs to open the source bucket: keys, or the role address for a role destination.
+export type ISourceS3Keys = Pick<
+  IDestinationConfig,
+  'authType' | 'roleArn' | 'externalId' | 'accessKeyId' | 'secretAccessKey' | 'sessionToken'
+>;
 
 export interface IRestoreJobSource {
   backupConfigId: string;
@@ -14,6 +21,11 @@ export interface IRestoreJobSource {
     | {
         accessKeyId: string;
         secretAccessKey: string;
+      }
+    | {
+        authType: 'ASSUME_ROLE';
+        roleArn: string;
+        externalId: string;
       }
     | EncryptedPayload;
 }

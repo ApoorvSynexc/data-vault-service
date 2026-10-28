@@ -1,34 +1,36 @@
+import crypto from 'crypto';
 import {
+    DeleteObjectCommand,
     DeleteObjectsCommand,
     GetObjectCommand,
     HeadBucketCommand,
     ListObjectsV2Command,
     PutObjectCommand,
     S3Client,
+    S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { IAwsCredentials, IS3Config } from '../../../models';
+import { credentialIdentityKey, getAwsCredentials, isRoleAuth } from './credentials';
 
 // ---------------------------------------------------------------------------
-// One S3Client per unique destination (region + credentials + bucket).
+// One S3Client per unique destination (region + identity + bucket).
 // Reusing the client lets the AWS SDK pool HTTP connections across calls
 // instead of opening a new TLS handshake on every upload/download/list.
+// For a role destination the client holds a credentials function, so it keeps
+// working across temporary passes without being rebuilt.
 // ---------------------------------------------------------------------------
 const clientCache = new Map<string, S3Client>();
 const getS3Client = (config: IS3Config): S3Client => {
-    const cacheKey = `${config.region}:${config.accessKeyId}:${config.bucketName}`;
+    const cacheKey = `${config.region}:${credentialIdentityKey(config)}:${config.bucketName}`;
     let client = clientCache.get(cacheKey);
     if (!client) {
         const awsConfig: IAwsCredentials = {
-            region: config.region
-        }
+            region: config.region,
+            credentials: getAwsCredentials(config),
+        };
 
-        awsConfig.credentials = {
-            accessKeyId: config.accessKeyId,
-            secretAccessKey: config.secretAccessKey,
-        }
-
-        client = new S3Client(awsConfig);
+        client = new S3Client(awsConfig as unknown as S3ClientConfig);
         clientCache.set(cacheKey, client);
     }
     return client;
@@ -36,9 +38,22 @@ const getS3Client = (config: IS3Config): S3Client => {
 
 // Confirms the given credentials/bucket are usable — throws if the bucket
 // doesn't exist or the credentials can't access it.
+// For a role destination this also writes, reads and deletes a tiny test file, so a missing
+// write permission or a missing encryption-key (KMS) permission is caught now, not on the first backup.
 const validateS3Credentials = async (config: IS3Config): Promise<void> => {
     const client = getS3Client(config);
     await client.send(new HeadBucketCommand({ Bucket: config.bucketName }));
+
+    if (!isRoleAuth(config)) return;
+
+    const prefix = config.folderPath ? `${config.folderPath.replace(/\/+$/, '')}/` : '';
+    const key = `${prefix}.datacraft-connection-test/${crypto.randomUUID()}.txt`;
+    await client.send(new PutObjectCommand({ Bucket: config.bucketName, Key: key, Body: 'datacraft connection test' }));
+    try {
+        await client.send(new GetObjectCommand({ Bucket: config.bucketName, Key: key }));
+    } finally {
+        await client.send(new DeleteObjectCommand({ Bucket: config.bucketName, Key: key }));
+    }
 };
 
 const downloadFromS3 = async (

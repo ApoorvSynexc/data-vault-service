@@ -7,6 +7,7 @@ import {
 import { KMSClient, GetKeyPolicyCommand, PutKeyPolicyCommand } from '@aws-sdk/client-kms';
 import { AWS_ATHENA_ROLE_ARN } from '../../../constant';
 import { IS3Config } from '../../../models';
+import { getAwsCredentials } from '../s3-bucket/credentials';
 
 // SID stamped on our statement so we can detect and skip re-adding it.
 const ATHENA_POLICY_SID = 'DataCraftAthenaRoleAccess';
@@ -141,9 +142,14 @@ const withRetries = async (fn: (attempt: number) => Promise<void>): Promise<void
 // with every currently required action. Used when the client claims they
 // granted access manually — we verify rather than modify their policy.
 // Uses the CLIENT'S credentials.
+// The exact statement a customer pastes into their bucket policy when they add Athena access
+// themselves. Role destinations do not give us permission to edit their bucket policy.
+export const getAthenaBucketPolicyStatement = (bucketName: string) => buildAthenaStatement(bucketName);
+
 export const checkAthenaRoleS3Access = async (creds: IS3Config): Promise<boolean> => {
-  const { bucketName, region, accessKeyId, secretAccessKey } = creds;
-  const credentials = { accessKeyId, secretAccessKey };
+  const { bucketName, region } = creds;
+  // Works for both legacy access keys and a customer IAM role (the S3 and KMS clients renew the pass themselves).
+  const credentials = getAwsCredentials(creds);
 
   const s3 = new S3Client({ region, credentials });
 
@@ -181,8 +187,9 @@ export const checkAthenaRoleS3Access = async (creds: IS3Config): Promise<boolean
 //
 // Uses the CLIENT'S credentials — only the bucket/key owner can modify these.
 export const grantAthenaRoleS3Access = async (creds: IS3Config): Promise<void> => {
-  const { bucketName, region, accessKeyId, secretAccessKey } = creds;
-  const credentials = { accessKeyId, secretAccessKey };
+  const { bucketName, region } = creds;
+  // Works for both legacy access keys and a customer IAM role (the S3 and KMS clients renew the pass themselves).
+  const credentials = getAwsCredentials(creds);
 
   const s3 = new S3Client({ region, credentials });
 

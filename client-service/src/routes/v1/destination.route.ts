@@ -4,6 +4,8 @@ import { createDestinationValidation, updateDestinationValidation } from '../../
 
 const router = Router();
 
+router.get('/role-setup', destinationController.getRoleSetupHandler);
+router.post('/test-connection', createDestinationValidation, destinationController.testConnectionHandler);
 router.post('/', createDestinationValidation, destinationController.createDestinationHandler);
 router.get('/list', destinationController.listDestinationsHandler);
 router.get('/', destinationController.getDestinationHandler);
