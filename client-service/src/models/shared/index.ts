@@ -26,12 +26,20 @@ export interface IMedia {
   size?: number;
 }
 
+// One set of AWS credentials. For a role destination these are temporary: they come with a
+// sessionToken and an expiration time.
+export interface IAwsCredentialIdentity {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+  expiration?: Date;
+}
+
 export interface IAwsCredentials {
   region: string;
-  credentials?: {
-    accessKeyId: string;
-    secretAccessKey: string
-  }
+  // Either fixed credentials, or a function the AWS SDK calls whenever it needs them. With a
+  // function, the SDK asks again when a temporary pass is about to expire.
+  credentials?: IAwsCredentialIdentity | (() => Promise<IAwsCredentialIdentity>);
 }
 
 export interface IObjectField {

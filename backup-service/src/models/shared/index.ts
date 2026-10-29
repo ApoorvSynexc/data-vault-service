@@ -1,9 +1,14 @@
+export interface IAwsCredentialIdentity {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+  expiration?: Date;
+}
+
 export interface IAwsCredentials {
   region: string;
-  credentials?: {
-    accessKeyId: string;
-    secretAccessKey: string;
-  };
+  // A function is used for role destinations: the SDK calls it to get a fresh temporary pass.
+  credentials?: IAwsCredentialIdentity | (() => Promise<IAwsCredentialIdentity>);
 }
 
 export interface IS3ObjectKey {

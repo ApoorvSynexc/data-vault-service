@@ -1,0 +1,88 @@
+// Generic customer-account template for CloudFormation quick-create.
+// Parameters are supplied via the console quick-create URL (param_*), not baked into Defaults.
+export const S3_ASSUME_ROLE_CFN_TEMPLATE = `AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  DataCraft S3 access role for keyless destination connect.
+  Customer deploys this in their AWS account. DataCraft assumes the role
+  with ExternalId — no IAM user access keys required.
+
+Parameters:
+  DataCraftAwsAccountId:
+    Type: String
+    AllowedPattern: '^\\d{12}$'
+    Description: DataCraft platform AWS account ID (trust principal)
+  ExternalId:
+    Type: String
+    MinLength: 8
+    Description: External ID from the DataCraft Connect to AWS screen
+  BucketName:
+    Type: String
+    Description: Customer S3 bucket DataCraft may use
+  RoleName:
+    Type: String
+    Default: DataCraftS3AccessRole
+  MaxSessionDurationSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 3600
+    MaxValue: 43200
+    Description: 1 hour is enough; DataCraft renews the session before it expires
+  FolderPrefix:
+    Type: String
+    Default: ''
+    Description: Optional object prefix without leading slash (empty = whole bucket)
+
+Conditions:
+  HasFolderPrefix: !Not [!Equals [!Ref FolderPrefix, '']]
+
+Resources:
+  DataCraftS3AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      MaxSessionDuration: !Ref MaxSessionDurationSeconds
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::\${DataCraftAwsAccountId}:root'
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Policies:
+        - PolicyName: DataCraftS3BucketAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DataCraftBucketAccess
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketPolicy
+                  - s3:GetEncryptionConfiguration
+                  - s3:ListBucketMultipartUploads
+                Resource: !Sub 'arn:aws:s3:::\${BucketName}'
+              - Sid: DataCraftObjectAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !If
+                  - HasFolderPrefix
+                  - !Sub 'arn:aws:s3:::\${BucketName}/\${FolderPrefix}*'
+                  - !Sub 'arn:aws:s3:::\${BucketName}/*'
+
+Outputs:
+  RoleArn:
+    Description: Paste this Role ARN into DataCraft Connect to AWS
+    Value: !GetAtt DataCraftS3AccessRole.Arn
+  ExternalIdEcho:
+    Description: External ID this role requires
+    Value: !Ref ExternalId
+`;
