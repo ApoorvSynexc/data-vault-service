@@ -1098,9 +1098,6 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
         let comparisonErrorMessage: string | undefined;
 
         for (const { objectName, result: metadataResult } of result) {
-          // const operations = getMetadataChangeOperations(metadataResult);
-          // const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
-
           if (!metadataResult || 'error' in metadataResult) {
             if (!comparisonErrorMessage) {
               comparisonErrorMessage = (metadataResult && 'error' in metadataResult && metadataResult.error) || 'Metadata comparison failed, Please retry after reconnect your crm';
@@ -1120,7 +1117,10 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           await updateRestore({ restoreId, status: STATUS.failed });
         }
 
-        if (changedObjectNames.length) {
+        if (hasComparisonError) {
+          // Already marked restore/restoreJob failed above — don't trigger a
+          // backup/field-setup for objects that changed before the failing one.
+        } else if (changedObjectNames.length) {
           await triggerBackupJob({
             user: backupConfigUser,
             config: backupConfig,
@@ -1133,7 +1133,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
             },
             ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
           });
-        } else if (!hasComparisonError) {
+        } else {
           await runRestoreFieldSetupAndTransform(restoreJob.restoreId, restoreJob.restoreJobId, restoreJob.destination.objects);
         }
       } else {
