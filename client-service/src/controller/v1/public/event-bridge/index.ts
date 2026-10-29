@@ -51,7 +51,7 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
                     await runLogsArchive();
                 }
                 if (isStaleObjects) {
-                    staleObjectSweeperJob();
+                    await staleObjectSweeperJob();
                 }
                 if (isSyncPayment) {
                     await runPaymentSyncJob();
