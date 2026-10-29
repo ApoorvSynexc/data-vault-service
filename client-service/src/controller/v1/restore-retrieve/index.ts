@@ -1095,12 +1095,14 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     if (backupConfig.type === 'NORMAL') {
       if (backupConfig.schedule === 'REALTIME') {
         const result = await runMetadataComparisonForConfig(backupConfig, false);
-        let comparisonErrorMessage: string | undefined;
+        const comparisonErrorMessage = 'Metadata comparison failed, Please retry after reconnect your crm';
 
         for (const { objectName, result: metadataResult } of result) {
           if (!metadataResult || 'error' in metadataResult) {
-            if (!comparisonErrorMessage) {
-              comparisonErrorMessage = (metadataResult && 'error' in metadataResult && metadataResult.error) || 'Metadata comparison failed, Please retry after reconnect your crm';
+            if (metadataResult && 'error' in metadataResult) {
+              logger.error(
+                `[create restore] metadata comparison failed, backupConfigId=${backupConfig.backupConfigId}, objectName=${objectName}, errorMsg=${metadataResult.error}`
+              );
             }
             hasComparisonError = true;
             continue;
