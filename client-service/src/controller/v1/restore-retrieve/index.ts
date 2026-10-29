@@ -1100,7 +1100,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           // const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
 
           if (!metadataResult) {
-            const failedObjects = restoreJob.destination.objects.filter((obj) => ({ ...obj, status: JOB_OBJECT_STATUS.failed, errorMessage: 'Metadata comparison failed, Please retry after reconnect your crm' }));
+            const failedObjects = restoreJob.destination.objects.map((obj) => ({ ...obj, status: JOB_OBJECT_STATUS.failed, errorMessage: 'Metadata comparison failed, Please retry after reconnect your crm' }));
             await updateRestoreJob({ restoreJobId: restoreJob.restoreJobId, replaceObjects: failedObjects, status: STATUS.failed });
             await updateRestore({ restoreId, status: STATUS.failed });
             hasComparisonError = true;
