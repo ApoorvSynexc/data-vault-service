@@ -1,30 +1,20 @@
 import { httpRequest } from '../../../utils/http-request';
-import { CORE_SERVICE, INTERNAL_SECRET, SALESFORCE_BULK_API_VERSION } from '../../../constant';
+import { SALESFORCE_BULK_API_VERSION } from '../../../constant';
+import {
+  awaitTokenGate,
+  onUnauthorized,
+  SalesforceTokenUnavailableError,
+  SalesforceTokens,
+  TOKEN_GATE_CLOSE_REASON,
+} from './token-gate';
 
 const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 
-class SalesforceAuthExpiredError extends Error {
-  constructor() {
-    super('Salesforce session expired. User must re-authenticate.');
-    this.name = 'SalesforceAuthExpiredError';
-  }
-}
-
-const refreshSalesforceToken = async (backupConfigId: string): Promise<any> => {
-  return httpRequest({
-    url: `${CORE_SERVICE}/v1/internal/refresh-token?backupConfigId=${backupConfigId}`,
-    method: 'GET',
-    headers: {
-      'x-internal-secret': INTERNAL_SECRET,
-    },
-  });
-};
-
-// Wraps every Salesforce API call with automatic token refresh on 401.
-// IMPORTANT: `tokens` is mutated in-place when a refresh occurs so all
-// callers sharing the same object automatically use the new access token —
-// including subsequent pages in the upload loop and any retry attempts in
-// exportWithRetry.
+// Wraps every Salesforce API call with the job's TokenGate (token-gate.ts):
+// waits while a refresh is running, and on 401 waits for the shared refresh
+// and replays the call once. `tokens` is mutated in place, so every caller
+// sharing the holder — later pages, exportWithRetry attempts — uses the new
+// access token. Bodies must be strings/Buffers so the replay can resend them.
 interface SalesforceRequestOptions {
   url: string;
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -33,12 +23,12 @@ interface SalesforceRequestOptions {
   headers?: Record<string, string>;
 }
 
-export interface SalesforceTokens {
-  accessToken: string;
-  refreshToken: string;
-  crmId: string;
-  backupConfigId: string;
-}
+const isUnauthorized = (error: any) => error?.message?.startsWith('HTTP Error 401');
+
+// A 401 on the replay means Salesforce rejects even a freshly issued token —
+// not something another refresh will fix.
+const rejectedAfterRefresh = () =>
+  new SalesforceTokenUnavailableError(TOKEN_GATE_CLOSE_REASON.reauthRequired, 'rejected after refresh');
 
 const salesforceRequest = async <T = any>(
   options: SalesforceRequestOptions,
@@ -52,50 +42,63 @@ const salesforceRequest = async <T = any>(
     });
   };
 
+  await awaitTokenGate(tokens);
+  const usedToken = tokens.accessToken;
   try {
-    return await makeCall(tokens.accessToken);
+    return await makeCall(usedToken);
   } catch (error: any) {
-    if (!error?.message?.startsWith('HTTP Error 401')) {
+    if (!isUnauthorized(error)) {
       throw error;
     }
+  }
 
-    // Access token expired — refresh and retry once
-    try {
-      const refreshed = await refreshSalesforceToken(tokens.backupConfigId);
-      tokens.accessToken = refreshed.access_token; // mutate shared ref
-    } catch {
-      throw new SalesforceAuthExpiredError();
-    }
-
-    return await makeCall(tokens.accessToken);
+  const freshToken = await onUnauthorized(tokens, usedToken);
+  try {
+    return await makeCall(freshToken);
+  } catch (error: any) {
+    throw isUnauthorized(error) ? rejectedAfterRefresh() : error;
   }
 };
 
+// Raw-response variant for callers that need the Response itself (CSV pages,
+// SOAP). Same gate and single replay as salesforceRequest; `init` must be
+// replayable (string/Buffer body).
+const salesforceFetch = async (
+  url: string,
+  init: RequestInit,
+  tokens: SalesforceTokens
+): Promise<Response> => {
+  const send = (accessToken: string) =>
+    fetch(url, {
+      ...init,
+      headers: {
+        ...(init.headers as Record<string, string>),
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+  await awaitTokenGate(tokens);
+  const usedToken = tokens.accessToken;
+  const response = await send(usedToken);
+  if (response.status !== 401) {
+    return response;
+  }
+
+  const replay = await send(await onUnauthorized(tokens, usedToken));
+  if (replay.status === 401) {
+    throw rejectedAfterRefresh();
+  }
+  return replay;
+};
+
 // ---------------------------------------------------------------------------
-// Returns a page-fetcher bound to the given token holder.
-// Handles 401 → token refresh → single retry transparently.
-// Mutates tokens.accessToken in-place so all callers sharing the same object
-// automatically use the refreshed token on subsequent calls.
+// Returns a page-fetcher bound to the given token holder. Result-page
+// downloads replay from the same locator after a refresh.
 // ---------------------------------------------------------------------------
 const makePageFetcher =
   (tokens: SalesforceTokens) =>
-  async (url: string): Promise<Response> => {
-    let response = await fetch(url, {
-      headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-    });
-    if (response.status === 401) {
-      try {
-        const refreshed = await refreshSalesforceToken(tokens.backupConfigId);
-        tokens.accessToken = refreshed.access_token;
-      } catch {
-        throw new SalesforceAuthExpiredError();
-      }
-      response = await fetch(url, {
-        headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'text/csv' },
-      });
-    }
-    return response;
-  };
+  (url: string): Promise<Response> =>
+    salesforceFetch(url, { headers: { Accept: 'text/csv' } }, tokens);
 
 export interface ISalesforceChild {
   apiName?: string;
@@ -128,4 +131,11 @@ const createBulkQueryJob = async (payload: ICreateBulkQueryJob): Promise<string>
   return res.id;
 };
 
-export { salesforceRequest, makePageFetcher, createBulkQueryJob };
+export {
+  salesforceRequest,
+  salesforceFetch,
+  makePageFetcher,
+  createBulkQueryJob,
+  SalesforceTokenUnavailableError,
+};
+export type { SalesforceTokens };

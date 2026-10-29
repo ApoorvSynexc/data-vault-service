@@ -607,8 +607,8 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
       userId: config.userId,
       backupConfigId: config.backupConfigId,
       source: {
+        // Access token only — backup-service refreshes via the internal API.
         access_token,
-        refresh_token,
         crmId: crm.crmId,
         crmName: crm.crmName,
         instanceUrl,

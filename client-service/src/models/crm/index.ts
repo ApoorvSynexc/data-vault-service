@@ -9,6 +9,9 @@ export interface ICrm {
   environment?: 'production' | 'sandbox';
   status: string;
   instanceUrl?: string; // Salesforce instance URL, set via the configure-org flow
+  // Support-alert dedupe for OrgInactive / IpRestricted (token-lifecycle.ts).
+  lastSupportNotifiedKind?: string;
+  lastSupportNotifiedAt?: string;
   // Per-org AES-256 key, set via the configure-org flow, encrypted at rest with
   // the master ENCRYPTION_KEY (same treatment as crmCredential).
   encryptionKey?: EncryptedPayload;

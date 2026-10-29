@@ -8,9 +8,17 @@ const PORT = Number(process.env.PORT) || 3000;
 const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || '360 DataCraft');
 const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com');
 const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
+// Test environments only: when set, every email goes to this address instead
+// of its real recipient (the subject names who it was meant for). Ignored
+// when NODE_ENV is production.
+const EMAIL_OVERRIDE_TO = String(process.env.EMAIL_OVERRIDE_TO || '').trim();
 const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
 const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
 const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
+// Any SMTP relay (e.g. smtp-relay.brevo.com:587). Leave EMAIL_SMTP_HOST empty
+// to keep using Gmail.
+const EMAIL_SMTP_HOST = String(process.env.EMAIL_SMTP_HOST || '').trim();
+const EMAIL_SMTP_PORT = Number(process.env.EMAIL_SMTP_PORT) || 587;
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
@@ -34,6 +42,7 @@ const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE ||
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
+const TOKEN_EVENT_TABLE = `${NODE_ENV_PREFIX}-${process.env.TOKEN_EVENT_TABLE || 'data-vault-token-events'}`;
 
 // Event Bridge Scheduler Config
 const AWS_EVENT_DESTINATION_API_KEY = String(process.env.AWS_EVENT_DESTINATION_API_KEY);
@@ -295,6 +304,8 @@ const FILTER_OPERATOR = {
 const EMAIL_TEMPLATE = {
   realtimeTriggerFailure: 'REALTIME_TRIGGER_FAILURE',
   salesforceApiLimitReached: 'SALESFORCE_API_LIMIT_REACHED',
+  salesforceReconnectRequired: 'SALESFORCE_RECONNECT_REQUIRED',
+  salesforceSupportAlert: 'SALESFORCE_SUPPORT_ALERT',
 } as const;
 
 // Config lifecycle/visibility — backup-config, archival-config (same table),
@@ -319,6 +330,66 @@ const NOTIFICATION_STATUS = {
   read: 'READ',
   deleted: 'DELETED',
 };
+
+// Salesforce credential health — user.tokenStatus. Only persisted states live
+// here: "refreshing" is derived from refreshLockedUntil > now, never stored.
+// A missing tokenStatus is treated as `ready` (users connected before RTR).
+const SALESFORCE_TOKEN_STATUS = {
+  ready: 'Ready',
+  retryScheduled: 'RetryScheduled',
+  expired: 'Expired',
+  orgInactive: 'OrgInactive',
+  ipRestricted: 'IpRestricted',
+} as const;
+
+// Who asked TokenAuthority for a refresh — written on every token event.
+const TOKEN_REFRESH_TRIGGER = {
+  api401: 'API_401',
+  job401: 'JOB_401',
+  nightly: 'NIGHTLY',
+  retryWorker: 'RETRY_WORKER',
+  manual: 'MANUAL',
+  connect: 'CONNECT',
+  reconnect: 'RECONNECT',
+  disconnect: 'DISCONNECT',
+} as const;
+
+// Classifier result for a failed refresh_token grant.
+const TOKEN_ERROR_KIND = {
+  retry: 'RETRY',
+  platform: 'PLATFORM',
+  expire: 'EXPIRE',
+  expireUnconfirmed: 'EXPIRE_UNCONFIRMED',
+  expireSupport: 'EXPIRE_SUPPORT',
+  ipRestricted: 'IP_RESTRICTED',
+} as const;
+
+// data-vault-token-events.eventType
+const TOKEN_EVENT_TYPE = {
+  tokenIssued: 'TOKEN_ISSUED',
+  tokenReissued: 'TOKEN_REISSUED',
+  disconnected: 'DISCONNECTED',
+  refreshAttempt: 'REFRESH_ATTEMPT',
+  refreshSuccess: 'REFRESH_SUCCESS',
+  refreshFailed: 'REFRESH_FAILED',
+  refreshSkippedAlreadyFresh: 'REFRESH_SKIPPED_ALREADY_FRESH',
+  lockAcquired: 'LOCK_ACQUIRED',
+  lockJoined: 'LOCK_JOINED',
+  lockWait: 'LOCK_WAIT',
+  lockTimeout: 'LOCK_TIMEOUT',
+  persistRetry: 'PERSIST_RETRY',
+  persistSuperseded: 'PERSIST_SUPERSEDED',
+  persistFailed: 'PERSIST_FAILED',
+  statusChanged: 'STATUS_CHANGED',
+  retryScheduled: 'RETRY_SCHEDULED',
+  retryAttempt: 'RETRY_ATTEMPT',
+  retryExhausted: 'RETRY_EXHAUSTED',
+  authRejectedAfterRefresh: 'AUTH_REJECTED_AFTER_REFRESH',
+  jobResumed: 'JOB_RESUMED',
+  reminderSent: 'REMINDER_SENT',
+  reminderSkipped: 'REMINDER_SKIPPED',
+  supportNotified: 'SUPPORT_NOTIFIED',
+} as const;
 // Outcome status — backupConfig.backupStatus, backupJob.status, restore.status
 // (outcome dimension), restoreJob.status. A job's own status stays `pending`
 // for its entire in-flight duration — there's no separate "now actively
@@ -360,6 +431,13 @@ const JOB_OBJECT_STATUS = {
 const ERROR_REASON = {
   serverCrashed: 'SERVER_CRASHED',
   emrServerCrashed: 'EMR_SERVER_CRASHED',
+  // Set by backup-service when a run's Salesforce token gate closed (mirrors
+  // its TOKEN_GATE_CLOSE_REASON). Jobs with these are re-queued once the
+  // user's token is Ready again — see token-lifecycle.ts.
+  salesforceTokenWaiting: 'SALESFORCE_TOKEN_WAITING',
+  salesforceReauthRequired: 'SALESFORCE_REAUTH_REQUIRED',
+  salesforceOrgInactive: 'SALESFORCE_ORG_INACTIVE',
+  salesforceIpRestricted: 'SALESFORCE_IP_RESTRICTED',
 }
 
 const ENVIRONMENT_TYPE = {
@@ -575,6 +653,9 @@ export {
   EMAIL_COMPANY_NAME,
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
+  EMAIL_SMTP_HOST,
+  EMAIL_SMTP_PORT,
+  EMAIL_OVERRIDE_TO,
   EMAIL_APP_URL,
   EMAIL_SMTP_USER,
   EMAIL_SMTP_APP_PASSWORD,
@@ -600,6 +681,7 @@ export {
   BACKUP_JOB_TABLE,
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
+  TOKEN_EVENT_TABLE,
 
   // AWS EventBridge Scheduler Config
   AWS_EVENT_DESTINATION_API_KEY,
@@ -674,6 +756,10 @@ export {
   EMAIL_TEMPLATE,
   VISIBILITY_STATUS,
   NOTIFICATION_STATUS,
+  SALESFORCE_TOKEN_STATUS,
+  TOKEN_REFRESH_TRIGGER,
+  TOKEN_ERROR_KIND,
+  TOKEN_EVENT_TYPE,
   AUTH_PROVIDER,
   LANGUAGE,
   GENDER,

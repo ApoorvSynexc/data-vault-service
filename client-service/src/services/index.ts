@@ -14,5 +14,6 @@ export * from './schema';
 export * from './session';
 export * from './settings';
 export * from './notification';
+export * from './token-event';
 export * from './third-party';
 export * from './user';

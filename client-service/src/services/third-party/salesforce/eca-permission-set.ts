@@ -329,13 +329,12 @@ export const provisionEcaPermissionSet = async (
       }
       // Documented Salesforce behavior, not a real failure: switching
       // permittedUsersPolicyType to AdminApprovedPreAuthorized can revoke the
-      // very session used to request the change. deployMetadata's initial
-      // submit uses a plain fetch() with no session-refresh handling — only
-      // the status poll goes through salesforceRequest (whose retry-then-
-      // SalesforceAuthExpiredError path is what's being caught here) — so a
-      // 401 at this exact point means the deploy was already submitted
-      // before the session died, and is very likely already applied; we
-      // just lost the ability to poll for confirmation.
+      // very session used to request the change. The admin-provisioning
+      // tokens carry no DataCraft userId, so a 401 is not refreshed and
+      // surfaces as SalesforceAuthExpiredError (caught here). A 401 while
+      // polling means the deploy was already submitted before the session
+      // died, and is very likely already applied; we just lost the ability
+      // to poll for confirmation.
       logger.warn(
         '[eca-permission-set] Session invalidated while confirming the OAuth policy deploy — expected when permittedUsersPolicyType changes to AdminApprovedPreAuthorized. The deploy was already submitted and is very likely applied; verify in Setup and have the admin re-authenticate.'
       );

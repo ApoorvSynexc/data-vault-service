@@ -34,6 +34,32 @@ export default defineConfig([
     },
   },
   {
+    // Salesforce RTR: every Salesforce call must go through the shared request
+    // wrapper so a 401 waits for the single token refresh and is replayed once.
+    // A hand-built "Authorization: Bearer ..." header bypasses that and breaks
+    // under refresh token rotation — only the wrapper itself may build one.
+    files: ['src/**/*.ts'],
+    ignores: [
+      'src/services/third-party/salesforce/api-request.ts',
+    ],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'TemplateElement[value.raw=/^Bearer /]',
+          message:
+            'Build Salesforce requests with salesforceRequest/salesforceFetch — never a raw Bearer header (breaks token refresh/rotation).',
+        },
+        {
+          // Also catches 'Bearer ' + token and ['Bearer', token].join(' ').
+          selector: 'Literal[value=/^Bearer( |$)/]',
+          message:
+            'Build Salesforce requests with salesforceRequest/salesforceFetch — never a raw Bearer header (breaks token refresh/rotation).',
+        },
+      ],
+    },
+  },
+  {
     ignores: ['node_modules', 'dist'],
   },
 ]);

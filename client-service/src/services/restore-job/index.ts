@@ -8,7 +8,7 @@ import { incrementTableCounter } from '../counter';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDecryptedDestinationConfig, getDestinationById } from '../destination';
-import { getUser } from '../user';
+import { getDecryptedCrmCredential, getUser } from '../user';
 import { updateRestore } from '../restore';
 import { httpRequest } from '../../utils/http-request';
 import { timer } from '../../utils/helper';
@@ -111,9 +111,12 @@ const createRestoreJob = async (params: IRestore): Promise<IRestoreJob> => {
   const updatedDestination = {
     crmId: destinationCrm?.crmId,
     crmName: destinationCrm?.crmName,
+    userId: destinationUser?.userId,
     objects: destinationObjects,
     instanceUrl: destinationUser?.crmProfile?.instanceUrl!,
-    encryptedTokens: destinationUser.crmCredential!,
+    // Access token only — backup-service refreshes the destination user's
+    // token via the internal API; the refresh token stays in client-service.
+    encryptedTokens: encrypt(JSON.stringify({ access_token: getDecryptedCrmCredential(destinationUser).access_token })),
   }
 
   const item: IRestoreJob = {
@@ -471,6 +474,44 @@ const getRestoreJobsByUserId = async (
   return (result.Items as IRestoreJob[] | undefined) ?? [];
 };
 
+// Restore/rollback runs that backup-service stopped because the Salesforce
+// token gate closed (errorReason = one of `reasons`), created since `since`.
+const getTokenStoppedRestoreJobs = async (
+  userId: string,
+  reasons: string[],
+  since: string
+): Promise<IRestoreJob[]> => {
+  const reasonValues = Object.fromEntries(reasons.map((reason, i) => [`:r${i}`, reason]));
+  const items: IRestoreJob[] = [];
+  let lastKey: Record<string, any> | undefined;
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: RESTORE_JOB_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :uid AND createdAt >= :since',
+        FilterExpression: `errorReason IN (${Object.keys(reasonValues).join(', ')}) AND #status = :failed AND attribute_not_exists(processingStartedAt)`,
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':uid': userId, ':since': since, ':failed': STATUS.failed, ...reasonValues },
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      })
+    );
+    items.push(...((result.Items ?? []) as IRestoreJob[]));
+    lastKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastKey);
+  return items;
+};
+
+// Asks backup-service to resume a token-stopped restore; its chunk
+// checkpoints make the re-run skip work already done in Salesforce.
+const resumeRestoreJob = (restoreJobId: string) =>
+  httpRequest({
+    url: `${BACKUP_SERVICE}/v1/restore/resume`,
+    method: 'POST',
+    headers: { 'x-internal-secret': INTERNAL_SECRET },
+    body: JSON.stringify({ restoreJobId }),
+  });
+
 const getRestoreJobsByRestoreId = async (restoreId: string): Promise<IRestoreJob[]> => {
   const result = await docClient.send(
     new QueryCommand({
@@ -766,6 +807,8 @@ export {
   getRestoreJobById,
   getRestoreJobsByUserId,
   getRestoreJobsByRestoreId,
+  getTokenStoppedRestoreJobs,
+  resumeRestoreJob,
   computeRestoreJobStats,
   getRestoreOverview,
 };

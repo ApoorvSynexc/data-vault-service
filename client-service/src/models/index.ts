@@ -10,5 +10,6 @@ export * from './role';
 export * from './session';
 export * from './settings';
 export * from './notification';
+export * from './token-event';
 export type { IAddress, IMedia, IAwsCredentials, IAwsCredentialIdentity } from './shared';
 export * from './user';
