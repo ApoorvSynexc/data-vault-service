@@ -82,6 +82,7 @@ const createDestinationHandler = async (req: IRequest, res: IResponse): Promise<
 const getRoleSetupHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const bucketName = String(req.query.bucketName ?? '').trim();
   const folderPath = req.query.folderPath ? String(req.query.folderPath) : undefined;
+  const region = req.query.region ? String(req.query.region).trim() : undefined;
 
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucketName)) {
     makeResponse(req, res, 400, false, 'invalid_bucket_name');
@@ -93,7 +94,14 @@ const getRoleSetupHandler = async (req: IRequest, res: IResponse): Promise<void>
     return;
   }
 
-  makeResponse(req, res, 200, true, 'fetch', buildRoleSetup({ userId: req.user!.userId, bucketName, folderPath }));
+  makeResponse(
+    req,
+    res,
+    200,
+    true,
+    'fetch',
+    buildRoleSetup({ userId: req.user!.userId, bucketName, region, folderPath })
+  );
 };
 
 // GET /destination/resolve-bucket-region?bucketName=...&region=...

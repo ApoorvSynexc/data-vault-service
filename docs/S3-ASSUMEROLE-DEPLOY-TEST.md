@@ -18,6 +18,10 @@ Add/update `/var/www/DataVault-Backend-NodeJS/client-service/.env`:
 ```bash
 DATACRAFT_AWS_ACCOUNT_ID=394567804523
 S3_ROLE_SESSION_SECONDS=3600
+# Required for "Open in AWS CloudFormation" (no trailing slash)
+PUBLIC_API_BASE_URL=https://devdatacraft.360degreecloud.in/api
+# optional override if the CFN YAML is hosted on public S3 instead:
+# CLOUDFORMATION_TEMPLATE_URL=https://.../s3-assumerole-role.cfn.yaml
 # optional; defaults to ENCRYPTION_KEY
 EXTERNAL_ID_SECRET=<long-random-secret>
 ALLOW_ACCESS_KEY_DESTINATIONS=true

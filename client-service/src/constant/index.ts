@@ -186,6 +186,11 @@ const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 const DATACRAFT_AWS_ACCOUNT_ID = String(process.env.DATACRAFT_AWS_ACCOUNT_ID || '').trim();
 const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS || 3600);
 const EXTERNAL_ID_SECRET = String(process.env.EXTERNAL_ID_SECRET || ENCRYPTION_KEY);
+// Public base for API routes used in CloudFormation quick-create templateURL
+// e.g. https://devdatacraft.360degreecloud.in/api
+// Override the whole template URL with CLOUDFORMATION_TEMPLATE_URL if hosted elsewhere (S3).
+const PUBLIC_API_BASE_URL = String(process.env.PUBLIC_API_BASE_URL || '').replace(/\/+$/, '');
+const CLOUDFORMATION_TEMPLATE_URL = String(process.env.CLOUDFORMATION_TEMPLATE_URL || '').trim();
 
 // Bootstrap-layer key for the Salesforce org-registration handshake only —
 // /auth/configure-org's request/response envelope and
@@ -645,6 +650,8 @@ export {
   ENCRYPTION_KEY,
   DATACRAFT_AWS_ACCOUNT_ID,
   S3_ROLE_SESSION_SECONDS,
+  PUBLIC_API_BASE_URL,
+  CLOUDFORMATION_TEMPLATE_URL,
   EXTERNAL_ID_SECRET,
   SALESFORCE_ENCRYPTION_KEY,
 
