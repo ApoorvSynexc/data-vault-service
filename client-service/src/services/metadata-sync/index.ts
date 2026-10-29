@@ -27,7 +27,7 @@ export interface IMetadataComparisonResult {
 export const hasMetadataChanged = (
   result: IMetadataComparisonResult['result']
 ): result is NonNullable<IMetadataComparisonResult['result']> => {
-  if (!result) {
+  if (!result || 'error' in result) {
     return false;
   }
   switch (result.metadataType) {
@@ -51,7 +51,7 @@ export const getMetadataChangeOperations = (
   result: IMetadataComparisonResult['result']
 ): Array<'inserts' | 'updates' | 'deletes'> => {
   const operations: Array<'inserts' | 'updates' | 'deletes'> = [];
-  if (!result) {
+  if (!result || 'error' in result) {
     return operations;
   }
 
@@ -87,11 +87,11 @@ export const getMetadataChangeOperations = (
 // backup before compression, and by the restore workflow's realtime path to
 // run that same comparison without ever invoking EMR.
 //
-// salesforceMetadataHandler swallows its own per-call error (logs it, never
-// rethrows) so one object/metadataType failing never stops the rest — but it
-// also means a caller can't recover the underlying error text, only that a
-// given (objectName, metadataType) pair came back as `undefined` instead of a
-// real diff.
+// salesforceMetadataHandler catches its own per-call error (logs it, never
+// rethrows) so one object/metadataType failing never stops the rest. On
+// failure it returns { metadataType, error } instead of a diff — check for
+// `'error' in result` (as hasMetadataChanged/getMetadataChangeOperations do)
+// rather than relying on truthiness, since the failure case is still an object.
 export const runMetadataComparisonForConfig = async (
   config: IBackupConfig,
   isUpdateSchemaOnS3: boolean = true

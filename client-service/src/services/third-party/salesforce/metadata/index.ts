@@ -76,9 +76,11 @@ export const salesforceMetadataHandler = async (
             }
         }
     } catch (error: any) {
+        const errorMessage = error?.message ?? String(error);
         logger.error(
-            `Object metadata comparison failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}, errorMsg=${error?.message ?? error}`
+            `Object metadata comparison failed, backupConfigId=${backupConfigId}, backupJobId=${backupJobId}, objectName=${objectName}, metadataType=${metadataType}, errorMsg=${errorMessage}`
         );
+        return { metadataType, error: errorMessage };
     }
 }
 

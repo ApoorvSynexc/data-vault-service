@@ -452,7 +452,7 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
     if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
       const result = await runMetadataComparisonForConfig(config, false);
       for (const { objectName, result: metadataResult } of result) {
-        if (!metadataResult) {
+        if (!metadataResult || 'error' in metadataResult) {
           hasComparisonError = true;
           continue;
         }

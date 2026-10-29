@@ -150,9 +150,6 @@ const submitIngestChunk = async (
   await closeBulkJob(instanceUrl, tokens, job.id);
   const status = await pollBulkJobUntilDone(instanceUrl, tokens, job.id);
 
-  logger.info(
-    `[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({ status: status })}`
-  );
   const processed = status.numberRecordsProcessed ?? 0;
   const failed = status.numberRecordsFailed ?? 0;
 
@@ -162,6 +159,10 @@ const submitIngestChunk = async (
     errors = parseFirstNErrors(failedCsv, MAX_STORED_ERRORS_COUNT);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
+
+  logger.debug(
+    `[Restore] Polling for completion for object ${objectName}, status=${status.state}, failed=${failed}, errors.length=${errors.length}`
+  );
 
   // ponytail: update has no pre-change snapshot to roll back to (only ids are
   // captured), so it can't safely produce a rollback artifact — revisit if
@@ -256,7 +257,13 @@ const restoreObjectData = async (
     // Accumulate this chunk's processed/failed counts onto the object's running
     // total — a single object can span multiple chunks, so this fires once per
     // chunk rather than once at the very end of the object.
-    const jobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed || job.errors.length;
+    const isJobFailed = job.status === 'Failed' || job.status === 'Aborted' || job.failed > 0 || job.errors.length > 0;
+    let restoreStatus = type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreCompleted : JOB_OBJECT_STATUS.rollbackCompleted;
+    if (isJobFailed) {
+      restoreStatus = type === 'RESTORE' ? JOB_OBJECT_STATUS.restoreFailed : JOB_OBJECT_STATUS.rollbackFailed;
+    }
+
+    console.log({ objectName, isJobFailed, restoreStatus, job, jobFailedCount: job.failed, jobErrorCount: job.errors.length });
     await updateRestoreObject({
       restoreJobId,
       objectName,
@@ -274,13 +281,7 @@ const restoreObjectData = async (
           }
       ),
 
-      status: jobFailed
-        ? type === 'RESTORE'
-          ? JOB_OBJECT_STATUS.restoreFailed
-          : JOB_OBJECT_STATUS.rollbackFailed
-        : type === 'RESTORE'
-          ? JOB_OBJECT_STATUS.restoreCompleted
-          : JOB_OBJECT_STATUS.rollbackCompleted,
+      status: restoreStatus,
       errors: job.errors.length ? job.errors : undefined,
     });
     logger.info(
