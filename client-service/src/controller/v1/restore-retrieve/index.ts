@@ -1095,20 +1095,29 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     if (backupConfig.type === 'NORMAL') {
       if (backupConfig.schedule === 'REALTIME') {
         const result = await runMetadataComparisonForConfig(backupConfig, false);
+        let comparisonErrorMessage: string | undefined;
+
         for (const { objectName, result: metadataResult } of result) {
           // const operations = getMetadataChangeOperations(metadataResult);
           // const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
 
-          if (!metadataResult) {
-            const failedObjects = restoreJob.destination.objects.map((obj) => ({ ...obj, status: JOB_OBJECT_STATUS.failed, errorMessage: 'Metadata comparison failed, Please retry after reconnect your crm' }));
-            await updateRestoreJob({ restoreJobId: restoreJob.restoreJobId, replaceObjects: failedObjects, status: STATUS.failed });
-            await updateRestore({ restoreId, status: STATUS.failed });
+          if (!metadataResult || 'error' in metadataResult) {
+            if (!comparisonErrorMessage) {
+              comparisonErrorMessage = (metadataResult && 'error' in metadataResult && metadataResult.error) || 'Metadata comparison failed, Please retry after reconnect your crm';
+            }
             hasComparisonError = true;
+            continue;
           }
 
           if (!hasComparisonError && hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
             changedObjectNames.push(objectName);
           }
+        }
+
+        if (hasComparisonError) {
+          const failedObjects = restoreJob.destination.objects.map((obj) => ({ ...obj, status: JOB_OBJECT_STATUS.failed, errorMessage: comparisonErrorMessage }));
+          await updateRestoreJob({ restoreJobId: restoreJob.restoreJobId, replaceObjects: failedObjects, status: STATUS.failed });
+          await updateRestore({ restoreId, status: STATUS.failed });
         }
 
         if (changedObjectNames.length) {
