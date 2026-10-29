@@ -13,20 +13,20 @@ interface ISyncObject {
 }
 
 function buildPayloadTree(nodes: ISalesforceChildTreeNode[] = [], objects: ISalesforceObjectResponse[]): ISalesforceChildTreeNode[] {
-  const result: ISalesforceChildTreeNode[] = [];
-  nodes.forEach((node) => {
-    if (node.cascadeDelete !== true && node.restrictedDelete !== true) return;
-    const obj = objects.find((o) => o.name === node.name);
-    if (!obj) return;
-    const nested = node.children?.length ? buildPayloadTree(node.children, objects) : [];
-    result.push({
-      ...node,
-      ...(nested.length ? { children: nested } : {}),
+    const result: ISalesforceChildTreeNode[] = [];
+    nodes.forEach((node) => {
+        if (node.cascadeDelete !== true && node.restrictedDelete !== true) return;
+        const obj = objects.find((o) => o.name === node.name);
+        if (!obj) return;
+        const nested = node.children?.length ? buildPayloadTree(node.children, objects) : [];
+        result.push({
+            ...node,
+            children: nested
+        });
     });
-  });
-  return result;
+    return result;
 }
- 
+
 
 const flattenChildrenObjects = (objects: ISalesforceChildTreeNode[]): ISalesforceChildTreeNode[] => {
     if (!objects.length) return [];
