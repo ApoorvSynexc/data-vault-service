@@ -15,6 +15,10 @@ const EMAIL_OVERRIDE_TO = String(process.env.EMAIL_OVERRIDE_TO || '').trim();
 const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
 const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
 const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
+// Any SMTP relay (e.g. smtp-relay.brevo.com:587). Leave EMAIL_SMTP_HOST empty
+// to keep using Gmail.
+const EMAIL_SMTP_HOST = String(process.env.EMAIL_SMTP_HOST || '').trim();
+const EMAIL_SMTP_PORT = Number(process.env.EMAIL_SMTP_PORT) || 587;
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
@@ -242,6 +246,8 @@ export {
   EMAIL_COMPANY_NAME,
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
+  EMAIL_SMTP_HOST,
+  EMAIL_SMTP_PORT,
   EMAIL_OVERRIDE_TO,
   EMAIL_APP_URL,
   EMAIL_SMTP_USER,

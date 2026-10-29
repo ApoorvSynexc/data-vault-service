@@ -5,6 +5,8 @@ import {
   EMAIL_FROM_ADDRESS,
   EMAIL_COMPANY_NAME,
   EMAIL_OVERRIDE_TO,
+  EMAIL_SMTP_HOST,
+  EMAIL_SMTP_PORT,
   NODE_ENV,
 } from '../../../constant';
 import { logger } from '../../../middlewares/logger';
@@ -18,17 +20,18 @@ let transporter: Transporter | null = null;
 const getTransporter = (): Transporter => {
   if (!EMAIL_SMTP_USER || !EMAIL_SMTP_APP_PASSWORD) {
     throw new Error(
-      'Email transport not configured — set EMAIL_SMTP_USER and EMAIL_SMTP_APP_PASSWORD (a Gmail App Password, not the account login password).'
+      'Email transport not configured — set EMAIL_SMTP_USER and EMAIL_SMTP_APP_PASSWORD (for Gmail an App Password; for a relay such as Brevo its SMTP key).'
     );
   }
   if (!transporter) {
-    transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: EMAIL_SMTP_USER,
-        pass: EMAIL_SMTP_APP_PASSWORD,
-      },
-    });
+    const auth = { user: EMAIL_SMTP_USER, pass: EMAIL_SMTP_APP_PASSWORD };
+    // EMAIL_SMTP_HOST set → that relay (STARTTLS on 587, TLS on 465);
+    // otherwise Gmail, as before.
+    transporter = nodemailer.createTransport(
+      EMAIL_SMTP_HOST
+        ? { host: EMAIL_SMTP_HOST, port: EMAIL_SMTP_PORT, secure: EMAIL_SMTP_PORT === 465, auth }
+        : { service: 'gmail', auth }
+    );
   }
   return transporter;
 };
