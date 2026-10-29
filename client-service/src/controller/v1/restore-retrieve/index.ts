@@ -49,7 +49,7 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { toIsoDateString } from '../../../utils/iso-date';
 import { IRestoreScope, IRestoreFilters, IS3Config } from '../../../models';
 import { v4 as uuidv4 } from 'uuid';
-import { decrypt } from '../../../utils/encryption';
+import { resolveStoredSourceKeys } from '../../../services/third-party/s3-bucket/credentials';
 import { parseCsvRow } from '../../../utils/restore-csv-format';
 import { createRollbackService, runRestoreFieldSetupAndTransform } from '../../../services/third-party/salesforce/restore';
 
@@ -1272,12 +1272,8 @@ const downloadCsvFile = async (req: IRequest, res: IResponse): Promise<void> => 
   }
 
   const path = `${restoreJob.source.csvFilePath}/${objectName}/csv`;
-  const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
-    'cipherText' in restoreJob.source.encryptedKeys
-      ? JSON.parse(decrypt(restoreJob.source.encryptedKeys))
-      : restoreJob.source.encryptedKeys;
   const s3Config = {
-    ...sourceS3Credentials,
+    ...(await resolveStoredSourceKeys(restoreJob.source.encryptedKeys)),
     backupConfigId: restoreJob.source.backupConfigId,
     bucketName: restoreJob.source.bucketName,
     region: restoreJob.source.region,

@@ -22,6 +22,9 @@ const EMAIL_SMTP_PORT = Number(process.env.EMAIL_SMTP_PORT) || 587;
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
+// How long a pass for a customer's IAM role lasts. Default 3600: ECS/EC2 run on assumed roles, so
+// STS role chaining caps DurationSeconds at 1 hour. Credentials refresh before expiry for long jobs.
+const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS) || 3600;
 const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
 const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
@@ -255,6 +258,7 @@ export {
 
   // Aws Config
   AWS_REGION,
+  S3_ROLE_SESSION_SECONDS,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
   DYNAMODB_ENDPOINT,

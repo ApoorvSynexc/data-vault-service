@@ -22,6 +22,7 @@ import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
 
 import { SalesforceTokens } from './api-request';
 import { getCurrentAccessToken } from './token-gate';
+import { ISourceS3Keys } from '../../../models/restore-job';
 import { checkSalesforceApiLimitUsage, SalesforceApiLimitExceededError } from './api-limit';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { runSalesforceRestore, runSalesforceRollback } from './restore';
@@ -178,9 +179,7 @@ interface RestoreHierarchyContext {
   restoreId: string;
   restoreJobId: string;
   recurvedObject: Array<{ id: string; name: string; status?: string }>;
-  sourceS3Credentials: {
-    accessKeyId: string;
-    secretAccessKey: string;
+  sourceS3Credentials: ISourceS3Keys & {
     bucketName: string;
     region: string;
     csvFilePath: string;
@@ -582,7 +581,7 @@ const salesforceHandler: ICrmBackupHandler = {
   ): Promise<typeof STATUS.success | typeof STATUS.failed> => {
     try {
       const objects = destination.objects as any;
-      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+      const sourceS3Credentials: ISourceS3Keys =
         'cipherText' in source.encryptedKeys
           ? JSON.parse(decrypt(source.encryptedKeys))
           : source.encryptedKeys;
@@ -759,7 +758,7 @@ const salesforceHandler: ICrmBackupHandler = {
   ): Promise<typeof STATUS.success | typeof STATUS.failed> => {
     try {
       const objects = destination.objects as any;
-      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+      const sourceS3Credentials: ISourceS3Keys =
         'cipherText' in source.encryptedKeys
           ? JSON.parse(decrypt(source.encryptedKeys))
           : source.encryptedKeys;

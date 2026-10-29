@@ -1,6 +1,7 @@
 import { logger } from '../../../../middlewares/logger';
 import { STATUS, JOB_OBJECT_STATUS, MAX_STORED_ERRORS_COUNT } from '../../../../constant';
 import { IDestinationConfig, IRestoreConflict } from '../../../../models';
+import { ISourceS3Keys } from '../../../../models/restore-job';
 import {
   downloadFromS3,
   listS3Objects,
@@ -25,9 +26,7 @@ interface RunSalesforceRestorePayload {
   restoreId: string;
   restoreJobId: string;
   object: { id: string; name: string; status?: string };
-  sourceS3Credentials: {
-    accessKeyId: string;
-    secretAccessKey: string;
+  sourceS3Credentials: ISourceS3Keys & {
     bucketName: string;
     region: string;
     csvFilePath: string;
@@ -509,8 +508,12 @@ export const runSalesforceRestore = async (
   const s3Config: IDestinationConfig = {
     bucketName: sourceS3Credentials.bucketName,
     region: sourceS3Credentials.region,
+    authType: sourceS3Credentials.authType,
+    roleArn: sourceS3Credentials.roleArn,
+    externalId: sourceS3Credentials.externalId,
     accessKeyId: sourceS3Credentials.accessKeyId,
     secretAccessKey: sourceS3Credentials.secretAccessKey,
+    sessionToken: sourceS3Credentials.sessionToken,
   };
 
   const tokens: SalesforceTokens = {
@@ -560,8 +563,12 @@ export const runSalesforceRollback = async (
   const s3Config: IDestinationConfig = {
     bucketName: sourceS3Credentials.bucketName,
     region: sourceS3Credentials.region,
+    authType: sourceS3Credentials.authType,
+    roleArn: sourceS3Credentials.roleArn,
+    externalId: sourceS3Credentials.externalId,
     accessKeyId: sourceS3Credentials.accessKeyId,
     secretAccessKey: sourceS3Credentials.secretAccessKey,
+    sessionToken: sourceS3Credentials.sessionToken,
   };
 
   const tokens: SalesforceTokens = {

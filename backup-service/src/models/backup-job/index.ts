@@ -150,8 +150,14 @@ export interface ISource {
 export interface IDestinationConfig {
   bucketName: string;
   region: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+  // ACCESS_KEYS (or missing, for older destinations): accessKeyId + secretAccessKey are set.
+  // ASSUME_ROLE: roleArn + externalId are set and a temporary pass is fetched when needed.
+  authType?: 'ACCESS_KEYS' | 'ASSUME_ROLE';
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  sessionToken?: string;
+  roleArn?: string;
+  externalId?: string;
   folderPath?: string;
 }
 
