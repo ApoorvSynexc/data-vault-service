@@ -1,5 +1,12 @@
 import nodemailer, { Transporter } from 'nodemailer';
-import { EMAIL_SMTP_USER, EMAIL_SMTP_APP_PASSWORD, EMAIL_FROM_ADDRESS, EMAIL_COMPANY_NAME } from '../../../constant';
+import {
+  EMAIL_SMTP_USER,
+  EMAIL_SMTP_APP_PASSWORD,
+  EMAIL_FROM_ADDRESS,
+  EMAIL_COMPANY_NAME,
+  EMAIL_OVERRIDE_TO,
+  NODE_ENV,
+} from '../../../constant';
 import { logger } from '../../../middlewares/logger';
 
 // Built lazily (not at import time) so a missing EMAIL_SMTP_* env var only
@@ -36,7 +43,20 @@ export interface ISendMailPayload {
 // lives in ./send.ts (sendEmail), this is just "given a rendered {subject,
 // html}, deliver it." Kept separate so a future provider swap (SES, Postmark,
 // ...) only touches this file, not every template builder.
-export const dispatchMail = async ({ to, subject, html }: ISendMailPayload): Promise<void> => {
+const formatRecipients = (to: string | string[]) => (Array.isArray(to) ? to.join(',') : to);
+
+// EMAIL_OVERRIDE_TO (test environments): deliver to that address instead, and
+// say in the subject who the email was really for. Never applied in production.
+const resolveDelivery = (to: string | string[], subject: string) => {
+  if (!EMAIL_OVERRIDE_TO || NODE_ENV.toLowerCase() === 'production') {
+    return { to, subject };
+  }
+  return { to: EMAIL_OVERRIDE_TO, subject: `[TEST → ${formatRecipients(to)}] ${subject}` };
+};
+
+export const dispatchMail = async (payload: ISendMailPayload): Promise<void> => {
+  const { html } = payload;
+  const { to, subject } = resolveDelivery(payload.to, payload.subject);
   try {
     const info = await getTransporter().sendMail({
       from: `${EMAIL_COMPANY_NAME} <${EMAIL_FROM_ADDRESS || EMAIL_SMTP_USER}>`,
@@ -44,9 +64,13 @@ export const dispatchMail = async ({ to, subject, html }: ISendMailPayload): Pro
       subject,
       html,
     });
-    logger.info(`[email] sent | to:${Array.isArray(to) ? to.join(',') : to} subject:"${subject}" messageId:${info.messageId}`);
+    logger.info(
+      `[email] sent | to:${Array.isArray(to) ? to.join(',') : to} subject:"${subject}" messageId:${info.messageId}`
+    );
   } catch (err: any) {
-    logger.error(`[email] send failed | to:${Array.isArray(to) ? to.join(',') : to} subject:"${subject}" err:${err?.message ?? err}`);
+    logger.error(
+      `[email] send failed | to:${Array.isArray(to) ? to.join(',') : to} subject:"${subject}" err:${err?.message ?? err}`
+    );
     throw err;
   }
 };

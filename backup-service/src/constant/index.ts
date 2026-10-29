@@ -8,6 +8,10 @@ const EMAIL_SUPPORT_ADDRESS = String(
   process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com'
 );
 const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
+// Test environments only: when set, every email goes to this address instead
+// of its real recipient (the subject names who it was meant for). Ignored
+// when NODE_ENV is production.
+const EMAIL_OVERRIDE_TO = String(process.env.EMAIL_OVERRIDE_TO || '').trim();
 const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
 const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
 const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
@@ -238,6 +242,7 @@ export {
   EMAIL_COMPANY_NAME,
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
+  EMAIL_OVERRIDE_TO,
   EMAIL_APP_URL,
   EMAIL_SMTP_USER,
   EMAIL_SMTP_APP_PASSWORD,
