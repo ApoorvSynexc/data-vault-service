@@ -12,8 +12,9 @@ import { STATUS, JOB_OBJECT_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
 import { getBackupJob, updateArchivalObject, updateBackupJob, updateJobStatus } from '../backup-job';
+import { consumeTokenGateClosure } from '../third-party/salesforce/token-gate';
 import { getRestoreById, updateRestore } from '../restore';
-import { updateRestoreJobStatus } from '../restore-job';
+import { updateRestoreJob, updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
 import { httpRequest } from '../../utils/http-request';
@@ -39,6 +40,39 @@ const notifySchemaSyncCompleted = async (
       `[schema-sync] resume callback failed | backupConfigId:${backupConfigId} err:${err?.message ?? err}`
     );
   }
+};
+
+// ---------------------------------------------------------------------------
+// Liveness + token-gate bookkeeping shared by every runner.
+// ---------------------------------------------------------------------------
+const HEARTBEAT_INTERVAL_MS = 60_000;
+
+// Pings the job row every minute while it runs, so the stale-job sweeper can
+// tell a live 5-hour job from a crashed one. Returns the stop function.
+const startHeartbeat = (jobId: string, ping: (heartbeatAt: string) => Promise<unknown>): (() => void) => {
+  const timer = setInterval(() => {
+    ping(new Date().toISOString()).catch((err: any) =>
+      logger.warn(`Heartbeat failed for job ${jobId}: ${err?.message ?? err}`)
+    );
+  }, HEARTBEAT_INTERVAL_MS);
+  return () => clearInterval(timer);
+};
+
+// If the run's Salesforce token gate closed (refresh pending, reconnect
+// needed, org inactive…), records why on the job, so client-service can
+// re-queue it once the user's token is back. Always frees the job's gate.
+const recordTokenGateClosure = async (
+  jobId: string,
+  write: (fields: { errorReason: string; errorMessage: string }) => Promise<unknown>
+): Promise<void> => {
+  const closure = consumeTokenGateClosure(jobId);
+  if (!closure) {
+    return;
+  }
+  logger.warn(`Job ${jobId} stopped on Salesforce token: ${closure.reason}`);
+  await write({ errorReason: closure.reason, errorMessage: closure.message }).catch((err: any) =>
+    logger.error(`Job ${jobId}: could not record token stop reason: ${err?.message ?? err}`)
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -110,6 +144,9 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
     throw err;
   }
 
+  const stopHeartbeat = startHeartbeat(backupJobId, (heartbeatAt) =>
+    updateBackupJob({ backupJobId, heartbeatAt })
+  );
   try {
     if (!encryptedSource) {
       throw new Error(`Backup job ${backupJobId}: source credentials are missing`);
@@ -156,6 +193,8 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
       schemaSync: Boolean(job.schemaSync),
     });
   } finally {
+    stopHeartbeat();
+    await recordTokenGateClosure(backupJobId, (fields) => updateBackupJob({ backupJobId, ...fields }));
     activeJobs.delete(backupJobId);
   }
 };
@@ -187,6 +226,9 @@ export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> 
     throw err;
   }
 
+  const stopHeartbeat = startHeartbeat(backupJobId, (heartbeatAt) =>
+    updateBackupJob({ backupJobId, heartbeatAt })
+  );
   try {
     if (!encryptedSource) {
       throw new Error(`Archival job ${backupJobId}: source credentials are missing`);
@@ -264,6 +306,8 @@ export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> 
       schemaSync: Boolean(job.schemaSync),
     });
   } finally {
+    stopHeartbeat();
+    await recordTokenGateClosure(backupJobId, (fields) => updateBackupJob({ backupJobId, ...fields }));
     activeJobs.delete(backupJobId);
   }
 };
@@ -294,6 +338,9 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
     throw err;
   }
 
+  const stopHeartbeat = startHeartbeat(restoreJobId, (heartbeatAt) =>
+    updateRestoreJob({ restoreJobId, heartbeatAt })
+  );
   try {
     if (!source) {
       throw new Error(`Restore job ${restoreJobId}: source credentials are missing`);
@@ -306,6 +353,12 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
 
     const restoreSource = source as unknown as IRestoreJobSource;
     const restoreDestination = destination as unknown as IRestoreJobDestination;
+    restoreDestination.userId = restoreDestination.userId ?? job.userId;
+
+    // Kept so resumeRestoreJob can re-run exactly this restore later.
+    if (objectHierarchy?.length) {
+      await updateRestoreJob({ restoreJobId, objectHierarchy });
+    }
 
     const handler = getRestoreCrmHandler(restoreDestination.crmName);
     await handler.runRestore(
@@ -342,6 +395,8 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
       logger.error(`Restore ${restoreId}: could not mark restore as FAILED: ${updateErr?.message}`)
     );
   } finally {
+    stopHeartbeat();
+    await recordTokenGateClosure(restoreJobId, (fields) => updateRestoreJob({ restoreJobId, ...fields, stoppedRunType: 'RESTORE' }));
     activeJobs.delete(restoreJobId);
   }
 };
@@ -369,6 +424,9 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
     throw err;
   }
 
+  const stopHeartbeat = startHeartbeat(restoreJobId, (heartbeatAt) =>
+    updateRestoreJob({ restoreJobId, heartbeatAt })
+  );
   try {
     if (!source) {
       throw new Error(`Restore job ${restoreJobId}: source credentials are missing`);
@@ -386,6 +444,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
 
     const restoreSource = source as unknown as IRestoreJobSource;
     const restoreDestination = destination as unknown as IRestoreJobDestination;
+    restoreDestination.userId = restoreDestination.userId ?? job.userId;
 
     const handler = getRestoreCrmHandler(restoreDestination.crmName);
     await handler.runRollback(
@@ -422,6 +481,29 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
       logger.error(`Restore ${restoreId}: could not mark restore as FAILED: ${updateErr?.message}`)
     );
   } finally {
+    stopHeartbeat();
+    await recordTokenGateClosure(restoreJobId, (fields) => updateRestoreJob({ restoreJobId, ...fields, stoppedRunType: 'ROLLBACK' }));
     activeJobs.delete(restoreJobId);
   }
+};
+
+// Token-stop reasons that a resume may pick up (mirrors TOKEN_GATE_CLOSE_REASON).
+const RESUMABLE_TOKEN_REASONS = new Set(['SALESFORCE_TOKEN_WAITING', 'SALESFORCE_REAUTH_REQUIRED']);
+
+// Re-runs a restore or rollback that stopped because its Salesforce token gate
+// closed. Safe to repeat: restoreObjectData's chunk checkpoints skip chunks
+// already ingested and reconcile half-done ones, so nothing is inserted twice.
+export const resumeRestoreJob = async (job: IRestoreJob): Promise<void> => {
+  if (job.status !== STATUS.failed || !job.errorReason || !RESUMABLE_TOKEN_REASONS.has(job.errorReason)) {
+    throw new HttpError(409, `Restore job ${job.restoreJobId} did not stop on a Salesforce token problem`);
+  }
+  if (job.processingStartedAt) {
+    throw new HttpError(409, `Restore job ${job.restoreJobId} is already running`);
+  }
+
+  await updateRestore({ restoreId: job.restoreId, status: STATUS.pending });
+  const run = job.stoppedRunType === 'ROLLBACK' ? runRollbackJob : runRestoreJob;
+  run({ ...job, status: STATUS.pending }).catch((err: any) =>
+    logger.error(`Resume of restore job ${job.restoreJobId} failed: ${err?.message ?? err}`)
+  );
 };

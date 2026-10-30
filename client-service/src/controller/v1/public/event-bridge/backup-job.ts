@@ -1,7 +1,13 @@
-import { VISIBILITY_STATUS } from "../../../../constant";
+import { SALESFORCE_TOKEN_STATUS, VISIBILITY_STATUS } from "../../../../constant";
 import { logger } from "../../../../middlewares";
 import { checkSalesforceApiLimitUsage, getBackupConfigById, getUser, triggerBackupJob, updateBackupConfig } from "../../../../services";
 import { isScheduledForToday } from "../../../../utils/event-bridge";
+
+const BLOCKED_TOKEN_STATUSES = new Set<string>([
+    SALESFORCE_TOKEN_STATUS.expired,
+    SALESFORCE_TOKEN_STATUS.orgInactive,
+    SALESFORCE_TOKEN_STATUS.ipRestricted,
+]);
 
 const backupJob = async (params: { backupConfigId: string, userId: string, id?: string }) => {
     try {
@@ -27,6 +33,14 @@ const backupJob = async (params: { backupConfigId: string, userId: string, id?: 
         const user = await getUser({ userId });
         if (!user) {
             return
+        }
+
+        // Expired / org-inactive / IP-restricted users get a reconnect email
+        // series instead — starting a job that cannot authenticate would only
+        // add a failed run per schedule tick.
+        if (user.tokenStatus && BLOCKED_TOKEN_STATUSES.has(user.tokenStatus)) {
+            logger.info(`[EVENT BRIDGE] Skipping — Salesforce token status ${user.tokenStatus} | backupConfigId=${backupConfigId} userId=${userId}`);
+            return;
         }
 
         const shouldSkip = objectId ? targetObject?.upcomingJob?.skip : config.upcomingJob?.skip;

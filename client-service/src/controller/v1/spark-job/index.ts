@@ -5,7 +5,8 @@ import { setCompressionStatusBulk } from '../../../services/backup-job';
 import { ensureCompressionGlueTables } from '../../../services/spark-job';
 import { JOB_OBJECT_STATUS, STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../constant';
 import { flattenBackupObjects, wrapController } from '../../../utils/helper';
-import { decrypt, decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
+import { decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
+import { resolveStoredSourceKeys } from '../../../services/third-party/s3-bucket/credentials';
 import { logger } from '../../../middlewares';
 import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUser, toTreeSummary, filterObjectTree, getS3PrefixStats, onCompressionFinished } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
@@ -328,12 +329,8 @@ const updateSparkJobStatusHandler = async (req: IRequest, res: IResponse): Promi
     }
 
     if (restore.destination.type === 'EXPORT') {
-      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
-        'cipherText' in restoreJob.source.encryptedKeys
-          ? JSON.parse(decrypt(restoreJob.source.encryptedKeys))
-          : restoreJob.source.encryptedKeys;
       const s3Config = {
-        ...sourceS3Credentials,
+        ...(await resolveStoredSourceKeys(restoreJob.source.encryptedKeys)),
         bucketName: restoreJob.source.bucketName,
         region: restoreJob.source.region,
       };

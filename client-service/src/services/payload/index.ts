@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/client-emr-serverless';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
-import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
+import { getDestinationById, getResolvedDestinationConfig } from '../destination';
 import { getBackupJobsByConfig, getBackupJobsByConfigAndStatuses } from '../backup-job';
 import { getRestoreById } from '../restore';
 import { AWS_ACCESS_KEY_ID, AWS_REGION, AWS_EMR_APPLICATION_ID, ENCRYPTION_KEY, AWS_EMR_EXECUTION_ROLE_ARN, AWS_SECRET_ACCESS_KEY, STATUS, JOB_OBJECT_STATUS, NODE_ENV, AWS_EMR_S3_FILE_PATH, NODE_ENV_URL, SPARK_JOB_API_KEY, AWS_EMR_SPARK_SUBMIT_PARAMETERS, AWS_EMR_LOGS_S3_URI, SALESFORCE_AUDIT_ENABLE_OBJECTS } from '../../constant';
@@ -347,7 +347,7 @@ async function buildPayload(backupConfigId: string) {
             objectOperations,
             destinationConfigs: {
                 destinationName: destination.provider,
-                destinationRequiredCreds: getDecryptedDestinationConfig(destination),
+                destinationRequiredCreds: await getResolvedDestinationConfig(destination),
             },
         },
     };
@@ -485,7 +485,7 @@ async function buildRestorePayload(restoreConfigId: string) {
             },
             destinationConfigs: {
                 destinationName: destination.provider,
-                destinationRequiredCreds: getDecryptedDestinationConfig(destination),
+                destinationRequiredCreds: await getResolvedDestinationConfig(destination),
             },
         },
     };

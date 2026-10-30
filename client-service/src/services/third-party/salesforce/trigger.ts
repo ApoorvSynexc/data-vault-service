@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { createHash } from 'crypto';
-import { salesforceRequest, SalesforceTokens } from './index';
+import { salesforceFetch, salesforceRequest, SalesforceTokens } from './index';
 import { IBackupConfig, ITriggerResult, IUser } from '../../../models';
 import { getCrmById } from '../../crm';
 import { getBackupConfigsByCrm } from '../../backup-config';
@@ -331,16 +331,16 @@ const deployMetadata = async (
     Buffer.from(`\r\n--${boundary}--`),
   ]);
 
-  const deployResponse = await fetch(
+  const deployResponse = await salesforceFetch(
     `${instanceUrl}/services/data/v${API_VERSION}/metadata/deployRequest`,
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
       },
       body,
-    }
+    },
+    tokens
   );
 
   if (!deployResponse.ok) {
