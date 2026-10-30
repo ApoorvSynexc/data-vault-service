@@ -7,7 +7,7 @@ import { JOB_OBJECT_STATUS, STATUS, SALESFORCE_SYSTEM_FIELDS } from '../../../co
 import { flattenBackupObjects, wrapController } from '../../../utils/helper';
 import { decrypt, decryptEnvelope, decryptFromTransport } from '../../../utils/encryption';
 import { logger } from '../../../middlewares';
-import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUser, toTreeSummary, filterObjectTree, getS3PrefixStats } from '../../../services';
+import { getRestoreById, getRestoreJobById, runRestoreIngestJob, updateRestoreJob, updateRestore, getUser, toTreeSummary, filterObjectTree, getS3PrefixStats, onCompressionFinished } from '../../../services';
 import { getInactiveOwnerIds, salesforceObjectDescribe, salesforceObjectFilteredList } from '../../../services/third-party/salesforce/metadata/index';
 import { v4 as uuidv4 } from 'uuid';
 import { sendRestoreToBackupService } from '../../../services/third-party/salesforce/restore';
@@ -226,6 +226,13 @@ const applyCompressionStatus = async (
       );
     }
   }
+
+  // Release DynamoDB compression-queue lease and claim the next QUEUED tenant.
+  void onCompressionFinished(backupConfigId, success, errorMessage).catch((err: any) => {
+    logger.warn(
+      `[COMPRESSION] queue complete failed | configId=${backupConfigId} err:${err?.message ?? err}`
+    );
+  });
 
   return makeResponse(req, res, 200, true, 'update', { updated, failed });
 };

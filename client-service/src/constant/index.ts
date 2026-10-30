@@ -34,6 +34,30 @@ const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE ||
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
+const COMPRESSION_QUEUE_TABLE = `${NODE_ENV_PREFIX}-${process.env.COMPRESSION_QUEUE_TABLE || 'data-vault-compression-queue'}`;
+
+// Auto-compression after backup.job.completed (client-service owns enqueue + EMR submit).
+// Status updates always run; this flag only gates enqueue / worker StartJobRun.
+const AUTO_COMPRESSION_ENABLED = String(process.env.AUTO_COMPRESSION_ENABLED || 'true').toLowerCase() !== 'false';
+// Global parallel EMR compressions across tenants (Dev/QA=1, Prod≈15).
+const COMPRESSION_GLOBAL_CONCURRENCY = Math.max(1, Number(process.env.COMPRESSION_GLOBAL_CONCURRENCY || '1') || 1);
+// Realtime CDC debounce window before enqueue (ms).
+const COMPRESSION_REALTIME_DEBOUNCE_MS = Math.max(
+  60_000,
+  Number(process.env.COMPRESSION_REALTIME_DEBOUNCE_MS || String(15 * 60 * 1000)) || 15 * 60 * 1000
+);
+// Auto re-queue cap for COMPRESSION_JOB_FAILED (manual Process Backup bypasses).
+const COMPRESSION_MAX_ATTEMPTS = Math.max(1, Number(process.env.COMPRESSION_MAX_ATTEMPTS || '3') || 3);
+// How often the in-process worker polls DynamoDB for QUEUED items.
+const COMPRESSION_WORKER_POLL_MS = Math.max(
+  5_000,
+  Number(process.env.COMPRESSION_WORKER_POLL_MS || '30000') || 30_000
+);
+// Stale RUNNING lease (ms) — reaped by catch-up / worker.
+const COMPRESSION_LEASE_MS = Math.max(
+  60_000,
+  Number(process.env.COMPRESSION_LEASE_MS || String(3 * 60 * 60 * 1000)) || 3 * 60 * 60 * 1000
+);
 
 // Event Bridge Scheduler Config
 const AWS_EVENT_DESTINATION_API_KEY = String(process.env.AWS_EVENT_DESTINATION_API_KEY);
@@ -581,6 +605,14 @@ export {
   BACKUP_JOB_TABLE,
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
+  COMPRESSION_QUEUE_TABLE,
+
+  AUTO_COMPRESSION_ENABLED,
+  COMPRESSION_GLOBAL_CONCURRENCY,
+  COMPRESSION_REALTIME_DEBOUNCE_MS,
+  COMPRESSION_MAX_ATTEMPTS,
+  COMPRESSION_WORKER_POLL_MS,
+  COMPRESSION_LEASE_MS,
 
   // AWS EventBridge Scheduler Config
   AWS_EVENT_DESTINATION_API_KEY,

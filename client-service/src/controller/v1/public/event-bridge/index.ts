@@ -2,7 +2,7 @@ import { AWS_EVENT_DESTINATION_API_KEY } from "../../../../constant";
 import { runLogsArchive } from "../../../../jobs/logs-archive-cron";
 import { runPaymentSyncJob } from "../../../../jobs/payement-sync";
 import { runRetryFailedBackups } from "../../../../jobs/retry-failed-backups";
-import { runEmrJob } from "../../../../jobs/run-emr-job";
+import { runCompressionCatchup } from "../../../../jobs/compression-catchup";
 import { staleObjectSweeperJob } from "../../../../jobs/stale-object-sweeper";
 import { runSyncObjectJob } from "../../../../jobs/sync-objects";
 import { runSyncSalesforceRefreshTokenJob } from "../../../../jobs/sync-salesforce-refresh-token";
@@ -65,7 +65,8 @@ const eventBridgeHandler = async (req: IRequest, res: IResponse): Promise<void> 
             }
                 break;
             case "RUN_EMR":
-                await runEmrJob();
+                // Legacy purpose name — now drains DynamoDB compression queue / catch-up.
+                await runCompressionCatchup();
                 break;
             case "BACKUP_JOB":
             default:

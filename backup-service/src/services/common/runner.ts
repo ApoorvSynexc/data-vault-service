@@ -12,12 +12,12 @@ import { STATUS, JOB_OBJECT_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
 import { getBackupJob, updateArchivalObject, updateBackupJob, updateJobStatus } from '../backup-job';
-import { updateBackupConfig } from '../backup-config';
 import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
 import { httpRequest } from '../../utils/http-request';
+import { notifyJobCompleted } from './notify-client';
 
 // A Schema-Sync job refreshed the stored schema/picklist/record-type metadata; tell
 // client-service to resume the deferred /payload compression for this config. Reuses
@@ -147,6 +147,14 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
       completedAt: dayjs().toISOString(),
       errorMessage: err?.message ?? 'Unknown error',
     }).catch(() => { });
+    await notifyJobCompleted({
+      backupConfigId,
+      backupJobId,
+      status: STATUS.failed,
+      jobType: 'BULK',
+      eventId: `${backupJobId}:failed`,
+      schemaSync: Boolean(job.schemaSync),
+    });
   } finally {
     activeJobs.delete(backupJobId);
   }
@@ -241,15 +249,20 @@ export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> 
     }
   } catch (err: any) {
     logger.error(`Archival job ${backupJobId} failed: ${err?.message}`);
-    await Promise.all([
-      updateJobStatus({
-        backupJobId,
-        status: STATUS.failed,
-        completedAt: dayjs().toISOString(),
-        errorMessage: err?.message ?? 'Unknown error',
-      }).catch(() => { }),
-      updateBackupConfig(backupConfigId, { backupStatus: STATUS.failed }).catch(() => { }),
-    ]);
+    await updateJobStatus({
+      backupJobId,
+      status: STATUS.failed,
+      completedAt: dayjs().toISOString(),
+      errorMessage: err?.message ?? 'Unknown error',
+    }).catch(() => { });
+    await notifyJobCompleted({
+      backupConfigId,
+      backupJobId,
+      status: STATUS.failed,
+      jobType: 'BULK',
+      eventId: `${backupJobId}:failed`,
+      schemaSync: Boolean(job.schemaSync),
+    });
   } finally {
     activeJobs.delete(backupJobId);
   }
