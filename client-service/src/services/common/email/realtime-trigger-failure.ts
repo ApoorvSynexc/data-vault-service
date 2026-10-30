@@ -13,6 +13,7 @@ export interface IRealtimeTriggerFailureEmailParams {
   recipientName?: string;
   crmName: string;
   backupConfigId: string;
+  backupConfigSlug: string;
   backupConfigName: string;
   // When the backup config itself was created — context for "how long has
   // this real-time backup been running", not when this failure happened.
@@ -30,7 +31,7 @@ export const buildRealtimeTriggerFailureEmail = (params: IRealtimeTriggerFailure
   const {
     recipientName,
     crmName,
-    backupConfigId,
+    backupConfigSlug,
     backupConfigName,
     configCreatedAt,
     totalObjectCount,
@@ -58,7 +59,7 @@ export const buildRealtimeTriggerFailureEmail = (params: IRealtimeTriggerFailure
       preheader: `Real-time trigger ${actionLabel} failed for ${objectApiName}`,
       heading: `Real-time trigger ${actionLabel} failed`,
       ctaLabel: 'View backup configuration',
-      ctaUrl: `${EMAIL_APP_URL}/backup-configs/${backupConfigId}`,
+      ctaUrl: `${EMAIL_APP_URL}/backup-management-v2/details/${backupConfigSlug}`,
       accent: 'danger',
     }),
   };

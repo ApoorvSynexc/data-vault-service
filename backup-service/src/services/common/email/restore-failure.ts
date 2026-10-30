@@ -44,7 +44,7 @@ export const buildRestoreFailureEmail = (params: IRestoreFailureEmailParams): IE
       preheader: `Restore failed for ${label}`,
       heading: 'Restore failed',
       ctaLabel: 'View restore job',
-      ctaUrl: `${EMAIL_APP_URL}/restores/${restoreConfigId}/jobs/${restoreJobId}`,
+      ctaUrl: `${EMAIL_APP_URL}/restore-center/history/${restoreConfigId}`,
       accent: 'danger',
     }),
   };

@@ -401,6 +401,7 @@ const salesforceHandler: ICrmBackupHandler = {
           template: EMAIL_TEMPLATE.backupJobFailure,
           params: {
             backupConfigId,
+            backupConfigSlug: backupConfig.slug,
             backupConfigName: configLabel,
             crmName,
             backupJobId,
@@ -544,6 +545,7 @@ const salesforceHandler: ICrmBackupHandler = {
           template: EMAIL_TEMPLATE.archivalJobFailure,
           params: {
             backupConfigId,
+            backupConfigSlug: backupConfig.slug,
             backupConfigName: configLabel,
             crmName: source.crmName,
             backupJobId,

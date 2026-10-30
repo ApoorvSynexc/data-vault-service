@@ -6,6 +6,7 @@ import { IEmailTemplate, renderEmail, formatEmailDate } from './render';
 export interface IBackupJobFailureEmailParams {
   recipientName?: string;
   backupConfigId: string;
+  backupConfigSlug: string;
   backupConfigName: string;
   crmName: string;
   backupJobId: string;
@@ -30,7 +31,7 @@ export const buildBackupJobFailureEmail = (
 ): IEmailTemplate => {
   const {
     recipientName,
-    backupConfigId,
+    backupConfigSlug,
     backupConfigName,
     crmName,
     backupJobId,
@@ -65,7 +66,7 @@ export const buildBackupJobFailureEmail = (
       preheader: `Backup job failed for ${backupConfigName}`,
       heading: 'Backup job failed',
       ctaLabel: 'View backup job',
-      ctaUrl: `${EMAIL_APP_URL}/backup-configs/${backupConfigId}/jobs/${backupJobId}`,
+      ctaUrl: `${EMAIL_APP_URL}/backup-management-v2/details/${backupConfigSlug}`,
       accent: 'danger',
     }),
   };
