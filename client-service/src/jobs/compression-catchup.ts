@@ -3,6 +3,7 @@ import {
   getBackupConfigsInBatches,
   getBackupJobsByConfigAndStatuses,
   processCompressionQueue,
+  reconcileRunningCompressionJobs,
   requestCompressionForConfig,
   requeueStaleRunningLeases,
 } from '../services';
@@ -22,6 +23,7 @@ export const runCompressionCatchup = async (): Promise<void> => {
   let scanned = 0;
 
   try {
+    await reconcileRunningCompressionJobs();
     await requeueStaleRunningLeases();
 
     await getBackupConfigsInBatches(async (configs) => {

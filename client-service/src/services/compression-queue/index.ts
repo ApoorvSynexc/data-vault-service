@@ -10,6 +10,8 @@ import {
   COMPRESSION_QUEUE_TABLE,
   COMPRESSION_GLOBAL_CONCURRENCY,
   COMPRESSION_LEASE_MS,
+  COMPRESSION_MAX_ATTEMPTS,
+  COMPRESSION_RETRY_BACKOFF_MS,
   STATUS,
 } from '../../constant';
 import { logger } from '../../middlewares';
@@ -29,10 +31,23 @@ export interface ICompressionQueueItem {
   leaseOwner?: string;
   leaseExpiresAt?: string;
   errorMessage?: string;
+  /** EMR Serverless jobRunId from StartJobRun — used to reconcile without Spark callback. */
+  emrJobRunId?: string;
+  emrApplicationId?: string;
+  /** ISO time before which claim must skip this QUEUED row (backoff after EMR fail). */
+  nextRetryAt?: string;
 }
 
 const buildQueueId = (backupConfigId: string, backupJobId: string) =>
   `${backupConfigId}#${backupJobId}`;
+
+/** Delay before the next StartJobRun after a failed attempt, or null → permanent FAILED. */
+export const getCompressionRetryDelayMs = (attemptCount: number): number | null => {
+  if (attemptCount >= COMPRESSION_MAX_ATTEMPTS) return null;
+  const delays = COMPRESSION_RETRY_BACKOFF_MS;
+  if (!delays.length) return null;
+  return delays[Math.min(attemptCount - 1, delays.length - 1)] ?? null;
+};
 
 export const enqueueCompression = async (params: {
   backupConfigId: string;
@@ -52,6 +67,9 @@ export const enqueueCompression = async (params: {
     return { enqueued: false, queueId, reason: `already_${prev.status.toLowerCase()}` };
   }
 
+  // Fresh attempt cycle when re-enqueueing a permanent FAILED row.
+  const attemptCount = prev?.status === 'FAILED' ? 0 : (prev?.attemptCount ?? 0);
+
   const item: ICompressionQueueItem = {
     queueId,
     backupConfigId,
@@ -61,7 +79,7 @@ export const enqueueCompression = async (params: {
     source,
     createdAt: prev?.createdAt ?? now,
     updatedAt: now,
-    attemptCount: prev?.attemptCount ?? 0,
+    attemptCount,
   };
 
   await docClient.send(
@@ -131,6 +149,9 @@ const safeListByStatus = async (status: CompressionQueueStatus): Promise<ICompre
   }
 };
 
+export const listRunningCompressionJobs = async (): Promise<ICompressionQueueItem[]> =>
+  safeListByStatus('RUNNING');
+
 export const countRunning = async (): Promise<number> => {
   const running = await safeListByStatus('RUNNING');
   return running.length;
@@ -141,8 +162,14 @@ export const tenantHasRunning = async (backupConfigId: string): Promise<boolean>
   return running.some((r) => r.backupConfigId === backupConfigId);
 };
 
+const isRetryReady = (item: ICompressionQueueItem, nowMs: number): boolean => {
+  if (!item.nextRetryAt) return true;
+  return new Date(item.nextRetryAt).getTime() <= nowMs;
+};
+
 /**
  * Claim up to `slots` QUEUED items respecting per-tenant=1 and global concurrency.
+ * Skips rows whose nextRetryAt is still in the future.
  * Conditional QUEUED→RUNNING so two workers cannot steal the same row.
  */
 export const claimNextCompressionJobs = async (
@@ -162,6 +189,7 @@ export const claimNextCompressionJobs = async (
   for (const item of queued) {
     if (claimed.length >= slots) break;
     if (busyTenants.has(item.backupConfigId)) continue;
+    if (!isRetryReady(item, now)) continue;
 
     try {
       await docClient.send(
@@ -170,7 +198,7 @@ export const claimNextCompressionJobs = async (
           Key: { queueId: item.queueId },
           ConditionExpression: '#status = :queued',
           UpdateExpression:
-            'SET #status = :running, updatedAt = :updatedAt, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt, attemptCount = if_not_exists(attemptCount, :zero) + :one',
+            'SET #status = :running, updatedAt = :updatedAt, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt, attemptCount = if_not_exists(attemptCount, :zero) + :one REMOVE nextRetryAt',
           ExpressionAttributeNames: { '#status': 'status' },
           ExpressionAttributeValues: {
             ':queued': 'QUEUED',
@@ -191,6 +219,7 @@ export const claimNextCompressionJobs = async (
         leaseOwner,
         leaseExpiresAt,
         attemptCount: (item.attemptCount ?? 0) + 1,
+        nextRetryAt: undefined,
       });
       logger.info(`[compression-queue] claimed | queueId:${item.queueId} tenant:${item.backupConfigId}`);
     } catch (err: any) {
@@ -200,6 +229,51 @@ export const claimNextCompressionJobs = async (
   }
 
   return claimed;
+};
+
+/** Persist EMR ids after StartJobRun so reconcile can GetJobRun without Spark. */
+export const attachEmrJobRun = async (
+  queueId: string,
+  emrJobRunId: string,
+  emrApplicationId: string
+): Promise<void> => {
+  const now = new Date().toISOString();
+  await docClient.send(
+    new UpdateCommand({
+      TableName: COMPRESSION_QUEUE_TABLE,
+      Key: { queueId },
+      ConditionExpression: '#status = :running',
+      UpdateExpression:
+        'SET emrJobRunId = :emrJobRunId, emrApplicationId = :emrApplicationId, updatedAt = :updatedAt',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':running': 'RUNNING',
+        ':emrJobRunId': emrJobRunId,
+        ':emrApplicationId': emrApplicationId,
+        ':updatedAt': now,
+      },
+    })
+  );
+  logger.info(`[compression-queue] attached EMR job | queueId:${queueId} jobRunId:${emrJobRunId}`);
+};
+
+/** Keep lease alive while EMR (or Spark post-SUCCESS) is still in flight. */
+export const extendCompressionLease = async (queueId: string): Promise<void> => {
+  const now = Date.now();
+  await docClient.send(
+    new UpdateCommand({
+      TableName: COMPRESSION_QUEUE_TABLE,
+      Key: { queueId },
+      ConditionExpression: '#status = :running',
+      UpdateExpression: 'SET leaseExpiresAt = :leaseExpiresAt, updatedAt = :updatedAt',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':running': 'RUNNING',
+        ':leaseExpiresAt': new Date(now + COMPRESSION_LEASE_MS).toISOString(),
+        ':updatedAt': new Date(now).toISOString(),
+      },
+    })
+  );
 };
 
 export const completeCompressionQueueItem = async (
@@ -218,7 +292,7 @@ export const completeCompressionQueueItem = async (
           TableName: COMPRESSION_QUEUE_TABLE,
           Key: { queueId: item.queueId },
           UpdateExpression:
-            'SET #status = :status, updatedAt = :updatedAt, errorMessage = :errorMessage REMOVE leaseOwner, leaseExpiresAt',
+            'SET #status = :status, updatedAt = :updatedAt, errorMessage = :errorMessage REMOVE leaseOwner, leaseExpiresAt, nextRetryAt',
           ExpressionAttributeNames: { '#status': 'status' },
           ExpressionAttributeValues: {
             ':status': success ? 'DONE' : 'FAILED',
@@ -237,7 +311,87 @@ export const completeCompressionQueueItem = async (
   }
 };
 
-/** Re-queue stale RUNNING leases so a crashed worker does not block the tenant forever. */
+/**
+ * After EMR/StartJobRun/Spark failure: schedule QUEUED retry with backoff, or permanent FAILED.
+ * attemptCount is the attempt that just failed (incremented on claim).
+ */
+export const failOrRetryCompressionQueueItem = async (
+  item: ICompressionQueueItem,
+  errorMessage?: string
+): Promise<'retried' | 'failed'> => {
+  const attempts = item.attemptCount ?? 1;
+  const delayMs = getCompressionRetryDelayMs(attempts);
+  const now = Date.now();
+  const updatedAt = new Date(now).toISOString();
+
+  if (delayMs == null) {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: COMPRESSION_QUEUE_TABLE,
+        Key: { queueId: item.queueId },
+        ConditionExpression: '#status = :running',
+        UpdateExpression:
+          'SET #status = :failed, updatedAt = :updatedAt, errorMessage = :errorMessage REMOVE leaseOwner, leaseExpiresAt, nextRetryAt, emrJobRunId, emrApplicationId',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: {
+          ':running': 'RUNNING',
+          ':failed': 'FAILED',
+          ':updatedAt': updatedAt,
+          ':errorMessage': errorMessage ?? 'max_attempts_exceeded',
+        },
+      })
+    );
+    logger.warn(
+      `[compression-queue] permanent FAILED | queueId:${item.queueId} attempts:${attempts} err:${errorMessage ?? ''}`
+    );
+    return 'failed';
+  }
+
+  const nextRetryAt = new Date(now + delayMs).toISOString();
+  await docClient.send(
+    new UpdateCommand({
+      TableName: COMPRESSION_QUEUE_TABLE,
+      Key: { queueId: item.queueId },
+      ConditionExpression: '#status = :running',
+      UpdateExpression:
+        'SET #status = :queued, updatedAt = :updatedAt, nextRetryAt = :nextRetryAt, errorMessage = :errorMessage REMOVE leaseOwner, leaseExpiresAt, emrJobRunId, emrApplicationId',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':running': 'RUNNING',
+        ':queued': 'QUEUED',
+        ':updatedAt': updatedAt,
+        ':nextRetryAt': nextRetryAt,
+        ':errorMessage': errorMessage ?? 'emr_failed_retry_scheduled',
+      },
+    })
+  );
+  logger.warn(
+    `[compression-queue] retry scheduled | queueId:${item.queueId} attempt:${attempts} nextRetryAt:${nextRetryAt} delayMs:${delayMs} err:${errorMessage ?? ''}`
+  );
+  return 'retried';
+};
+
+/** Fail/retry every RUNNING row for a tenant (Spark callback / StartJobRun catch). */
+export const failOrRetryCompressionForConfig = async (
+  backupConfigId: string,
+  errorMessage?: string
+): Promise<void> => {
+  const running = await safeListByStatus('RUNNING');
+  const items = running.filter((r) => r.backupConfigId === backupConfigId);
+  for (const item of items) {
+    try {
+      await failOrRetryCompressionQueueItem(item, errorMessage);
+    } catch (err: any) {
+      if (err?.name === 'ConditionalCheckFailedException') continue;
+      throw err;
+    }
+  }
+};
+
+/**
+ * Re-queue stale RUNNING leases only when EMR is not still active.
+ * Prefer reconcileRunningCompressionJobs (GetJobRun) before calling this.
+ */
 export const requeueStaleRunningLeases = async (): Promise<number> => {
   const running = await safeListByStatus('RUNNING');
   const now = Date.now();
@@ -248,24 +402,20 @@ export const requeueStaleRunningLeases = async (): Promise<number> => {
       !item.leaseExpiresAt || new Date(item.leaseExpiresAt).getTime() < now;
     if (!expired) continue;
 
+    // Still has an EMR id — leave for reconcile; do not blind-requeue (avoids double StartJobRun).
+    if (item.emrJobRunId) {
+      logger.warn(
+        `[compression-queue] stale RUNNING with emrJobRunId — awaiting reconcile | queueId:${item.queueId}`
+      );
+      continue;
+    }
+
     try {
-      await docClient.send(
-        new UpdateCommand({
-          TableName: COMPRESSION_QUEUE_TABLE,
-          Key: { queueId: item.queueId },
-          ConditionExpression: '#status = :running',
-          UpdateExpression:
-            'SET #status = :queued, updatedAt = :updatedAt REMOVE leaseOwner, leaseExpiresAt',
-          ExpressionAttributeNames: { '#status': 'status' },
-          ExpressionAttributeValues: {
-            ':running': 'RUNNING',
-            ':queued': 'QUEUED',
-            ':updatedAt': new Date().toISOString(),
-          },
-        })
+      await failOrRetryCompressionQueueItem(
+        item,
+        'stale_lease_no_emr_job_run_id'
       );
       requeued++;
-      logger.warn(`[compression-queue] requeued stale RUNNING | queueId:${item.queueId}`);
     } catch (err: any) {
       if (err?.name === 'ConditionalCheckFailedException') continue;
       throw err;

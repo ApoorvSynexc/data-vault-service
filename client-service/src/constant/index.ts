@@ -46,14 +46,27 @@ const COMPRESSION_REALTIME_DEBOUNCE_MS = Math.max(
   60_000,
   Number(process.env.COMPRESSION_REALTIME_DEBOUNCE_MS || String(15 * 60 * 1000)) || 15 * 60 * 1000
 );
-// Auto re-queue cap for COMPRESSION_JOB_FAILED (manual Process Backup bypasses).
+// Max StartJobRun attempts per queue item before permanent FAILED.
+// Failures use COMPRESSION_RETRY_BACKOFF_MS between attempts (15m then 1h).
 const COMPRESSION_MAX_ATTEMPTS = Math.max(1, Number(process.env.COMPRESSION_MAX_ATTEMPTS || '3') || 3);
+// Backoff after EMR/StartJobRun failure: 1st→15m, 2nd→1h, then permanent FAILED.
+const COMPRESSION_RETRY_BACKOFF_MS: number[] = (() => {
+  const raw = process.env.COMPRESSION_RETRY_BACKOFF_MS;
+  if (raw) {
+    const parsed = raw
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (parsed.length) return parsed;
+  }
+  return [15 * 60 * 1000, 60 * 60 * 1000];
+})();
 // How often the in-process worker polls DynamoDB for QUEUED items.
 const COMPRESSION_WORKER_POLL_MS = Math.max(
   5_000,
   Number(process.env.COMPRESSION_WORKER_POLL_MS || '30000') || 30_000
 );
-// Stale RUNNING lease (ms) — reaped by catch-up / worker.
+// Stale RUNNING lease (ms) — reaped only when EMR is not still active.
 const COMPRESSION_LEASE_MS = Math.max(
   60_000,
   Number(process.env.COMPRESSION_LEASE_MS || String(3 * 60 * 60 * 1000)) || 3 * 60 * 60 * 1000
@@ -611,6 +624,7 @@ export {
   COMPRESSION_GLOBAL_CONCURRENCY,
   COMPRESSION_REALTIME_DEBOUNCE_MS,
   COMPRESSION_MAX_ATTEMPTS,
+  COMPRESSION_RETRY_BACKOFF_MS,
   COMPRESSION_WORKER_POLL_MS,
   COMPRESSION_LEASE_MS,
 

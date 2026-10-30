@@ -2,6 +2,7 @@ import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import {
   AUTO_COMPRESSION_ENABLED,
+  AWS_EMR_APPLICATION_ID,
   BACKUP_CONFIG_TABLE,
   COMPRESSION_MAX_ATTEMPTS,
   COMPRESSION_REALTIME_DEBOUNCE_MS,
@@ -11,15 +12,21 @@ import {
 import { logger } from '../../middlewares';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { getBackupJobsByConfigAndStatuses } from '../backup-job';
-import { initalizePayloadTransform } from '../payload';
+import { getEmrJobRun, initalizePayloadTransform } from '../payload';
 import {
+  attachEmrJobRun,
   claimNextCompressionJobs,
   completeCompressionQueueItem,
   countRunning,
   enqueueCompression,
+  extendCompressionLease,
+  failOrRetryCompressionForConfig,
+  failOrRetryCompressionQueueItem,
   getGlobalConcurrency,
+  listRunningCompressionJobs,
   requeueStaleRunningLeases,
   tenantHasRunning,
+  type ICompressionQueueItem,
 } from '../compression-queue';
 import os from 'os';
 
@@ -33,6 +40,15 @@ const MANUAL_ELIGIBLE_STATUSES = [
   STATUS.compressionFailed,
 ];
 
+const EMR_ACTIVE_STATES = new Set([
+  'SUBMITTED',
+  'PENDING',
+  'SCHEDULED',
+  'RUNNING',
+  'CANCELLING',
+]);
+const EMR_FAILED_STATES = new Set(['FAILED', 'CANCELLED']);
+
 let workerRunning = false;
 const leaseOwner = `${os.hostname()}:${process.pid}`;
 
@@ -42,7 +58,7 @@ const leaseOwner = `${os.hostname()}:${process.pid}`;
 export const claimRealtimeDebounce = async (backupConfigId: string): Promise<boolean> => {
   const now = Date.now();
   const cutoffIso = new Date(now - COMPRESSION_REALTIME_DEBOUNCE_MS).toISOString();
-  const nowIso = new Date(now).toISOString();
+  const nowIso = new Date().toISOString();
 
   try {
     await docClient.send(
@@ -224,7 +240,53 @@ export const handleBackupJobCompleted = async (body: {
 };
 
 /**
- * Worker: claim QUEUED → submitEMR. Called on interval, after enqueue, and after Spark callback.
+ * Poll GetJobRun for RUNNING queue rows:
+ * - FAILED/CANCELLED → backoff retry or permanent FAILED
+ * - still active / SUCCESS (awaiting Spark) → extend lease
+ */
+export const reconcileRunningCompressionJobs = async (): Promise<void> => {
+  const running = await listRunningCompressionJobs();
+  for (const item of running) {
+    if (!item.emrJobRunId) continue;
+
+    try {
+      const jobRun = await getEmrJobRun(
+        item.emrJobRunId,
+        item.emrApplicationId || AWS_EMR_APPLICATION_ID
+      );
+      const state = jobRun?.state ?? 'UNKNOWN';
+      const stateDetails = jobRun?.stateDetails;
+
+      if (EMR_FAILED_STATES.has(state)) {
+        const msg = `emr_${state.toLowerCase()}${stateDetails ? `:${stateDetails}` : ''}`;
+        await failOrRetryCompressionQueueItem(item, msg);
+        continue;
+      }
+
+      if (EMR_ACTIVE_STATES.has(state) || state === 'SUCCESS') {
+        // SUCCESS: Spark callback still owns DONE; extend so stale reaper does not double-submit.
+        try {
+          await extendCompressionLease(item.queueId);
+        } catch (err: any) {
+          if (err?.name !== 'ConditionalCheckFailedException') throw err;
+        }
+        continue;
+      }
+
+      logger.warn(
+        `[compression-reconcile] unexpected EMR state | queueId:${item.queueId} state:${state}`
+      );
+    } catch (err: any) {
+      logger.error(
+        `[compression-reconcile] GetJobRun failed | queueId:${item.queueId} err:${err?.message ?? err}`
+      );
+    }
+  }
+};
+
+/**
+ * Worker: reconcile EMR → claim QUEUED → StartJobRun.
+ * Called on interval, after enqueue, and after Spark callback.
  */
 export const processCompressionQueue = async (): Promise<void> => {
   if (workerRunning) return;
@@ -235,6 +297,7 @@ export const processCompressionQueue = async (): Promise<void> => {
       return;
     }
 
+    await reconcileRunningCompressionJobs();
     await requeueStaleRunningLeases();
 
     const running = await countRunning();
@@ -248,7 +311,7 @@ export const processCompressionQueue = async (): Promise<void> => {
     for (const item of claimed) {
       try {
         logger.info(
-          `[compression-worker] StartJobRun | cfg:${item.backupConfigId} queueId:${item.queueId}`
+          `[compression-worker] StartJobRun | cfg:${item.backupConfigId} queueId:${item.queueId} attempt:${item.attemptCount}`
         );
         const started = await initalizePayloadTransform(item.backupConfigId, {
           skipRealtimeSync: true,
@@ -257,12 +320,36 @@ export const processCompressionQueue = async (): Promise<void> => {
         // No compressible work left — release lease so the tenant is not stuck RUNNING.
         if (!started) {
           await completeCompressionQueueItem(item.backupConfigId, true, 'noop_no_compressible_jobs');
+          continue;
+        }
+
+        const jobRunId = started.jobRunId;
+        if (jobRunId) {
+          try {
+            await attachEmrJobRun(
+              item.queueId,
+              jobRunId,
+              AWS_EMR_APPLICATION_ID
+            );
+          } catch (err: any) {
+            // Job already submitted — keep RUNNING; reconcile may still work if we log the id.
+            logger.error(
+              `[compression-worker] attachEmrJobRun failed | queueId:${item.queueId} jobRunId:${jobRunId} err:${err?.message ?? err}`
+            );
+          }
+        } else {
+          logger.warn(
+            `[compression-worker] StartJobRun returned no jobRunId | queueId:${item.queueId}`
+          );
         }
       } catch (err: any) {
         logger.error(
           `[compression-worker] StartJobRun failed | cfg:${item.backupConfigId} err:${err?.message ?? err}`
         );
-        await completeCompressionQueueItem(item.backupConfigId, false, err?.message ?? 'start_failed');
+        await failOrRetryCompressionQueueItem(
+          item as ICompressionQueueItem,
+          err?.message ?? 'start_failed'
+        );
       }
     }
   } catch (err: any) {
@@ -277,7 +364,11 @@ export const onCompressionFinished = async (
   success: boolean,
   errorMessage?: string
 ): Promise<void> => {
-  await completeCompressionQueueItem(backupConfigId, success, errorMessage);
+  if (success) {
+    await completeCompressionQueueItem(backupConfigId, true, errorMessage);
+  } else {
+    await failOrRetryCompressionForConfig(backupConfigId, errorMessage);
+  }
   void processCompressionQueue();
 };
 

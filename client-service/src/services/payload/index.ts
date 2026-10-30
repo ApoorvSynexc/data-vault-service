@@ -1,4 +1,10 @@
-import { EMRServerlessClient, StartJobRunCommand, StartJobRunCommandOutput } from '@aws-sdk/client-emr-serverless';
+import {
+  EMRServerlessClient,
+  GetJobRunCommand,
+  StartJobRunCommand,
+  StartJobRunCommandOutput,
+  type JobRun,
+} from '@aws-sdk/client-emr-serverless';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getDecryptedDestinationConfig } from '../destination';
@@ -602,12 +608,24 @@ async function initalizeRestoreTransform(restoreConfigId: string): Promise<Start
     return submitEMR({ restoreConfigId });
 }
 
+/** Poll EMR Serverless job state (used by compression-queue reconcile). */
+async function getEmrJobRun(
+  jobRunId: string,
+  applicationId: string = AWS_EMR_APPLICATION_ID
+): Promise<JobRun | undefined> {
+  const response = await client.send(
+    new GetJobRunCommand({ applicationId, jobRunId })
+  );
+  return response.jobRun;
+}
+
 export {
     buildPayload,
     buildRestorePayload,
     submitEMR,
     initalizePayloadTransform,
     initalizeRestoreTransform,
+    getEmrJobRun,
     isCompressible,
     COMPRESSIBLE_STATUSES,
     // exported for payload.check.ts — the per-job grouping contract with Spark
