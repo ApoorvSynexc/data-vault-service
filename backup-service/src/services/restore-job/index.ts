@@ -1,7 +1,12 @@
 import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
-import { RESTORE_JOB_TABLE } from '../../constant';
-import { IRestoreJob, IRestoreJobObject, IRestoreObjectHierarchyTreeNode, IRestoreObjectHierarchyNode } from '../../models';
+import { JOB_OBJECT_STATUS, RESTORE_JOB_TABLE } from '../../constant';
+import {
+  IRestoreJob,
+  IRestoreJobObject,
+  IRestoreObjectHierarchyTreeNode,
+  IRestoreObjectHierarchyNode,
+} from '../../models';
 
 interface UpdateRestoreJobStatusParams {
   restoreJobId: string;
@@ -120,9 +125,11 @@ const updateRestoreObject = async (params: UpdateRestoreObjectParams): Promise<v
   };
   const expressionValues: Record<string, any> = { ':updatedAt': now };
 
-  // A restore can now write this object's status twice (once per insert/update
-  // operation) — don't let a later SUCCESS overwrite an earlier FAILED.
-  if (status !== undefined && !(status === 'SUCCESS' && currentObject.status === 'FAILED')) {
+  // A restore can now write this object's status twice (once per chunk) —
+  // don't let a later chunk's COMPLETED overwrite an earlier chunk's FAILED.
+  const isCompletedStatus = status === JOB_OBJECT_STATUS.restoreCompleted || status === JOB_OBJECT_STATUS.rollbackCompleted;
+  const wasFailedStatus = currentObject.status === JOB_OBJECT_STATUS.restoreFailed || currentObject.status === JOB_OBJECT_STATUS.rollbackFailed;
+  if (status !== undefined && !(isCompletedStatus && wasFailedStatus)) {
     setParts.push(`#destination.#objects[${objectIndex}].#status = :status`);
     expressionNames['#status'] = 'status';
     expressionValues[':status'] = status;

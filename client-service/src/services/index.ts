@@ -9,6 +9,8 @@ export * from './counter';
 export * from './crm';
 export * from './oauth-state';
 export * from './payload';
+export * from './compression-queue';
+export * from './compression';
 export * from './role';
 export * from './schema';
 export * from './session';

@@ -1,4 +1,10 @@
-import { EMRServerlessClient, StartJobRunCommand, StartJobRunCommandOutput } from '@aws-sdk/client-emr-serverless';
+import {
+  EMRServerlessClient,
+  GetJobRunCommand,
+  StartJobRunCommand,
+  StartJobRunCommandOutput,
+  type JobRun,
+} from '@aws-sdk/client-emr-serverless';
 import { getBackupConfigById } from '../backup-config';
 import { getCrmById } from '../crm';
 import { getDestinationById, getResolvedDestinationConfig } from '../destination';
@@ -572,11 +578,22 @@ async function submitEMR(payload: EmrTriggerPayload): Promise<StartJobRunCommand
 // against spinning up EMR for a config with no jobs at all.
 async function initalizePayloadTransform(
     backupConfigId: string,
-    opts: { skipRealtimeSync?: boolean } = {}
+    opts: { skipRealtimeSync?: boolean; requireCompressible?: boolean } = {}
 ): Promise<StartJobRunCommandOutput | void> {
     const backupJobs = await fetchAllBackupJobs(backupConfigId);
     if (!backupJobs.length) {
         throw new Error('No backup jobs found');
+    }
+
+    // Auto/worker path: never StartJobRun when nothing is compressible (avoids empty EMR cost).
+    if (opts.requireCompressible !== false) {
+        const compressible = await fetchCompressibleBackupJobs(backupConfigId);
+        if (!compressible.length) {
+            logger.info(
+                `[EMR] skip StartJobRun — no compressible jobs | backupConfigId:${backupConfigId}`
+            );
+            return;
+        }
     }
 
     logger.info(`Triggering EMR for backupConfigId: ${backupConfigId}`);
@@ -591,12 +608,24 @@ async function initalizeRestoreTransform(restoreConfigId: string): Promise<Start
     return submitEMR({ restoreConfigId });
 }
 
+/** Poll EMR Serverless job state (used by compression-queue reconcile). */
+async function getEmrJobRun(
+  jobRunId: string,
+  applicationId: string = AWS_EMR_APPLICATION_ID
+): Promise<JobRun | undefined> {
+  const response = await client.send(
+    new GetJobRunCommand({ applicationId, jobRunId })
+  );
+  return response.jobRun;
+}
+
 export {
     buildPayload,
     buildRestorePayload,
     submitEMR,
     initalizePayloadTransform,
     initalizeRestoreTransform,
+    getEmrJobRun,
     isCompressible,
     COMPRESSIBLE_STATUSES,
     // exported for payload.check.ts — the per-job grouping contract with Spark

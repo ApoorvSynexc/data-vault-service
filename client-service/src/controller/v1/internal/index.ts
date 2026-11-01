@@ -2,10 +2,12 @@ import { IRequest, IResponse, makeResponse } from '../../../lib';
 import {
   updateBackupConfig,
   getBackupConfigById,
-  initalizePayloadTransform,
   getRestoreJobById,
+  handleBackupJobCompleted,
+  requestCompressionForConfig,
+  processCompressionQueue,
 } from '../../../services';
-import { STATUS, TOKEN_REFRESH_TRIGGER, VISIBILITY_STATUS } from '../../../constant';
+import { STATUS, TOKEN_REFRESH_TRIGGER } from '../../../constant';
 import { getFreshTokens, SalesforceTokenError } from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
 import { runRestoreFieldSetupAndTransform } from '../../../services/third-party/salesforce/restore';
@@ -56,34 +58,39 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
 
   try {
     switch (eventType) {
+      case 'backup.job.completed': {
+        await handleBackupJobCompleted({
+          backupConfigId,
+          backupJobId: String(req.body.backupJobId ?? eventId ?? ''),
+          status: String(req.body.status ?? ''),
+          jobType: req.body.jobType === 'REALTIME' ? 'REALTIME' : 'BULK',
+          eventId,
+          schemaSync: Boolean(req.body.schemaSync),
+          sizeInBytes: req.body.sizeInBytes,
+          completedRecordCount: req.body.completedRecordCount,
+          deletedRecordCount: req.body.deletedRecordCount,
+        });
+      }
+        break;
+      // Legacy aliases — keep for any older callers; prefer backup.job.completed.
       case 'backup.completed': {
-        const backupConfig = await getBackupConfigById(backupConfigId);
-        if (backupConfig?.status !== VISIBILITY_STATUS.paused) {
-          await updateBackupConfig(
-            backupConfigId,
-            {
-              backupStatus: STATUS.success,
-              lastBackupAt: new Date().toISOString(),
-              lastEventId: eventId,
-            },
-            eventId
-          );
-        }
+        await handleBackupJobCompleted({
+          backupConfigId,
+          backupJobId: String(eventId ?? backupConfigId),
+          status: STATUS.success,
+          jobType: 'BULK',
+          eventId,
+        });
       }
         break;
       case 'backup.failed': {
-        const backupConfig = await getBackupConfigById(backupConfigId);
-        if (backupConfig?.status !== VISIBILITY_STATUS.paused) {
-          await updateBackupConfig(
-            backupConfigId,
-            {
-              backupStatus: STATUS.failed,
-              lastBackupAt: new Date().toISOString(),
-              lastEventId: eventId,
-            },
-            eventId
-          );
-        }
+        await handleBackupJobCompleted({
+          backupConfigId,
+          backupJobId: String(eventId ?? backupConfigId),
+          status: STATUS.failed,
+          jobType: 'BULK',
+          eventId,
+        });
       }
         break;
       case 'backup.size.updated': {
@@ -113,7 +120,17 @@ const getBackupServicePayloadHandler = async (req: IRequest, res: IResponse): Pr
             await runRestoreFieldSetupAndTransform(restoreJob.restoreId, restoreJob.restoreJobId, restoreJob.destination.objects);
           }
         } else {
-          await initalizePayloadTransform(backupConfigId, { skipRealtimeSync: true });
+          // Enqueue compression (same queue as backup.job.completed SUCCESS) — do not StartJobRun inline.
+          const result = await requestCompressionForConfig({
+            backupConfigId,
+            backupJobId: String(eventId ?? `schema-sync:${backupConfigId}`),
+            jobType: 'BULK',
+            source: 'schema-sync',
+          });
+          logger.info(
+            `[compression] schema.sync.completed | cfg:${backupConfigId} result:${result.reason}`
+          );
+          void processCompressionQueue();
         }
       }
         break;

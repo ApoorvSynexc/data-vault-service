@@ -43,6 +43,43 @@ const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || '
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
 const TOKEN_EVENT_TABLE = `${NODE_ENV_PREFIX}-${process.env.TOKEN_EVENT_TABLE || 'data-vault-token-events'}`;
+const COMPRESSION_QUEUE_TABLE = `${NODE_ENV_PREFIX}-${process.env.COMPRESSION_QUEUE_TABLE || 'data-vault-compression-queue'}`;
+
+// Auto-compression after backup.job.completed (client-service owns enqueue + EMR submit).
+// Status updates always run; this flag only gates enqueue / worker StartJobRun.
+const AUTO_COMPRESSION_ENABLED = String(process.env.AUTO_COMPRESSION_ENABLED || 'true').toLowerCase() !== 'false';
+// Global parallel EMR compressions across tenants (Dev/QA=1, Prod≈15).
+const COMPRESSION_GLOBAL_CONCURRENCY = Math.max(1, Number(process.env.COMPRESSION_GLOBAL_CONCURRENCY || '1') || 1);
+// Realtime CDC debounce window before enqueue (ms).
+const COMPRESSION_REALTIME_DEBOUNCE_MS = Math.max(
+  60_000,
+  Number(process.env.COMPRESSION_REALTIME_DEBOUNCE_MS || String(15 * 60 * 1000)) || 15 * 60 * 1000
+);
+// Max StartJobRun attempts per queue item before permanent FAILED.
+// Failures use COMPRESSION_RETRY_BACKOFF_MS between attempts (15m then 1h).
+const COMPRESSION_MAX_ATTEMPTS = Math.max(1, Number(process.env.COMPRESSION_MAX_ATTEMPTS || '3') || 3);
+// Backoff after EMR/StartJobRun failure: 1st→15m, 2nd→1h, then permanent FAILED.
+const COMPRESSION_RETRY_BACKOFF_MS: number[] = (() => {
+  const raw = process.env.COMPRESSION_RETRY_BACKOFF_MS;
+  if (raw) {
+    const parsed = raw
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (parsed.length) return parsed;
+  }
+  return [15 * 60 * 1000, 60 * 60 * 1000];
+})();
+// How often the in-process worker polls DynamoDB for QUEUED items.
+const COMPRESSION_WORKER_POLL_MS = Math.max(
+  5_000,
+  Number(process.env.COMPRESSION_WORKER_POLL_MS || '30000') || 30_000
+);
+// Stale RUNNING lease (ms) — reaped only when EMR is not still active.
+const COMPRESSION_LEASE_MS = Math.max(
+  60_000,
+  Number(process.env.COMPRESSION_LEASE_MS || String(3 * 60 * 60 * 1000)) || 3 * 60 * 60 * 1000
+);
 
 // Event Bridge Scheduler Config
 const AWS_EVENT_DESTINATION_API_KEY = String(process.env.AWS_EVENT_DESTINATION_API_KEY);
@@ -682,6 +719,15 @@ export {
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
   TOKEN_EVENT_TABLE,
+  COMPRESSION_QUEUE_TABLE,
+
+  AUTO_COMPRESSION_ENABLED,
+  COMPRESSION_GLOBAL_CONCURRENCY,
+  COMPRESSION_REALTIME_DEBOUNCE_MS,
+  COMPRESSION_MAX_ATTEMPTS,
+  COMPRESSION_RETRY_BACKOFF_MS,
+  COMPRESSION_WORKER_POLL_MS,
+  COMPRESSION_LEASE_MS,
 
   // AWS EventBridge Scheduler Config
   AWS_EVENT_DESTINATION_API_KEY,

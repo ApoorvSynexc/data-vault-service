@@ -1095,15 +1095,17 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
     if (backupConfig.type === 'NORMAL') {
       if (backupConfig.schedule === 'REALTIME') {
         const result = await runMetadataComparisonForConfig(backupConfig, false);
-        for (const { objectName, result: metadataResult } of result) {
-          // const operations = getMetadataChangeOperations(metadataResult);
-          // const requiresSchemaSync = operations.includes('updates') || operations.includes('deletes');
+        const comparisonErrorMessage = 'Metadata comparison failed, Please retry after reconnect your crm';
 
-          if (!metadataResult) {
-            const failedObjects = restoreJob.destination.objects.filter((obj) => ({ ...obj, status: JOB_OBJECT_STATUS.failed, errorMessage: 'Metadata comparison failed, Please retry after reconnect your crm' }));
-            await updateRestoreJob({ restoreJobId: restoreJob.restoreJobId, replaceObjects: failedObjects, status: STATUS.failed });
-            await updateRestore({ restoreId, status: STATUS.failed });
+        for (const { objectName, result: metadataResult } of result) {
+          if (!metadataResult || 'error' in metadataResult) {
+            if (metadataResult && 'error' in metadataResult) {
+              logger.error(
+                `[create restore] metadata comparison failed, backupConfigId=${backupConfig.backupConfigId}, objectName=${objectName}, errorMsg=${metadataResult.error}`
+              );
+            }
             hasComparisonError = true;
+            continue;
           }
 
           if (!hasComparisonError && hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
@@ -1111,7 +1113,16 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
           }
         }
 
-        if (changedObjectNames.length) {
+        if (hasComparisonError) {
+          const failedObjects = restoreJob.destination.objects.map((obj) => ({ ...obj, status: JOB_OBJECT_STATUS.failed, errorMessage: comparisonErrorMessage }));
+          await updateRestoreJob({ restoreJobId: restoreJob.restoreJobId, replaceObjects: failedObjects, status: STATUS.failed });
+          await updateRestore({ restoreId, status: STATUS.failed });
+        }
+
+        if (hasComparisonError) {
+          // Already marked restore/restoreJob failed above — don't trigger a
+          // backup/field-setup for objects that changed before the failing one.
+        } else if (changedObjectNames.length) {
           await triggerBackupJob({
             user: backupConfigUser,
             config: backupConfig,
@@ -1124,7 +1135,7 @@ const createRestoreHandler2 = async (req: IRequest, res: IResponse): Promise<voi
             },
             ...((backupConfig.type === 'NORMAL' && backupConfig.schedule === 'REALTIME') && { lastSchemaSyncAt: true })
           });
-        } else if (!hasComparisonError) {
+        } else {
           await runRestoreFieldSetupAndTransform(restoreJob.restoreId, restoreJob.restoreJobId, restoreJob.destination.objects);
         }
       } else {

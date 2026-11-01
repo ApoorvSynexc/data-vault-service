@@ -259,9 +259,6 @@ const submitIngestChunk = async (
   }
   const status = await pollBulkJobUntilDone(instanceUrl, tokens, jobId);
 
-  logger.info(
-    `[Restore] Polling for completion for object ${objectName}, }, status=${JSON.stringify({ status: status })}`
-  );
   const processed = status.numberRecordsProcessed ?? 0;
   const failed = status.numberRecordsFailed ?? 0;
 
@@ -271,6 +268,10 @@ const submitIngestChunk = async (
     errors = parseFirstNErrors(failedCsv, MAX_STORED_ERRORS_COUNT);
     errors = errors.length ? errors : [status.errorMessage ?? 'An error occurred'];
   }
+
+  logger.debug(
+    `[Restore] Polling for completion for object ${objectName}, status=${status.state}, failed=${failed}, errors.length=${errors.length}`
+  );
 
   // ponytail: update has no pre-change snapshot to roll back to (only ids are
   // captured), so it can't safely produce a rollback artifact — revisit if

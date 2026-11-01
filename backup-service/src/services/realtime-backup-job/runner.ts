@@ -5,7 +5,7 @@ import { IBackupJob, IDestinationConfig, IRealtimePayload } from '../../models';
 import { decrypt } from '../../utils/encryption';
 import { getRealtimeCrmHandler } from '../third-party/registry';
 import { updateRealtimeJob } from './index';
-import { updateBackupConfig } from '../backup-config';
+import { notifyJobCompleted } from '../common/notify-client';
 
 export const runRealtimeBackupJob = async (
   job: IBackupJob,
@@ -44,7 +44,15 @@ export const runRealtimeBackupJob = async (
       recordCountIncrement: payload.records.length,
     });
 
-    await updateBackupConfig(job.backupConfigId, { backupStatus: STATUS.success });
+    await notifyJobCompleted({
+      backupConfigId: job.backupConfigId,
+      backupJobId,
+      status: STATUS.success,
+      jobType: 'REALTIME',
+      eventId: `${backupJobId}:${dayjs().toISOString()}`,
+      sizeInBytes,
+      completedRecordCount: payload.records.length,
+    });
   } catch (err: any) {
     const errorMsg = err?.message ?? 'Unknown error';
     logger.error(`Realtime job failed, backupJobId=${backupJobId}, errorMessage=${errorMsg}`);
@@ -55,5 +63,13 @@ export const runRealtimeBackupJob = async (
       lastCompletedAt: dayjs().toISOString(),
       errorMessage: errorMsg,
     }).catch(() => {});
+
+    await notifyJobCompleted({
+      backupConfigId: job.backupConfigId,
+      backupJobId,
+      status: STATUS.failed,
+      jobType: 'REALTIME',
+      eventId: `${backupJobId}:failed:${dayjs().toISOString()}`,
+    });
   }
 };

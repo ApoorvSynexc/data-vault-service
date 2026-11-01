@@ -1,4 +1,4 @@
-import { STATUS, JOB_OBJECT_STATUS, EMAIL_TEMPLATE, BACKUP_TYPE } from '../../../constant';
+import { STATUS, JOB_OBJECT_STATUS, EMAIL_TEMPLATE, BACKUP_TYPE, JOB_TYPE } from '../../../constant';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../../middlewares/logger';
 import {
@@ -19,6 +19,7 @@ import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getBackupJob, updateBackupObject, updateJobStatus } from '../../backup-job';
 import { getRestoreById, updateRestore } from '../../restore';
 import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
+import { notifyJobCompleted } from '../../common/notify-client';
 
 import { SalesforceTokens } from './api-request';
 import { getCurrentAccessToken } from './token-gate';
@@ -373,15 +374,23 @@ const salesforceHandler: ICrmBackupHandler = {
           ? STATUS.partialFailure
           : STATUS.success;
 
-    await updateBackupConfig(backupConfigId, {
-      backupStatus: finalStatus,
-      sizeInBytes,
-      completedRecordCount,
-    });
+    // Job row stays in backup-service; config backupStatus is owned by client-service
+    // via backup.job.completed (see notifyJobCompleted).
     await updateJobStatus({
       backupJobId,
       status: finalStatus,
       completedAt: dayjs().toISOString(),
+    });
+
+    await notifyJobCompleted({
+      backupConfigId,
+      backupJobId,
+      status: finalStatus,
+      jobType: (completedJob?.jobType as 'BULK' | 'REALTIME') || JOB_TYPE.bulk,
+      eventId: backupJobId,
+      schemaSync: Boolean(completedJob?.schemaSync),
+      sizeInBytes,
+      completedRecordCount,
     });
 
     if (failedObjects.length) {
@@ -515,16 +524,22 @@ const salesforceHandler: ICrmBackupHandler = {
           ? STATUS.partialFailure
           : STATUS.success;
 
-    await updateBackupConfig(backupConfigId, {
-      backupStatus: finalStatus,
-      sizeInBytes,
-      completedRecordCount,
-      deletedRecordCount,
-    });
     await updateJobStatus({
       backupJobId,
       status: finalStatus,
       completedAt: dayjs().toISOString(),
+    });
+
+    await notifyJobCompleted({
+      backupConfigId,
+      backupJobId,
+      status: finalStatus,
+      jobType: (freshJob?.jobType as 'BULK' | 'REALTIME') || JOB_TYPE.bulk,
+      eventId: backupJobId,
+      schemaSync: Boolean(freshJob?.schemaSync),
+      sizeInBytes,
+      completedRecordCount,
+      deletedRecordCount,
     });
 
     if (failedObjects.length) {
