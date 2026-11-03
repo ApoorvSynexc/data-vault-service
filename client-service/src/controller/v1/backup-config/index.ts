@@ -410,6 +410,11 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
     return;
   }
 
+  if(backupConfig.status === VISIBILITY_STATUS.paused) {
+    makeResponse(req, res, 400, false, 'backup_paused');
+    return;
+  }
+
   await checkSalesforceApiLimitUsage({ userId: backupConfig.userId, crmId: backupConfig.crmId });
   const result = await runBackupNow({ user: req.user, config: backupConfig });
   if (!result.ok) {
