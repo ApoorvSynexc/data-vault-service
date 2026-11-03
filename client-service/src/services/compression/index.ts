@@ -12,6 +12,7 @@ import {
 import { logger } from '../../middlewares';
 import { getBackupConfigById, updateBackupConfig } from '../backup-config';
 import { getBackupJobsByConfigAndStatuses } from '../backup-job';
+import { getDestinationById } from '../destination';
 import { getEmrJobRun, initalizePayloadTransform } from '../payload';
 import {
   attachEmrJobRun,
@@ -23,6 +24,7 @@ import {
   failOrRetryCompressionForConfig,
   failOrRetryCompressionQueueItem,
   getGlobalConcurrency,
+  isNonRetryableCompressionError,
   listRunningCompressionJobs,
   requeueStaleRunningLeases,
   tenantHasRunning,
@@ -122,6 +124,20 @@ export const requestCompressionForConfig = async (params: {
   if (!config) return { ok: false, reason: 'config_not_found' };
   if (config.status === VISIBILITY_STATUS.paused && source !== 'manual') {
     return { ok: false, reason: 'config_paused' };
+  }
+
+  // Never enqueue (or StartJobRun) when destination row is missing — that caused
+  // all-day EMR Failed storms (build-payload 400 Destination not found).
+  if (!config.destinationId) {
+    logger.warn(`[compression] compress_skipped:destination_id_missing | cfg:${backupConfigId}`);
+    return { ok: false, reason: 'destination_not_found' };
+  }
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) {
+    logger.warn(
+      `[compression] compress_skipped:destination_not_found | cfg:${backupConfigId} destinationId:${config.destinationId}`
+    );
+    return { ok: false, reason: 'destination_not_found' };
   }
 
   if (jobType === 'REALTIME' && source === 'event') {
@@ -258,7 +274,12 @@ export const reconcileRunningCompressionJobs = async (): Promise<void> => {
       const stateDetails = jobRun?.stateDetails;
 
       if (EMR_FAILED_STATES.has(state)) {
-        const msg = `emr_${state.toLowerCase()}${stateDetails ? `:${stateDetails}` : ''}`;
+        // Prefer Spark/build-payload text inside stateDetails when present so
+        // destination_not_found is classified as non-retryable.
+        const detail = stateDetails ? String(stateDetails) : '';
+        const msg = isNonRetryableCompressionError(detail)
+          ? detail
+          : `emr_${state.toLowerCase()}${detail ? `:${detail}` : ''}`;
         await failOrRetryCompressionQueueItem(item, msg);
         continue;
       }
@@ -310,6 +331,25 @@ export const processCompressionQueue = async (): Promise<void> => {
     const claimed = await claimNextCompressionJobs(slots, leaseOwner);
     for (const item of claimed) {
       try {
+        // Preflight: fail permanently before StartJobRun when config/destination is gone.
+        const config = await getBackupConfigById(item.backupConfigId);
+        if (!config) {
+          await failOrRetryCompressionQueueItem(item, 'backup_config_not_found');
+          continue;
+        }
+        if (!config.destinationId) {
+          await failOrRetryCompressionQueueItem(item, 'destination_not_found');
+          continue;
+        }
+        const destination = await getDestinationById(config.destinationId);
+        if (!destination) {
+          await failOrRetryCompressionQueueItem(
+            item,
+            `destination_not_found:${config.destinationId}`
+          );
+          continue;
+        }
+
         logger.info(
           `[compression-worker] StartJobRun | cfg:${item.backupConfigId} queueId:${item.queueId} attempt:${item.attemptCount}`
         );
@@ -343,13 +383,11 @@ export const processCompressionQueue = async (): Promise<void> => {
           );
         }
       } catch (err: any) {
+        const message = err?.message ?? 'start_failed';
         logger.error(
-          `[compression-worker] StartJobRun failed | cfg:${item.backupConfigId} err:${err?.message ?? err}`
+          `[compression-worker] StartJobRun failed | cfg:${item.backupConfigId} err:${message}`
         );
-        await failOrRetryCompressionQueueItem(
-          item as ICompressionQueueItem,
-          err?.message ?? 'start_failed'
-        );
+        await failOrRetryCompressionQueueItem(item as ICompressionQueueItem, message);
       }
     }
   } catch (err: any) {
