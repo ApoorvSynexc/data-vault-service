@@ -36,13 +36,37 @@ export interface ICompressionQueueItem {
   emrApplicationId?: string;
   /** ISO time before which claim must skip this QUEUED row (backoff after EMR fail). */
   nextRetryAt?: string;
+  /**
+   * When true, auto paths (event/catch-up) must not re-enqueue this queueId.
+   * Set for config/destination errors that EMR cannot self-heal.
+   */
+  permanentFailure?: boolean;
 }
 
 const buildQueueId = (backupConfigId: string, backupJobId: string) =>
   `${backupConfigId}#${backupJobId}`;
 
+/** Config/data errors — do not burn EMR retries or catch-up all day. */
+export const isNonRetryableCompressionError = (errorMessage?: string | null): boolean => {
+  if (!errorMessage) return false;
+  const msg = String(errorMessage);
+  return (
+    /destination[_ ]?not[_ ]?found/i.test(msg) ||
+    /backup[_ ]?config[_ ]?not[_ ]?found/i.test(msg) ||
+    /crm[_ ]?not[_ ]?found/i.test(msg) ||
+    /no_eligible_jobs/i.test(msg) ||
+    /No backup jobs found/i.test(msg) ||
+    /noop_no_compressible/i.test(msg) ||
+    /invalid_payload/i.test(msg)
+  );
+};
+
 /** Delay before the next StartJobRun after a failed attempt, or null → permanent FAILED. */
-export const getCompressionRetryDelayMs = (attemptCount: number): number | null => {
+export const getCompressionRetryDelayMs = (
+  attemptCount: number,
+  errorMessage?: string | null
+): number | null => {
+  if (isNonRetryableCompressionError(errorMessage)) return null;
   if (attemptCount >= COMPRESSION_MAX_ATTEMPTS) return null;
   const delays = COMPRESSION_RETRY_BACKOFF_MS;
   if (!delays.length) return null;
@@ -67,7 +91,17 @@ export const enqueueCompression = async (params: {
     return { enqueued: false, queueId, reason: `already_${prev.status.toLowerCase()}` };
   }
 
-  // Fresh attempt cycle when re-enqueueing a permanent FAILED row.
+  // Permanent data failures (e.g. destination_not_found) must not be revived by catch-up/event.
+  // Manual Process Backup may clear the block by re-enqueueing after the operator fixed data.
+  if (
+    prev?.status === 'FAILED' &&
+    (prev.permanentFailure || isNonRetryableCompressionError(prev.errorMessage)) &&
+    source !== 'manual'
+  ) {
+    return { enqueued: false, queueId, reason: 'permanent_failed' };
+  }
+
+  // Fresh attempt cycle when re-enqueueing a FAILED row (manual or transient).
   const attemptCount = prev?.status === 'FAILED' ? 0 : (prev?.attemptCount ?? 0);
 
   const item: ICompressionQueueItem = {
@@ -86,6 +120,7 @@ export const enqueueCompression = async (params: {
     new PutCommand({
       TableName: COMPRESSION_QUEUE_TABLE,
       Item: item,
+      // Drop permanentFailure / nextRetryAt / emr fields by full replace of known shape.
     })
   );
 
@@ -292,7 +327,7 @@ export const completeCompressionQueueItem = async (
           TableName: COMPRESSION_QUEUE_TABLE,
           Key: { queueId: item.queueId },
           UpdateExpression:
-            'SET #status = :status, updatedAt = :updatedAt, errorMessage = :errorMessage REMOVE leaseOwner, leaseExpiresAt, nextRetryAt',
+            'SET #status = :status, updatedAt = :updatedAt, errorMessage = :errorMessage REMOVE leaseOwner, leaseExpiresAt, nextRetryAt, permanentFailure',
           ExpressionAttributeNames: { '#status': 'status' },
           ExpressionAttributeValues: {
             ':status': success ? 'DONE' : 'FAILED',
@@ -320,29 +355,31 @@ export const failOrRetryCompressionQueueItem = async (
   errorMessage?: string
 ): Promise<'retried' | 'failed'> => {
   const attempts = item.attemptCount ?? 1;
-  const delayMs = getCompressionRetryDelayMs(attempts);
+  const delayMs = getCompressionRetryDelayMs(attempts, errorMessage);
   const now = Date.now();
   const updatedAt = new Date(now).toISOString();
+  const permanent = delayMs == null;
 
-  if (delayMs == null) {
+  if (permanent) {
     await docClient.send(
       new UpdateCommand({
         TableName: COMPRESSION_QUEUE_TABLE,
         Key: { queueId: item.queueId },
         ConditionExpression: '#status = :running',
         UpdateExpression:
-          'SET #status = :failed, updatedAt = :updatedAt, errorMessage = :errorMessage REMOVE leaseOwner, leaseExpiresAt, nextRetryAt, emrJobRunId, emrApplicationId',
+          'SET #status = :failed, updatedAt = :updatedAt, errorMessage = :errorMessage, permanentFailure = :permanentFailure REMOVE leaseOwner, leaseExpiresAt, nextRetryAt, emrJobRunId, emrApplicationId',
         ExpressionAttributeNames: { '#status': 'status' },
         ExpressionAttributeValues: {
           ':running': 'RUNNING',
           ':failed': 'FAILED',
           ':updatedAt': updatedAt,
           ':errorMessage': errorMessage ?? 'max_attempts_exceeded',
+          ':permanentFailure': isNonRetryableCompressionError(errorMessage) || attempts >= COMPRESSION_MAX_ATTEMPTS,
         },
       })
     );
     logger.warn(
-      `[compression-queue] permanent FAILED | queueId:${item.queueId} attempts:${attempts} err:${errorMessage ?? ''}`
+      `[compression-queue] permanent FAILED | queueId:${item.queueId} attempts:${attempts} nonRetryable:${isNonRetryableCompressionError(errorMessage)} err:${errorMessage ?? ''}`
     );
     return 'failed';
   }
