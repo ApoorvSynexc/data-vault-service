@@ -137,5 +137,6 @@
   "invalid_file_type": "Only .csv files are supported",
   "empty_csv_file": "The uploaded CSV file has no data rows",
   "too_many_records": "The uploaded CSV file has too many rows",
-  "upload_failed": "The file upload failed. Please try again"
+  "upload_failed": "The file upload failed. Please try again",
+  "backup_paused": "This backup is paused. Please try again later"
 }

@@ -44,7 +44,7 @@ export const buildRollbackFailureEmail = (params: IRollbackFailureEmailParams): 
       preheader: `Rollback failed for ${label}`,
       heading: 'Rollback failed',
       ctaLabel: 'View rollback job',
-      ctaUrl: `${EMAIL_APP_URL}/restores/${restoreConfigId}/jobs/${restoreJobId}`,
+      ctaUrl: `${EMAIL_APP_URL}/restore-center/history/${restoreConfigId}`,
       accent: 'danger',
     }),
   };

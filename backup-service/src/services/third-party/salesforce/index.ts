@@ -401,6 +401,7 @@ const salesforceHandler: ICrmBackupHandler = {
           template: EMAIL_TEMPLATE.backupJobFailure,
           params: {
             backupConfigId,
+            backupConfigSlug: backupConfig.slug,
             backupConfigName: configLabel,
             crmName,
             backupJobId,
@@ -544,6 +545,7 @@ const salesforceHandler: ICrmBackupHandler = {
           template: EMAIL_TEMPLATE.archivalJobFailure,
           params: {
             backupConfigId,
+            backupConfigSlug: backupConfig.slug,
             backupConfigName: configLabel,
             crmName: source.crmName,
             backupJobId,
@@ -621,7 +623,7 @@ const salesforceHandler: ICrmBackupHandler = {
         conflict,
       };
 
-      console.log(JSON.stringify({ hierarchy, objectHierarchy, recurvedObject }))
+      console.log(JSON.stringify({ hierarchy, objectHierarchy, recurvedObject }));
       for (let index = 0; index < hierarchy.length; index++) {
         const rootObject = hierarchy[index];
         await restoreObjectHierarchy(rootObject, hierarchyContext);

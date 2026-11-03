@@ -109,87 +109,92 @@ export const salesforceRealtimeHandler: ICrmRealtimeHandler = {
     destConfig: IDestinationConfig,
     payload: IRealtimePayload
   ) {
-    let { records } = payload;
-    const { operation, objectApiName } = payload;
+    try {
+      let { records } = payload;
+      const { operation, objectApiName } = payload;
 
-    if (records.length) {
-      records = records.map((record) => {
-        if (record.records) {
-          return record.records;
-        }
-        return record;
-      });
-    }
+      if (records.length) {
+        records = records.map((record) => {
+          if (record.records) {
+            return record.records;
+          }
+          return record;
+        });
+      }
 
-    // Column source, in order of authority:
-    //   1. the schema stored in S3 (org-wide, written by the scheduled backup) — the
-    //      same isQueryableField-filtered list the Bulk API SELECT is built from
-    //   2. the descriptor on this hit (permission-scoped), filtered the same way
-    //   3. the record's own keys, so an early hit is never dropped for lack of columns
-    const storedSchema = await loadStoredSchema(
-      crmId,
-      crmName,
-      backupConfigId,
-      objectApiName,
-      destConfig
-    );
-    const columns = storedSchema?.length
-      ? storedSchema.map((f) => f.name)
-      : payload.fields?.length
-        ? payload.fields.filter(isQueryableSchemaField).map((f) => f.apiName)
-        : null;
+      // Column source, in order of authority:
+      //   1. the schema stored in S3 (org-wide, written by the scheduled backup) — the
+      //      same isQueryableField-filtered list the Bulk API SELECT is built from
+      //   2. the descriptor on this hit (permission-scoped), filtered the same way
+      //   3. the record's own keys, so an early hit is never dropped for lack of columns
+      const storedSchema = await loadStoredSchema(
+        crmId,
+        crmName,
+        backupConfigId,
+        objectApiName,
+        destConfig
+      );
+      const columns = storedSchema?.length
+        ? storedSchema.map((f) => f.name)
+        : payload.fields?.length
+          ? payload.fields.filter(isQueryableSchemaField).map((f) => f.apiName)
+          : null;
 
-    // Drop any key not in the Bulk-query field set (e.g. compound Address/Location
-    // fields) so realtime writes never store more than a scheduled backup would.
-    // Per-record fallback to the record's own keys: if the column list doesn't
-    // intersect this particular record (stale/mismatched schema, renamed object),
-    // filtering to nothing would silently write `{}` instead of the real data.
-    const filteredRecords = columns
-      ? records.map((record) => {
+      // Drop any key not in the Bulk-query field set (e.g. compound Address/Location
+      // fields) so realtime writes never store more than a scheduled backup would.
+      // Per-record fallback to the record's own keys: if the column list doesn't
+      // intersect this particular record (stale/mismatched schema, renamed object),
+      // filtering to nothing would silently write `{}` instead of the real data.
+      const filteredRecords = columns
+        ? records.map((record) => {
           const filtered = Object.fromEntries(
             columns.filter((c) => c in record).map((c) => [c, record[c]])
           );
           return Object.keys(filtered).length ? filtered : record;
         })
-      : records;
+        : records;
 
-    // ── Upload ───────────────────────────────────────────────────────────────
-    // All hits for the same job share the same backupJobId folder.
-    // Each hit gets a unique UUID filename so concurrent uploads never overwrite each other.
-    // realtimeJobId (backupJobId) must stay in this key — see the note on
-    // buildS3KeyPrefix in utils/helper.ts for why dropping it collides every job for
-    // an object into one shared raw_data/<object>/ folder.
-    const folder = operationToFolder(operation);
-    const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.json`;
-    // Newline-delimited JSON (one object per line), NOT a JSON array — this
-    // raw_data output is still what Spark's compression job reads to build
-    // Hudi/Delta, and its JSON reader parses each LINE as one row's JSON
-    // object, same constraint as the retired raw-data Glue/Athena SerDe had —
-    // a file starting with `[` fails to parse as a row at all, even with
-    // exactly one record inside.
-    const csvBuffer = Buffer.from(filteredRecords.map((r) => JSON.stringify(r)).join('\n'), 'utf8');
-    const sizeInBytes = csvBuffer.length;
-    const s3Path = await uploadToS3(destConfig, s3Key, csvBuffer);
+      // ── Upload ───────────────────────────────────────────────────────────────
+      // All hits for the same job share the same backupJobId folder.
+      // Each hit gets a unique UUID filename so concurrent uploads never overwrite each other.
+      // realtimeJobId (backupJobId) must stay in this key — see the note on
+      // buildS3KeyPrefix in utils/helper.ts for why dropping it collides every job for
+      // an object into one shared raw_data/<object>/ folder.
+      const folder = operationToFolder(operation);
+      const s3Key = `${crmName}/${crmId}/backup/${backupConfigId}/raw_data/${realtimeJobId}/${objectApiName}/${folder}/${Date.now()}.json`;
+      // Newline-delimited JSON (one object per line), NOT a JSON array — this
+      // raw_data output is still what Spark's compression job reads to build
+      // Hudi/Delta, and its JSON reader parses each LINE as one row's JSON
+      // object, same constraint as the retired raw-data Glue/Athena SerDe had —
+      // a file starting with `[` fails to parse as a row at all, even with
+      // exactly one record inside.
+      const csvBuffer = Buffer.from(filteredRecords.map((r) => JSON.stringify(r)).join('\n'), 'utf8');
+      const sizeInBytes = csvBuffer.length;
+      const s3Path = await uploadToS3(destConfig, s3Key, csvBuffer);
 
-    logger.info(
-      `Realtime job ${realtimeJobId}: uploaded ${records.length} ${operation} record(s) for ${objectApiName} → ${s3Path}`
-    );
+      logger.info(
+        `Realtime job ${realtimeJobId}: uploaded ${records.length} ${operation} record(s) for ${objectApiName} → ${s3Path}`
+      );
 
-    // Persist the descriptor that came with this hit — fields, picklist values,
-    // record types and children — into the same layout the scheduled backup uses.
-    // Runs after the records: if anything dies mid-hit, the data is the part worth
-    // having. Writes changes/<realtimeJobId>/ only — main/ is never written from a
-    // permission-scoped webhook descriptor. See persistRealtimeSchema.
-    await persistRealtimeSchema({
-      payload,
-      destConfig,
-      crmId,
-      crmName,
-      backupConfigId,
-      backupJobId: realtimeJobId,
-    });
+      // Persist the descriptor that came with this hit — fields, picklist values,
+      // record types and children — into the same layout the scheduled backup uses.
+      // Runs after the records: if anything dies mid-hit, the data is the part worth
+      // having. Writes changes/<realtimeJobId>/ only — main/ is never written from a
+      // permission-scoped webhook descriptor. See persistRealtimeSchema.
+      await persistRealtimeSchema({
+        payload,
+        destConfig,
+        crmId,
+        crmName,
+        backupConfigId,
+        backupJobId: realtimeJobId,
+      });
 
-    // schemaChanged is always false now — realtime no longer detects schema drift.
-    return { s3Path, schemaChanged: false, sizeInBytes };
+      // schemaChanged is always false now — realtime no longer detects schema drift.
+      return { s3Path, schemaChanged: false, sizeInBytes };
+    } catch (error) {
+      logger.error(`[BACKUP-REALTIME] Job failed: ${error}`);
+      throw error;
+    }
   },
 };

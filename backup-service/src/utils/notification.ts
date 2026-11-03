@@ -27,7 +27,7 @@ export const notifyJobOutcome = async (params: {
     } as SendEmailPayload);
 
   const setting = await getSettingsByUser(notification.userId);
-  if (!setting || !setting.notification?.email) return;
+  if (!setting || !setting.notification?.email) {return;}
 
   const [notificationResult, emailResult] = await Promise.allSettled([
     createNotification(notification),

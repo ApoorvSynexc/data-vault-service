@@ -1350,6 +1350,7 @@ const notifyTriggerFailures = async (
           params: {
             crmName,
             backupConfigId: config.backupConfigId,
+            backupConfigSlug: config.slug,
             backupConfigName: configLabel,
             configCreatedAt: config.createdAt,
             totalObjectCount: config.objectNames.length,

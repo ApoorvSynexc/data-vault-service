@@ -7,6 +7,7 @@ import { IEmailTemplate, renderEmail, formatEmailDate } from './render';
 export interface IArchivalJobFailureEmailParams {
   recipientName?: string;
   backupConfigId: string;
+  backupConfigSlug: string;
   backupConfigName: string;
   crmName: string;
   backupJobId: string;
@@ -30,7 +31,7 @@ export const buildArchivalJobFailureEmail = (
 ): IEmailTemplate => {
   const {
     recipientName,
-    backupConfigId,
+    backupConfigSlug,
     backupConfigName,
     crmName,
     backupJobId,
@@ -65,7 +66,7 @@ export const buildArchivalJobFailureEmail = (
       preheader: `Archival job failed for ${backupConfigName}`,
       heading: 'Archival job failed',
       ctaLabel: 'View archival job',
-      ctaUrl: `${EMAIL_APP_URL}/backup-configs/${backupConfigId}/jobs/${backupJobId}`,
+      ctaUrl: `${EMAIL_APP_URL}/archive-vault/${backupConfigSlug}`,
       accent: 'danger',
     }),
   };
