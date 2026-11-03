@@ -71,22 +71,18 @@ export const uploadToS3 = async (
   key: string,
   body: Buffer
 ): Promise<string> => {
-  try {
-    const client = getS3Client(config);
+  const client = getS3Client(config);
 
-    await client.send(
-      new PutObjectCommand({
-        Bucket: config.bucketName,
-        Key: key,
-        Body: body,
-        ContentType: 'text/csv',
-      })
-    );
+  await client.send(
+    new PutObjectCommand({
+      Bucket: config.bucketName,
+      Key: key,
+      Body: body,
+      ContentType: 'text/csv',
+    })
+  );
 
-    return `s3://${config.bucketName}/${key}`;
-  } catch (error) {
-    throw error;
-  }
+  return `s3://${config.bucketName}/${key}`;
 };
 
 export const downloadFromS3 = async (
