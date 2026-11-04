@@ -5,7 +5,7 @@ Branches (from `QA`):
 - Backend: `DataVault-Backend-NodeJS` → `feat/s3-assumerole-external-id`
 - Frontend: `DataVault-Frontend-App` → `feat/s3-assumerole-external-id`
 
-Customer brings **S3 + IAM role only**. Connect wizard: region picker (no default), CloudFormation | Manual role setup, staged Test connection. Athena is **not** part of this wizard.
+Customer brings **S3 + IAM role only**. Connect wizard: region picker (no default), CloudFormation | Manual role setup, staged Test connection. Both CloudFormation and Manual include the **Athena bucket-policy statement** so restore preview / dry-run can query the customer bucket (`AWS_ATHENA_ROLE_ARN`).
 
 Long backups use **1-hour** STS sessions (`S3_ROLE_SESSION_SECONDS=3600`) with automatic refresh before expiry (required under ECS/EC2 role chaining).
 
@@ -20,6 +20,8 @@ DATACRAFT_AWS_ACCOUNT_ID=394567804523
 S3_ROLE_SESSION_SECONDS=3600
 # Required for "Open in AWS CloudFormation" (no trailing slash)
 PUBLIC_API_BASE_URL=https://devdatacraft.360degreecloud.in/api
+# Athena role principal granted on the customer bucket (restore preview / dry-run)
+AWS_ATHENA_ROLE_ARN=arn:aws:iam::<datacraft-account>:role/<athena-role-name>
 # optional override if the CFN YAML is hosted on public S3 instead:
 # CLOUDFORMATION_TEMPLATE_URL=https://.../s3-assumerole-role.cfn.yaml
 # optional; defaults to ENCRYPTION_KEY
@@ -96,11 +98,13 @@ pm2 restart client-service
 
 1. **Step 1:** Connection name + bucket + **Choose bucket region** (no default) → **Configure it**
 2. Wrong region → accept **Use &lt;detected-region&gt;**; invalid bucket (`My Bucket`) → format error
-3. **Step 2:** CloudFormation (download template) or Manual (copy policies) → **I've created the role**
+3. **Step 2:** CloudFormation (download / quick-create — includes Athena bucket policy when `AWS_ATHENA_ROLE_ARN` is set) **or** Manual (trust + permissions + **Athena bucket policy statement**) → **I've created the role**
 4. Customer role max session ≥ **1 hour** (AWS default is enough)
-5. **Step 3:** Paste Role ARN → **Test connection** (four checks) → **Connect**
-6. Wrong role name → first check fails; remaining skipped
-7. Run a backup → objects in customer bucket (session refresh keeps long jobs alive)
+5. Confirm the bucket policy contains `Sid: DataCraftAthenaRoleAccess` (preview / dry-run will fail without it)
+6. **Step 3:** Paste Role ARN → **Test connection** (four checks) → **Connect**
+7. Wrong role name → first check fails; remaining skipped
+8. Run a backup → objects in customer bucket (session refresh keeps long jobs alive)
+9. Open Restore Center dry-run / show-preview against that destination → Athena query succeeds
 
 ---
 

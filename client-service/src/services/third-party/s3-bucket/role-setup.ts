@@ -1,14 +1,17 @@
 import {
+  AWS_ATHENA_ROLE_ARN,
   CLOUDFORMATION_TEMPLATE_URL,
   DATACRAFT_AWS_ACCOUNT_ID,
   PUBLIC_API_BASE_URL,
   S3_ROLE_SESSION_SECONDS,
 } from '../../../constant';
 import { S3_ASSUME_ROLE_CFN_TEMPLATE } from '../../../assets/cloudformation/s3-assumerole-role';
+import { getAthenaBucketPolicyStatement } from '../athena';
 import { createExternalId } from './credentials';
 
 // Everything the "Connect to AWS" screen shows a customer so they can create their IAM role:
 // DataCraft's account, a fresh External ID, and policy JSON / CloudFormation quick-create link.
+// Also includes the Athena bucket-policy statement so restore preview / dry-run can read the bucket.
 
 interface IRoleSetupInput {
   userId: string;
@@ -19,10 +22,14 @@ interface IRoleSetupInput {
 }
 
 const KMS_KEY_ARN_PATTERN = /^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key\/[0-9a-f-]{8,}$/;
+const ATHENA_ROLE_ARN_PATTERN = /^arn:aws[a-z-]*:iam::\d{12}:role\/[\w+=,.@\-_/]+$/;
 
 const isValidKmsKeyArn = (arn: string | undefined): boolean => !!arn && KMS_KEY_ARN_PATTERN.test(arn);
 
 const isRoleSetupConfigured = (): boolean => /^\d{12}$/.test(DATACRAFT_AWS_ACCOUNT_ID);
+
+const resolveAthenaRoleArn = (): string | null =>
+  ATHENA_ROLE_ARN_PATTERN.test(AWS_ATHENA_ROLE_ARN) ? AWS_ATHENA_ROLE_ARN : null;
 
 // Customer-facing CFN session: always 1 hour (role chaining + refresh). Do not advertise 12h.
 const CUSTOMER_MAX_SESSION_SECONDS = 3600;
@@ -40,6 +47,7 @@ const buildCloudFormationQuickCreateUrl = (params: {
   bucketName: string;
   folderPath?: string;
   maxSessionSeconds: number;
+  athenaRoleArn?: string | null;
 }): string | null => {
   const templateUrl = resolveTemplateUrl();
   if (!templateUrl) return null;
@@ -57,6 +65,9 @@ const buildCloudFormationQuickCreateUrl = (params: {
   if (params.folderPath) {
     qs.set('param_FolderPrefix', params.folderPath.replace(/^\/+|\/+$/g, ''));
   }
+  if (params.athenaRoleArn) {
+    qs.set('param_DataCraftAthenaRoleArn', params.athenaRoleArn);
+  }
 
   return `https://${region}.console.aws.amazon.com/cloudformation/home?region=${encodeURIComponent(region)}#/stacks/quickcreate?${qs.toString()}`;
 };
@@ -67,13 +78,20 @@ const buildCloudFormationTemplate = (params: {
   bucketName: string;
   folderPath?: string;
   maxSessionSeconds: number;
+  athenaRoleArn?: string | null;
 }): string => {
   const folder = params.folderPath ? params.folderPath.replace(/^\/+|\/+$/g, '') : '';
+  const athenaArn = params.athenaRoleArn ?? '';
   return `AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  DataCraft S3 access role for keyless destination connect.
+  DataCraft S3 access role for keyless destination connect, plus a bucket
+  policy so DataCraft Athena can run restore preview / dry-run queries.
   Customer deploys this in their AWS account. DataCraft assumes the role
   with ExternalId — no IAM user access keys required.
+  Note: the Athena bucket policy resource sets the bucket's policy document
+  for this stack. If the bucket already has a policy you need to keep,
+  leave DataCraftAthenaRoleArn empty and merge the Athena statement from
+  DataCraft Manual setup instead.
 
 Parameters:
   DataCraftAwsAccountId:
@@ -94,9 +112,14 @@ Parameters:
   FolderPrefix:
     Type: String
     Default: '${folder}'
+  DataCraftAthenaRoleArn:
+    Type: String
+    Default: '${athenaArn}'
+    Description: DataCraft Athena role ARN for restore preview / dry-run
 
 Conditions:
   HasFolderPrefix: !Not [!Equals [!Ref FolderPrefix, '']]
+  HasAthenaRole: !Not [!Equals [!Ref DataCraftAthenaRoleArn, '']]
 
 Resources:
   DataCraftS3AccessRole:
@@ -141,6 +164,30 @@ Resources:
                   - !Sub 'arn:aws:s3:::\${BucketName}/\${FolderPrefix}*'
                   - !Sub 'arn:aws:s3:::\${BucketName}/*'
 
+  DataCraftAthenaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: HasAthenaRole
+    Properties:
+      Bucket: !Ref BucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DataCraftAthenaRoleAccess
+            Effect: Allow
+            Principal:
+              AWS: !Ref DataCraftAthenaRoleArn
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:PutObject
+              - s3:ListBucketMultipartUploads
+              - s3:ListMultipartUploadParts
+              - s3:AbortMultipartUpload
+            Resource:
+              - !Sub 'arn:aws:s3:::\${BucketName}'
+              - !Sub 'arn:aws:s3:::\${BucketName}/*'
+
 Outputs:
   RoleArn:
     Description: Paste this Role ARN into DataCraft Connect to AWS
@@ -152,6 +199,7 @@ const buildRoleSetup = ({ userId, bucketName, region, folderPath, kmsKeyArn }: I
   const externalId = createExternalId(userId);
   const bucketArn = `arn:aws:s3:::${bucketName}`;
   const prefix = folderPath ? `${folderPath.replace(/^\/+|\/+$/g, '')}/` : '';
+  const athenaRoleArn = resolveAthenaRoleArn();
 
   const trustPolicy = {
     Version: '2012-10-17',
@@ -165,6 +213,8 @@ const buildRoleSetup = ({ userId, bucketName, region, folderPath, kmsKeyArn }: I
     ],
   };
 
+  // What the role may do: only this bucket. s3:GetBucketPolicy lets DataCraft verify the Athena
+  // statement; it cannot change the policy.
   const permissionsPolicy = {
     Version: '2012-10-17',
     Statement: [
@@ -208,6 +258,11 @@ const buildRoleSetup = ({ userId, bucketName, region, folderPath, kmsKeyArn }: I
   const platformSessionSeconds = Math.max(3600, Math.min(43200, S3_ROLE_SESSION_SECONDS || 3600));
   const customerSessionSeconds = CUSTOMER_MAX_SESSION_SECONDS;
 
+  // Pasted into the customer's bucket policy so Athena can query backups for restore preview / dry-run.
+  const athenaBucketPolicyStatement = athenaRoleArn
+    ? getAthenaBucketPolicyStatement(bucketName)
+    : undefined;
+
   return {
     dataCraftAccountId: DATACRAFT_AWS_ACCOUNT_ID,
     externalId,
@@ -215,12 +270,15 @@ const buildRoleSetup = ({ userId, bucketName, region, folderPath, kmsKeyArn }: I
     trustPolicy,
     permissionsPolicy,
     usesCustomerKmsKey: Boolean(kmsKeyArn),
+    athenaRoleArn: athenaRoleArn ?? undefined,
+    athenaBucketPolicyStatement,
     cloudFormationTemplate: buildCloudFormationTemplate({
       dataCraftAccountId: DATACRAFT_AWS_ACCOUNT_ID,
       externalId,
       bucketName,
       folderPath,
       maxSessionSeconds: customerSessionSeconds,
+      athenaRoleArn,
     }),
     cloudFormationParameters: {
       DataCraftAwsAccountId: DATACRAFT_AWS_ACCOUNT_ID,
@@ -229,6 +287,7 @@ const buildRoleSetup = ({ userId, bucketName, region, folderPath, kmsKeyArn }: I
       RoleName: 'DataCraftS3AccessRole',
       MaxSessionDurationSeconds: customerSessionSeconds,
       ...(folderPath ? { FolderPrefix: folderPath.replace(/^\/+|\/+$/g, '') } : {}),
+      ...(athenaRoleArn ? { DataCraftAthenaRoleArn: athenaRoleArn } : {}),
     },
     cloudFormationTemplateUrl: resolveTemplateUrl(),
     cloudFormationQuickCreateUrl: buildCloudFormationQuickCreateUrl({
@@ -238,6 +297,7 @@ const buildRoleSetup = ({ userId, bucketName, region, folderPath, kmsKeyArn }: I
       bucketName,
       folderPath,
       maxSessionSeconds: customerSessionSeconds,
+      athenaRoleArn,
     }),
     // Kept for debugging/support; not shown in wizard.
     platformSessionSeconds,
