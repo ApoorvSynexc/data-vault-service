@@ -101,6 +101,23 @@ const closeBulkJob = async (
   return result;
 };
 
+// Aborts an ingest job that never reached UploadComplete — Salesforce has not
+// processed any of its rows, so the chunk can safely be resubmitted.
+const abortBulkJob = async (
+  instanceUrl: string,
+  tokens: SalesforceTokens,
+  jobId: string
+): Promise<void> => {
+  await salesforceRequest(
+    {
+      url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
+      method: 'PATCH',
+      body: JSON.stringify({ state: 'Aborted' }),
+    },
+    tokens
+  );
+};
+
 // Fetches the current state + counters for one ingest job. Salesforce processes
 // jobs asynchronously after UploadComplete, so this is the only way to know
 // whether the upload actually succeeded.
@@ -176,6 +193,7 @@ export {
   createBulkJob,
   uploadDataToJob,
   closeBulkJob,
+  abortBulkJob,
   getBulkJobStatus,
   pollBulkJobUntilDone,
   getFailedResults,

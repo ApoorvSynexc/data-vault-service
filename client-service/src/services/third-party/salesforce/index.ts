@@ -1,45 +1,28 @@
 import crypto from 'crypto';
-import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { httpRequest } from '../../../utils/http-request';
 import {
   SALESFORCE_CLIENT_ID,
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
   SALESFORCE_METADATA_API_VERSION,
-  USER_TABLE,
   EMAIL_TEMPLATE,
+  TOKEN_EVENT_TYPE,
+  TOKEN_REFRESH_TRIGGER,
 } from '../../../constant';
-import { docClient } from '../../../config';
-import { encrypt } from '../../../utils/encryption';
-import { getDecryptedCrmCredential, getUser, updateUser } from '../../user';
+import { getDecryptedCrmCredential, getUser } from '../../user';
 import { logger } from '../../../middlewares';
 import { getCrmById } from '../../crm';
 import { getSettingsByUser } from '../../settings';
 import { notifyUserOutcome } from '../../../utils/notification';
 import { SalesforceApiLimitProcess } from '../../common/email';
-
-const SALESFORCE_PRODUCTION_BASE = 'https://login.salesforce.com';
-const SALESFORCE_SANDBOX_BASE = 'https://test.salesforce.com';
-
-type SalesforceEnvironment = 'production' | 'sandbox' | 'custom';
-
-const getSalesforceBaseUrl = (environment?: SalesforceEnvironment, customUrl?: string): string => {
-  if (environment === 'sandbox') return SALESFORCE_SANDBOX_BASE;
-  if (environment === 'custom') {
-    if (!customUrl) throw new Error('customUrl is required for custom environment');
-    return customUrl.replace(/\/$/, '');
-  }
-  return SALESFORCE_PRODUCTION_BASE;
-};
-
-const getSalesforceUrls = (environment?: SalesforceEnvironment, customUrl?: string) => {
-  const base = getSalesforceBaseUrl(environment, customUrl);
-  return {
-    authUrl: `${base}/services/oauth2/authorize`,
-    tokenUrl: `${base}/services/oauth2/token`,
-    profileUrl: `${base}/services/oauth2/userinfo`,
-  };
-};
+import { fingerprintToken, logTokenEvent } from '../../token-event';
+import { getSalesforceUrls, SalesforceEnvironment } from './oauth-urls';
+import { getFreshTokens, TokenRefreshTrigger } from './token-authority';
+import {
+  SalesforceAuthExpiredError,
+  SalesforceAuthRejectedAfterRefreshError,
+  SalesforceTokenRefreshInProgressError,
+} from './token-errors';
 
 // ---------------------------------------------------------------------------
 // PKCE / state helpers
@@ -58,23 +41,16 @@ function generateState() {
 }
 
 // ---------------------------------------------------------------------------
-// Typed error — thrown when both access token and refresh token are expired.
-// Controllers catch this to respond with 401 + reconnect prompt.
-// ---------------------------------------------------------------------------
-
-export class SalesforceAuthExpiredError extends Error {
-  constructor() {
-    super('Salesforce session expired. User must re-authenticate.');
-    this.name = 'SalesforceAuthExpiredError';
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Centralized Salesforce API request
 //   - Injects Authorization header automatically
-//   - On 401 (expired access token) → refreshes token and retries once
-//   - Returns { data, accessToken } so callers can persist the (possibly new) token
+//   - On 401 → holds the call while TokenAuthority refreshes (at most
+//     API_MAX_HOLD_MS), then replays it once with the new token
+//   - Mutates `tokens` in place, so callers sharing the object reuse the new
+//     token; also returns { data, accessToken } for callers that persist it
 // ---------------------------------------------------------------------------
+
+// Longest a UI/API request waits for a refresh — below nginx's 60 s.
+const API_MAX_HOLD_MS = 25_000;
 
 interface SalesforceRequestOptions {
   url: string;
@@ -87,15 +63,61 @@ interface SalesforceRequestOptions {
 interface SalesforceTokens {
   accessToken: string;
   refreshToken: string;
+  // DataCraft userId. Without it a 401 cannot be refreshed (fresh OAuth
+  // tokens during login) and surfaces as SalesforceAuthExpiredError.
   userId?: string;
   environment?: SalesforceEnvironment;
   customUrl?: string;
+  trigger?: TokenRefreshTrigger;
 }
 
 interface SalesforceRequestResult<T> {
   data: T;
   accessToken: string;
 }
+
+const isUnauthorized = (error: any) => error?.status === 401 || error?.message?.startsWith('HTTP Error 401');
+
+// Resolves with the refresh, or rejects with "in progress" once the hold
+// limit passes — the refresh itself keeps running in the background.
+const holdForRefresh = <T>(refresh: Promise<T>): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SalesforceTokenRefreshInProgressError()), API_MAX_HOLD_MS);
+  });
+  refresh.catch(() => undefined); // an abandoned refresh must not become an unhandled rejection
+  return Promise.race([refresh, limit]).finally(() => clearTimeout(timer));
+};
+
+// Gets a fresh token after a 401 (held at most API_MAX_HOLD_MS) and stores it
+// on the shared holder. Throws when there is no userId to refresh for.
+const refreshAfterUnauthorized = async (tokens: SalesforceTokens, failedAccessToken: string): Promise<string> => {
+  if (!tokens.userId) {
+    throw new SalesforceAuthExpiredError();
+  }
+  logger.info(`Salesforce request got 401, refreshing token for user ${tokens.userId}`);
+  const fresh = await holdForRefresh(
+    getFreshTokens(tokens.userId, {
+      trigger: tokens.trigger ?? TOKEN_REFRESH_TRIGGER.api401,
+      failedAccessToken,
+    })
+  );
+  tokens.accessToken = fresh.accessToken;
+  tokens.refreshToken = fresh.refreshToken;
+  return fresh.accessToken;
+};
+
+// The replayed call got 401 too — no second refresh, no loops.
+const rejectedAfterRefresh = (tokens: SalesforceTokens, accessToken: string, url: string) => {
+  logTokenEvent({
+    userId: tokens.userId!,
+    eventType: TOKEN_EVENT_TYPE.authRejectedAfterRefresh,
+    trigger: tokens.trigger ?? TOKEN_REFRESH_TRIGGER.api401,
+    accessTokenFp: fingerprintToken(accessToken),
+    message: url.split('?')[0],
+  });
+  return new SalesforceAuthRejectedAfterRefreshError();
+};
 
 const salesforceRequest = async <T = any>(
   options: SalesforceRequestOptions,
@@ -107,41 +129,47 @@ const salesforceRequest = async <T = any>(
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
+  const failedAccessToken = tokens.accessToken;
   try {
-    const data = await makeCall(tokens.accessToken);
-    return { data, accessToken: tokens.accessToken };
+    const data = await makeCall(failedAccessToken);
+    return { data, accessToken: failedAccessToken };
   } catch (error: any) {
-    if (!error?.message?.startsWith('HTTP Error 401')) {
+    if (!isUnauthorized(error)) {
       throw error;
     }
-    logger.info(`Salesforce request got 401, refreshing token: ${error?.message}`);
-
-    // Access token expired — refresh and retry once. Deduped per-userId so N
-    // concurrent callers for the same user share a single refresh+persist
-    // instead of racing (see refreshAndPersistSalesforceToken above).
-    let refreshed: RefreshedCrmCredential;
-    try {
-      if (tokens.userId) {
-        refreshed = await refreshAndPersistSalesforceToken(
-          tokens.userId,
-          tokens.refreshToken,
-          tokens.environment,
-          tokens.customUrl
-        );
-      } else {
-        refreshed = await refreashSalesforceToken(tokens.refreshToken, tokens.environment, tokens.customUrl);
-      }
-    } catch (e: any) {
-      logger.error(`Salesforce token refresh failed: ${e?.message}`);
-      // Refresh token also expired — user must reconnect
-      throw new SalesforceAuthExpiredError();
-    }
-
-    const newAccessToken: string = refreshed.access_token;
-
-    const data = await makeCall(newAccessToken);
-    return { data, accessToken: newAccessToken };
   }
+
+  const freshAccessToken = await refreshAfterUnauthorized(tokens, failedAccessToken);
+  try {
+    const data = await makeCall(freshAccessToken);
+    return { data, accessToken: freshAccessToken };
+  } catch (error: any) {
+    throw isUnauthorized(error) ? rejectedAfterRefresh(tokens, freshAccessToken, options.url) : error;
+  }
+};
+
+// Raw-response variant for requests httpRequest can't make (multipart
+// uploads). Same 401 → refresh → single replay; `init.body` must be
+// replayable (string/Buffer, never a stream).
+const salesforceFetch = async (url: string, init: RequestInit, tokens: SalesforceTokens): Promise<Response> => {
+  const send = (accessToken: string) =>
+    fetch(url, {
+      ...init,
+      headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${accessToken}` },
+    });
+
+  const failedAccessToken = tokens.accessToken;
+  const response = await send(failedAccessToken);
+  if (response.status !== 401) {
+    return response;
+  }
+
+  const freshAccessToken = await refreshAfterUnauthorized(tokens, failedAccessToken);
+  const replay = await send(freshAccessToken);
+  if (replay.status === 401) {
+    throw rejectedAfterRefresh(tokens, freshAccessToken, url);
+  }
+  return replay;
 };
 
 // ---------------------------------------------------------------------------
@@ -206,154 +234,6 @@ const getSalesforceToken = async (
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
-  });
-};
-
-const refreashSalesforceToken = async (
-  refreshToken: string,
-  environment?: SalesforceEnvironment,
-  customUrl?: string
-) => {
-  const { tokenUrl } = getSalesforceUrls(environment, customUrl);
-  return httpRequest({
-    url: tokenUrl,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: SALESFORCE_CLIENT_ID,
-      client_secret: SALESFORCE_CLIENT_SECRET,
-      refresh_token: refreshToken,
-    }).toString(),
-  });
-};
-
-interface RefreshedCrmCredential {
-  access_token: string;
-  refresh_token: string;
-}
-
-// Dedups concurrent refreshes within this process (same userId).
-const inFlightSalesforceRefreshes = new Map<string, Promise<RefreshedCrmCredential>>();
-const REFRESH_LOCK_TTL_MS = 15_000;
-const REFRESH_LOCK_POLL_INTERVAL_MS = 500;
-const REFRESH_LOCK_MAX_WAIT_MS = REFRESH_LOCK_TTL_MS + 5_000;
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-// Returns the fencing token (the lockUntil value this call wrote) on success,
-// or null if another instance currently holds the lock. The token lets
-// release target only the lock *this* call acquired — see below.
-const acquireSalesforceRefreshLock = async (userId: string): Promise<number | null> => {
-  const now = Date.now();
-  const lockUntil = now + REFRESH_LOCK_TTL_MS;
-  try {
-    await docClient.send(
-      new UpdateCommand({
-        TableName: USER_TABLE,
-        Key: { userId },
-        UpdateExpression: 'SET refreshLockedUntil = :lockUntil',
-        ConditionExpression: 'attribute_not_exists(refreshLockedUntil) OR refreshLockedUntil < :now',
-        ExpressionAttributeValues: {
-          ':lockUntil': lockUntil,
-          ':now': now,
-        },
-      })
-    );
-    return lockUntil;
-  } catch (error: any) {
-    if (error?.name === 'ConditionalCheckFailedException') {
-      return null;
-    }
-    throw error;
-  }
-};
-
-// Only clears the lock if it still holds the exact value we set when we
-// acquired it. Without this check, a refresh that overran the TTL (so
-// another instance legitimately took over the lock) would delete that
-// instance's still-active lock out from under it on release.
-const releaseSalesforceRefreshLock = async (userId: string, lockToken: number): Promise<void> => {
-  try {
-    await docClient.send(
-      new UpdateCommand({
-        TableName: USER_TABLE,
-        Key: { userId },
-        UpdateExpression: 'REMOVE refreshLockedUntil',
-        ConditionExpression: 'refreshLockedUntil = :lockToken',
-        ExpressionAttributeValues: { ':lockToken': lockToken },
-      })
-    );
-  } catch (error: any) {
-    if (error?.name === 'ConditionalCheckFailedException') {
-      // Our lock already expired and someone else owns it now — leave it alone.
-      return;
-    }
-    logger.error(`Failed to release Salesforce refresh lock for user ${userId}: ${error?.message}`);
-  }
-};
-
-// Lock is held by another instance — rather than redeeming the refresh_token
-// ourselves (risking invalid_grant on a rotated token), wait for the holder
-// to finish and read back whatever it persisted.
-const waitForSalesforceRefreshToComplete = async (userId: string): Promise<RefreshedCrmCredential> => {
-  const deadline = Date.now() + REFRESH_LOCK_MAX_WAIT_MS;
-  while (Date.now() < deadline) {
-    await sleep(REFRESH_LOCK_POLL_INTERVAL_MS);
-    const user = await getUser({ userId });
-    const stillLocked = !!user?.refreshLockedUntil && user.refreshLockedUntil > Date.now();
-    if (!stillLocked) {
-      const { access_token, refresh_token } = getDecryptedCrmCredential(user);
-      if (access_token) {
-        return { access_token, refresh_token };
-      }
-      break;
-    }
-  }
-  throw new Error(`Timed out waiting for concurrent Salesforce token refresh (userId=${userId})`);
-};
-
-const refreshAndPersistSalesforceToken = (
-  userId: string,
-  refreshToken: string,
-  environment?: SalesforceEnvironment,
-  customUrl?: string
-): Promise<RefreshedCrmCredential> => {
-  const existing = inFlightSalesforceRefreshes.get(userId);
-  if (existing) {
-    return existing;
-  }
-
-  const refreshPromise = (async (): Promise<RefreshedCrmCredential> => {
-    const lockToken = await acquireSalesforceRefreshLock(userId);
-    if (lockToken === null) {
-      return waitForSalesforceRefreshToComplete(userId);
-    }
-
-    try {
-      const refreshed = await refreashSalesforceToken(refreshToken, environment, customUrl);
-      const crmCredential: RefreshedCrmCredential = {
-        access_token: refreshed.access_token,
-        refresh_token: refreshed.refresh_token || refreshToken,
-      };
-      const encrptedCrm = encrypt(JSON.stringify(crmCredential));
-      await updateUser({ userId }, { crmCredential: encrptedCrm });
-      return crmCredential;
-    } catch (error) {
-      const err = error as { status?: number; body?: string };
-      if (err.status === 400 && err.body?.includes('invalid_grant')) {
-        await updateUser({ userId }, { crmCredential: null, isCrmConnected: false });
-      }
-      throw error;
-    } finally {
-      await releaseSalesforceRefreshLock(userId, lockToken);
-    }
-  })();
-
-  inFlightSalesforceRefreshes.set(userId, refreshPromise);
-
-  return refreshPromise.finally(() => {
-    inFlightSalesforceRefreshes.delete(userId);
   });
 };
 
@@ -490,14 +370,22 @@ export {
   getSalesforceLoginUrl,
   getSalesforceToken,
   getSalesforceProfile,
-  refreashSalesforceToken,
-  refreshAndPersistSalesforceToken,
   salesforceRequest,
+  salesforceFetch,
   getSalesforceOrgLimits,
   checkSalesforceApiLimitUsage,
 };
 export type { SalesforceEnvironment };
 export type { SalesforceTokens, SalesforceRequestResult };
+export * from './token-errors';
+export {
+  getFreshTokens,
+  buildIssuedCredentialFields,
+  logCredentialIssued,
+  disconnectSalesforceCredential,
+} from './token-authority';
+export { sendReconnectReminder, TOKEN_RETRY_PURPOSE, TOKEN_REMINDER_PURPOSE } from './token-lifecycle';
+export type { FreshTokens, GetFreshTokensOptions, TokenRefreshTrigger } from './token-authority';
 export * from './apex';
 export * from './trigger';
 export * from './metadata';

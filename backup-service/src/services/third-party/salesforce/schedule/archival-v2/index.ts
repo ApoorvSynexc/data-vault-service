@@ -17,6 +17,7 @@ import {
 import { updateArchivalConfigObject } from '../../../../backup-config';
 import { updateArchivalObject } from '../../../../backup-job';
 import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
+import { getCurrentAccessToken } from '../../token-gate';
 import { salesforceMetadataHandler } from '../../metadata';
 import { bulkDeleteRecords } from '../archival/delete-bulk';
 import { pollBulkJobArchival, uploadBulkResultsByPage } from './bulk';
@@ -301,10 +302,13 @@ const archiveObject = async (payload: IArchiveObject) => {
   const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
   const backupConfigId = backupConfig.backupConfigId;
   const tokens: SalesforceTokens = {
-    accessToken: access_token,
+    accessToken: (await getCurrentAccessToken(backupConfig.userId)) ?? access_token,
     refreshToken: refresh_token,
     crmId,
     backupConfigId,
+    userId: backupConfig.userId,
+    jobId: backupJobId,
+    jobType: 'ARCHIVAL',
   };
   const objectName = object.name;
   let jobId: string;
@@ -614,10 +618,13 @@ const deleteObjectRecords = async (payload: IArchiveObject): Promise<string> => 
 
   const backupConfigId = backupConfig.backupConfigId;
   const tokens: SalesforceTokens = {
-    accessToken: source.access_token,
+    accessToken: (await getCurrentAccessToken(backupConfig.userId)) ?? source.access_token,
     refreshToken: source.refresh_token,
     crmId: source.crmId,
     backupConfigId,
+    userId: backupConfig.userId,
+    jobId: backupJobId,
+    jobType: 'ARCHIVAL',
   };
   const s3Urls = s3Keys?.filter((s3Key) => s3Key.objectId === object.id).map((s3Key) => s3Key.key);
   try {

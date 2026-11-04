@@ -35,6 +35,11 @@ const destinationSchema = Joi.object({
   crmId: Joi.string().required(),
   crmName: Joi.string().required(),
 
+  // DataCraft user whose Salesforce credential the restore writes with —
+  // required for RTR token refresh mid-restore. Optional so pre-RTR jobs
+  // still validate; client-service always sends it for new jobs.
+  userId: Joi.string().optional(),
+
   encryptedTokens: Joi.object().required(),
   instanceUrl: Joi.string().uri().required(),
 

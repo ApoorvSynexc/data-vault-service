@@ -30,6 +30,14 @@ import { DecryptedSalesforceRequest } from '../../../middlewares/salesforce';
 // import { runLogsArchive } from '../../../jobs/logs-archive-cron';
 // import { runSyncSalesforceRefreshTokenJob } from '../../../jobs/sync-salesforce-refresh-token';
 import { eventBridgeHandler } from './event-bridge';
+import { S3_ASSUME_ROLE_CFN_TEMPLATE } from '../../../assets/cloudformation/s3-assumerole-role';
+
+/** Public CloudFormation template for AssumeRole quick-create (no auth). */
+const s3AssumeRoleCfnTemplateHandler = async (_req: IRequest, res: IResponse): Promise<void> => {
+  res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.status(200).send(S3_ASSUME_ROLE_CFN_TEMPLATE);
+};
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -294,9 +302,13 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   makeResponse(req, res, 200, true, 'create',);
 }
 
-export const publicController = wrapController({
-  payloadHandler,
-  eventBridgeHandler,
-  salesForceRealTimeHandler,
-  testHandler
-});
+export const publicController = {
+  ...wrapController({
+    payloadHandler,
+    eventBridgeHandler,
+    salesForceRealTimeHandler,
+    testHandler,
+  }),
+  // Raw YAML — do not wrap with JSON makeResponse
+  s3AssumeRoleCfnTemplateHandler,
+};

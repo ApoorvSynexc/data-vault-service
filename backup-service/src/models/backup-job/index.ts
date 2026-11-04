@@ -118,6 +118,9 @@ export interface IBackupObject {
   field?: IBackupField[];
   status?: string;
   bulkJobId?: string;
+  // Query job created but not yet polled to completion — saved immediately so
+  // a resumed run polls it instead of starting the query over.
+  pendingBulkJobId?: string;
   totalRecordCount?: number;
   completedRecordCount?: number;
   deletedSuccessRecordCount?: number;
@@ -138,7 +141,7 @@ export interface IBackupObject {
 
 export interface ISource {
   access_token: string;
-  refresh_token: string;
+  refresh_token?: string; // no longer sent — kept for jobs created before RTR
   instanceUrl: string;
   crmName: string;
   crmId: string;
@@ -147,8 +150,14 @@ export interface ISource {
 export interface IDestinationConfig {
   bucketName: string;
   region: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+  // ACCESS_KEYS (or missing, for older destinations): accessKeyId + secretAccessKey are set.
+  // ASSUME_ROLE: roleArn + externalId are set and a temporary pass is fetched when needed.
+  authType?: 'ACCESS_KEYS' | 'ASSUME_ROLE';
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  sessionToken?: string;
+  roleArn?: string;
+  externalId?: string;
   folderPath?: string;
 }
 
@@ -178,6 +187,7 @@ export interface IBackupJob {
   completedAt?: string;
   errorMessage?: string;
   errorReason?: string;
+  heartbeatAt?: string; // runner liveness ping (every 60 s while running)
   createdAt: string;
   updatedAt: string;
   // BULK-only fields

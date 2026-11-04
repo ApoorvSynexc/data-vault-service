@@ -1,0 +1,35 @@
+<p style="margin:0 0 8px;">Hi <%= recipientName %>,</p>
+<% if (reason === 'DISCONNECTED') { %>
+<p style="margin:0 0 20px;">Your Salesforce org <strong style="color:#0f172a;"><%= crmName %></strong> was disconnected from 360 DataCraft. Until it is reconnected, no backups, archivals or restores can run against it.</p>
+<% } else if (reason === 'UNCONFIRMED') { %>
+<p style="margin:0 0 20px;">We could not refresh the connection to your Salesforce org <strong style="color:#0f172a;"><%= crmName %></strong>. This can happen after a security change in Salesforce or a temporary problem on our side. To be safe, please reconnect — until then your backups are paused.</p>
+<% } else { %>
+<p style="margin:0 0 20px;">The connection to your Salesforce org <strong style="color:#0f172a;"><%= crmName %></strong> has expired. <strong style="color:#0f172a;">All your backups are paused</strong> until you reconnect.</p>
+<% } %>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;border-bottom:1px solid #e2e8f0;">Connection lost</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;border-bottom:1px solid #e2e8f0;"><%= expiredAt %></td>
+  </tr>
+  <tr>
+    <td style="padding:13px 18px;font-size:13px;color:#64748b;">Affected configurations</td>
+    <td style="padding:13px 18px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;"><%= impactedConfigs.length %></td>
+  </tr>
+</table>
+
+<% if (impactedConfigs.length) { %>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;border:1px solid #e2e8f0;border-radius:10px;">
+  <% impactedConfigs.forEach(function (config, index) { %>
+  <tr>
+    <td style="padding:11px 18px;font-size:13px;color:#0f172a;<%= index < impactedConfigs.length - 1 ? 'border-bottom:1px solid #e2e8f0;' : '' %>"><%= config.name %></td>
+    <td style="padding:11px 18px;font-size:13px;color:#64748b;text-align:right;<%= index < impactedConfigs.length - 1 ? 'border-bottom:1px solid #e2e8f0;' : '' %>"><%= config.detail %></td>
+  </tr>
+  <% }); %>
+</table>
+<% if (moreConfigCount > 0) { %>
+<p style="margin:8px 0 0;font-size:12px;color:#64748b;">…and <%= moreConfigCount %> more.</p>
+<% } %>
+<% } %>
+
+<p style="margin:20px 0 0;">Reconnecting takes a minute and resumes your paused jobs automatically.<% if (reminderSeq > 1) { %> This is reminder <%= reminderSeq %> — we'll keep reminding you once a day until the org is reconnected.<% } %></p>

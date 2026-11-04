@@ -45,6 +45,9 @@ interface UpdateBackupConfigParams {
   lastEventId?: string;
   schemaChange?: boolean;
   sizeInBytes?: number;
+  completedRecordCount?: number;
+  deletedRecordCount?: number;
+  lastCompressionRequestedAt?: string;
   triggerResults?: ITriggerResult[];
   type?: string;
   status?: string;
@@ -260,6 +263,15 @@ const updateBackupConfig = async (
   }
   if (params.sizeInBytes !== undefined) {
     updates.sizeInBytes = params.sizeInBytes;
+  }
+  if (params.completedRecordCount !== undefined) {
+    updates.completedRecordCount = params.completedRecordCount;
+  }
+  if (params.deletedRecordCount !== undefined) {
+    updates.deletedRecordCount = params.deletedRecordCount;
+  }
+  if (params.lastCompressionRequestedAt !== undefined) {
+    updates.lastCompressionRequestedAt = params.lastCompressionRequestedAt;
   }
   if (params.scheduleConfig !== undefined) {
     updates.scheduleConfig = params.scheduleConfig;

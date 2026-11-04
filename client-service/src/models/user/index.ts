@@ -26,6 +26,19 @@ export interface IUser {
     authTag: string;
   }
   refreshLockedUntil?: number;
+  // Salesforce token health (see token-authority.ts). refreshTokenFp is a
+  // fingerprint of the stored refresh token, used for compare-and-swap saves.
+  refreshTokenFp?: string;
+  tokenStatus?: string; // SALESFORCE_TOKEN_STATUS; missing = Ready
+  tokenStatusChangedAt?: string;
+  tokenRetryAttempt?: number;
+  tokenNextRetryAt?: string;
+  tokenLastError?: string;
+  lastRefreshAt?: string;
+  refreshCount?: number;
+  expiredAt?: string;
+  reminderSeq?: number; // reconnect emails sent in the current expiry episode
+  nextReminderAt?: string;
   contact?: {
     email?: string;
     isEmailVerified?: boolean;

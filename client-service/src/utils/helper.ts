@@ -7,7 +7,7 @@ import {
   SCHEDULE_TYPE,
 } from '../constant';
 import { IRequest, IResponse, makeResponse } from '../lib';
-import { SalesforceAuthExpiredError } from '../services/third-party/salesforce';
+import { SalesforceTokenError } from '../services/third-party/salesforce';
 import { IBackupObject, IObject } from '../models';
 import { logger } from '../middlewares';
 
@@ -61,8 +61,16 @@ const asyncHandler =
       try {
         await fn(req, res);
       } catch (error: unknown) {
-        if (error instanceof SalesforceAuthExpiredError) {
-          makeResponse(req, res, 401, false, 'salesforce_reauth_required');
+        if (error instanceof SalesforceTokenError) {
+          if (error.retryAfterSec) {
+            res.setHeader('Retry-After', String(error.retryAfterSec));
+          }
+          // `data.code` lets the frontend tell "reconnect Salesforce" (401)
+          // apart from an expired DataCraft session (also 401).
+          makeResponse(req, res, error.httpStatus, false, error.code as Parameters<typeof makeResponse>[4], {
+            code: error.code,
+            retryAfterSec: error.retryAfterSec,
+          });
           return;
         }
         const message = error instanceof Error ? error.message : 'unknown_error';
