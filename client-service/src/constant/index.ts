@@ -417,6 +417,7 @@ const TOKEN_EVENT_TYPE = {
   persistRetry: 'PERSIST_RETRY',
   persistSuperseded: 'PERSIST_SUPERSEDED',
   persistFailed: 'PERSIST_FAILED',
+  fingerprintMismatch: 'FINGERPRINT_MISMATCH',
   statusChanged: 'STATUS_CHANGED',
   retryScheduled: 'RETRY_SCHEDULED',
   retryAttempt: 'RETRY_ATTEMPT',

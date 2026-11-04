@@ -10,8 +10,9 @@
 //   2. DynamoDB lock (refreshLockedUntil) across PM2 workers / instances
 //   3. consistent re-read — always redeem the STORED token, never a caller's copy
 //   4. skip the redeem when the failed access token was already replaced
-//   5. save with compare-and-swap on refreshTokenFp (not on the lock: if the
-//      lock expired mid-call, our rotated token is still the valid one)
+//   5. save with compare-and-swap on the stored credential's IV (not on the
+//      lock: if the lock expired mid-call, our rotated token is still the
+//      valid one; not on refreshTokenFp: see SAME_CREDENTIAL_CONDITION)
 //   6. classify failures and apply the kind's action
 //
 // Design: docs/Salesforce-RTR-Final-v2.md §5–§9. Every step writes a
@@ -263,13 +264,21 @@ const redeemRefreshToken = (
 // Persisting results
 // ---------------------------------------------------------------------------
 
-// Every conditional write below is "only if the stored refresh token is still
-// the one we sent". Users connected before RTR have no fingerprint yet — they pass only while a
-// credential is still stored. Disconnect and EXPIRE remove both crmCredential
-// and refreshTokenFp, so a refresh still in flight can never write a removed
+// Every conditional write below is "only if the stored credential is still the
+// exact one we read". Every encrypt() draws a fresh random IV, so the IV
+// identifies one stored credential: any reconnect, rotation or disconnect
+// changes or removes it. This deliberately does NOT compare refreshTokenFp —
+// a writer that updates crmCredential without it (a pre-RTR build sharing the
+// table) would leave the fingerprint stale and lock every save out for good:
+// rotated tokens discarded, failures never recorded. Saves here rewrite
+// refreshTokenFp, so a stale one heals on the next save. Disconnect and EXPIRE
+// remove crmCredential, so a refresh still in flight can never write a removed
 // credential back as Ready.
-const SAME_REFRESH_TOKEN_CONDITION =
-  'refreshTokenFp = :sentFp OR (attribute_not_exists(refreshTokenFp) AND attribute_exists(crmCredential))';
+const SAME_CREDENTIAL_CONDITION = '#credential.#iv = :readIv';
+const SAME_CREDENTIAL_NAMES = { '#credential': 'crmCredential', '#iv': 'iv' };
+
+const credentialIv = (user: Pick<IUser, 'crmCredential'>): string | undefined =>
+  user.crmCredential?.iv;
 
 const isConditionalFailure = (error: any) => error?.name === 'ConditionalCheckFailedException';
 
@@ -279,7 +288,7 @@ const isConditionalFailure = (error: any) => error?.name === 'ConditionalCheckFa
 const persistRefreshedCredential = async (
   user: IUser,
   credential: StoredCredential,
-  sentFp: string,
+  readIv: string,
   context: { trigger: TokenRefreshTrigger; jobId?: string }
 ): Promise<'saved' | 'superseded' | 'failed'> => {
   const now = nowIso();
@@ -295,11 +304,12 @@ const persistRefreshedCredential = async (
             'refreshCount = if_not_exists(refreshCount, :zero) + :one, tokenStatusChangedAt = :now',
             'REMOVE tokenNextRetryAt, tokenLastError, expiredAt',
           ].join(' '),
-          ConditionExpression: SAME_REFRESH_TOKEN_CONDITION,
+          ConditionExpression: SAME_CREDENTIAL_CONDITION,
+          ExpressionAttributeNames: SAME_CREDENTIAL_NAMES,
           ExpressionAttributeValues: {
             ':credential': encrypt(JSON.stringify(credential)),
             ':newFp': fingerprintToken(credential.refresh_token),
-            ':sentFp': sentFp,
+            ':readIv': readIv,
             ':ready': SALESFORCE_TOKEN_STATUS.ready,
             ':zero': 0,
             ':one': 1,
@@ -339,12 +349,12 @@ interface StatusChange {
   nextRetryAt?: string;
 }
 
-// Applies a failure kind's status. Conditioned on the stored token still
-// being the one we sent, so a concurrent reconnect is never overwritten.
+// Applies a failure kind's status. Conditioned on the stored credential still
+// being the one we read, so a concurrent reconnect is never overwritten.
 // Returns false when the condition failed.
 const applyStatusChange = async (
   userId: string,
-  sentFp: string,
+  readIv: string,
   change: StatusChange
 ): Promise<boolean> => {
   const now = nowIso();
@@ -361,7 +371,7 @@ const applyStatusChange = async (
     ':now': now,
     ':lastError': change.lastError,
     ':connected': change.isCrmConnected,
-    ':sentFp': sentFp,
+    ':readIv': readIv,
   };
 
   if (change.status === SALESFORCE_TOKEN_STATUS.expired) {
@@ -384,7 +394,8 @@ const applyStatusChange = async (
         TableName: USER_TABLE,
         Key: { userId },
         UpdateExpression: `SET ${set.join(', ')}${remove.length ? ` REMOVE ${remove.join(', ')}` : ''}`,
-        ConditionExpression: SAME_REFRESH_TOKEN_CONDITION,
+        ConditionExpression: SAME_CREDENTIAL_CONDITION,
+        ExpressionAttributeNames: SAME_CREDENTIAL_NAMES,
         ExpressionAttributeValues: values,
       })
     );
@@ -494,6 +505,8 @@ interface RefreshContext {
   user: IUser;
   credential: StoredCredential;
   sentFp: string;
+  // IV of the stored credential we read — the compare-and-swap key.
+  readIv: string;
   environment?: SalesforceEnvironment;
   options: GetFreshTokensOptions;
   // eventKey of this refresh's latest REFRESH_ATTEMPT — the §6 lost-rotation
@@ -559,7 +572,7 @@ const attemptRedeem = async (ctx: RefreshContext, attempt: number): Promise<Atte
     durationMs: Date.now() - startedAt,
   });
 
-  const persisted = await persistRefreshedCredential(user, newCredential, sentFp, options);
+  const persisted = await persistRefreshedCredential(user, newCredential, ctx.readIv, options);
 
   if (persisted === 'superseded') {
     logTokenEvent({ ...eventBase, eventType: TOKEN_EVENT_TYPE.persistSuperseded });
@@ -618,7 +631,7 @@ const applyOrAdoptWinner = async (
   error: Error,
   event: { kind: string; message?: string }
 ): Promise<FreshTokens> => {
-  const { user, sentFp, options } = ctx;
+  const { user, sentFp, readIv, options } = ctx;
   const eventBase = {
     userId: user.userId,
     crmId: user.crmId,
@@ -626,13 +639,20 @@ const applyOrAdoptWinner = async (
     trigger: options.trigger,
   };
 
-  if (!(await applyStatusChange(user.userId, sentFp, change))) {
+  if (!(await applyStatusChange(user.userId, readIv, change))) {
     logTokenEvent({
       ...eventBase,
       eventType: TOKEN_EVENT_TYPE.persistSuperseded,
       kind: event.kind,
     });
-    return readStoredTokensOrThrow(user.userId);
+    const winner = await readStoredTokensOrThrow(user.userId);
+    // Re-stored, but still the refresh token that just failed: there is no
+    // newer token to adopt. Handing it back would make the caller replay,
+    // 401 and refresh again — an endless loop that never records the failure.
+    if (fingerprintToken(winner.refreshToken) === sentFp) {
+      throw error;
+    }
+    return winner;
   }
 
   if (effectiveStatus(user) !== change.status) {
@@ -787,11 +807,32 @@ const refreshWhileLocked = async (
     return toFreshTokens(credential);
   }
 
+  const readIv = credentialIv(user);
+  if (!readIv) {
+    throw new SalesforceAuthExpiredError();
+  }
+  const sentFp = fingerprintToken(credential.refresh_token)!;
+  if (user.refreshTokenFp && user.refreshTokenFp !== sentFp) {
+    // Saves no longer depend on this field, but a mismatch means something
+    // wrote crmCredential without it — most likely a pre-RTR build on this table.
+    logTokenEvent({
+      userId,
+      crmId: user.crmId,
+      jobId: options.jobId,
+      trigger: options.trigger,
+      eventType: TOKEN_EVENT_TYPE.fingerprintMismatch,
+      oldRefreshTokenFp: user.refreshTokenFp,
+      newRefreshTokenFp: sentFp,
+      message: 'stored refreshTokenFp does not match the stored refresh token',
+    });
+  }
+
   const crm = user.crmId ? await getCrmById(user.crmId) : null;
   const ctx: RefreshContext = {
     user,
     credential,
-    sentFp: fingerprintToken(credential.refresh_token)!,
+    sentFp,
+    readIv,
     environment: crm?.environment as SalesforceEnvironment | undefined,
     options,
   };
