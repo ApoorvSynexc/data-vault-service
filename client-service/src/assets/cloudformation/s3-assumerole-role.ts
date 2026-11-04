@@ -2,9 +2,14 @@
 // Parameters are supplied via the console quick-create URL (param_*), not baked into Defaults.
 export const S3_ASSUME_ROLE_CFN_TEMPLATE = `AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  DataCraft S3 access role for keyless destination connect.
+  DataCraft S3 access role for keyless destination connect, plus a bucket
+  policy so DataCraft Athena can run restore preview / dry-run queries.
   Customer deploys this in their AWS account. DataCraft assumes the role
   with ExternalId — no IAM user access keys required.
+  Note: the Athena bucket policy resource sets the bucket's policy document
+  for this stack. If the bucket already has a policy you need to keep,
+  leave DataCraftAthenaRoleArn empty and merge the Athena statement from
+  DataCraft Manual setup instead.
 
 Parameters:
   DataCraftAwsAccountId:
@@ -31,9 +36,16 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional object prefix without leading slash (empty = whole bucket)
+  DataCraftAthenaRoleArn:
+    Type: String
+    Default: ''
+    Description: >
+      DataCraft Athena role ARN for restore preview / dry-run.
+      Leave empty to skip creating the Athena bucket policy.
 
 Conditions:
   HasFolderPrefix: !Not [!Equals [!Ref FolderPrefix, '']]
+  HasAthenaRole: !Not [!Equals [!Ref DataCraftAthenaRoleArn, '']]
 
 Resources:
   DataCraftS3AccessRole:
@@ -77,6 +89,30 @@ Resources:
                   - HasFolderPrefix
                   - !Sub 'arn:aws:s3:::\${BucketName}/\${FolderPrefix}*'
                   - !Sub 'arn:aws:s3:::\${BucketName}/*'
+
+  DataCraftAthenaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: HasAthenaRole
+    Properties:
+      Bucket: !Ref BucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DataCraftAthenaRoleAccess
+            Effect: Allow
+            Principal:
+              AWS: !Ref DataCraftAthenaRoleArn
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:PutObject
+              - s3:ListBucketMultipartUploads
+              - s3:ListMultipartUploadParts
+              - s3:AbortMultipartUpload
+            Resource:
+              - !Sub 'arn:aws:s3:::\${BucketName}'
+              - !Sub 'arn:aws:s3:::\${BucketName}/*'
 
 Outputs:
   RoleArn:
