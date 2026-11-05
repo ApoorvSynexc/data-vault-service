@@ -23,6 +23,7 @@ import {
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
   TOKEN_EVENT_TABLE,
+  COMPRESSION_QUEUE_TABLE,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
   //DYNAMODB_ENDPOINT,
@@ -397,6 +398,28 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         KeySchema: [
           { AttributeName: 'jobId', KeyType: 'HASH' },
           { AttributeName: 'eventAt', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  // EMR compression queue (services/compression-queue). The worker and the
+  // catch-up poller list rows by status through status-createdAt-index.
+  {
+    TableName: COMPRESSION_QUEUE_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'queueId', AttributeType: 'S' },
+      { AttributeName: 'status', AttributeType: 'S' },
+      { AttributeName: 'createdAt', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'queueId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'status-createdAt-index',
+        KeySchema: [
+          { AttributeName: 'status', KeyType: 'HASH' },
+          { AttributeName: 'createdAt', KeyType: 'RANGE' },
         ],
         Projection: { ProjectionType: 'ALL' },
       },

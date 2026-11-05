@@ -116,13 +116,28 @@ export const enqueueCompression = async (params: {
     attemptCount,
   };
 
-  await docClient.send(
-    new PutCommand({
-      TableName: COMPRESSION_QUEUE_TABLE,
-      Item: item,
-      // Drop permanentFailure / nextRetryAt / emr fields by full replace of known shape.
-    })
-  );
+  try {
+    await docClient.send(
+      new PutCommand({
+        TableName: COMPRESSION_QUEUE_TABLE,
+        Item: item,
+        // Drop permanentFailure / nextRetryAt / emr fields by full replace of known shape.
+        // The Get above is only a pre-check: the event path, catch-up poller and other
+        // client-service instances can enqueue the same queueId concurrently. Only write
+        // over a row that is still missing or FAILED, never one that moved to QUEUED,
+        // RUNNING or DONE in between.
+        ConditionExpression: 'attribute_not_exists(queueId) OR #status = :failed',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':failed': 'FAILED' },
+      })
+    );
+  } catch (error: any) {
+    if (error?.name === 'ConditionalCheckFailedException') {
+      logger.info(`[compression-queue] enqueue raced, kept existing row | queueId:${queueId}`);
+      return { enqueued: false, queueId, reason: 'already_enqueued' };
+    }
+    throw error;
+  }
 
   logger.info(
     `[compression-queue] enqueued | queueId:${queueId} source:${source} jobType:${jobType}`

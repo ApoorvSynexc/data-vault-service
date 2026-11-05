@@ -50,6 +50,13 @@ const EMR_ACTIVE_STATES = new Set([
   'CANCELLING',
 ]);
 const EMR_FAILED_STATES = new Set(['FAILED', 'CANCELLED']);
+// Outcomes a backup/archival/realtime run may report in backup.job.completed.
+const TERMINAL_JOB_STATUSES = new Set<string>([
+  STATUS.success,
+  STATUS.failed,
+  STATUS.partialFailure,
+  STATUS.cancelled,
+]);
 
 let workerRunning = false;
 const leaseOwner = `${os.hostname()}:${process.pid}`;
@@ -197,13 +204,28 @@ export const handleBackupJobCompleted = async (body: {
     deletedRecordCount,
   } = body;
 
+  if (!TERMINAL_JOB_STATUSES.has(status)) {
+    logger.warn(
+      `[compression] backup.job.completed ignored: invalid status "${status}" | cfg:${backupConfigId} job:${backupJobId}`
+    );
+    return;
+  }
+
   const config = await getBackupConfigById(backupConfigId);
   if (!config) {
     logger.warn(`[compression] backup.job.completed missing config | cfg:${backupConfigId}`);
     return;
   }
 
-  // Always update config status (CS is sole owner). Skip if paused for non-terminal UX? Plan: still update.
+  // Always update config status, paused or not (CS is sole owner). This matches what
+  // QA did before the event-driven change: backup-service wrote backupStatus directly on
+  // every run, and the paused guard only sat on the legacy backup.completed/backup.failed
+  // events, which nothing sent. Paused configs only skip compression (below).
+  //
+  // Size and record counts are config TOTALS. A bulk run reports its full totals; a
+  // realtime run reports a single batch (its totals accumulate on the realtime job row),
+  // so writing a realtime batch here would overwrite the config totals with one batch.
+  const reportsTotals = jobType !== 'REALTIME';
   try {
     await updateBackupConfig(
       backupConfigId,
@@ -211,9 +233,9 @@ export const handleBackupJobCompleted = async (body: {
         backupStatus: status,
         lastBackupAt: new Date().toISOString(),
         ...(eventId ? { lastEventId: eventId } : {}),
-        ...(sizeInBytes !== undefined ? { sizeInBytes } : {}),
-        ...(completedRecordCount !== undefined ? { completedRecordCount } : {}),
-        ...(deletedRecordCount !== undefined ? { deletedRecordCount } : {}),
+        ...(reportsTotals && sizeInBytes !== undefined ? { sizeInBytes } : {}),
+        ...(reportsTotals && completedRecordCount !== undefined ? { completedRecordCount } : {}),
+        ...(reportsTotals && deletedRecordCount !== undefined ? { deletedRecordCount } : {}),
       },
       eventId
     );
