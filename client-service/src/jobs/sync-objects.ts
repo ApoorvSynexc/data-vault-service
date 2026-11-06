@@ -129,7 +129,8 @@ const syncObjectsForEntireDataset = async (params: ISyncObject) => {
                 userId: backupConfig.userId,
                 backupConfigId: backupConfig.backupConfigId,
                 source: {
-                    ...credentials,
+                    // Access token only — backup-service refreshes via the internal API.
+                    access_token: credentials.access_token,
                     crmId: crm.crmId,
                     crmName: crm.crmName,
                     instanceUrl,

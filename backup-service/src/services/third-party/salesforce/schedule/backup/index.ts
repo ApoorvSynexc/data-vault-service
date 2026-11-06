@@ -1,10 +1,10 @@
-import { JOB_OBJECT_STATUS } from '../../../../../constant';
+import { JOB_OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
 import { logger } from '../../../../../middlewares/logger';
 import { IBackupConfig, IBackupObject, IDestinationConfig } from '../../../../../models';
 import { getBackupJob, updateBackupObject } from '../../../../backup-job';
 import { buildS3KeyPrefix, withSystemFields } from '../../../../../utils/helper';
 import { pollBulkJob, classifyAndUploadBulkResultsByPage, uploadBulkResultsByPage } from './bulk';
-import { createBulkQueryJob, SalesforceTokens } from '../../api-request';
+import { createBulkQueryJob, salesforceRequest, SalesforceTokenUnavailableError, SalesforceTokens } from '../../api-request';
 import { SalesforceApiLimitExceededError } from '../../api-limit';
 import { updateBackupConfigObject } from '../../../../backup-config';
 import { salesforceMetadataHandler } from '../../metadata';
@@ -128,6 +128,49 @@ const buildWhereClause = (object: IBackupObject): string => {
 };
 
 // First-time backup: export all records into insert/ and schema into schema/
+// Reuses the query job an interrupted run already created (pendingBulkJobId)
+// when Salesforce still has it in a usable state — a multi-hour query is not
+// restarted just because the token rotated or the task restarted mid-poll.
+// Otherwise creates a new job and records it right away.
+const createOrResumeBulkQueryJob = async (params: {
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  soql: string;
+  operation: 'query' | 'queryAll';
+  pendingBulkJobId?: string;
+  backupJobId: string;
+  objectIndex: number;
+}): Promise<{ jobId: string; apiCalls: number }> => {
+  const { instanceUrl, tokens, soql, operation, pendingBulkJobId, backupJobId, objectIndex } = params;
+
+  if (pendingBulkJobId) {
+    try {
+      const job = await salesforceRequest<{ state: string }>(
+        { url: `${instanceUrl}/services/data/${SALESFORCE_BULK_API_VERSION}/jobs/query/${pendingBulkJobId}` },
+        tokens
+      );
+      if (job.state !== 'Failed' && job.state !== 'Aborted') {
+        logger.info(`Resuming Bulk query job ${pendingBulkJobId} from an earlier run, backupJobId=${backupJobId}`);
+        return { jobId: pendingBulkJobId, apiCalls: 1 };
+      }
+    } catch (err: any) {
+      if (err instanceof SalesforceTokenUnavailableError) {
+        throw err;
+      }
+      logger.warn(`Earlier Bulk query job ${pendingBulkJobId} is not usable (${err?.message}); starting a new one`);
+    }
+  }
+
+  let jobId: string;
+  try {
+    jobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation });
+  } catch (err: any) {
+    throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
+  }
+  await updateBackupObject({ backupJobId, objectIndex, pendingBulkJobId: jobId });
+  return { jobId, apiCalls: pendingBulkJobId ? 3 : 2 };
+};
+
 export const exportFirstTime = async (
   backupConfig: IBackupConfig,
   backupJobId: string,
@@ -257,12 +300,17 @@ export const exportFirstTime = async (
 
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName}${whereClause ? ` ${whereClause}` : ''} ${dateFilter.length ? ` ${dateFilter}` : ''}  WITH USER_MODE ORDER BY Id ASC`;
 
-      try {
-        jobId = await createBulkQueryJob({ instanceUrl, tokens, soql });
-        salesforceApiCount += 2;
-      } catch (err: any) {
-        throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
-      }
+      const queryJob = await createOrResumeBulkQueryJob({
+        instanceUrl,
+        tokens,
+        soql,
+        operation: 'query',
+        pendingBulkJobId: object.pendingBulkJobId,
+        backupJobId,
+        objectIndex,
+      });
+      jobId = queryJob.jobId;
+      salesforceApiCount += queryJob.apiCalls;
 
       try {
         totalRecordCount = await pollBulkJob({
@@ -452,12 +500,17 @@ export const exportIncremental = async (
       const soql = `SELECT ${allFieldNames.join(', ')} FROM ${objectName} ${where} WITH USER_MODE ORDER BY Id ASC`;
 
       // queryAll so Salesforce includes soft-deleted records in the result set
-      try {
-        bulkJobId = await createBulkQueryJob({ instanceUrl, tokens, soql, operation: 'queryAll' });
-        salesforceApiCount += 2;
-      } catch (err: any) {
-        throw new Error(`[create-bulk-job] ${err.message}`, { cause: err });
-      }
+      const queryJob = await createOrResumeBulkQueryJob({
+        instanceUrl,
+        tokens,
+        soql,
+        operation: 'queryAll',
+        pendingBulkJobId: object.pendingBulkJobId,
+        backupJobId,
+        objectIndex,
+      });
+      bulkJobId = queryJob.jobId;
+      salesforceApiCount += queryJob.apiCalls;
 
       try {
         totalRecordCount = await pollBulkJob({

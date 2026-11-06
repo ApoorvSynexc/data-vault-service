@@ -22,6 +22,8 @@ import {
   USER_TABLE,
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
+  TOKEN_EVENT_TABLE,
+  COMPRESSION_QUEUE_TABLE,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
   //DYNAMODB_ENDPOINT,
@@ -60,6 +62,7 @@ export const docClient = DynamoDBDocumentClient.from(client);
 const TTL_CONFIG: Record<string, string> = {
   [SESSION_TABLE]: 'ttl',
   [OAUTH_STATE_TABLE]: 'ttl',
+  [TOKEN_EVENT_TABLE]: 'expiresAt',
 };
 
 const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
@@ -361,6 +364,61 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         IndexName: 'userId-index',
         KeySchema: [
           { AttributeName: 'userId', KeyType: 'HASH' },
+          { AttributeName: 'createdAt', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  {
+    TableName: TOKEN_EVENT_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'userId', AttributeType: 'S' },
+      { AttributeName: 'eventKey', AttributeType: 'S' },
+      { AttributeName: 'crmId', AttributeType: 'S' },
+      { AttributeName: 'jobId', AttributeType: 'S' },
+      { AttributeName: 'eventAt', AttributeType: 'S' },
+    ],
+    KeySchema: [
+      { AttributeName: 'userId', KeyType: 'HASH' },
+      { AttributeName: 'eventKey', KeyType: 'RANGE' },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'crmId-index',
+        KeySchema: [
+          { AttributeName: 'crmId', KeyType: 'HASH' },
+          { AttributeName: 'eventAt', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'jobId-index',
+        KeySchema: [
+          { AttributeName: 'jobId', KeyType: 'HASH' },
+          { AttributeName: 'eventAt', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  // EMR compression queue (services/compression-queue). The worker and the
+  // catch-up poller list rows by status through status-createdAt-index.
+  {
+    TableName: COMPRESSION_QUEUE_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'queueId', AttributeType: 'S' },
+      { AttributeName: 'status', AttributeType: 'S' },
+      { AttributeName: 'createdAt', AttributeType: 'S' },
+    ],
+    KeySchema: [{ AttributeName: 'queueId', KeyType: 'HASH' }],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'status-createdAt-index',
+        KeySchema: [
+          { AttributeName: 'status', KeyType: 'HASH' },
           { AttributeName: 'createdAt', KeyType: 'RANGE' },
         ],
         Projection: { ProjectionType: 'ALL' },

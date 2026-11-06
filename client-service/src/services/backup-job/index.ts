@@ -12,7 +12,10 @@ import { incrementTableCounter } from '../counter';
 import { flattenBackupObjects } from '../../utils/helper';
 import { logger } from '../../middlewares';
 import { getDecryptedCrmCredential } from '../user';
-import { SalesforceAuthExpiredError } from '../third-party';
+// Leaf module on purpose: importing the third-party barrel here creates a
+// load-time cycle (salesforce → token-authority → token-lifecycle → here)
+// that leaves the barrel missing exports.
+import { SalesforceAuthExpiredError } from '../third-party/salesforce/token-errors';
 import { deleteAwsEventScheduler } from '../third-party/event-bridge';
 import { buildBackupScheduleName, computeNextScheduledRun } from '../../utils/event-bridge';
 
@@ -110,7 +113,8 @@ const triggerArchivalBackupJob = async (params: {
     userId: config.userId,
     backupConfigId: config.backupConfigId,
     source: {
-      ...credentials,
+      // Access token only — backup-service refreshes via the internal API.
+      access_token: credentials.access_token,
       crmId: crm.crmId,
       crmName: crm.crmName,
       instanceUrl: user.crmProfile?.instanceUrl,
@@ -941,6 +945,39 @@ const getFailedBackupJobs = async (
   } while (lastEvaluatedKey !== undefined);
 };
 
+// Backup/archival runs that backup-service stopped because the Salesforce
+// token gate closed (errorReason = one of `reasons`), created since `since`.
+// These are re-queued once the user's token is Ready again.
+const getTokenStoppedBackupJobs = async (userId: string, reasons: string[], since: string): Promise<IBackupJob[]> => {
+  const items: IBackupJob[] = [];
+  let lastKey: Record<string, any> | undefined;
+  const reasonValues = Object.fromEntries(reasons.map((reason, i) => [`:r${i}`, reason]));
+
+  do {
+    const result = await docClient.send(
+      new QueryCommand({
+        TableName: BACKUP_JOB_TABLE,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId AND createdAt >= :since',
+        FilterExpression: `errorReason IN (${Object.keys(reasonValues).join(', ')}) AND #status IN (:failed, :partialFailure) AND attribute_not_exists(processingStartedAt)`,
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: {
+          ':userId': userId,
+          ':since': since,
+          ':failed': STATUS.failed,
+          ':partialFailure': STATUS.partialFailure,
+          ...reasonValues,
+        },
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      })
+    );
+    items.push(...((result.Items ?? []) as IBackupJob[]));
+    lastKey = result.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastKey);
+
+  return items;
+};
+
 export {
   triggerBackupJob,
   triggerArchivalBackupJob,
@@ -963,4 +1000,5 @@ export {
   getBackupJobOverview,
   getStaleJobs,
   getFailedBackupJobs,
+  getTokenStoppedBackupJobs,
 };

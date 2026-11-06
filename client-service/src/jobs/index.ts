@@ -1,10 +1,11 @@
+import cron from 'node-cron';
 import { logger } from '../middlewares';
 import { registerSystemEventSchedules } from './system-event-schedules';
-
+import { processCompressionQueue } from '../services';
+import { COMPRESSION_WORKER_POLL_MS, AUTO_COMPRESSION_ENABLED } from '../constant';
+import { runCompressionCatchup } from './compression-catchup';
 
 export const startCron = () => {
-    // startBackupConfigCron();
-
     // Fire-and-forget: registration failures are logged, not thrown — a
     // schedule that fails to register on this boot gets retried on the next
     // one, it should never block server startup.
@@ -12,33 +13,23 @@ export const startCron = () => {
         logger.error('[CRON] failed to register system EventBridge schedules: ', error)
     );
 
+    // In-process compression queue worker (DynamoDB QUEUED → StartJobRun).
+    if (AUTO_COMPRESSION_ENABLED) {
+        const intervalMs = COMPRESSION_WORKER_POLL_MS;
+        setInterval(() => {
+            void processCompressionQueue();
+        }, intervalMs);
+        // Immediate kick on boot in case rows were left QUEUED across restart.
+        void processCompressionQueue();
+        logger.info(`[CRON] compression worker started | pollMs:${intervalMs}`);
+    } else {
+        logger.info('[CRON] compression worker disabled (AUTO_COMPRESSION_ENABLED=false)');
+    }
 
-
-    // Staggered 8h apart so they never overlap: 3AM, 11AM, 7PM.
-    // cron.schedule('0 3 * * *', async () => {
-    //     logger.info(`[CRON] cron triggered | 3AM | started`);
-    //     await runLogsArchive();
-    //     await runPaymentSyncJob();
-        
-    //     if (!['qa'].includes(NODE_ENV.toLowerCase())) {
-    //         await timer(1000 * 60 * 15);
-    //         await runEmrJob();
-    //         await timer(1000 * 60 * 15);
-    //     }
-    //     logger.info(`[CRON] cron triggered | 3AM | ended`);
-    // });
-
-    // if (['qa'].includes(NODE_ENV.toLowerCase())) return;
-    // logger.info(`[CRON] cron registered | for 11AM, 7PM`);
-
-    // cron.schedule('0 11 * * *', async () => {
-    //     logger.info(`[CRON] cron triggered | 11AM | started`);
-    //     await runEmrJob();
-    //     logger.info(`[CRON] cron triggered | 11AM | ended`);
-    // });
-    // cron.schedule('0 19 * * *', async () => {
-    //     logger.info(`[CRON] cron triggered | 7PM | started`);
-    //     await runEmrJob();
-    //     logger.info(`[CRON] cron triggered | 7PM | ended`);
-    // });
-}
+    // Catch-up every 2 hours — recover missed backup.job.completed notifies.
+    cron.schedule('0 */2 * * *', async () => {
+        logger.info('[CRON] compression catch-up started');
+        await runCompressionCatchup();
+        logger.info('[CRON] compression catch-up ended');
+    });
+};
