@@ -103,7 +103,18 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       continue;
     }
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending, status: VISIBILITY_STATUS.active });
+    // Hot-path: large realtime bursts hit the same backupConfigId partition.
+    // Only flip to pending when needed; lastBackupAt is owned by backup.job.completed.
+    const needsPendingWrite =
+      config.backupStatus !== STATUS.pending || config.status !== VISIBILITY_STATUS.active;
+    if (needsPendingWrite) {
+      await updateBackupConfig(config.backupConfigId, {
+        backupStatus: STATUS.pending,
+        status: VISIBILITY_STATUS.active,
+      });
+      config.backupStatus = STATUS.pending;
+      config.status = VISIBILITY_STATUS.active;
+    }
 
     /**
      * WHY we pass destination config decrypted to backup-service:
@@ -130,7 +141,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       }),
     });
 
-    await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
     logger.info(`Triggered real-time backup for backupConfigId: ${config.backupConfigId} transactionId: ${transactionId}`);
   }
 };

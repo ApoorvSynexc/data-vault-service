@@ -51,7 +51,13 @@ const awsCredentials: IAwsCredentials = {
   }
 }
 
-const client = new DynamoDBClient(awsCredentials);
+// Adaptive retries absorb short on-demand scale-up / hot-partition throttles
+// (common on realtime webhook storms writing the same backupConfigId).
+const client = new DynamoDBClient({
+  ...awsCredentials,
+  maxAttempts: 10,
+  retryMode: 'adaptive',
+});
 export const docClient = DynamoDBDocumentClient.from(client);
 
 // ---------------------------------------------------------------------------
