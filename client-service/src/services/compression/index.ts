@@ -61,6 +61,19 @@ const TERMINAL_JOB_STATUSES = new Set<string>([
 let workerRunning = false;
 const leaseOwner = `${os.hostname()}:${process.pid}`;
 
+// Realtime completions still call this once per Salesforce batch. Writing the
+// config on every batch is the hot partition. Success status is refreshed at
+// most this often; failures always write.
+const REALTIME_STATUS_WRITE_MS = 30_000;
+const lastRealtimeStatusWrite = new Map<string, { at: number; status: string }>();
+
+const shouldSkipRealtimeStatusWrite = (backupConfigId: string, status: string): boolean => {
+  if (status !== STATUS.success) return false;
+  const prev = lastRealtimeStatusWrite.get(backupConfigId);
+  if (!prev || prev.status !== status) return false;
+  return Date.now() - prev.at < REALTIME_STATUS_WRITE_MS;
+};
+
 /**
  * Atomic realtime debounce: only one enqueue per config per COMPRESSION_REALTIME_DEBOUNCE_MS.
  */
@@ -217,6 +230,13 @@ export const handleBackupJobCompleted = async (body: {
     return;
   }
 
+  if (jobType === 'REALTIME' && shouldSkipRealtimeStatusWrite(backupConfigId, status)) {
+    logger.info(
+      `[compression] realtime status write skipped | cfg:${backupConfigId} status:${status}`
+    );
+    return;
+  }
+
   // Always update config status, paused or not (CS is sole owner). This matches what
   // QA did before the event-driven change: backup-service wrote backupStatus directly on
   // every run, and the paused guard only sat on the legacy backup.completed/backup.failed
@@ -242,6 +262,9 @@ export const handleBackupJobCompleted = async (body: {
     logger.info(
       `[compression] status_updated | cfg:${backupConfigId} status:${status} job:${backupJobId}`
     );
+    if (jobType === 'REALTIME') {
+      lastRealtimeStatusWrite.set(backupConfigId, { at: Date.now(), status });
+    }
   } catch (err: any) {
     if (err?.name === 'ConditionalCheckFailedException') {
       logger.info(`[compression] duplicate event ignored | eventId:${eventId}`);
