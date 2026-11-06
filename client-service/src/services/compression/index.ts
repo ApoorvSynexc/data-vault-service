@@ -336,9 +336,9 @@ export const processCompressionQueue = async (): Promise<void> => {
   workerRunning = true;
 
   try {
-    if (!AUTO_COMPRESSION_ENABLED) {
-      return;
-    }
+    // Do not gate the worker on AUTO_COMPRESSION_ENABLED here.
+    // Auto paths (event/catch-up + poll interval) already respect the flag;
+    // Process Backup (source=manual) must still be able to StartJobRun.
 
     await reconcileRunningCompressionJobs();
     await requeueStaleRunningLeases();
