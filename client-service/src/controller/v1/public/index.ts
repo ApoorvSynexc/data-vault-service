@@ -75,6 +75,10 @@ const s3AssumeRoleCfnTemplateHandler = async (_req: IRequest, res: IResponse): P
  *   bad envelope is rejected there with a 401 before this ever runs. That decryption
  *   IS the authorization; there is no separate webhook-secret header any more.
  */
+// In-process guard so a GSI lag does not re-write pending on every webhook.
+const realtimePendingMarkedAt = new Map<string, number>();
+const REALTIME_PENDING_MARK_MS = 60_000;
+
 const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<void> => {
   const { crm, data: decryptedBody } = sf;
 
@@ -103,7 +107,22 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       continue;
     }
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending, status: VISIBILITY_STATUS.active });
+    // Hot-path: large realtime bursts hit the same backupConfigId partition.
+    // Only flip to pending when needed; lastBackupAt is owned by backup.job.completed.
+    const markedAt = realtimePendingMarkedAt.get(config.backupConfigId) ?? 0;
+    const recentlyMarked = Date.now() - markedAt < REALTIME_PENDING_MARK_MS;
+    const needsPendingWrite =
+      !recentlyMarked &&
+      (config.backupStatus !== STATUS.pending || config.status !== VISIBILITY_STATUS.active);
+    if (needsPendingWrite) {
+      await updateBackupConfig(config.backupConfigId, {
+        backupStatus: STATUS.pending,
+        status: VISIBILITY_STATUS.active,
+      });
+      realtimePendingMarkedAt.set(config.backupConfigId, Date.now());
+      config.backupStatus = STATUS.pending;
+      config.status = VISIBILITY_STATUS.active;
+    }
 
     /**
      * WHY we pass destination config decrypted to backup-service:
@@ -130,7 +149,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       }),
     });
 
-    await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
     logger.info(`Triggered real-time backup for backupConfigId: ${config.backupConfigId} transactionId: ${transactionId}`);
   }
 };
