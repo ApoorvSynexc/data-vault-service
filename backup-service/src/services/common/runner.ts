@@ -11,13 +11,21 @@ import {
 import { STATUS, JOB_OBJECT_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
-import { getBackupJob, updateArchivalObject, updateBackupJob, updateJobStatus } from '../backup-job';
+import {
+  getBackupJob,
+  updateArchivalObject,
+  updateBackupJob,
+  updateBackupObject,
+  updateJobStatus,
+} from '../backup-job';
 import { updateBackupConfig } from '../backup-config';
 import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
 import { httpRequest } from '../../utils/http-request';
+import { jobSlots } from './concurrency';
+
 
 // A Schema-Sync job refreshed the stored schema/picklist/record-type metadata; tell
 // client-service to resume the deferred /payload compression for this config. Reuses
@@ -45,7 +53,8 @@ const notifySchemaSyncCompleted = async (
 // Tracks jobs currently being processed in this process instance.
 // Used by the shutdown handler to mark them FAILED on SIGTERM/SIGINT.
 // ---------------------------------------------------------------------------
-const activeJobs = new Set<string>();
+type ActiveJob = { kind: 'backup' } | { kind: 'restore'; restoreId: string };
+const activeJobs = new Map<string, ActiveJob>();
 
 // ---------------------------------------------------------------------------
 // Validate and return a job that is eligible for resume.
@@ -82,7 +91,13 @@ interface IRunBackupJobParams extends IBackupJob {
   executionType: 'RETRY' | 'NEW';
 }
 
-export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
+// Waits for a free job slot BEFORE claiming the DynamoDB lock: a queued job
+// stays an untouched PENDING job (no processingStartedAt), so the stale-job
+// sweeper can't mistake time spent waiting here for a hung run.
+export const runBackupJob = (job: IRunBackupJobParams): Promise<void> =>
+  jobSlots.run(() => executeBackupJob(job));
+
+const executeBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
   const {
     backupConfigId,
     backupJobId,
@@ -93,7 +108,7 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
     executionType
   } = job;
   const startedAt = dayjs().toISOString();
-  activeJobs.add(backupJobId);
+  activeJobs.set(backupJobId, { kind: 'backup' });
 
   try {
     await updateJobStatus({
@@ -158,11 +173,14 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
 interface IRunArchivalJobParams extends IBackupJob {
   executionType: 'RETRY' | 'NEW';
 }
-export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
+export const runArchivalJob = (job: IRunArchivalJobParams): Promise<void> =>
+  jobSlots.run(() => executeArchivalJob(job));
+
+const executeArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
   const { backupConfigId, backupJobId, source: encryptedSource, destination, object, triggerSource, executionType } = job;
   const startedAt = dayjs().toISOString();
 
-  activeJobs.add(backupJobId);
+  activeJobs.set(backupJobId, { kind: 'backup' });
 
   try {
     await updateJobStatus({
@@ -262,7 +280,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
   const { restoreId, restoreJobId, source, destination, conflict, objectHierarchy } = job;
   const startedAt = dayjs().toISOString();
 
-  activeJobs.add(restoreJobId);
+  activeJobs.set(restoreJobId, { kind: 'restore', restoreId });
 
   // Same atomic claim as backup/archival — see runBackupJob for the
   // concurrent-resume rationale. status stays PENDING; processingStartedAt is the lock.
@@ -337,7 +355,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
   const { restoreId, restoreJobId, source, destination, conflict, hierarchy } = job;
   const startedAt = dayjs().toISOString();
 
-  activeJobs.add(restoreJobId);
+  activeJobs.set(restoreJobId, { kind: 'restore', restoreId });
 
   // Same atomic claim as backup/archival — see runBackupJob for the
   // concurrent-resume rationale. status stays PENDING; processingStartedAt is the lock.
@@ -411,4 +429,87 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
   } finally {
     activeJobs.delete(restoreJobId);
   }
+};
+
+// ---------------------------------------------------------------------------
+// Called on SIGTERM/SIGINT (deploy, scale-in, ECS stop). Marks every job this
+// instance is still running as FAILED and releases its lock so it can be
+// resumed from its saved currentLocator right away, instead of sitting PENDING
+// with a held lock until the client-service stale-job sweeper notices hours later.
+// Best-effort: each update is independent and a failure is only logged.
+// ---------------------------------------------------------------------------
+// Objects mid-flight are marked FAILED (same convention the client-service stale
+// sweeper uses) so resume can tell them apart; the job itself is failed with
+// completedAt, which also clears the processingStartedAt lock.
+const SHUTDOWN_MESSAGE = 'Interrupted by server shutdown — resume in next retry';
+const IN_FLIGHT_OBJECT_STATUSES: string[] = [
+  JOB_OBJECT_STATUS.transferInProgress,
+  JOB_OBJECT_STATUS.bulkQueryInProgress,
+];
+
+const failBackupJobForShutdown = async (job: IBackupJob): Promise<void> => {
+  await Promise.allSettled(
+    (job.object ?? []).flatMap((obj, objectIndex) =>
+      obj.status && IN_FLIGHT_OBJECT_STATUSES.includes(obj.status)
+        ? [
+            updateBackupObject({
+              backupJobId: job.backupJobId,
+              objectIndex,
+              status: JOB_OBJECT_STATUS.failed,
+              errorMessage: SHUTDOWN_MESSAGE,
+            }),
+          ]
+        : []
+    )
+  );
+  await Promise.allSettled([
+    updateJobStatus({
+      backupJobId: job.backupJobId,
+      status: STATUS.failed,
+      completedAt: dayjs().toISOString(),
+      errorMessage: SHUTDOWN_MESSAGE,
+    }),
+    updateBackupConfig(job.backupConfigId, { backupStatus: STATUS.failed }),
+  ]);
+};
+
+export const failActiveJobsOnShutdown = async (): Promise<void> => {
+  const backupJobIds: string[] = [];
+  const restoreJobs: Array<{ restoreJobId: string; restoreId: string }> = [];
+
+  for (const [id, active] of activeJobs) {
+    if (active.kind === 'backup') {
+      backupJobIds.push(id);
+    } else {
+      restoreJobs.push({ restoreJobId: id, restoreId: active.restoreId });
+    }
+  }
+
+  if (!backupJobIds.length && !restoreJobs.length) {
+    return;
+  }
+  logger.warn(
+    `Shutdown: failing ${backupJobIds.length} backup/archival and ${restoreJobs.length} restore job(s) so they can be resumed`
+  );
+
+  const backupJobs = (
+    await Promise.all(backupJobIds.map((id) => getBackupJob(id).catch(() => null)))
+  ).filter((job): job is IBackupJob => Boolean(job));
+
+  await Promise.allSettled([
+    ...backupJobs.map(failBackupJobForShutdown),
+    ...restoreJobs.flatMap(({ restoreJobId, restoreId }) => [
+      updateRestoreJobStatus({
+        restoreJobId,
+        status: STATUS.failed,
+        completedAt: dayjs().toISOString(),
+        errorMessage: SHUTDOWN_MESSAGE,
+      }),
+      updateRestore({
+        restoreId,
+        status: STATUS.failed,
+        errorMessage: SHUTDOWN_MESSAGE,
+      }),
+    ]),
+  ]);
 };

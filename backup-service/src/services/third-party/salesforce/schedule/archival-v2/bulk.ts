@@ -1,15 +1,20 @@
-import { JOB_OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
+import {
+  JOB_OBJECT_STATUS,
+  SALESFORCE_BULK_API_VERSION,
+  SF_BULK_MAX_RECORDS_PER_PAGE,
+} from '../../../../../constant';
 import { logger } from '../../../../../middlewares';
 import { IBackupObject, IDestinationConfig, IS3ObjectKey } from '../../../../../models';
 import { updateArchivalObject } from '../../../../backup-job';
 import { uploadToS3 } from '../../../../destination';
 import { makePageFetcher, salesforceRequest, SalesforceTokens } from '../../api-request';
+import { pageSlots } from '../../../../common/concurrency';
 
 const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000;
 const INITIAL_PAGE_KEY = `initial`;
-const MAX_RECORDS_PER_PAGE = 50000;
+const MAX_RECORDS_PER_PAGE = SF_BULK_MAX_RECORDS_PER_PAGE;
 
 interface IPollBulkJobArchival {
   instanceUrl: string;
@@ -141,29 +146,34 @@ const uploadBulkResultsByPage = async (
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
         : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
 
-      const response = await fetchPage(url);
-      ++salesforceApiCount;
-      if (!response.ok) {
-        throw new Error(`Salesforce results fetch failed with status ${response.status}`);
-      }
+      // The page body is buffered here, so the whole fetch -> upload step holds a
+      // page slot (see services/common/concurrency).
+      const nextLocator = await pageSlots.run(async () => {
+        const response = await fetchPage(url);
+        ++salesforceApiCount;
+        if (!response.ok) {
+          throw new Error(`Salesforce results fetch failed with status ${response.status}`);
+        }
 
-      const nextLocatorRaw = response.headers.get('sforce-locator');
-      const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
+        const nextLocatorRaw = response.headers.get('sforce-locator');
+        const next = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
 
-      // Use current locator as file name; first page has no locator yet so use constant
-      const pageKey = locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`;
-      const s3Key = `${s3KeyPrefix}/${pageKey}.csv`;
+        // Use current locator as file name; first page has no locator yet so use constant
+        const pageKey = locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`;
+        const s3Key = `${s3KeyPrefix}/${pageKey}.csv`;
 
-      const csvBuffer = Buffer.from(await response.arrayBuffer());
+        const csvBuffer = Buffer.from(await response.arrayBuffer());
 
-      // Use the Salesforce-provided record count header (exact, independent
-      // of how the page was re-serialized above).
-      const pageRowCount = parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
-      completedRecordCount += pageRowCount;
-      sizeInBytes += csvBuffer.length;
+        // Use the Salesforce-provided record count header (exact, independent
+        // of how the page was re-serialized above).
+        const pageRowCount = parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
+        completedRecordCount += pageRowCount;
+        sizeInBytes += csvBuffer.length;
 
-      s3Keys?.push({ objectId: object.id, key: s3Key });
-      await uploadToS3(destConfig, s3Key, csvBuffer);
+        s3Keys?.push({ objectId: object.id, key: s3Key });
+        await uploadToS3(destConfig, s3Key, csvBuffer);
+        return next;
+      });
 
       locator = nextLocator;
 

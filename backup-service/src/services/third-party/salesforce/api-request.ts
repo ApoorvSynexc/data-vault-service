@@ -1,5 +1,6 @@
 import { httpRequest } from '../../../utils/http-request';
 import { CORE_SERVICE, INTERNAL_SECRET, SALESFORCE_BULK_API_VERSION } from '../../../constant';
+import { logger } from '../../../middlewares/logger';
 
 const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 
@@ -128,4 +129,105 @@ const createBulkQueryJob = async (payload: ICreateBulkQueryJob): Promise<string>
   return res.id;
 };
 
-export { salesforceRequest, makePageFetcher, createBulkQueryJob };
+// ---------------------------------------------------------------------------
+// Bulk API 2.0 — job state lookup. Returns null when Salesforce no longer knows
+// the job (404: expired or deleted), so a caller holding a saved job id can tell
+// "resume this job" from "create a new one".
+// ---------------------------------------------------------------------------
+interface IBulkQueryJobState {
+  state: string; // Open | UploadComplete | InProgress | JobComplete | Aborted | Failed
+  numberRecordsProcessed?: number;
+  errorMessage?: string;
+}
+
+interface IBulkQueryJobRef {
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  jobId: string;
+}
+
+const getBulkQueryJobState = async (
+  payload: IBulkQueryJobRef
+): Promise<IBulkQueryJobState | null> => {
+  const { instanceUrl, tokens, jobId } = payload;
+  try {
+    return await salesforceRequest<IBulkQueryJobState>(
+      { url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}` },
+      tokens
+    );
+  } catch (err: any) {
+    if (String(err?.message ?? '').startsWith('HTTP Error 404')) {
+      return null;
+    }
+    throw err;
+  }
+};
+
+// Best effort: a job we are about to abandon should stop consuming Salesforce capacity.
+const abortBulkQueryJob = async (payload: IBulkQueryJobRef): Promise<void> => {
+  const { instanceUrl, tokens, jobId } = payload;
+  try {
+    await salesforceRequest(
+      {
+        url: `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}`,
+        method: 'PATCH',
+        body: JSON.stringify({ state: 'Aborted' }),
+      },
+      tokens
+    );
+  } catch (err: any) {
+    logger.warn(`[range] could not abort Salesforce bulk job ${jobId}: ${err?.message ?? err}`);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Record count, used only to decide whether an object is large enough to export in
+// ranges. Never required for correctness, so any failure returns null.
+//  - no filter: GET /limits/recordCount (fast, approximate, ignores WHERE)
+//  - filter:    SELECT COUNT() with the same WHERE
+// ---------------------------------------------------------------------------
+const getRecordCount = async (payload: {
+  instanceUrl: string;
+  tokens: SalesforceTokens;
+  objectName: string;
+  whereClause?: string; // empty, or starting with "WHERE "
+}): Promise<number | null> => {
+  const { instanceUrl, tokens, objectName, whereClause } = payload;
+  try {
+    if (!whereClause) {
+      const res = await salesforceRequest<{ sObjects?: Array<{ name: string; count: number }> }>(
+        {
+          url: `${instanceUrl}/services/data/${SF_API_VERSION}/limits/recordCount`,
+          query: { sObjects: objectName },
+        },
+        tokens
+      );
+      const found = res?.sObjects?.find((o) => o.name.toLowerCase() === objectName.toLowerCase());
+      if (typeof found?.count === 'number') {
+        return found.count;
+      }
+    }
+    const soql = `SELECT COUNT() FROM ${objectName}${whereClause ? ` ${whereClause}` : ''}`;
+    const res = await salesforceRequest<{ totalSize?: number }>(
+      {
+        url: `${instanceUrl}/services/data/${SF_API_VERSION}/query`,
+        query: { q: soql },
+      },
+      tokens
+    );
+    return typeof res?.totalSize === 'number' ? res.totalSize : null;
+  } catch (err: any) {
+    logger.warn(`[range] record count unavailable for ${objectName}: ${err?.message ?? err}`);
+    return null;
+  }
+};
+
+export {
+  salesforceRequest,
+  makePageFetcher,
+  createBulkQueryJob,
+  getBulkQueryJobState,
+  abortBulkQueryJob,
+  getRecordCount,
+};
+export type { IBulkQueryJobState };

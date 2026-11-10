@@ -133,6 +133,11 @@ export interface IBackupObject {
   errorMessage?: string;
   children?: IBackupObject[];
   parentObjects?: IBackupObjectParent[];
+  // Range-chunked export summary (per-range state lives in the range table).
+  rangeMode?: boolean;
+  rangesTotal?: number;
+  rangesDone?: number;
+  safeRangeSize?: number;
   schemaChange?: boolean;
 }
 

@@ -3,7 +3,7 @@
 Source of truth: `client-service/src/config/database/index.ts`
 Names: `client-service/src/constant/index.ts`
 
-**Create nothing by hand.** `initializeDatabase()` runs on boot (`src/index.ts:52`) and creates all 12 active tables + GSIs if they're missing. You only need `AWS_REGION` set, IAM permission to `CreateTable`/`DescribeTable`/`UpdateTimeToLive` (plus normal data ops), and `npm start` once. Console-created tables are only needed if you deploy with a read-only IAM role — in that case, use the schemas below.
+**Create nothing by hand.** `initializeDatabase()` runs on boot (`src/index.ts:52`) and creates every table in `TABLE_DEFINITIONS` (including `data-vault-backup-ranges`) + GSIs if they're missing. You only need `AWS_REGION` set, IAM permission to `CreateTable`/`DescribeTable`/`UpdateTimeToLive` (plus normal data ops), and `npm start` once. Console-created tables are only needed if you deploy with a read-only IAM role — in that case, use the schemas below.
 
 `backup-service/src/config/database/index.ts` re-declares (does not own) four of these — `data-vault-backup-jobs`, `data-vault-restores`, `data-vault-restore-jobs`, `data-vault-table-counters` — so it can `ensureTable()` them too if it boots before client-service. **Both `TABLE_DEFINITIONS` must stay identical** for those four; a GSI added on one side and not the other silently breaks queries on whichever side is missing it.
 
@@ -18,6 +18,7 @@ Every table below uses `BillingMode: PAY_PER_REQUEST` and every GSI uses `Projec
 3. [DESTINATION_TABLE — `data-vault-destinations`](#destination_table--data-vault-destinations)
 4. [BACKUP_CONFIG_TABLE — `data-vault-backup-configs`](#backup_config_table--data-vault-backup-configs)
 5. [BACKUP_JOB_TABLE — `data-vault-backup-jobs`](#backup_job_table--data-vault-backup-jobs-shared)
+   - 5a. [BACKUP_RANGE_TABLE — `data-vault-backup-ranges`](#backup_range_table--data-vault-backup-ranges-backup-service-only) (used by backup-service only; created by client-service on boot)
 6. [RESTORE_TABLE — `data-vault-restores`](#restore_table--data-vault-restores-shared)
 7. [RESTORE_JOB_TABLE — `data-vault-restore-jobs`](#restore_job_table--data-vault-restore-jobs-shared)
 8. [ROLE_TABLE — `data-vault-roles`](#role_table--data-vault-roles)
@@ -197,6 +198,59 @@ One row per actual backup *run* (as opposed to `BACKUP_CONFIG_TABLE`, which is t
 `source`/`destination` are encrypted at write time — the credentials needed to actually run the job (Salesforce tokens, S3/cloud keys) never sit in plaintext on this table. `object` on this item is a *copy* of `backupConfig.objects` taken at job-start time (plus live per-run counters like `bulkJobId`, `totalRecordCount`, `errorMessage`) — mutating it never touches the parent config.
 
 `status` doubles as the compression-lifecycle field after a job finishes (see `COMPRESSION_STATUS` in `constant/index.ts`) — a compressed job no longer reports whether the original backup succeeded or failed, since that value is overwritten. If that outcome is ever needed post-compression, it needs its own attribute.
+
+---
+
+## BACKUP_RANGE_TABLE — `data-vault-backup-ranges` (backup-service only)
+
+### Schema
+
+```
+TableName: ${NODE_ENV}-data-vault-backup-ranges   (override: env BACKUP_RANGE_TABLE)
+AttributeDefinitions:
+  backupJobId  S
+  rangeKey     S
+KeySchema:
+  backupJobId  HASH
+  rangeKey     RANGE
+BillingMode: PAY_PER_REQUEST
+TimeToLiveSpecification: AttributeName = expiresAt   (epoch seconds, 90 days after creation)
+No GSIs.
+
+Range item: backupJobId, rangeKey ('<objectKey>#<rangeId>'), objectKey, rangeId,
+  startId (inclusive, null = open), endId (exclusive, null = open), expectedRows,
+  status (the shared JOB_OBJECT_STATUS / STATUS constants, no separate enum:
+    PENDING -> BULK_QUERY_IN_PROGRESS (Salesforce query running) -> TRANSFER_IN_PROGRESS
+    (downloading/uploading pages) -> UPLOAD_COMPLETED, or FAILED, or SPLIT (replaced by smaller ranges)),
+  bulkJobId?, currentLocator?, downloadComplete?, completedRecordCount?, insertCount?,
+  updateCount?, deleteCount?, sizeInBytes?, sfProcessedCount?, waitTimeouts?,
+  verifyFailures?, salesforceApiCount?, errorMessage?, updatedAt, expiresAt
+
+Plan item (one per object): rangeKey '<objectKey>#plan', fieldList (the exact SELECT list,
+  fixed for every range of the object), planStartedAt, failedJobs, safeRangeSize?, updatedAt, expiresAt
+```
+
+client-service declares it in `TABLE_DEFINITIONS` (with `expiresAt` in `TTL_CONFIG`), so it is created on boot like the other tables, provided the client-service role may `CreateTable` and `UpdateTimeToLive`. backup-service only reads and writes it and does **not** create tables; if the table is missing the range feature switches itself off and the single-query export runs. To create it by hand instead (for example with a read-only client-service role), per environment:
+
+```bash
+aws dynamodb create-table --region <region> \
+  --table-name <env>-data-vault-backup-ranges \
+  --attribute-definitions AttributeName=backupJobId,AttributeType=S AttributeName=rangeKey,AttributeType=S \
+  --key-schema AttributeName=backupJobId,KeyType=HASH AttributeName=rangeKey,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST
+aws dynamodb update-time-to-live --region <region> --table-name <env>-data-vault-backup-ranges \
+  --time-to-live-specification Enabled=true,AttributeName=expiresAt
+```
+
+The backup-service task role needs `dynamodb:GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query`, `BatchWriteItem` on this table (a split uses `TransactWriteItems`, which is authorised by the same item-level actions). The client-service role additionally needs `dynamodb:CreateTable`, `DescribeTable` and `UpdateTimeToLive` for it to be created on boot (the same permissions it already uses for the other tables).
+
+### Explanation
+
+State for the range-chunked export of very large Salesforce objects (`schedule/backup/range-export.ts`). One object is split into Id ranges (about 200K rows each); each range has its own Salesforce Bulk job id, locator and counters, so a failed or interrupted run resumes at the first range that is not `UPLOAD_COMPLETED`/`SPLIT`, and a range Salesforce cannot finish is halved (`r003` → `r003a` + `r003b`, repeatedly down to 10K rows).
+
+It is a separate table, not a field on the backup-job item, because the job item already carries every object's full field list (close to DynamoDB's 400 KB item limit for large configs) and is rewritten on every poll and page into three `Projection: ALL` indexes. Range rows are small, individually updated, and expire by TTL. The job item only carries four summary fields per chunked object (`rangeMode`, `rangesTotal`, `rangesDone`, `safeRangeSize`); the object-level `completedRecordCount`, `sizeInBytes` and `status` that client-service reads are kept up to date as the sum of the ranges.
+
+Range ids sort in run order as plain strings, so a `Query` on `backupJobId` + `begins_with(rangeKey, '<objectKey>#r')` returns the ranges in the order they must run. Writes are conditional: an `UPLOAD_COMPLETED` or `SPLIT` range is never overwritten, so a replaced task cannot undo finished work.
 
 ---
 

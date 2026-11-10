@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { docClient } from '../../config';
 import { BACKUP_JOB_TABLE, STATUS, JOB_TYPE, JOB_OBJECT_STATUS } from '../../constant';
@@ -247,6 +247,11 @@ interface UpdateBackupObjectParams {
   currentLocator?: string;
   errorMessage?: string;
   salesforceApiCount?: number;
+  // Range-chunked export summary (per-range state is in the range table)
+  rangeMode?: boolean;
+  rangesTotal?: number;
+  rangesDone?: number;
+  safeRangeSize?: number;
 }
 
 const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<void> => {
@@ -264,6 +269,10 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     currentLocator,
     errorMessage,
     salesforceApiCount,
+    rangeMode,
+    rangesTotal,
+    rangesDone,
+    safeRangeSize,
   } = params;
   const now = new Date().toISOString();
   const expressionParts = ['updatedAt = :updatedAt'];
@@ -352,6 +361,20 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     expressionValues[':salesforceApiCount'] = salesforceApiCount;
   }
 
+  const rangeSummary: Array<[string, unknown]> = [
+    ['rangeMode', rangeMode],
+    ['rangesTotal', rangesTotal],
+    ['rangesDone', rangesDone],
+    ['safeRangeSize', safeRangeSize],
+  ];
+  rangeSummary.forEach(([field, value]) => {
+    if (value !== undefined) {
+      expressionParts.push(`#object[${objectIndex}].#${field} = :${field}`);
+      expressionNames[`#${field}`] = field;
+      expressionValues[`:${field}`] = value;
+    }
+  });
+
   try {
     await docClient.send(
       new UpdateCommand({
@@ -369,6 +392,27 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
       return;
     }
     throw error;
+  }
+};
+
+// Heartbeat for range-chunked exports: range progress is written to the range table,
+// not the job item, but the stale-job sweeper looks at the job item's updatedAt. Touching
+// it on every poll tick and page keeps a long-running range from being swept as stale.
+const touchBackupJob = async (backupJobId: string): Promise<void> => {
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: BACKUP_JOB_TABLE,
+        Key: { backupJobId },
+        UpdateExpression: 'SET updatedAt = :now',
+        ExpressionAttributeValues: { ':now': new Date().toISOString() },
+        ConditionExpression: 'attribute_exists(backupJobId)',
+      })
+    );
+  } catch (error: any) {
+    if (error.name !== 'ConditionalCheckFailedException') {
+      throw error;
+    }
   }
 };
 
@@ -502,36 +546,6 @@ const getBackupJob = async (backupJobId: string): Promise<IBackupJob | null> => 
   return (result.Item as IBackupJob) ?? null;
 };
 
-const getStaleRunningJobs = async (
-  thresholdMinutes: number,
-  onPage: (jobs: IBackupJob[]) => Promise<void>
-): Promise<void> => {
-  const cutoff = new Date(Date.now() - thresholdMinutes * 60 * 1000).toISOString();
-  let lastKey: Record<string, any> | undefined;
-
-  do {
-    const result = await docClient.send(
-      new ScanCommand({
-        TableName: BACKUP_JOB_TABLE,
-        // "Stale" now means: claimed (processingStartedAt set) but never reached
-        // a terminal status, and not touched in a while — status itself stays
-        // PENDING for the whole in-flight duration, so it's no longer part of
-        // this filter.
-        FilterExpression:
-          'attribute_exists(processingStartedAt) AND #status = :pending AND updatedAt < :cutoff',
-        ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: { ':pending': STATUS.pending, ':cutoff': cutoff },
-        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
-      })
-    );
-    const page = (result.Items ?? []) as IBackupJob[];
-    if (page.length > 0) {
-      await onPage(page);
-    }
-    lastKey = result.LastEvaluatedKey as Record<string, any> | undefined;
-  } while (lastKey !== undefined);
-};
-
 export {
   createBackupJob,
   createArchivalJob,
@@ -541,5 +555,5 @@ export {
   updateBackupObject,
   updateArchivalObject,
   getBackupJob,
-  getStaleRunningJobs,
+  touchBackupJob,
 };

@@ -109,7 +109,8 @@ flowchart TB
     subgraph BSVC["backup-service (ECS Fargate)"]
         direction TB
         R2["Routes (all behind internal-auth):<br/>/backup-job, /backup-job/archival,<br/>/realtime-backup, /restore, /glue"]
-        RUNNER["services/common/runner.ts<br/>runBackupJob · runArchivalJob · runRestoreJob<br/>(conditional-write RUNNING transition)"]
+        RUNNER["services/common/runner.ts<br/>runBackupJob · runArchivalJob · runRestoreJob<br/>(conditional-write RUNNING transition;<br/>backup/archival gated by jobSlots, MAX_CONCURRENT_JOBS=2)"]
+        CONC["services/common/concurrency.ts<br/>jobSlots · pageSlots (MAX_CONCURRENT_PAGES=2)<br/>bounds Salesforce result pages held in memory"]
         REG["services/third-party/registry.ts<br/>CRM handler lookup (Salesforce)"]
         SFEX["services/third-party/salesforce<br/>Bulk API 2.0 query+poll<br/>manual CSV parsers (x3)<br/>SOQL builder w/ injection guards"]
         S3W["services/destination/s3<br/>Put/Get/List/DeleteObjects<br/>raw_data/ key templates"]
@@ -342,9 +343,44 @@ flowchart TD
 
     M["DynamoDB optimistic-lock writes<br/>(updateArchivalObject/Config)"] --> N["ConditionalCheckFailedException →<br/>read-merge-write retry, max 5"]
 
-    O["Stale-job sweeper<br/>(backup-service, every 5 min)"] --> P{"status=RUNNING AND<br/>updatedAt &gt; 6h old?"}
+    O["Stale-job sweeper<br/>(client-service stale-object-sweeper)"] --> P{"status=RUNNING AND<br/>updatedAt &gt; 6h old?"}
     P -- "yes" --> Q["force job/object → FAILED<br/>(orphaned by container crash/restart)"]
 ```
+
+### Range-chunked export of very large objects (backup-service)
+
+One huge object exported as a single Bulk API 2.0 query can exceed Salesforce's internal query limit (it retries a chunk ~15 times, then marks the job `Failed`), and every retry used to restart the same query from zero. When enabled (`BULK_RANGE_CHUNKING`, or the config id in `BULK_RANGE_CONFIG_IDS`) and the object has at least `BULK_RANGE_MIN_RECORDS` rows, `exportFirstTime` and `exportIncremental` call `tryRangeExport` (`schedule/backup/range-export.ts`) instead of the single query:
+
+```mermaid
+flowchart TD
+    A["exportFirstTime / exportIncremental"] --> B{"flag on, table present,<br/>count >= BULK_RANGE_MIN_RECORDS?"}
+    B -- "no" --> S["single-query export (unchanged)"]
+    B -- "yes" --> C["plan: Id-only Bulk query -> every 200K-th Id is a boundary<br/>ranges [null,b1) [b1,b2) ... [bk,null) written to<br/>data-vault-backup-ranges (+ plan row with the fixed field list)"]
+    C --> D["next range not UPLOAD_COMPLETED/SPLIT (run order = id order)"]
+    D --> E["Bulk job per range: Id >= a AND Id < b<br/>job id saved BEFORE polling"]
+    E -- "JobComplete" --> F["download pages from the range's locator -> S3 {rangeId}-{page}.csv<br/>verify rows == Salesforce count -> UPLOAD_COMPLETED"]
+    E -- "Failed (size-related) or wait limit hit twice" --> G["halve the range from its Id list<br/>(r003 -> r003a + r003b, again and again) and lower safeRangeSize;<br/>pending bigger ranges are pre-split to the learned size"]
+    G --> D
+    F --> D
+    D -- "none left" --> H["object UPLOAD_COMPLETED; counters = sum of ranges"]
+```
+
+- **Halving stops at `BULK_RANGE_MIN_SPLIT` (10K) rows**: a range that still fails there is marked `FAILED`, finished ranges stay in S3, and the object ends FAILED with a clear message (column width is the likely cause). Limits: 128 ranges per object, 20 size-related failed jobs per object. Network, auth, upload and API-limit errors never split: they resume the same range on the next attempt.
+- **Resume**: state is in `data-vault-backup-ranges` (one row per range: Salesforce job id, locator, counters, status), so a crash or the client-service retry resumes at the first unfinished range and reuses its saved Salesforce job. `exportWithRetry` re-reads the object from DynamoDB on each retry attempt for this path.
+- **Compatibility**: the object's `completedRecordCount`, `sizeInBytes`, `insertCount`/`updateCount`/`deleteCount` and `status` (still `BULK_QUERY_IN_PROGRESS`/`TRANSFER_IN_PROGRESS` until final) are the sum of the ranges, so client-service payload gating, dashboards and the stale-job sweeper behave as before. Files stay flat in the same `inserts|updates|deletes` folders. A heartbeat keeps the job item's `updatedAt` fresh because range progress is written to the range table.
+- **Flags off = today's behaviour.** The range table is declared in client-service's `TABLE_DEFINITIONS` (created on boot) and only used by backup-service; if it does not exist, the feature disables itself and the single-query path runs. Table schema and create command: `docs/dynamodb-tables.md` (BACKUP_RANGE_TABLE).
+
+### Memory guards (backup-service)
+
+A Salesforce result page is held in memory several times over (response buffer, text, parsed records, per-class row arrays, joined output) while it is classified and uploaded, so the worker bounds this explicitly:
+
+- `jobSlots` (`MAX_CONCURRENT_JOBS`, default 2) — `runBackupJob` / `runArchivalJob` wait for a slot *before* claiming the DynamoDB `processingStartedAt` lock, so a queued job stays plain PENDING and the stale-job sweeper can't mistake queue time for a hung run. The queue is in-memory: a restart drops queued jobs, which stay PENDING and can be re-triggered via resume.
+- `pageSlots` (`MAX_CONCURRENT_PAGES`, default 2) — the fetch → parse → upload step of each page in `schedule/backup/bulk.ts` and `schedule/archival-v2/bulk.ts` runs under a slot. This is the hard memory bound regardless of how many jobs/objects (6 per job) are running.
+- `SF_BULK_MAX_RECORDS_PER_PAGE` (default 20000, was 50000) — page size requested from Salesforce.
+- `withRetry` (`services/common/retry.ts`) — used by `exportWithRetry` and `exportWithRetryArchivalV2`: max 3 attempts, exponential backoff with jitter (`RETRY_BASE_DELAY_MS`=5s, cap `RETRY_MAX_DELAY_MS`=60s), and retries (not first attempts) run under `retrySlots` (`MAX_CONCURRENT_RETRIES`=3) so a mass failure can't become a retry storm. Salesforce API-limit errors are not retried.
+- Graceful shutdown — on SIGTERM/SIGINT `failActiveJobsOnShutdown()` (runner.ts) marks running backup/archival/restore jobs FAILED and releases their `processingStartedAt` lock so they can be resumed from `currentLocator` immediately. Stale-job cleanup for crashes remains the client-service `stale-object-sweeper`.
+- `startMemoryMonitor` logs `[MEM]` (heap/rss + job/page slot usage) every minute and warns at 80% of the heap limit.
+- `fetchCsvFromS3` counts lines in a single pass instead of `split`+`filter`; restore already streams via `streamCsvLinesFromS3`.
 
 Glue writes rely on catching `AlreadyExistsException` for idempotency, alongside the AWS SDK's own default retry behavior.
 

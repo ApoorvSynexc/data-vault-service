@@ -32,6 +32,9 @@ const DESTINATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.DESTINATION_TABLE ||
 const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
 const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
+// Per-range state for the range-chunked export of very large objects. Written and read only
+// by backup-service; declared here because this service creates the tables on boot.
+const BACKUP_RANGE_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_RANGE_TABLE || 'data-vault-backup-ranges'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
 
@@ -579,6 +582,7 @@ export {
   RESTORE_TABLE,
   RESTORE_JOB_TABLE,
   BACKUP_JOB_TABLE,
+  BACKUP_RANGE_TABLE,
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
 

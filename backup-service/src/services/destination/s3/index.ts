@@ -106,6 +106,31 @@ export const downloadFromS3 = async (
   }
 };
 
+// Counts non-blank lines and captures the first one in a single pass, without
+// the full-file copy that split('\n').filter() makes on a large CSV.
+const scanCsvLines = (
+  text: string
+): { nonBlankLineCount: number; firstNonBlankLine: string | undefined } => {
+  let nonBlankLineCount = 0;
+  let firstNonBlankLine: string | undefined;
+  let start = 0;
+
+  while (start <= text.length) {
+    let end = text.indexOf('\n', start);
+    if (end === -1) {
+      end = text.length;
+    }
+    const line = text.slice(start, end);
+    if (line.trim()) {
+      nonBlankLineCount++;
+      firstNonBlankLine ??= line;
+    }
+    start = end + 1;
+  }
+
+  return { nonBlankLineCount, firstNonBlankLine };
+};
+
 export const fetchCsvFromS3 = async (
   config: IDestinationConfig,
   key: string
@@ -121,10 +146,10 @@ export const fetchCsvFromS3 = async (
   try {
     const result = await client.send(new GetObjectCommand({ Bucket: config.bucketName, Key: key }));
     const csvData = (await result.Body?.transformToString()) || '';
-    const lines = csvData.split('\n').filter((line) => line.trim());
-    const recordCount = Math.max(0, lines.length - 1);
+    const { nonBlankLineCount, firstNonBlankLine } = scanCsvLines(csvData);
+    const recordCount = Math.max(0, nonBlankLineCount - 1);
 
-    if (!lines[0]?.toLowerCase().includes('id')) {
+    if (!firstNonBlankLine?.toLowerCase().includes('id')) {
       throw new Error('CSV must contain Id column');
     }
 

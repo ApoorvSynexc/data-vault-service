@@ -6,3 +6,4 @@ export * from './shared';
 export * from './settings';
 export * from './notification';
 export * from './user';
+export * from './backup-range';
