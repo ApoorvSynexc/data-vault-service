@@ -32,7 +32,7 @@ import {
   checkSalesforceApiLimitUsage,
   requestCompressionForConfig,
   processCompressionQueue,
-  initalizePayloadTransform,
+  startDirectManualCompression,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { AUTO_COMPRESSION_ENABLED, BACKUP_CONFIG_TABLE, SCHEDULE_MODE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
@@ -448,20 +448,70 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
     return;
   }
 
+  // Automatic compression off: one EMR job, recorded on the compression-queue row.
+  // A click while that job is still queued or running returns the state and does
+  // not call StartJobRun. The queue worker is not used on this path.
+  if (!AUTO_COMPRESSION_ENABLED) {
+    let hasComparisonError = false;
+    const changedObjectNames: string[] = [];
+    try {
+      if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
+        const result = await runMetadataComparisonForConfig(config, false);
+        for (const { objectName, result: metadataResult } of result) {
+          if (!metadataResult || 'error' in metadataResult) {
+            hasComparisonError = true;
+            continue;
+          }
+          if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+            changedObjectNames.push(objectName);
+          }
+        }
+
+        if (hasComparisonError) {
+          logger.warn(
+            `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
+          );
+          makeResponse(req, res, 201, true, 'create');
+          return;
+        }
+
+        if (changedObjectNames.length) {
+          const user = await getUser({ userId: config.userId });
+          if (!user) {
+            logger.warn(
+              `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+            );
+            makeResponse(req, res, 201, true, 'create');
+            return;
+          }
+          await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
+          await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
+          makeResponse(req, res, 201, true, 'create');
+          return;
+        }
+      }
+
+      const started = await startDirectManualCompression(config);
+      if (!started.ok) {
+        makeResponse(req, res, 400, false, started.message);
+        return;
+      }
+      makeResponse(req, res, 201, true, 'create', { jobRunId: started.jobRunId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      logger.error(`[Process Backup] direct EMR error | cfg:${config.backupConfigId} err:${message}`);
+      makeResponse(req, res, 400, false, 'compression_start_failed');
+    }
+    return;
+  }
+
   makeResponse(req, res, 201, true, 'create');
 
   let hasComparisonError = false;
   let user;
   const changedObjectNames: string[] = [];
   try {
-    // Automatic compression off: StartJobRun directly, as this button did before the
-    // queue. The queue is used only while automatic compression is on.
     const enqueueManual = async () => {
-      if (!AUTO_COMPRESSION_ENABLED) {
-        logger.info(`[Process Backup] direct EMR | cfg:${config.backupConfigId}`);
-        await initalizePayloadTransform(config.backupConfigId, { requireCompressible: false });
-        return;
-      }
       const result = await requestCompressionForConfig({
         backupConfigId: config.backupConfigId,
         backupJobId: `manual:${config.backupConfigId}:${Date.now()}`,

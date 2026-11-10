@@ -16,6 +16,7 @@ import { getDestinationById } from '../destination';
 import { getEmrJobRun, initalizePayloadTransform } from '../payload';
 import {
   attachEmrJobRun,
+  claimDirectCompressionStart,
   claimNextCompressionJobs,
   completeCompressionQueueItem,
   countRunning,
@@ -25,8 +26,11 @@ import {
   failOrRetryCompressionQueueItem,
   getGlobalConcurrency,
   isNonRetryableCompressionError,
+  listOpenCompressionForConfig,
   listRunningCompressionJobs,
+  openDirectCompressionRow,
   requeueStaleRunningLeases,
+  settleCompressionQueueItem,
   tenantHasRunning,
   type ICompressionQueueItem,
 } from '../compression-queue';
@@ -461,4 +465,148 @@ export const onCompressionFinished = async (
  * requeue stale leases + kick worker. Full SUCCESS scan is done via runEmrJob-style
  * batch in jobs/compression-catchup.ts.
  */
+export type DirectCompressionMessage =
+  | 'destination_not_found'
+  | 'no_eligible_jobs'
+  | 'compression_start_failed'
+  | 'compression_status_unavailable'
+  | 'compression_in_queued'
+  | 'compression_in_submitted'
+  | 'compression_in_pending'
+  | 'compression_in_scheduled'
+  | 'compression_in_running'
+  | 'compression_in_cancelling';
+
+const compressionInMessage = (state: string): DirectCompressionMessage => {
+  switch (state.toUpperCase()) {
+    case 'QUEUED':
+      return 'compression_in_queued';
+    case 'SUBMITTED':
+      return 'compression_in_submitted';
+    case 'PENDING':
+      return 'compression_in_pending';
+    case 'SCHEDULED':
+      return 'compression_in_scheduled';
+    case 'RUNNING':
+      return 'compression_in_running';
+    case 'CANCELLING':
+      return 'compression_in_cancelling';
+    default:
+      return 'compression_status_unavailable';
+  }
+};
+
+/**
+ * Read every open row for this config. An EMR job still in SUBMITTED, PENDING,
+ * SCHEDULED, RUNNING, or CANCELLING blocks the click. SUCCESS and FAILED rows
+ * are closed here so the same click can start the next run.
+ */
+const releaseFinishedDirectCompression = async (
+  backupConfigId: string
+): Promise<DirectCompressionMessage | null> => {
+  const open = await listOpenCompressionForConfig(backupConfigId);
+  for (const item of open) {
+    if (!item.emrJobRunId) continue;
+
+    let state = 'UNKNOWN';
+    try {
+      const jobRun = await getEmrJobRun(
+        item.emrJobRunId,
+        item.emrApplicationId || AWS_EMR_APPLICATION_ID
+      );
+      state = String(jobRun?.state ?? 'UNKNOWN').toUpperCase();
+    } catch (err: any) {
+      logger.error(
+        `[Process Backup] GetJobRun failed | cfg:${backupConfigId} queueId:${item.queueId} err:${err?.message ?? err}`
+      );
+      return 'compression_status_unavailable';
+    }
+
+    if (EMR_ACTIVE_STATES.has(state)) return compressionInMessage(state);
+    if (state === 'SUCCESS') {
+      await settleCompressionQueueItem(item.queueId, 'DONE');
+      continue;
+    }
+    if (EMR_FAILED_STATES.has(state)) {
+      await settleCompressionQueueItem(item.queueId, 'FAILED', `emr_${state.toLowerCase()}`);
+      continue;
+    }
+    return 'compression_status_unavailable';
+  }
+  return null;
+};
+
+/**
+ * Process Backup while automatic compression is off.
+ * Starts one EMR job and records it on the compression-queue row.
+ * Does not call the queue worker.
+ */
+export const startDirectManualCompression = async (config: {
+  backupConfigId: string;
+  destinationId?: string;
+  schedule?: string;
+}): Promise<{ ok: true; jobRunId: string } | { ok: false; message: DirectCompressionMessage }> => {
+  const { backupConfigId } = config;
+
+  if (!config.destinationId) {
+    logger.warn(`[Process Backup] destination_id_missing | cfg:${backupConfigId}`);
+    return { ok: false, message: 'destination_not_found' };
+  }
+  const destination = await getDestinationById(config.destinationId);
+  if (!destination) {
+    logger.warn(
+      `[Process Backup] destination_not_found | cfg:${backupConfigId} destinationId:${config.destinationId}`
+    );
+    return { ok: false, message: 'destination_not_found' };
+  }
+
+  const eligible = await hasEligibleJobs(backupConfigId, 'manual');
+  if (!eligible) return { ok: false, message: 'no_eligible_jobs' };
+
+  const blocked = await releaseFinishedDirectCompression(backupConfigId);
+  if (blocked) return { ok: false, message: blocked };
+
+  const open = await listOpenCompressionForConfig(backupConfigId);
+  const waiting = open.find((item) => !item.emrJobRunId);
+  let queueItem: ICompressionQueueItem | null = null;
+
+  if (waiting) {
+    const claimed = await claimDirectCompressionStart(waiting, leaseOwner);
+    if (!claimed) return { ok: false, message: compressionInMessage(waiting.status) };
+    queueItem = { ...waiting, status: 'RUNNING' };
+  } else {
+    queueItem = await openDirectCompressionRow({
+      backupConfigId,
+      jobType: config.schedule === 'REALTIME' ? 'REALTIME' : 'BULK',
+      leaseOwner,
+    });
+    if (!queueItem) return { ok: false, message: 'compression_in_running' };
+  }
+
+  try {
+    const started = await initalizePayloadTransform(backupConfigId, { requireCompressible: true });
+    const jobRunId = started && 'jobRunId' in started ? started.jobRunId : undefined;
+    if (!jobRunId) {
+      await settleCompressionQueueItem(queueItem.queueId, 'FAILED', 'noop_no_compressible_jobs');
+      return { ok: false, message: 'no_eligible_jobs' };
+    }
+    await attachEmrJobRun(queueItem.queueId, jobRunId, AWS_EMR_APPLICATION_ID);
+    logger.info(
+      `[Process Backup] direct EMR started | cfg:${backupConfigId} queueId:${queueItem.queueId} jobRunId:${jobRunId}`
+    );
+    return { ok: true, jobRunId };
+  } catch (err: any) {
+    const message = err?.message ?? 'start_failed';
+    await settleCompressionQueueItem(queueItem.queueId, 'FAILED', message);
+    logger.error(`[Process Backup] direct EMR failed | cfg:${backupConfigId} err:${message}`);
+    if (/destination[_ ]?not[_ ]?found/i.test(message)) {
+      return { ok: false, message: 'destination_not_found' };
+    }
+    if (/No backup jobs found/i.test(message) || /no_eligible_jobs/i.test(message)) {
+      return { ok: false, message: 'no_eligible_jobs' };
+    }
+    return { ok: false, message: 'compression_start_failed' };
+  }
+};
+
 export { AUTO_ELIGIBLE_STATUSES, MANUAL_ELIGIBLE_STATUSES };

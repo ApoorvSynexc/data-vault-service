@@ -212,6 +212,126 @@ export const tenantHasRunning = async (backupConfigId: string): Promise<boolean>
   return running.some((r) => r.backupConfigId === backupConfigId);
 };
 
+/** QUEUED and RUNNING rows for one backup. Process Backup uses this as the single-run lock. */
+export const listOpenCompressionForConfig = async (
+  backupConfigId: string
+): Promise<ICompressionQueueItem[]> => {
+  const [queued, running] = await Promise.all([
+    safeListByStatus('QUEUED'),
+    safeListByStatus('RUNNING'),
+  ]);
+  return [...queued, ...running]
+    .filter((item) => item.backupConfigId === backupConfigId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+};
+
+/**
+ * One manual row per config. A second click loses the conditional write while this
+ * row is QUEUED or RUNNING, so it cannot start a second EMR job.
+ */
+export const openDirectCompressionRow = async (params: {
+  backupConfigId: string;
+  jobType: 'BULK' | 'REALTIME';
+  leaseOwner: string;
+}): Promise<ICompressionQueueItem | null> => {
+  const queueId = buildQueueId(params.backupConfigId, 'process-backup');
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const item: ICompressionQueueItem = {
+    queueId,
+    backupConfigId: params.backupConfigId,
+    backupJobId: 'process-backup',
+    jobType: params.jobType,
+    status: 'RUNNING',
+    source: 'manual',
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    attemptCount: 1,
+    leaseOwner: params.leaseOwner,
+    leaseExpiresAt: new Date(now.getTime() + COMPRESSION_LEASE_MS).toISOString(),
+  };
+
+  try {
+    await docClient.send(
+      new PutCommand({
+        TableName: COMPRESSION_QUEUE_TABLE,
+        Item: item,
+        ConditionExpression: 'attribute_not_exists(queueId) OR #status = :done OR #status = :failed',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':done': 'DONE', ':failed': 'FAILED' },
+      })
+    );
+  } catch (error: any) {
+    if (error?.name === 'ConditionalCheckFailedException') return null;
+    throw error;
+  }
+
+  logger.info(`[compression-queue] direct row opened | queueId:${queueId}`);
+  return item;
+};
+
+/**
+ * Take a QUEUED/RUNNING row that has no EMR id yet. Fails when another click
+ * already holds a live lease, so only one StartJobRun proceeds.
+ */
+export const claimDirectCompressionStart = async (
+  item: ICompressionQueueItem,
+  leaseOwner: string
+): Promise<boolean> => {
+  const now = Date.now();
+  const updatedAt = new Date(now).toISOString();
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: COMPRESSION_QUEUE_TABLE,
+        Key: { queueId: item.queueId },
+        ConditionExpression:
+          '(#status = :queued OR #status = :running) AND attribute_not_exists(emrJobRunId) AND (attribute_not_exists(leaseOwner) OR leaseExpiresAt < :nowIso)',
+        UpdateExpression:
+          'SET #status = :running, leaseOwner = :leaseOwner, leaseExpiresAt = :leaseExpiresAt, updatedAt = :updatedAt, attemptCount = if_not_exists(attemptCount, :zero) + :one REMOVE nextRetryAt',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: {
+          ':queued': 'QUEUED',
+          ':running': 'RUNNING',
+          ':nowIso': updatedAt,
+          ':leaseOwner': leaseOwner,
+          ':leaseExpiresAt': new Date(now + COMPRESSION_LEASE_MS).toISOString(),
+          ':updatedAt': updatedAt,
+          ':zero': 0,
+          ':one': 1,
+        },
+      })
+    );
+    return true;
+  } catch (error: any) {
+    if (error?.name === 'ConditionalCheckFailedException') return false;
+    throw error;
+  }
+};
+
+/** Close one row when EMR has finished or the direct StartJobRun did not submit. */
+export const settleCompressionQueueItem = async (
+  queueId: string,
+  status: 'DONE' | 'FAILED',
+  errorMessage?: string
+): Promise<void> => {
+  await docClient.send(
+    new UpdateCommand({
+      TableName: COMPRESSION_QUEUE_TABLE,
+      Key: { queueId },
+      UpdateExpression:
+        'SET #status = :status, updatedAt = :updatedAt, errorMessage = :errorMessage REMOVE leaseOwner, leaseExpiresAt, nextRetryAt',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':status': status,
+        ':updatedAt': new Date().toISOString(),
+        ':errorMessage': errorMessage ?? null,
+      },
+    })
+  );
+  logger.info(`[compression-queue] settled | queueId:${queueId} status:${status}`);
+};
+
 const isRetryReady = (item: ICompressionQueueItem, nowMs: number): boolean => {
   if (!item.nextRetryAt) return true;
   return new Date(item.nextRetryAt).getTime() <= nowMs;
