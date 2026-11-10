@@ -51,9 +51,9 @@ const COMPRESSION_QUEUE_TABLE = `${NODE_ENV_PREFIX}-${process.env.COMPRESSION_QU
 // Auto-compression after backup.job.completed (client-service owns enqueue + EMR submit).
 // Status updates always run; this flag only gates enqueue / worker StartJobRun.
 const AUTO_COMPRESSION_ENABLED = String(process.env.AUTO_COMPRESSION_ENABLED || 'true').toLowerCase() !== 'false';
-// Process Backup. false skips the Salesforce metadata comparison and starts compression.
-// true runs the comparison first. A detected schema change still starts a backup.
-const METADATA_CHECK_BEFORE_COMPRESSION = String(process.env.METADATA_CHECK_BEFORE_COMPRESSION || 'true').toLowerCase() === 'true';
+// Process Backup. Only the exact value false turns the Salesforce metadata comparison off.
+// Anything else, including a typo, keeps the check. A detected schema change still starts a backup.
+const METADATA_CHECK_BEFORE_COMPRESSION = String(process.env.METADATA_CHECK_BEFORE_COMPRESSION || 'true').trim().toLowerCase() !== 'false';
 // Global parallel EMR compressions across tenants (Dev/QA=1, Prod≈15).
 const COMPRESSION_GLOBAL_CONCURRENCY = Math.max(1, Number(process.env.COMPRESSION_GLOBAL_CONCURRENCY || '1') || 1);
 // Realtime CDC debounce window before enqueue (ms).

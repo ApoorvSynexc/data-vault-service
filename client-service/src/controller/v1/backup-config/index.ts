@@ -449,6 +449,11 @@ const resolveRealtimeSchemaChange = async (
     return { outcome: 'not_realtime' };
   }
 
+  if (!METADATA_CHECK_BEFORE_COMPRESSION) {
+    logger.info(`[Process Backup] metadata check skipped | cfg:${config.backupConfigId}`);
+    return { outcome: 'not_realtime' };
+  }
+
   const result = await runMetadataComparisonForConfig(config, false);
   let hasComparisonError = false;
   const changedObjectNames: string[] = [];
@@ -509,23 +514,6 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   // Automatic compression off: one EMR job, recorded on the compression-queue row.
   // A click while that job is still active returns 400 and does not call StartJobRun.
   if (!AUTO_COMPRESSION_ENABLED) {
-    if (!METADATA_CHECK_BEFORE_COMPRESSION) {
-      logger.info(`[Process Backup] metadata check skipped | cfg:${config.backupConfigId}`);
-      try {
-        const started = await startDirectManualCompression(config);
-        if (!started.ok) {
-          makeResponse(req, res, 400, false, started.message);
-          return;
-        }
-        makeResponse(req, res, 201, true, 'create', { jobRunId: started.jobRunId });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'unknown_error';
-        logger.error(`[Process Backup] direct EMR error | cfg:${config.backupConfigId} err:${message}`);
-        makeResponse(req, res, 400, false, 'compression_start_failed');
-      }
-      return;
-    }
-
     const schemaCheck = resolveRealtimeSchemaChange(config);
     let schemaTimer: NodeJS.Timeout | undefined;
     try {
@@ -607,14 +595,6 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
       );
       void processCompressionQueue();
     };
-
-    if (!METADATA_CHECK_BEFORE_COMPRESSION) {
-      logger.info(`[Process Backup] metadata check skipped | cfg:${config.backupConfigId}`);
-      enqueueManual().catch((err) => {
-        logger.error('EMR enqueue failed after response sent:', err?.message ?? err);
-      });
-      return;
-    }
 
     const schema = await resolveRealtimeSchemaChange(config);
     if (schema.outcome === 'error' || schema.outcome === 'user_not_found' || schema.outcome === 'changed') {
