@@ -46,6 +46,10 @@ export interface ICompressionQueueItem {
 const buildQueueId = (backupConfigId: string, backupJobId: string) =>
   `${backupConfigId}#${backupJobId}`;
 
+// Holds the row only until StartJobRun returns an id. A restart in that window
+// must not block the button for the full COMPRESSION_LEASE_MS (3 hours).
+const DIRECT_START_LEASE_MS = 5 * 60 * 1000;
+
 /** Config/data errors — do not burn EMR retries or catch-up all day. */
 export const isNonRetryableCompressionError = (errorMessage?: string | null): boolean => {
   if (!errorMessage) return false;
@@ -248,7 +252,7 @@ export const openDirectCompressionRow = async (params: {
     updatedAt: nowIso,
     attemptCount: 1,
     leaseOwner: params.leaseOwner,
-    leaseExpiresAt: new Date(now.getTime() + COMPRESSION_LEASE_MS).toISOString(),
+    leaseExpiresAt: new Date(now.getTime() + DIRECT_START_LEASE_MS).toISOString(),
   };
 
   try {
@@ -295,7 +299,7 @@ export const claimDirectCompressionStart = async (
           ':running': 'RUNNING',
           ':nowIso': updatedAt,
           ':leaseOwner': leaseOwner,
-          ':leaseExpiresAt': new Date(now + COMPRESSION_LEASE_MS).toISOString(),
+          ':leaseExpiresAt': new Date(now + DIRECT_START_LEASE_MS).toISOString(),
           ':updatedAt': updatedAt,
           ':zero': 0,
           ':one': 1,
@@ -407,20 +411,22 @@ export const attachEmrJobRun = async (
   emrJobRunId: string,
   emrApplicationId: string
 ): Promise<void> => {
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   await docClient.send(
     new UpdateCommand({
       TableName: COMPRESSION_QUEUE_TABLE,
       Key: { queueId },
       ConditionExpression: '#status = :running',
       UpdateExpression:
-        'SET emrJobRunId = :emrJobRunId, emrApplicationId = :emrApplicationId, updatedAt = :updatedAt',
+        'SET emrJobRunId = :emrJobRunId, emrApplicationId = :emrApplicationId, updatedAt = :updatedAt, leaseExpiresAt = :leaseExpiresAt',
       ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: {
         ':running': 'RUNNING',
         ':emrJobRunId': emrJobRunId,
         ':emrApplicationId': emrApplicationId,
         ':updatedAt': now,
+        ':leaseExpiresAt': new Date(nowMs + COMPRESSION_LEASE_MS).toISOString(),
       },
     })
   );

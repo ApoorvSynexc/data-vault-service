@@ -470,30 +470,45 @@ export type DirectCompressionMessage =
   | 'no_eligible_jobs'
   | 'compression_start_failed'
   | 'compression_status_unavailable'
-  | 'compression_in_queued'
-  | 'compression_in_submitted'
-  | 'compression_in_pending'
-  | 'compression_in_scheduled'
-  | 'compression_in_running'
-  | 'compression_in_cancelling';
+  | 'compression_in_progress';
 
-const compressionInMessage = (state: string): DirectCompressionMessage => {
-  switch (state.toUpperCase()) {
-    case 'QUEUED':
-      return 'compression_in_queued';
-    case 'SUBMITTED':
-      return 'compression_in_submitted';
-    case 'PENDING':
-      return 'compression_in_pending';
-    case 'SCHEDULED':
-      return 'compression_in_scheduled';
-    case 'RUNNING':
-      return 'compression_in_running';
-    case 'CANCELLING':
-      return 'compression_in_cancelling';
-    default:
-      return 'compression_status_unavailable';
+const compressionAlreadyRunning = (
+  backupConfigId: string,
+  state: string
+): DirectCompressionMessage => {
+  logger.info(
+    `[Process Backup] compression already in progress | cfg:${backupConfigId} state:${state}`
+  );
+  return 'compression_in_progress';
+};
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** StartJobRun already succeeded. Keep the row RUNNING and store the run id. */
+const rememberDirectEmrJobRun = async (queueId: string, jobRunId: string): Promise<boolean> => {
+  const delays = [0, 250, 750];
+  let lastError: unknown;
+  for (const delay of delays) {
+    if (delay) await pause(delay);
+    try {
+      await attachEmrJobRun(queueId, jobRunId, AWS_EMR_APPLICATION_ID);
+      return true;
+    } catch (err) {
+      lastError = err;
+    }
   }
+
+  logger.error(
+    `[Process Backup] attachEmrJobRun failed after StartJobRun | queueId:${queueId} jobRunId:${jobRunId} err:${lastError instanceof Error ? lastError.message : lastError}`
+  );
+  try {
+    await extendCompressionLease(queueId);
+  } catch (err: any) {
+    logger.error(
+      `[Process Backup] could not extend lease after attach failure | queueId:${queueId} jobRunId:${jobRunId} err:${err?.message ?? err}`
+    );
+  }
+  return false;
 };
 
 /**
@@ -522,7 +537,7 @@ const releaseFinishedDirectCompression = async (
       return 'compression_status_unavailable';
     }
 
-    if (EMR_ACTIVE_STATES.has(state)) return compressionInMessage(state);
+    if (EMR_ACTIVE_STATES.has(state)) return compressionAlreadyRunning(backupConfigId, state);
     if (state === 'SUCCESS') {
       await settleCompressionQueueItem(item.queueId, 'DONE');
       continue;
@@ -572,7 +587,7 @@ export const startDirectManualCompression = async (config: {
 
   if (waiting) {
     const claimed = await claimDirectCompressionStart(waiting, leaseOwner);
-    if (!claimed) return { ok: false, message: compressionInMessage(waiting.status) };
+    if (!claimed) return { ok: false, message: compressionAlreadyRunning(backupConfigId, waiting.status) };
     queueItem = { ...waiting, status: 'RUNNING' };
   } else {
     queueItem = await openDirectCompressionRow({
@@ -580,21 +595,13 @@ export const startDirectManualCompression = async (config: {
       jobType: config.schedule === 'REALTIME' ? 'REALTIME' : 'BULK',
       leaseOwner,
     });
-    if (!queueItem) return { ok: false, message: 'compression_in_running' };
+    if (!queueItem) return { ok: false, message: compressionAlreadyRunning(backupConfigId, 'RUNNING') };
   }
 
+  let jobRunId: string | undefined;
   try {
     const started = await initalizePayloadTransform(backupConfigId, { requireCompressible: true });
-    const jobRunId = started && 'jobRunId' in started ? started.jobRunId : undefined;
-    if (!jobRunId) {
-      await settleCompressionQueueItem(queueItem.queueId, 'FAILED', 'noop_no_compressible_jobs');
-      return { ok: false, message: 'no_eligible_jobs' };
-    }
-    await attachEmrJobRun(queueItem.queueId, jobRunId, AWS_EMR_APPLICATION_ID);
-    logger.info(
-      `[Process Backup] direct EMR started | cfg:${backupConfigId} queueId:${queueItem.queueId} jobRunId:${jobRunId}`
-    );
-    return { ok: true, jobRunId };
+    jobRunId = started && 'jobRunId' in started ? started.jobRunId : undefined;
   } catch (err: any) {
     const message = err?.message ?? 'start_failed';
     await settleCompressionQueueItem(queueItem.queueId, 'FAILED', message);
@@ -607,6 +614,19 @@ export const startDirectManualCompression = async (config: {
     }
     return { ok: false, message: 'compression_start_failed' };
   }
+
+  if (!jobRunId) {
+    await settleCompressionQueueItem(queueItem.queueId, 'FAILED', 'noop_no_compressible_jobs');
+    return { ok: false, message: 'no_eligible_jobs' };
+  }
+
+  const attached = await rememberDirectEmrJobRun(queueItem.queueId, jobRunId);
+  if (attached) {
+    logger.info(
+      `[Process Backup] direct EMR started | cfg:${backupConfigId} queueId:${queueItem.queueId} jobRunId:${jobRunId}`
+    );
+  }
+  return { ok: true, jobRunId };
 };
 
 export { AUTO_ELIGIBLE_STATUSES, MANUAL_ELIGIBLE_STATUSES };

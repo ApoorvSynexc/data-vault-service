@@ -48,6 +48,7 @@ import { wrapController, isOwner } from '../../../utils/helper';
 import { buildEventScheduleInput, buildBackupScheduleName } from '../../../utils/event-bridge';
 import { logger } from '../../../middlewares';
 import { ISalesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/common';
+import { IBackupConfig } from '../../../models/backup-config';
 import { syncObjectsForEntireDataset } from '../../../jobs/sync-objects';
 
 const createBackupConfigHandler = async (req: IRequest, res: IResponse): Promise<void> => {
@@ -431,6 +432,63 @@ const runNowHandler = async (req: IRequest, res: IResponse) => {
   makeResponse(req, res, 200, true, 'fetch');
 }
 
+type RealtimeSchemaOutcome =
+  | { outcome: 'not_realtime' }
+  | { outcome: 'error' }
+  | { outcome: 'user_not_found' }
+  | { outcome: 'changed' }
+  | { outcome: 'unchanged' };
+
+// Stay under the reverse proxy's 60s limit. A slower check continues after the 201.
+const SCHEMA_CHECK_BUDGET_MS = 45_000;
+
+const resolveRealtimeSchemaChange = async (
+  config: IBackupConfig
+): Promise<RealtimeSchemaOutcome> => {
+  if (!(config.type === 'NORMAL' && config.schedule === 'REALTIME')) {
+    return { outcome: 'not_realtime' };
+  }
+
+  const result = await runMetadataComparisonForConfig(config, false);
+  let hasComparisonError = false;
+  const changedObjectNames: string[] = [];
+  for (const { objectName, result: metadataResult } of result) {
+    if (!metadataResult || 'error' in metadataResult) {
+      hasComparisonError = true;
+      continue;
+    }
+    if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
+      changedObjectNames.push(objectName);
+    }
+  }
+
+  if (hasComparisonError) {
+    logger.warn(
+      `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
+    );
+    return { outcome: 'error' };
+  }
+
+  if (!changedObjectNames.length) return { outcome: 'unchanged' };
+
+  const user = await getUser({ userId: config.userId });
+  if (!user) {
+    logger.warn(`[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`);
+    return { outcome: 'user_not_found' };
+  }
+
+  await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
+  await triggerBackupJob({
+    user,
+    config,
+    type: 'backup',
+    lastUpdatedAt: config.lastSchemaSyncAt,
+    schemaSync: true,
+    lastSchemaSyncAt: true,
+  });
+  return { outcome: 'changed' };
+};
+
 const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   const { slug } = req.query;
 
@@ -449,46 +507,56 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   }
 
   // Automatic compression off: one EMR job, recorded on the compression-queue row.
-  // A click while that job is still queued or running returns the state and does
-  // not call StartJobRun. The queue worker is not used on this path.
+  // A click while that job is still active returns 400 and does not call StartJobRun.
   if (!AUTO_COMPRESSION_ENABLED) {
-    let hasComparisonError = false;
-    const changedObjectNames: string[] = [];
+    const schemaCheck = resolveRealtimeSchemaChange(config);
+    let schemaTimer: NodeJS.Timeout | undefined;
     try {
-      if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
-        const result = await runMetadataComparisonForConfig(config, false);
-        for (const { objectName, result: metadataResult } of result) {
-          if (!metadataResult || 'error' in metadataResult) {
-            hasComparisonError = true;
-            continue;
-          }
-          if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-            changedObjectNames.push(objectName);
-          }
-        }
+      const schema = await Promise.race([
+        schemaCheck,
+        new Promise<'timeout'>((resolve) => {
+          schemaTimer = setTimeout(() => resolve('timeout'), SCHEMA_CHECK_BUDGET_MS);
+        }),
+      ]);
 
-        if (hasComparisonError) {
-          logger.warn(
-            `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
-          );
-          makeResponse(req, res, 201, true, 'create');
-          return;
-        }
+      const startAfterSchema = async (outcome: RealtimeSchemaOutcome) => {
+        if (outcome.outcome !== 'unchanged' && outcome.outcome !== 'not_realtime') return null;
+        return startDirectManualCompression(config);
+      };
 
-        if (changedObjectNames.length) {
-          const user = await getUser({ userId: config.userId });
-          if (!user) {
-            logger.warn(
-              `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
+      if (schema === 'timeout') {
+        // The Salesforce check is still running. Answer now so the proxy does not 504,
+        // then start EMR only if the schema did not change.
+        makeResponse(req, res, 201, true, 'create');
+        void schemaCheck
+          .then(async (outcome) => {
+            const started = await startAfterSchema(outcome);
+            if (started && !started.ok) {
+              logger.error(
+                `[Process Backup] direct EMR after schema check | cfg:${config.backupConfigId} message:${started.message}`
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : 'unknown_error';
+            logger.error(
+              `[Process Backup] schema check failed after response | cfg:${config.backupConfigId} err:${message}`
             );
-            makeResponse(req, res, 201, true, 'create');
-            return;
-          }
-          await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
-          await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
-          makeResponse(req, res, 201, true, 'create');
-          return;
-        }
+          });
+        return;
+      }
+
+      if (schema.outcome === 'error') {
+        makeResponse(req, res, 400, false, 'metadata_comparison_failed');
+        return;
+      }
+      if (schema.outcome === 'user_not_found') {
+        makeResponse(req, res, 400, false, 'not_exist');
+        return;
+      }
+      if (schema.outcome === 'changed') {
+        makeResponse(req, res, 201, true, 'create');
+        return;
       }
 
       const started = await startDirectManualCompression(config);
@@ -501,15 +569,14 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
       const message = error instanceof Error ? error.message : 'unknown_error';
       logger.error(`[Process Backup] direct EMR error | cfg:${config.backupConfigId} err:${message}`);
       makeResponse(req, res, 400, false, 'compression_start_failed');
+    } finally {
+      if (schemaTimer) clearTimeout(schemaTimer);
     }
     return;
   }
 
   makeResponse(req, res, 201, true, 'create');
 
-  let hasComparisonError = false;
-  let user;
-  const changedObjectNames: string[] = [];
   try {
     const enqueueManual = async () => {
       const result = await requestCompressionForConfig({
@@ -524,43 +591,17 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
       void processCompressionQueue();
     };
 
-    if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
-      const result = await runMetadataComparisonForConfig(config, false);
-      for (const { objectName, result: metadataResult } of result) {
-        if (!metadataResult || 'error' in metadataResult) {
-          hasComparisonError = true;
-          continue;
-        }
-        if (hasMetadataChanged(metadataResult) && !changedObjectNames.includes(objectName)) {
-          changedObjectNames.push(objectName);
-        }
-      }
-
-      if (hasComparisonError) {
-        logger.warn(
-          `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=metadata_comparison_error`
-        );
-        return;
-      }
-
-      if (changedObjectNames.length) {
-        user = await getUser({ userId: config.userId });
-        if (!user) {
-          logger.warn(
-            `[EMR JOb - CRON] config ${config.backupConfigId} SKIP | reason=user_not_found`
-          );
-          return;
-        }
-        await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
-        await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
-      } else {
-        await enqueueManual();
-      }
-    } else {
+    const schema = await resolveRealtimeSchemaChange(config);
+    if (schema.outcome === 'error' || schema.outcome === 'user_not_found' || schema.outcome === 'changed') {
+      return;
+    }
+    if (schema.outcome === 'not_realtime') {
       enqueueManual().catch((err) => {
         logger.error('EMR enqueue failed after response sent:', err?.message ?? err);
       });
+      return;
     }
+    await enqueueManual();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown_error';
     console.log(`[initalizePayloadTransformHandler] error: ${message}`);
