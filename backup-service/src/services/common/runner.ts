@@ -11,13 +11,21 @@ import {
 import { STATUS, JOB_OBJECT_STATUS, CORE_SERVICE, INTERNAL_SECRET } from '../../constant';
 import { decrypt } from '../../utils/encryption';
 import { getCrmHandler, getRestoreCrmHandler } from '../third-party/registry';
-import { getBackupJob, updateArchivalObject, updateBackupJob, updateJobStatus } from '../backup-job';
+import {
+  getBackupJob,
+  updateArchivalObject,
+  updateBackupJob,
+  updateBackupObject,
+  updateJobStatus,
+} from '../backup-job';
+import { updateBackupConfig } from '../backup-config';
 import { consumeTokenGateClosure } from '../third-party/salesforce/token-gate';
 import { getRestoreById, updateRestore } from '../restore';
 import { updateRestoreJob, updateRestoreJobStatus } from '../restore-job';
 import { logger } from '../../middlewares/logger';
 import { HttpError } from '../../utils/helper';
 import { httpRequest } from '../../utils/http-request';
+import { jobSlots } from './concurrency';
 import { notifyJobCompleted } from './notify-client';
 
 // A Schema-Sync job refreshed the stored schema/picklist/record-type metadata; tell
@@ -79,7 +87,8 @@ const recordTokenGateClosure = async (
 // Tracks jobs currently being processed in this process instance.
 // Used by the shutdown handler to mark them FAILED on SIGTERM/SIGINT.
 // ---------------------------------------------------------------------------
-const activeJobs = new Set<string>();
+type ActiveJob = { kind: 'backup' } | { kind: 'restore'; restoreId: string };
+const activeJobs = new Map<string, ActiveJob>();
 
 // ---------------------------------------------------------------------------
 // Validate and return a job that is eligible for resume.
@@ -116,7 +125,53 @@ interface IRunBackupJobParams extends IBackupJob {
   executionType: 'RETRY' | 'NEW';
 }
 
+// The job's DynamoDB lock is claimed FIRST, then the job waits for a free job slot while it
+// heartbeats. A queued job therefore looks like any running job: a second trigger gets
+// "already running", SIGTERM fails it (failActiveJobsOnShutdown) and releases the lock, and
+// if the task crashes while it waits, the client-service stale-job sweeper fails it exactly
+// like any other crashed job. (Waiting WITHOUT the lock left a job PENDING and invisible to
+// every cleanup path after a restart, blocking its config forever.)
+const claimJob = async (backupJobId: string, label: string): Promise<void> => {
+  activeJobs.set(backupJobId, { kind: 'backup' });
+  try {
+    await updateJobStatus({
+      backupJobId,
+      status: STATUS.pending,
+      startedAt: dayjs().toISOString(),
+      conditionExpression: 'attribute_not_exists(processingStartedAt)',
+    });
+  } catch (err: any) {
+    activeJobs.delete(backupJobId);
+    if (err.name === 'ConditionalCheckFailedException') {
+      throw new HttpError(409, `${label} ${backupJobId} is already running`);
+    }
+    throw err;
+  }
+};
+
+// Runs `execute` once a job slot is free. While the job is still queued its row is
+// heartbeated (updatedAt) so the sweeper does not mistake waiting for a hung run; once
+// running, the job's own heartbeat takes over.
+const runInJobSlot = async (backupJobId: string, execute: () => Promise<void>): Promise<void> => {
+  const stopQueueHeartbeat = startHeartbeat(backupJobId, (heartbeatAt) =>
+    updateBackupJob({ backupJobId, heartbeatAt })
+  );
+  try {
+    await jobSlots.run(async () => {
+      stopQueueHeartbeat();
+      await execute();
+    });
+  } finally {
+    stopQueueHeartbeat();
+  }
+};
+
 export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
+  await claimJob(job.backupJobId, 'Backup job');
+  await runInJobSlot(job.backupJobId, () => processBackupJob(job));
+};
+
+const processBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
   const {
     backupConfigId,
     backupJobId,
@@ -126,23 +181,6 @@ export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
     triggerSource,
     executionType
   } = job;
-  const startedAt = dayjs().toISOString();
-  activeJobs.add(backupJobId);
-
-  try {
-    await updateJobStatus({
-      backupJobId,
-      status: STATUS.pending,
-      startedAt,
-      conditionExpression: 'attribute_not_exists(processingStartedAt)',
-    });
-  } catch (err: any) {
-    activeJobs.delete(backupJobId);
-    if (err.name === 'ConditionalCheckFailedException') {
-      throw new HttpError(409, `Backup job ${backupJobId} is already running`);
-    }
-    throw err;
-  }
 
   const stopHeartbeat = startHeartbeat(backupJobId, (heartbeatAt) =>
     updateBackupJob({ backupJobId, heartbeatAt })
@@ -206,25 +244,12 @@ interface IRunArchivalJobParams extends IBackupJob {
   executionType: 'RETRY' | 'NEW';
 }
 export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
+  await claimJob(job.backupJobId, 'Archival job');
+  await runInJobSlot(job.backupJobId, () => processArchivalJob(job));
+};
+
+const processArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
   const { backupConfigId, backupJobId, source: encryptedSource, destination, object, triggerSource, executionType } = job;
-  const startedAt = dayjs().toISOString();
-
-  activeJobs.add(backupJobId);
-
-  try {
-    await updateJobStatus({
-      backupJobId,
-      status: STATUS.pending,
-      startedAt,
-      conditionExpression: 'attribute_not_exists(processingStartedAt)',
-    });
-  } catch (err: any) {
-    activeJobs.delete(backupJobId);
-    if (err.name === 'ConditionalCheckFailedException') {
-      throw new HttpError(409, `Archival job ${backupJobId} is already running`);
-    }
-    throw err;
-  }
 
   const stopHeartbeat = startHeartbeat(backupJobId, (heartbeatAt) =>
     updateBackupJob({ backupJobId, heartbeatAt })
@@ -319,7 +344,7 @@ export const runRestoreJob = async (job: IRestoreJob): Promise<void> => {
   const { restoreId, restoreJobId, source, destination, conflict, objectHierarchy } = job;
   const startedAt = dayjs().toISOString();
 
-  activeJobs.add(restoreJobId);
+  activeJobs.set(restoreJobId, { kind: 'restore', restoreId });
 
   // Same atomic claim as backup/archival — see runBackupJob for the
   // concurrent-resume rationale. status stays PENDING; processingStartedAt is the lock.
@@ -405,7 +430,7 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
   const { restoreId, restoreJobId, source, destination, conflict, hierarchy } = job;
   const startedAt = dayjs().toISOString();
 
-  activeJobs.add(restoreJobId);
+  activeJobs.set(restoreJobId, { kind: 'restore', restoreId });
 
   // Same atomic claim as backup/archival — see runBackupJob for the
   // concurrent-resume rationale. status stays PENDING; processingStartedAt is the lock.
@@ -485,6 +510,89 @@ export const runRollbackJob = async (job: IRestoreJob): Promise<void> => {
     await recordTokenGateClosure(restoreJobId, (fields) => updateRestoreJob({ restoreJobId, ...fields, stoppedRunType: 'ROLLBACK' }));
     activeJobs.delete(restoreJobId);
   }
+};
+
+// ---------------------------------------------------------------------------
+// Called on SIGTERM/SIGINT (deploy, scale-in, ECS stop). Marks every job this
+// instance is still running as FAILED and releases its lock so it can be
+// resumed from its saved currentLocator right away, instead of sitting PENDING
+// with a held lock until the client-service stale-job sweeper notices hours later.
+// Best-effort: each update is independent and a failure is only logged.
+// ---------------------------------------------------------------------------
+// Objects mid-flight are marked FAILED (same convention the client-service stale
+// sweeper uses) so resume can tell them apart; the job itself is failed with
+// completedAt, which also clears the processingStartedAt lock.
+const SHUTDOWN_MESSAGE = 'Interrupted by server shutdown — resume in next retry';
+const IN_FLIGHT_OBJECT_STATUSES: string[] = [
+  JOB_OBJECT_STATUS.transferInProgress,
+  JOB_OBJECT_STATUS.bulkQueryInProgress,
+];
+
+const failBackupJobForShutdown = async (job: IBackupJob): Promise<void> => {
+  await Promise.allSettled(
+    (job.object ?? []).flatMap((obj, objectIndex) =>
+      obj.status && IN_FLIGHT_OBJECT_STATUSES.includes(obj.status)
+        ? [
+          updateBackupObject({
+            backupJobId: job.backupJobId,
+            objectIndex,
+            status: JOB_OBJECT_STATUS.failed,
+            errorMessage: SHUTDOWN_MESSAGE,
+          }),
+        ]
+        : []
+    )
+  );
+  await Promise.allSettled([
+    updateJobStatus({
+      backupJobId: job.backupJobId,
+      status: STATUS.failed,
+      completedAt: dayjs().toISOString(),
+      errorMessage: SHUTDOWN_MESSAGE,
+    }),
+    updateBackupConfig(job.backupConfigId, { backupStatus: STATUS.failed }),
+  ]);
+};
+
+export const failActiveJobsOnShutdown = async (): Promise<void> => {
+  const backupJobIds: string[] = [];
+  const restoreJobs: Array<{ restoreJobId: string; restoreId: string }> = [];
+
+  for (const [id, active] of activeJobs) {
+    if (active.kind === 'backup') {
+      backupJobIds.push(id);
+    } else {
+      restoreJobs.push({ restoreJobId: id, restoreId: active.restoreId });
+    }
+  }
+
+  if (!backupJobIds.length && !restoreJobs.length) {
+    return;
+  }
+  logger.warn(
+    `Shutdown: failing ${backupJobIds.length} backup/archival and ${restoreJobs.length} restore job(s) so they can be resumed`
+  );
+
+  const backupJobs = (
+    await Promise.all(backupJobIds.map((id) => getBackupJob(id).catch(() => null)))
+  ).filter((job): job is IBackupJob => Boolean(job));
+
+  await Promise.allSettled([
+    ...backupJobs.map(failBackupJobForShutdown),
+    ...restoreJobs.flatMap(({ restoreJobId, restoreId }) => [
+      updateRestoreJobStatus({
+        restoreJobId,
+        status: STATUS.failed,
+        completedAt: dayjs().toISOString(),
+        errorMessage: SHUTDOWN_MESSAGE,
+      }),
+      updateRestore({
+        restoreId,
+        status: STATUS.failed,
+        errorMessage: SHUTDOWN_MESSAGE,
+      }),
+    ]),
+  ]);
 };
 
 // Token-stop reasons that a resume may pick up (mirrors TOKEN_GATE_CLOSE_REASON).

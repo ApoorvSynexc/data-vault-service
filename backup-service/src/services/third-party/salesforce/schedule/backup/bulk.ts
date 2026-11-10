@@ -1,4 +1,8 @@
-import { JOB_OBJECT_STATUS, SALESFORCE_BULK_API_VERSION } from '../../../../../constant';
+import {
+  JOB_OBJECT_STATUS,
+  SALESFORCE_BULK_API_VERSION,
+  SF_BULK_MAX_RECORDS_PER_PAGE,
+} from '../../../../../constant';
 import { updateBackupObject } from '../../../../backup-job';
 import { logger } from '../../../../../middlewares/logger';
 import { IDestinationConfig } from '../../../../../models';
@@ -6,12 +10,32 @@ import { uploadToS3 } from '../../../../destination/s3';
 import { makePageFetcher, salesforceRequest, SalesforceTokens } from '../../api-request';
 import { checkSalesforceApiLimitUsage, SalesforceApiLimitExceededError } from '../../api-limit';
 import { parseCSVRecords, toSingleLineCsv } from '../../../../../utils/csv';
+import { pageSlots } from '../../../../common/concurrency';
 
 const SF_API_VERSION = SALESFORCE_BULK_API_VERSION;
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 const INITIAL_PAGE_KEY = `initial`;
-const MAX_RECORDS_PER_PAGE = 50000; // Capped well below SF
+const MAX_RECORDS_PER_PAGE = SF_BULK_MAX_RECORDS_PER_PAGE; // env-tunable; SF allows up to 50k+
+
+// Typed errors so the range exporter can tell "Salesforce could not finish this
+// query" (split the range) from "we stopped waiting" and from everything else.
+// Messages are unchanged from the previous plain Errors.
+class BulkPollTimeoutError extends Error {
+  constructor(jobId: string, minutes: number) {
+    super(`Bulk job ${jobId} did not complete within ${minutes} minutes`);
+    this.name = 'BulkPollTimeoutError';
+  }
+}
+
+class BulkJobFailedError extends Error {
+  readonly sfErrorMessage: string;
+  constructor(jobId: string, state: string, sfErrorMessage: string) {
+    super(`Bulk job ${jobId} ${state}: ${sfErrorMessage}`);
+    this.name = 'BulkJobFailedError';
+    this.sfErrorMessage = sfErrorMessage;
+  }
+}
 
 interface IPollBulkJob {
   instanceUrl: string;
@@ -22,13 +46,25 @@ interface IPollBulkJob {
   userId?: string;
   backupJobId?: string;
   objectIndex?: number;
+  // When given, progress goes here instead of onto the object (range mode keeps
+  // progress on the range row, not on the object).
+  onProgress?: (progress: { processed: number; salesforceApiCount: number }) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
 // Bulk API 2.0 — Poll
 // ---------------------------------------------------------------------------
 const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
-  const { instanceUrl, tokens, jobId, backupConfigId, userId, backupJobId, objectIndex } = payload;
+  const {
+    instanceUrl,
+    tokens,
+    jobId,
+    backupConfigId,
+    userId,
+    backupJobId,
+    objectIndex,
+    onProgress,
+  } = payload;
   let { salesforceApiCount } = payload;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
   let pollCount = 0;
@@ -43,9 +79,7 @@ const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
     await new Promise((r) => setTimeout(r, currentInterval));
 
     if (Date.now() >= deadline) {
-      throw new Error(
-        `Bulk job ${jobId} did not complete within ${MAX_POLL_DURATION_MS / 60_000} minutes`
-      );
+      throw new BulkPollTimeoutError(jobId, MAX_POLL_DURATION_MS / 60_000);
     }
 
     await checkSalesforceApiLimitUsage({ instanceUrl, tokens, userId, backupConfigId });
@@ -62,7 +96,9 @@ const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
     );
     salesforceApiCount++;
 
-    if (
+    if (onProgress) {
+      await onProgress({ processed: res.numberRecordsProcessed ?? 0, salesforceApiCount });
+    } else if (
       backupJobId &&
       objectIndex !== undefined &&
       typeof res.numberRecordsProcessed === 'number'
@@ -79,7 +115,7 @@ const pollBulkJob = async (payload: IPollBulkJob): Promise<number> => {
       return res.numberRecordsProcessed ?? 0;
     }
     if (res.state === 'Failed' || res.state === 'Aborted') {
-      throw new Error(`Bulk job ${jobId} ${res.state}: ${res.errorMessage ?? 'unknown'}`);
+      throw new BulkJobFailedError(jobId, res.state, res.errorMessage ?? 'unknown');
     }
   }
 };
@@ -110,6 +146,30 @@ interface IUploadBulkResultsByPage {
   startLocator?: string | null;
   startCompletedRecordCount?: number;
   maxRecords?: number;
+  // Range mode (see range-export.ts). File names become `${filePrefix}-${pageKey}`
+  // with a fixed first-page key, so a retried first page overwrites itself instead
+  // of leaving a duplicate. Progress goes to onPage and nothing is written to the
+  // object (no status changes, no object-level counters).
+  range?: IRangeUploadOptions;
+}
+
+interface IRangeUploadOptions {
+  filePrefix: string;
+  // Counters saved on the range row, so a resumed download continues them instead
+  // of restarting from zero.
+  startSizeInBytes?: number;
+  startInsertCount?: number;
+  startUpdateCount?: number;
+  startDeleteCount?: number;
+  onPage: (progress: {
+    locator: string | null; // next locator, null after the last page
+    completedRecordCount: number;
+    sizeInBytes: number;
+    insertCount?: number; // classify (incremental) uploads only
+    updateCount?: number;
+    deleteCount?: number;
+    salesforceApiCount: number;
+  }) => Promise<void>;
 }
 
 const uploadBulkResultsByPage = async (
@@ -129,20 +189,23 @@ const uploadBulkResultsByPage = async (
     startLocator = null,
     startCompletedRecordCount = 0,
     maxRecords = MAX_RECORDS_PER_PAGE,
+    range,
   } = payload;
 
   const fetchPage = makePageFetcher(tokens);
 
   let locator: string | null = startLocator;
   let completedRecordCount = startCompletedRecordCount;
-  let sizeInBytes = 0;
+  let sizeInBytes = range?.startSizeInBytes ?? 0;
 
   try {
-    await updateBackupObject({
-      backupJobId,
-      objectIndex,
-      status: JOB_OBJECT_STATUS.transferInProgress,
-    });
+    if (!range) {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: JOB_OBJECT_STATUS.transferInProgress,
+      });
+    }
     do {
       await checkSalesforceApiLimitUsage({ instanceUrl, tokens, userId, backupConfigId });
 
@@ -150,46 +213,57 @@ const uploadBulkResultsByPage = async (
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
         : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
 
-      const response = await fetchPage(url);
-      ++salesforceApiCount;
-      if (!response.ok) {
-        throw new Error(`Salesforce results fetch failed with status ${response.status}`);
-      }
+      // The page body is buffered here, so the whole fetch -> upload step holds a
+      // page slot; the buffer is unreachable (collectable) once the slot is released.
+      const nextLocator = await pageSlots.run(async () => {
+        const response = await fetchPage(url);
+        ++salesforceApiCount;
+        if (!response.ok) {
+          throw new Error(`Salesforce results fetch failed with status ${response.status}`);
+        }
 
-      const nextLocatorRaw = response.headers.get('sforce-locator');
-      const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
+        const nextLocatorRaw = response.headers.get('sforce-locator');
+        const next = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
 
-      // Use current locator as file name; first page has no locator yet so use constant
-      const pageKey = locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`;
-      const s3Key = `${s3KeyPrefix}/${pageKey}.csv`;
+        // Use current locator as file name; first page has no locator yet so use constant
+        const pageKey = range
+          ? `${range.filePrefix}-${locator ?? INITIAL_PAGE_KEY}`
+          : (locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`);
+        const s3Key = `${s3KeyPrefix}/${pageKey}.csv`;
 
-      // TODO(perf): sanitizeCsvText removed here for speed — see the same
-      // removal + rationale in archival-v2/bulk.ts's uploadBulkResultsByPage.
-      // Reintroduces the multi-line-field CSV corruption bug; needs a real
-      // (ideally row-level, not whole-page) fix before this is safe again.
-      const csvBuffer = Buffer.from(await response.arrayBuffer());
+        // TODO(perf): sanitizeCsvText removed here for speed — see the same
+        // removal + rationale in archival-v2/bulk.ts's uploadBulkResultsByPage.
+        // Reintroduces the multi-line-field CSV corruption bug; needs a real
+        // (ideally row-level, not whole-page) fix before this is safe again.
+        const csvBuffer = Buffer.from(await response.arrayBuffer());
 
-      // Use the Salesforce-provided record count header (exact, independent
-      // of how the page was re-serialized above).
-      const pageRowCount = parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
-      completedRecordCount += pageRowCount;
-      sizeInBytes += csvBuffer.length;
+        // Use the Salesforce-provided record count header (exact, independent
+        // of how the page was re-serialized above).
+        const pageRowCount = parseInt(response.headers.get('sforce-numberOfrecords') ?? '0', 10);
+        completedRecordCount += pageRowCount;
+        sizeInBytes += csvBuffer.length;
 
-      await uploadToS3(destConfig, s3Key, csvBuffer);
+        await uploadToS3(destConfig, s3Key, csvBuffer);
+        return next;
+      });
 
       locator = nextLocator;
 
-      await updateBackupObject({
-        backupJobId,
-        objectIndex,
-        completedRecordCount,
-        salesforceApiCount,
-        insertCount: completedRecordCount,
-        sizeInBytes,
-        ...(locator
-          ? { currentLocator: locator }
-          : { status: JOB_OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
-      });
+      if (range) {
+        await range.onPage({ locator, completedRecordCount, sizeInBytes, salesforceApiCount });
+      } else {
+        await updateBackupObject({
+          backupJobId,
+          objectIndex,
+          completedRecordCount,
+          salesforceApiCount,
+          insertCount: completedRecordCount,
+          sizeInBytes,
+          ...(locator
+            ? { currentLocator: locator }
+            : { status: JOB_OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
+        });
+      }
     } while (locator !== null);
   } catch (err: any) {
     const failedAt = locator ?? INITIAL_PAGE_KEY;
@@ -197,12 +271,15 @@ const uploadBulkResultsByPage = async (
 
     logger.error(`Backup job ${backupJobId}: object index ${objectIndex} - ${errorMessage}`);
 
-    await updateBackupObject({
-      backupJobId,
-      objectIndex,
-      status: JOB_OBJECT_STATUS.failed,
-      errorMessage,
-    });
+    // Range mode: the range exporter owns the range/object state, so it only needs the error.
+    if (!range) {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: JOB_OBJECT_STATUS.failed,
+        errorMessage,
+      });
+    }
 
     if (err instanceof SalesforceApiLimitExceededError) {
       throw err;
@@ -235,11 +312,18 @@ interface IClassifyAndUploadBulkResultsByPage {
   startCompletedRecordCount?: number;
   salesforceApiCount: number;
   maxRecords?: number;
+  range?: IRangeUploadOptions; // range mode, see IUploadBulkResultsByPage
 }
 
 const classifyAndUploadBulkResultsByPage = async (
   payload: IClassifyAndUploadBulkResultsByPage
-): Promise<{ sizeInBytes: number }> => {
+): Promise<{
+  sizeInBytes: number;
+  completedRecordCount: number;
+  insertCount: number;
+  updateCount: number;
+  deleteCount: number;
+}> => {
   let { salesforceApiCount } = payload;
   const {
     instanceUrl,
@@ -257,23 +341,26 @@ const classifyAndUploadBulkResultsByPage = async (
     startLocator = null,
     startCompletedRecordCount = 0,
     maxRecords = MAX_RECORDS_PER_PAGE,
+    range,
   } = payload;
 
   const fetchPage = makePageFetcher(tokens);
 
   let locator: string | null = startLocator;
   let completedRecordCount = startCompletedRecordCount;
-  let sizeInBytes = 0;
-  let insertCount = 0;
-  let updateCount = 0;
-  let deleteCount = 0;
+  let sizeInBytes = range?.startSizeInBytes ?? 0;
+  let insertCount = range?.startInsertCount ?? 0;
+  let updateCount = range?.startUpdateCount ?? 0;
+  let deleteCount = range?.startDeleteCount ?? 0;
 
   try {
-    await updateBackupObject({
-      backupJobId,
-      objectIndex,
-      status: JOB_OBJECT_STATUS.transferInProgress,
-    });
+    if (!range) {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: JOB_OBJECT_STATUS.transferInProgress,
+      });
+    }
     do {
       await checkSalesforceApiLimitUsage({ instanceUrl, tokens, userId, backupConfigId });
 
@@ -281,108 +368,129 @@ const classifyAndUploadBulkResultsByPage = async (
         ? `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?locator=${locator}&maxRecords=${maxRecords}`
         : `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/query/${jobId}/results?maxRecords=${maxRecords}`;
 
-      const response = await fetchPage(url);
+      // Parsing multiplies the page's footprint (text + parsed records + per-class
+      // row arrays + joined output), so the whole step holds a page slot.
+      const { nextLocator, pageSizeInBytes } = await pageSlots.run(async () => {
+        const response = await fetchPage(url);
 
-      ++salesforceApiCount;
-      if (!response.ok) {
-        throw new Error(`Salesforce results fetch failed with status ${response.status}`);
-      }
+        ++salesforceApiCount;
+        if (!response.ok) {
+          throw new Error(`Salesforce results fetch failed with status ${response.status}`);
+        }
 
-      const nextLocatorRaw = response.headers.get('sforce-locator');
-      const nextLocator = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
+        const nextLocatorRaw = response.headers.get('sforce-locator');
+        const next = nextLocatorRaw && nextLocatorRaw !== 'null' ? nextLocatorRaw : null;
 
-      const csvText = Buffer.from(await response.arrayBuffer()).toString('utf-8');
-      const records = parseCSVRecords(csvText);
-      const [headerRecord, ...dataRecords] = records;
+        const csvText = Buffer.from(await response.arrayBuffer()).toString('utf-8');
+        const records = parseCSVRecords(csvText);
+        const headerRecord = records[0];
 
-      const pageKey = locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`;
-      let pageSizeInBytes = 0;
+        const pageKey = range
+          ? `${range.filePrefix}-${locator ?? INITIAL_PAGE_KEY}`
+          : (locator ?? `${INITIAL_PAGE_KEY}_${Date.now()}`);
+        let pageBytes = 0;
 
-      if (headerRecord) {
-        // Find column indexes for IsDeleted, CreatedDate, LastModifiedDate
-        const isDeletedIdx = headerRecord.fields.indexOf('IsDeleted');
-        const createdDateIdx = headerRecord.fields.indexOf('CreatedDate');
-        const lastModifiedDateIdx = headerRecord.fields.indexOf('LastModifiedDate');
+        if (headerRecord) {
+          // Find column indexes for IsDeleted, CreatedDate, LastModifiedDate
+          const isDeletedIdx = headerRecord.fields.indexOf('IsDeleted');
+          const createdDateIdx = headerRecord.fields.indexOf('CreatedDate');
+          const lastModifiedDateIdx = headerRecord.fields.indexOf('LastModifiedDate');
 
-        // Re-serialized via toSingleLineCsv, not the parser's own `raw` text —
-        // `raw` still carries any embedded newline verbatim (e.g. a
-        // multi-line MailingStreet), and this raw_data CSV output is still
-        // read by physical line downstream (Spark's compression reader), so
-        // writing it back out would recreate the exact truncated-row/
-        // phantom-row corruption this parser exists to avoid.
-        const insertRows: string[] = [];
-        const updateRows: string[] = [];
-        const deleteRows: string[] = [];
+          // Re-serialized via toSingleLineCsv, not the parser's own `raw` text —
+          // `raw` still carries any embedded newline verbatim (e.g. a
+          // multi-line MailingStreet), and this raw_data CSV output is still
+          // read by physical line downstream (Spark's compression reader), so
+          // writing it back out would recreate the exact truncated-row/
+          // phantom-row corruption this parser exists to avoid.
+          const insertRows: string[] = [];
+          const updateRows: string[] = [];
+          const deleteRows: string[] = [];
 
-        for (const { fields } of dataRecords) {
-          const isDeleted = isDeletedIdx >= 0 ? fields[isDeletedIdx] : null;
-          const row = toSingleLineCsv(fields);
+          for (let r = 1; r < records.length; r++) {
+            const { fields } = records[r];
+            const isDeleted = isDeletedIdx >= 0 ? fields[isDeletedIdx] : null;
+            const row = toSingleLineCsv(fields);
 
-          if (isDeleted === 'true') {
-            deleteRows.push(row);
-          } else {
-            const createdDate = createdDateIdx >= 0 ? fields[createdDateIdx] : null;
-            const lastModifiedDate = lastModifiedDateIdx >= 0 ? fields[lastModifiedDateIdx] : null;
-
-            const isNewRecord =
-              createdDate && lastUpdatedAt
-                ? new Date(createdDate) >= new Date(lastUpdatedAt)
-                : createdDate === lastModifiedDate
-                  ? true
-                  : false;
-
-            if (isNewRecord) {
-              insertRows.push(row);
+            if (isDeleted === 'true') {
+              deleteRows.push(row);
             } else {
-              updateRows.push(row);
+              const createdDate = createdDateIdx >= 0 ? fields[createdDateIdx] : null;
+              const lastModifiedDate =
+                lastModifiedDateIdx >= 0 ? fields[lastModifiedDateIdx] : null;
+
+              const isNewRecord =
+                createdDate && lastUpdatedAt
+                  ? new Date(createdDate) >= new Date(lastUpdatedAt)
+                  : createdDate === lastModifiedDate
+                    ? true
+                    : false;
+
+              if (isNewRecord) {
+                insertRows.push(row);
+              } else {
+                updateRows.push(row);
+              }
             }
           }
+
+          const headerRow = toSingleLineCsv(headerRecord.fields);
+
+          if (insertRows.length > 0) {
+            const insertCsv = Buffer.from([headerRow, ...insertRows].join('\n'));
+            pageBytes += insertCsv.length;
+            await uploadToS3(destConfig, `${insertS3KeyPrefix}/${pageKey}.csv`, insertCsv);
+          }
+
+          if (updateRows.length > 0) {
+            const updateCsv = Buffer.from([headerRow, ...updateRows].join('\n'));
+            pageBytes += updateCsv.length;
+            await uploadToS3(destConfig, `${updateS3KeyPrefix}/${pageKey}.csv`, updateCsv);
+          }
+
+          if (deleteRows.length > 0) {
+            const deleteCsv = Buffer.from([headerRow, ...deleteRows].join('\n'));
+            pageBytes += deleteCsv.length;
+            await uploadToS3(destConfig, `${deleteS3KeyPrefix}/${pageKey}.csv`, deleteCsv);
+          }
+
+          // Deleted records are excluded from completedRecordCount to match
+          // Salesforce's numberRecordsProcessed, which does not count soft-deleted
+          // rows returned by queryAll.
+          insertCount += insertRows.length;
+          updateCount += updateRows.length;
+          deleteCount += deleteRows.length;
+          completedRecordCount += insertRows.length + updateRows.length + deleteRows.length;
         }
-
-        const headerRow = toSingleLineCsv(headerRecord.fields);
-
-        if (insertRows.length > 0) {
-          const insertCsv = Buffer.from([headerRow, ...insertRows].join('\n'));
-          pageSizeInBytes += insertCsv.length;
-          await uploadToS3(destConfig, `${insertS3KeyPrefix}/${pageKey}.csv`, insertCsv);
-        }
-
-        if (updateRows.length > 0) {
-          const updateCsv = Buffer.from([headerRow, ...updateRows].join('\n'));
-          pageSizeInBytes += updateCsv.length;
-          await uploadToS3(destConfig, `${updateS3KeyPrefix}/${pageKey}.csv`, updateCsv);
-        }
-
-        if (deleteRows.length > 0) {
-          const deleteCsv = Buffer.from([headerRow, ...deleteRows].join('\n'));
-          pageSizeInBytes += deleteCsv.length;
-          await uploadToS3(destConfig, `${deleteS3KeyPrefix}/${pageKey}.csv`, deleteCsv);
-        }
-
-        // Deleted records are excluded from completedRecordCount to match
-        // Salesforce's numberRecordsProcessed, which does not count soft-deleted
-        // rows returned by queryAll.
-        insertCount += insertRows.length;
-        updateCount += updateRows.length;
-        deleteCount += deleteRows.length;
-        completedRecordCount += insertRows.length + updateRows.length + deleteRows.length;
-      }
+        return { nextLocator: next, pageSizeInBytes: pageBytes };
+      });
       sizeInBytes += pageSizeInBytes;
       locator = nextLocator;
 
-      await updateBackupObject({
-        backupJobId,
-        objectIndex,
-        completedRecordCount,
-        insertCount,
-        updateCount,
-        deleteCount,
-        sizeInBytes,
-        salesforceApiCount,
-        ...(locator
-          ? { currentLocator: locator }
-          : { status: JOB_OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
-      });
+      if (range) {
+        await range.onPage({
+          locator,
+          completedRecordCount,
+          sizeInBytes,
+          insertCount,
+          updateCount,
+          deleteCount,
+          salesforceApiCount,
+        });
+      } else {
+        await updateBackupObject({
+          backupJobId,
+          objectIndex,
+          completedRecordCount,
+          insertCount,
+          updateCount,
+          deleteCount,
+          sizeInBytes,
+          salesforceApiCount,
+          ...(locator
+            ? { currentLocator: locator }
+            : { status: JOB_OBJECT_STATUS.uploadCompleted, errorMessage: '' }),
+        });
+      }
     } while (locator !== null);
   } catch (err: any) {
     const failedAt = locator ?? INITIAL_PAGE_KEY;
@@ -390,19 +498,28 @@ const classifyAndUploadBulkResultsByPage = async (
     logger.error(
       `Backup job ${backupJobId}: classify phase object index ${objectIndex} - ${errorMessage}`
     );
-    await updateBackupObject({
-      backupJobId,
-      objectIndex,
-      status: JOB_OBJECT_STATUS.failed,
-      errorMessage,
-    });
+    if (!range) {
+      await updateBackupObject({
+        backupJobId,
+        objectIndex,
+        status: JOB_OBJECT_STATUS.failed,
+        errorMessage,
+      });
+    }
     if (err instanceof SalesforceApiLimitExceededError) {
       throw err;
     }
     throw new Error(errorMessage, { cause: err });
   }
 
-  return { sizeInBytes };
+  return { sizeInBytes, completedRecordCount, insertCount, updateCount, deleteCount };
 };
 
-export { pollBulkJob, uploadBulkResultsByPage, classifyAndUploadBulkResultsByPage };
+export {
+  pollBulkJob,
+  uploadBulkResultsByPage,
+  classifyAndUploadBulkResultsByPage,
+  BulkPollTimeoutError,
+  BulkJobFailedError,
+};
+export type { IRangeUploadOptions };

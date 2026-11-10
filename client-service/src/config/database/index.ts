@@ -10,6 +10,7 @@ import {
   AWS_REGION,
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
+  BACKUP_RANGE_TABLE,
   DESTINATION_TABLE,
   RESTORE_TABLE,
   RESTORE_JOB_TABLE,
@@ -68,6 +69,7 @@ export const docClient = DynamoDBDocumentClient.from(client);
 const TTL_CONFIG: Record<string, string> = {
   [SESSION_TABLE]: 'ttl',
   [OAUTH_STATE_TABLE]: 'ttl',
+  [BACKUP_RANGE_TABLE]: 'expiresAt', // epoch seconds, set by backup-service
   [TOKEN_EVENT_TABLE]: 'expiresAt',
 };
 
@@ -108,6 +110,20 @@ const TABLE_DEFINITIONS: CreateTableCommand['input'][] = [
         ],
         Projection: { ProjectionType: 'ALL' },
       },
+    ],
+  },
+  {
+    // Per-range state of the range-chunked export (backup-service only); no GSIs.
+    // Sort key '<objectKey>#<rangeId>' (or '<objectKey>#plan'), see docs/dynamodb-tables.md.
+    TableName: BACKUP_RANGE_TABLE,
+    BillingMode: 'PAY_PER_REQUEST',
+    AttributeDefinitions: [
+      { AttributeName: 'backupJobId', AttributeType: 'S' },
+      { AttributeName: 'rangeKey', AttributeType: 'S' },
+    ],
+    KeySchema: [
+      { AttributeName: 'backupJobId', KeyType: 'HASH' },
+      { AttributeName: 'rangeKey', KeyType: 'RANGE' },
     ],
   },
   {

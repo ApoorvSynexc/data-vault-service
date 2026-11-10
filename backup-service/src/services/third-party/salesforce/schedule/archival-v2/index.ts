@@ -21,13 +21,14 @@ import { getCurrentAccessToken } from '../../token-gate';
 import { salesforceMetadataHandler } from '../../metadata';
 import { bulkDeleteRecords } from '../archival/delete-bulk';
 import { pollBulkJobArchival, uploadBulkResultsByPage } from './bulk';
+import { withRetry } from '../../../../common/retry';
 
 interface IArchiveObject {
   backupConfig: IBackupConfig;
   backupJobId: string;
   source: ISource;
   destConfig: IDestinationConfig;
-  executionType: 'RETRY' | 'NEW',
+  executionType: 'RETRY' | 'NEW';
   object: IBackupObject;
   parentWhereClause?: string;
   s3Keys?: IS3ObjectKey[];
@@ -298,7 +299,16 @@ function transformWhereBodyForChild(whereBody: string, fkFieldName: string): str
 }
 
 const archiveObject = async (payload: IArchiveObject) => {
-  const { backupConfig, backupJobId, source, destConfig, object, s3Keys, objectNames, executionType } = payload;
+  const {
+    backupConfig,
+    backupJobId,
+    source,
+    destConfig,
+    object,
+    s3Keys,
+    objectNames,
+    executionType,
+  } = payload;
   const { access_token, refresh_token, instanceUrl, crmId, crmName } = source;
   const backupConfigId = backupConfig.backupConfigId;
   const tokens: SalesforceTokens = {
@@ -679,7 +689,7 @@ const exportWithRetryArchivalV2 = async (data: {
   backupJobId: string;
   source: ISource;
   destConfig: IDestinationConfig;
-  executionType: 'RETRY' | 'NEW',
+  executionType: 'RETRY' | 'NEW';
   object: IBackupObject;
   parentWhereClause?: string;
   s3Keys?: IS3ObjectKey[];
@@ -687,26 +697,21 @@ const exportWithRetryArchivalV2 = async (data: {
 }): Promise<string | void> => {
   const { type, ...payload } = data;
   const objectName = payload.object.name;
-  let lastError: any;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
+  return withRetry({
+    maxAttempts: MAX_RETRIES,
+    run: async (): Promise<string | void> => {
       if (type === 'backup') {
         await archiveObject(payload);
         return;
       }
-      return await deleteObjectRecords(payload);
-    } catch (err: any) {
-      lastError = err;
-      if (attempt < MAX_RETRIES) {
-        logger.warn(
-          `Archival job ${payload.backupJobId}: retrying ${objectName} (attempt ${attempt}/${MAX_RETRIES}) - ${err?.message}`
-        );
-      }
-    }
-  }
-
-  throw lastError;
+      return deleteObjectRecords(payload);
+    },
+    onRetry: (attempt, err: any, delayMs) =>
+      logger.warn(
+        `Archival job ${payload.backupJobId}: retrying ${objectName} in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES} failed) - ${err?.message}`
+      ),
+  });
 };
 
 export { exportWithRetryArchivalV2 };

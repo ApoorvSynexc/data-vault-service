@@ -34,6 +34,7 @@ const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
 // grouping of the same constant list.
 const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
+const BACKUP_RANGE_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_RANGE_TABLE || 'data-vault-backup-ranges'}`;
 const RESTORE_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_TABLE || 'data-vault-restores'}`;
 const RESTORE_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.RESTORE_JOB_TABLE || 'data-vault-restore-jobs'}`;
 const TABLE_COUNTER_TABLE = `${NODE_ENV_PREFIX}-${process.env.TABLE_COUNTER_TABLE || 'data-vault-table-counters'}`;
@@ -62,6 +63,48 @@ const SALESFORCE_REDIRECT_URI = String(process.env.SALESFORCE_REDIRECT_URI);
 const SALESFORCE_BULK_API_VERSION = String(
   process.env.SALESFORCE_BULK_API_VERSION || 'v65.0'
 ).trim();
+
+// Memory guards for the long-running backup/archival worker. A Salesforce result
+// page is held in memory several times over while it is parsed and re-uploaded,
+// so these bound how many jobs/pages one process works on at once.
+const positiveIntFromEnv = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+const MAX_CONCURRENT_JOBS = positiveIntFromEnv(process.env.MAX_CONCURRENT_JOBS, 6);
+const MAX_CONCURRENT_PAGES = positiveIntFromEnv(process.env.MAX_CONCURRENT_PAGES, 6);
+// Retry policy for per-object exports: exponential backoff with jitter, and a
+// process-wide cap on how many retry attempts run at once (prevents a retry storm
+// when many objects/jobs fail together, e.g. a Salesforce or S3 outage).
+const MAX_CONCURRENT_RETRIES = positiveIntFromEnv(process.env.MAX_CONCURRENT_RETRIES, 3);
+const RETRY_BASE_DELAY_MS = positiveIntFromEnv(process.env.RETRY_BASE_DELAY_MS, 5000);
+const RETRY_MAX_DELAY_MS = positiveIntFromEnv(process.env.RETRY_MAX_DELAY_MS, 60000);
+// A retry holds its slot only while it STARTS, not for its whole run (a retry of a huge
+// object can run for hours and would block every other retry). So at most
+// MAX_CONCURRENT_RETRIES retries begin within any RETRY_SLOT_HOLD_MS window.
+const RETRY_SLOT_HOLD_MS = positiveIntFromEnv(process.env.RETRY_SLOT_HOLD_MS, 60000);
+const SF_BULK_MAX_RECORDS_PER_PAGE = positiveIntFromEnv(
+  process.env.SF_BULK_MAX_RECORDS_PER_PAGE,
+  50000
+);
+
+// Range-chunked export of very large objects (schedule/backup/range-export.ts).
+// Off by default: with the flag off (and no allowlisted config) behaviour is
+// byte-identical to the single-query path.
+const csvEnvList = (value: string | undefined): string[] =>
+  String(value ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+const BULK_RANGE_CHUNKING = String(process.env.BULK_RANGE_CHUNKING).toLowerCase() === 'true';
+const BULK_RANGE_CONFIG_IDS = csvEnvList(process.env.BULK_RANGE_CONFIG_IDS);
+const BULK_RANGE_SIZE = positiveIntFromEnv(process.env.BULK_RANGE_SIZE, 200000); // target rows per range
+const BULK_RANGE_MIN_RECORDS = positiveIntFromEnv(process.env.BULK_RANGE_MIN_RECORDS, 500000); // objects below this keep the single-query path
+const BULK_RANGE_MAX_INITIAL = positiveIntFromEnv(process.env.BULK_RANGE_MAX_INITIAL, 64); // cap on ranges at planning time
+const BULK_RANGE_MAX_TOTAL = positiveIntFromEnv(process.env.BULK_RANGE_MAX_TOTAL, 128); // cap incl. split children
+const BULK_RANGE_MIN_SPLIT = positiveIntFromEnv(process.env.BULK_RANGE_MIN_SPLIT, 10000); // ranges this small are never split
+const BULK_RANGE_MAX_FAILED_JOBS = positiveIntFromEnv(process.env.BULK_RANGE_MAX_FAILED_JOBS, 20); // size-failures per object
+const BULK_RANGE_PAGE_CELLS = positiveIntFromEnv(process.env.BULK_RANGE_PAGE_CELLS, 5000000); // rows x fields per page
 
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 const MAX_STORED_ERRORS_COUNT = Number(process.env.MAX_STORED_ERRORS_COUNT) || 25;
@@ -150,6 +193,11 @@ const JOB_OBJECT_STATUS = {
   rollbackInProgress: 'ROLLBACK_IN_PROGRESS',
   rollbackCompleted: 'ROLLBACK_COMPLETED',
   rollbackFailed: 'ROLLBACK_FAILED',
+
+  // Range-chunked export only (data-vault-backup-ranges): a range that was replaced by
+  // smaller ones. Range rows otherwise reuse the values above (pending, bulkQueryInProgress,
+  // transferInProgress, uploadCompleted, failed).
+  split: 'SPLIT',
 
   failed: 'FAILED',
 };
@@ -266,6 +314,7 @@ export {
   // DynamoDB table names
   BACKUP_CONFIG_TABLE,
   BACKUP_JOB_TABLE,
+  BACKUP_RANGE_TABLE,
   RESTORE_TABLE,
   RESTORE_JOB_TABLE,
   TABLE_COUNTER_TABLE,
@@ -285,6 +334,22 @@ export {
   SALESFORCE_CLIENT_SECRET,
   SALESFORCE_REDIRECT_URI,
   SALESFORCE_BULK_API_VERSION,
+  MAX_CONCURRENT_JOBS,
+  MAX_CONCURRENT_PAGES,
+  MAX_CONCURRENT_RETRIES,
+  RETRY_BASE_DELAY_MS,
+  RETRY_MAX_DELAY_MS,
+  RETRY_SLOT_HOLD_MS,
+  SF_BULK_MAX_RECORDS_PER_PAGE,
+  BULK_RANGE_CHUNKING,
+  BULK_RANGE_CONFIG_IDS,
+  BULK_RANGE_SIZE,
+  BULK_RANGE_MIN_RECORDS,
+  BULK_RANGE_MAX_INITIAL,
+  BULK_RANGE_MAX_TOTAL,
+  BULK_RANGE_MIN_SPLIT,
+  BULK_RANGE_MAX_FAILED_JOBS,
+  BULK_RANGE_PAGE_CELLS,
 
   //service
   CORE_SERVICE,

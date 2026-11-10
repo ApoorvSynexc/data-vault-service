@@ -26,9 +26,11 @@ import { getCurrentAccessToken } from './token-gate';
 import { ISourceS3Keys } from '../../../models/restore-job';
 import { checkSalesforceApiLimitUsage, SalesforceApiLimitExceededError } from './api-limit';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
+import { isRangeExportEnabled } from './schedule/backup/range-export';
 import { runSalesforceRestore, runSalesforceRollback } from './restore';
 import { decrypt } from '../../../utils/encryption';
 import { exportWithRetryArchivalV2 } from './schedule/archival-v2';
+import { withRetry } from '../../common/retry';
 import {
   buildParentToChildHierarchy,
   recursivelyFlatten,
@@ -132,43 +134,59 @@ const exportObjectToDestination = async (
   }
 };
 
+// A retry attempt must see what the previous attempt saved (range mode, ranges, job id),
+// not the copy captured when the batch started. Only done for the range-chunked export,
+// so the single-query path keeps behaving exactly as before.
+const withFreshObject = async (
+  args: Parameters<typeof exportObjectToDestination>
+): Promise<Parameters<typeof exportObjectToDestination>> => {
+  const [backupConfig, backupJobId, , , , , object, objectIndex] = args;
+  if (!object.rangeMode && !isRangeExportEnabled(backupConfig.backupConfigId)) {
+    return args;
+  }
+  const job = await getBackupJob(backupJobId);
+  const fresh = job?.object?.[objectIndex];
+  if (!fresh) {
+    return args;
+  }
+  const next = [...args] as Parameters<typeof exportObjectToDestination>;
+  next[6] = fresh;
+  return next;
+};
+
 const exportWithRetry = async (
   ...args: Parameters<typeof exportObjectToDestination>
 ): Promise<void> => {
   const [, backupJobId, , , , , object, objectIndex] = args;
   const objectName = object.name;
-  let lastError: any;
+  let attemptNo = 0;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      await exportObjectToDestination(...args);
-      return;
-    } catch (err: any) {
+  await withRetry({
+    maxAttempts: MAX_RETRIES,
+    run: async () => {
+      attemptNo++;
+      return exportObjectToDestination(...(attemptNo === 1 ? args : await withFreshObject(args)));
+    },
+    shouldRetry: async (err: any) => {
       // Org-wide API limit, not a transient per-object failure — retrying
       // just burns more of the exhausted quota. Mark it failed and stop.
       if (err instanceof SalesforceApiLimitExceededError) {
-        logger.error(
-          `Backup job ${backupJobId}: ${objectName} stopped — ${err.message}`
-        );
+        logger.error(`Backup job ${backupJobId}: ${objectName} stopped — ${err.message}`);
         await updateBackupObject({
           backupJobId,
           objectIndex,
           status: JOB_OBJECT_STATUS.failed,
           errorMessage: err.message,
-        }).catch(() => { });
-        throw err;
+        }).catch(() => {});
+        return false;
       }
-
-      lastError = err;
-      if (attempt < MAX_RETRIES) {
-        logger.warn(
-          `Backup job ${backupJobId}: retrying ${objectName} (attempt ${attempt}/${MAX_RETRIES}) - ${err?.message}`
-        );
-      }
-    }
-  }
-
-  throw lastError;
+      return true;
+    },
+    onRetry: (attempt, err: any, delayMs) =>
+      logger.warn(
+        `Backup job ${backupJobId}: retrying ${objectName} in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES} failed) - ${err?.message}`
+      ),
+  });
 };
 
 interface RestoreHierarchyNode {
@@ -908,4 +926,9 @@ const salesforceHandler: ICrmBackupHandler = {
   },
 };
 
-export { salesforceHandler, exportObjectToDestination, exportWithRetry, checkSalesforceApiLimitUsage };
+export {
+  salesforceHandler,
+  exportObjectToDestination,
+  exportWithRetry,
+  checkSalesforceApiLimitUsage,
+};
