@@ -35,7 +35,7 @@ import {
   startDirectManualCompression,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { AUTO_COMPRESSION_ENABLED, BACKUP_CONFIG_TABLE, SCHEDULE_MODE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
+import { AUTO_COMPRESSION_ENABLED, METADATA_CHECK_BEFORE_COMPRESSION, BACKUP_CONFIG_TABLE, SCHEDULE_MODE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
 import { salesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/index';
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
@@ -446,6 +446,11 @@ const resolveRealtimeSchemaChange = async (
   config: IBackupConfig
 ): Promise<RealtimeSchemaOutcome> => {
   if (!(config.type === 'NORMAL' && config.schedule === 'REALTIME')) {
+    return { outcome: 'not_realtime' };
+  }
+
+  if (!METADATA_CHECK_BEFORE_COMPRESSION) {
+    logger.info(`[Process Backup] metadata check skipped | cfg:${config.backupConfigId}`);
     return { outcome: 'not_realtime' };
   }
 
