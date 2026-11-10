@@ -32,9 +32,10 @@ import {
   checkSalesforceApiLimitUsage,
   requestCompressionForConfig,
   processCompressionQueue,
+  initalizePayloadTransform,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
-import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
+import { AUTO_COMPRESSION_ENABLED, BACKUP_CONFIG_TABLE, SCHEDULE_MODE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
 import { salesforceMetadataHandler } from '../../../services/third-party/salesforce/metadata/index';
 
 const METADATA_TYPES: ISalesforceMetadataHandler['metadataType'][] = [
@@ -453,8 +454,14 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   let user;
   const changedObjectNames: string[] = [];
   try {
-    // Manual Process Backup — enqueue through the same DynamoDB queue (bypasses auto flag).
+    // Automatic compression off: StartJobRun directly, as this button did before the
+    // queue. The queue is used only while automatic compression is on.
     const enqueueManual = async () => {
+      if (!AUTO_COMPRESSION_ENABLED) {
+        logger.info(`[Process Backup] direct EMR | cfg:${config.backupConfigId}`);
+        await initalizePayloadTransform(config.backupConfigId, { requireCompressible: false });
+        return;
+      }
       const result = await requestCompressionForConfig({
         backupConfigId: config.backupConfigId,
         backupJobId: `manual:${config.backupConfigId}:${Date.now()}`,
