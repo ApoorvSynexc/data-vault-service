@@ -11,7 +11,8 @@ const objectParentSchema = Joi.object({
 
 const sourceSchema = Joi.object({
   access_token: Joi.string().required(),
-  refresh_token: Joi.string().required(),
+  // No longer sent by client-service (RTR) — accepted for older callers.
+  refresh_token: Joi.string().optional(),
   instanceUrl: Joi.string().uri().required(),
   crmName: Joi.string().required(),
   crmId: Joi.string().required(),
@@ -50,8 +51,13 @@ const sourceSchema = Joi.object({
 const destinationConfigSchema = Joi.object({
   bucketName: Joi.string().required(),
   region: Joi.string().required(),
-  accessKeyId: Joi.string().required(),
-  secretAccessKey: Joi.string().required(),
+  // A role destination carries the role address instead of keys.
+  authType: Joi.string().valid('ACCESS_KEYS', 'ASSUME_ROLE').optional(),
+  accessKeyId: Joi.string().when('authType', { is: 'ASSUME_ROLE', then: Joi.forbidden(), otherwise: Joi.required() }),
+  secretAccessKey: Joi.string().when('authType', { is: 'ASSUME_ROLE', then: Joi.forbidden(), otherwise: Joi.required() }),
+  sessionToken: Joi.string().optional(),
+  roleArn: Joi.string().when('authType', { is: 'ASSUME_ROLE', then: Joi.required(), otherwise: Joi.forbidden() }),
+  externalId: Joi.string().when('authType', { is: 'ASSUME_ROLE', then: Joi.required(), otherwise: Joi.forbidden() }),
   folderPath: Joi.string().optional(),
 });
 

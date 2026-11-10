@@ -1,7 +1,12 @@
 import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { docClient } from '../../config';
 import { JOB_OBJECT_STATUS, RESTORE_JOB_TABLE } from '../../constant';
-import { IRestoreJob, IRestoreJobObject, IRestoreObjectHierarchyTreeNode } from '../../models';
+import {
+  IRestoreJob,
+  IRestoreJobObject,
+  IRestoreObjectHierarchyTreeNode,
+  IRestoreObjectHierarchyNode,
+} from '../../models';
 
 interface UpdateRestoreJobStatusParams {
   restoreJobId: string;
@@ -45,8 +50,10 @@ const updateRestoreJobStatus = async (params: UpdateRestoreJobStatusParams): Pro
     expressionParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
   } else if (startedAt !== undefined) {
-    // Clear stale error from a previous failed run when the job is (re)claimed.
-    removeParts.push('errorMessage');
+    // Clear stale error (and token-stop reason) from a previous failed run
+    // when the job is (re)claimed, so a later unrelated failure is never
+    // mistaken for a token stop and auto-resumed.
+    removeParts.push('errorMessage', 'errorReason');
   }
 
   let finalCondition = 'attribute_exists(restoreJobId)';
@@ -234,6 +241,15 @@ interface RestoreJobObjectUpdate {
 }
 
 interface UpdateRestoreJobParams {
+  // Why a run stopped early (e.g. SALESFORCE_TOKEN_WAITING) — lets a resume
+  // path find jobs to re-queue.
+  errorReason?: string;
+  // Liveness ping from the runner; keeps updatedAt fresh for the sweeper.
+  heartbeatAt?: string;
+  // Which run the token stop interrupted, so a resume re-runs the same kind.
+  stoppedRunType?: 'RESTORE' | 'ROLLBACK';
+  // Raw hierarchy input of the restore run — persisted so a resume can re-run it.
+  objectHierarchy?: IRestoreObjectHierarchyNode[];
   restoreJobId: string;
   status?: string;
   startedAt?: string;
@@ -280,6 +296,10 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
     objects,
     replaceObjects,
     hierarchy,
+    errorReason,
+    heartbeatAt,
+    stoppedRunType,
+    objectHierarchy,
     conditionExpression,
     conditionExpressionValues,
   } = params;
@@ -323,6 +343,28 @@ const updateRestoreJob = async (params: UpdateRestoreJobParams): Promise<boolean
   if (hierarchy) {
     setParts.push('hierarchy = :hierarchy');
     expressionValues[':hierarchy'] = hierarchy;
+  }
+
+  if (errorReason) {
+    setParts.push('errorReason = :errorReason');
+    expressionValues[':errorReason'] = errorReason;
+  } else if (startedAt !== undefined) {
+    removeParts.push('errorReason');
+  }
+
+  if (heartbeatAt) {
+    setParts.push('heartbeatAt = :heartbeatAt');
+    expressionValues[':heartbeatAt'] = heartbeatAt;
+  }
+
+  if (stoppedRunType) {
+    setParts.push('stoppedRunType = :stoppedRunType');
+    expressionValues[':stoppedRunType'] = stoppedRunType;
+  }
+
+  if (objectHierarchy) {
+    setParts.push('objectHierarchy = :objectHierarchy');
+    expressionValues[':objectHierarchy'] = objectHierarchy;
   }
 
   if (job && objects?.length) {

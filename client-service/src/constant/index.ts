@@ -8,9 +8,17 @@ const PORT = Number(process.env.PORT) || 3000;
 const EMAIL_COMPANY_NAME = String(process.env.EMAIL_COMPANY_NAME || '360 DataCraft');
 const EMAIL_SUPPORT_ADDRESS = String(process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com');
 const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
+// Test environments only: when set, every email goes to this address instead
+// of its real recipient (the subject names who it was meant for). Ignored
+// when NODE_ENV is production.
+const EMAIL_OVERRIDE_TO = String(process.env.EMAIL_OVERRIDE_TO || '').trim();
 const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
 const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
 const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
+// Any SMTP relay (e.g. smtp-relay.brevo.com:587). Leave EMAIL_SMTP_HOST empty
+// to keep using Gmail.
+const EMAIL_SMTP_HOST = String(process.env.EMAIL_SMTP_HOST || '').trim();
+const EMAIL_SMTP_PORT = Number(process.env.EMAIL_SMTP_PORT) || 587;
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'us-east-1');
@@ -37,6 +45,44 @@ const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || '
 const BACKUP_RANGE_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_RANGE_TABLE || 'data-vault-backup-ranges'}`;
 const SETTINGS_TABLE = `${NODE_ENV_PREFIX}-${process.env.SETTINGS_TABLE || 'data-vault-settings'}`;
 const NOTIFICATION_TABLE = `${NODE_ENV_PREFIX}-${process.env.NOTIFICATION_TABLE || 'data-vault-notifications'}`;
+const TOKEN_EVENT_TABLE = `${NODE_ENV_PREFIX}-${process.env.TOKEN_EVENT_TABLE || 'data-vault-token-events'}`;
+const COMPRESSION_QUEUE_TABLE = `${NODE_ENV_PREFIX}-${process.env.COMPRESSION_QUEUE_TABLE || 'data-vault-compression-queue'}`;
+
+// Auto-compression after backup.job.completed (client-service owns enqueue + EMR submit).
+// Status updates always run; this flag only gates enqueue / worker StartJobRun.
+const AUTO_COMPRESSION_ENABLED = String(process.env.AUTO_COMPRESSION_ENABLED || 'true').toLowerCase() !== 'false';
+// Global parallel EMR compressions across tenants (Dev/QA=1, Prod≈15).
+const COMPRESSION_GLOBAL_CONCURRENCY = Math.max(1, Number(process.env.COMPRESSION_GLOBAL_CONCURRENCY || '1') || 1);
+// Realtime CDC debounce window before enqueue (ms).
+const COMPRESSION_REALTIME_DEBOUNCE_MS = Math.max(
+  60_000,
+  Number(process.env.COMPRESSION_REALTIME_DEBOUNCE_MS || String(15 * 60 * 1000)) || 15 * 60 * 1000
+);
+// Max StartJobRun attempts per queue item before permanent FAILED.
+// Failures use COMPRESSION_RETRY_BACKOFF_MS between attempts (15m then 1h).
+const COMPRESSION_MAX_ATTEMPTS = Math.max(1, Number(process.env.COMPRESSION_MAX_ATTEMPTS || '3') || 3);
+// Backoff after EMR/StartJobRun failure: 1st→15m, 2nd→1h, then permanent FAILED.
+const COMPRESSION_RETRY_BACKOFF_MS: number[] = (() => {
+  const raw = process.env.COMPRESSION_RETRY_BACKOFF_MS;
+  if (raw) {
+    const parsed = raw
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (parsed.length) return parsed;
+  }
+  return [15 * 60 * 1000, 60 * 60 * 1000];
+})();
+// How often the in-process worker polls DynamoDB for QUEUED items.
+const COMPRESSION_WORKER_POLL_MS = Math.max(
+  5_000,
+  Number(process.env.COMPRESSION_WORKER_POLL_MS || '30000') || 30_000
+);
+// Stale RUNNING lease (ms) — reaped only when EMR is not still active.
+const COMPRESSION_LEASE_MS = Math.max(
+  60_000,
+  Number(process.env.COMPRESSION_LEASE_MS || String(3 * 60 * 60 * 1000)) || 3 * 60 * 60 * 1000
+);
 
 // Event Bridge Scheduler Config
 const AWS_EVENT_DESTINATION_API_KEY = String(process.env.AWS_EVENT_DESTINATION_API_KEY);
@@ -176,6 +222,25 @@ const SALESFORCE_HANDLER_METHOD_NAME = String(
 
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
+// S3 destinations that use a customer IAM role (no stored access keys).
+// DATACRAFT_AWS_ACCOUNT_ID    : the AWS account the customer's role must trust. Shown in the setup guide.
+// S3_ROLE_SESSION_SECONDS     : how long each temporary STS pass lasts. Default 3600 (1 hour) because
+//                               EC2/ECS callers are already on an assumed role (role chaining caps
+//                               DurationSeconds at 1 hour). The S3 client refreshes the pass before expiry,
+//                               so long backups are not limited by this window.
+// EXTERNAL_ID_SECRET          : every External ID we hand out is derived from it, so an ID can only be used by
+//                               the user it was issued to. Each user always gets the same ID, so changing
+//                               this secret invalidates every role connection. Set it explicitly and keep it
+//                               stable; it falls back to ENCRYPTION_KEY if not set.
+const DATACRAFT_AWS_ACCOUNT_ID = String(process.env.DATACRAFT_AWS_ACCOUNT_ID || '').trim();
+const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS || 3600);
+const EXTERNAL_ID_SECRET = String(process.env.EXTERNAL_ID_SECRET || ENCRYPTION_KEY);
+// Public base for API routes used in CloudFormation quick-create templateURL
+// e.g. https://devdatacraft.360degreecloud.in/api
+// Override the whole template URL with CLOUDFORMATION_TEMPLATE_URL if hosted elsewhere (S3).
+const PUBLIC_API_BASE_URL = String(process.env.PUBLIC_API_BASE_URL || '').replace(/\/+$/, '');
+const CLOUDFORMATION_TEMPLATE_URL = String(process.env.CLOUDFORMATION_TEMPLATE_URL || '').trim();
+
 // Bootstrap-layer key for the Salesforce org-registration handshake only —
 // /auth/configure-org's request/response envelope and
 // /salesforce/confirm-org-authorized's query envelope. Distinct from
@@ -279,6 +344,8 @@ const FILTER_OPERATOR = {
 const EMAIL_TEMPLATE = {
   realtimeTriggerFailure: 'REALTIME_TRIGGER_FAILURE',
   salesforceApiLimitReached: 'SALESFORCE_API_LIMIT_REACHED',
+  salesforceReconnectRequired: 'SALESFORCE_RECONNECT_REQUIRED',
+  salesforceSupportAlert: 'SALESFORCE_SUPPORT_ALERT',
 } as const;
 
 // Config lifecycle/visibility — backup-config, archival-config (same table),
@@ -303,6 +370,67 @@ const NOTIFICATION_STATUS = {
   read: 'READ',
   deleted: 'DELETED',
 };
+
+// Salesforce credential health — user.tokenStatus. Only persisted states live
+// here: "refreshing" is derived from refreshLockedUntil > now, never stored.
+// A missing tokenStatus is treated as `ready` (users connected before RTR).
+const SALESFORCE_TOKEN_STATUS = {
+  ready: 'Ready',
+  retryScheduled: 'RetryScheduled',
+  expired: 'Expired',
+  orgInactive: 'OrgInactive',
+  ipRestricted: 'IpRestricted',
+} as const;
+
+// Who asked TokenAuthority for a refresh — written on every token event.
+const TOKEN_REFRESH_TRIGGER = {
+  api401: 'API_401',
+  job401: 'JOB_401',
+  nightly: 'NIGHTLY',
+  retryWorker: 'RETRY_WORKER',
+  manual: 'MANUAL',
+  connect: 'CONNECT',
+  reconnect: 'RECONNECT',
+  disconnect: 'DISCONNECT',
+} as const;
+
+// Classifier result for a failed refresh_token grant.
+const TOKEN_ERROR_KIND = {
+  retry: 'RETRY',
+  platform: 'PLATFORM',
+  expire: 'EXPIRE',
+  expireUnconfirmed: 'EXPIRE_UNCONFIRMED',
+  expireSupport: 'EXPIRE_SUPPORT',
+  ipRestricted: 'IP_RESTRICTED',
+} as const;
+
+// data-vault-token-events.eventType
+const TOKEN_EVENT_TYPE = {
+  tokenIssued: 'TOKEN_ISSUED',
+  tokenReissued: 'TOKEN_REISSUED',
+  disconnected: 'DISCONNECTED',
+  refreshAttempt: 'REFRESH_ATTEMPT',
+  refreshSuccess: 'REFRESH_SUCCESS',
+  refreshFailed: 'REFRESH_FAILED',
+  refreshSkippedAlreadyFresh: 'REFRESH_SKIPPED_ALREADY_FRESH',
+  lockAcquired: 'LOCK_ACQUIRED',
+  lockJoined: 'LOCK_JOINED',
+  lockWait: 'LOCK_WAIT',
+  lockTimeout: 'LOCK_TIMEOUT',
+  persistRetry: 'PERSIST_RETRY',
+  persistSuperseded: 'PERSIST_SUPERSEDED',
+  persistFailed: 'PERSIST_FAILED',
+  fingerprintMismatch: 'FINGERPRINT_MISMATCH',
+  statusChanged: 'STATUS_CHANGED',
+  retryScheduled: 'RETRY_SCHEDULED',
+  retryAttempt: 'RETRY_ATTEMPT',
+  retryExhausted: 'RETRY_EXHAUSTED',
+  authRejectedAfterRefresh: 'AUTH_REJECTED_AFTER_REFRESH',
+  jobResumed: 'JOB_RESUMED',
+  reminderSent: 'REMINDER_SENT',
+  reminderSkipped: 'REMINDER_SKIPPED',
+  supportNotified: 'SUPPORT_NOTIFIED',
+} as const;
 // Outcome status — backupConfig.backupStatus, backupJob.status, restore.status
 // (outcome dimension), restoreJob.status. A job's own status stays `pending`
 // for its entire in-flight duration — there's no separate "now actively
@@ -344,6 +472,13 @@ const JOB_OBJECT_STATUS = {
 const ERROR_REASON = {
   serverCrashed: 'SERVER_CRASHED',
   emrServerCrashed: 'EMR_SERVER_CRASHED',
+  // Set by backup-service when a run's Salesforce token gate closed (mirrors
+  // its TOKEN_GATE_CLOSE_REASON). Jobs with these are re-queued once the
+  // user's token is Ready again — see token-lifecycle.ts.
+  salesforceTokenWaiting: 'SALESFORCE_TOKEN_WAITING',
+  salesforceReauthRequired: 'SALESFORCE_REAUTH_REQUIRED',
+  salesforceOrgInactive: 'SALESFORCE_ORG_INACTIVE',
+  salesforceIpRestricted: 'SALESFORCE_IP_RESTRICTED',
 }
 
 const ENVIRONMENT_TYPE = {
@@ -559,6 +694,9 @@ export {
   EMAIL_COMPANY_NAME,
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
+  EMAIL_SMTP_HOST,
+  EMAIL_SMTP_PORT,
+  EMAIL_OVERRIDE_TO,
   EMAIL_APP_URL,
   EMAIL_SMTP_USER,
   EMAIL_SMTP_APP_PASSWORD,
@@ -585,6 +723,16 @@ export {
   BACKUP_RANGE_TABLE,
   SETTINGS_TABLE,
   NOTIFICATION_TABLE,
+  TOKEN_EVENT_TABLE,
+  COMPRESSION_QUEUE_TABLE,
+
+  AUTO_COMPRESSION_ENABLED,
+  COMPRESSION_GLOBAL_CONCURRENCY,
+  COMPRESSION_REALTIME_DEBOUNCE_MS,
+  COMPRESSION_MAX_ATTEMPTS,
+  COMPRESSION_RETRY_BACKOFF_MS,
+  COMPRESSION_WORKER_POLL_MS,
+  COMPRESSION_LEASE_MS,
 
   // AWS EventBridge Scheduler Config
   AWS_EVENT_DESTINATION_API_KEY,
@@ -633,6 +781,11 @@ export {
   SALESFORCE_HANDLER_CLASS_NAME,
   SALESFORCE_HANDLER_METHOD_NAME,
   ENCRYPTION_KEY,
+  DATACRAFT_AWS_ACCOUNT_ID,
+  S3_ROLE_SESSION_SECONDS,
+  PUBLIC_API_BASE_URL,
+  CLOUDFORMATION_TEMPLATE_URL,
+  EXTERNAL_ID_SECRET,
   SALESFORCE_ENCRYPTION_KEY,
 
   // Webhook
@@ -654,6 +807,10 @@ export {
   EMAIL_TEMPLATE,
   VISIBILITY_STATUS,
   NOTIFICATION_STATUS,
+  SALESFORCE_TOKEN_STATUS,
+  TOKEN_REFRESH_TRIGGER,
+  TOKEN_ERROR_KIND,
+  TOKEN_EVENT_TYPE,
   AUTH_PROVIDER,
   LANGUAGE,
   GENDER,

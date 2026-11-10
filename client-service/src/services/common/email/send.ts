@@ -2,6 +2,12 @@ import { EMAIL_TEMPLATE } from '../../../constant';
 import { dispatchMail } from './transport';
 import { buildRealtimeTriggerFailureEmail, IRealtimeTriggerFailureEmailParams } from './realtime-trigger-failure';
 import { buildSalesforceApiLimitEmail, ISalesforceApiLimitEmailParams } from './salesforce-api-limit';
+import {
+  buildSalesforceReconnectEmail,
+  buildSalesforceSupportAlertEmail,
+  ISalesforceReconnectEmailParams,
+  ISalesforceSupportAlertEmailParams,
+} from './salesforce-token';
 
 // Discriminated union keyed on EMAIL_TEMPLATE — picking a template fixes
 // which `params` shape TypeScript will accept. Mirrors backup-service's own
@@ -14,6 +20,14 @@ export type SendEmailPayload =
   | {
       template: typeof EMAIL_TEMPLATE.salesforceApiLimitReached;
       params: ISalesforceApiLimitEmailParams;
+    }
+  | {
+      template: typeof EMAIL_TEMPLATE.salesforceReconnectRequired;
+      params: ISalesforceReconnectEmailParams;
+    }
+  | {
+      template: typeof EMAIL_TEMPLATE.salesforceSupportAlert;
+      params: ISalesforceSupportAlertEmailParams;
     };
 
 const buildEmail = (payload: SendEmailPayload) => {
@@ -22,6 +36,10 @@ const buildEmail = (payload: SendEmailPayload) => {
       return buildRealtimeTriggerFailureEmail(payload.params);
     case EMAIL_TEMPLATE.salesforceApiLimitReached:
       return buildSalesforceApiLimitEmail(payload.params);
+    case EMAIL_TEMPLATE.salesforceReconnectRequired:
+      return buildSalesforceReconnectEmail(payload.params);
+    case EMAIL_TEMPLATE.salesforceSupportAlert:
+      return buildSalesforceSupportAlertEmail(payload.params);
   }
 };
 

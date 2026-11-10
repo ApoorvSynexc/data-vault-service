@@ -30,6 +30,14 @@ import { DecryptedSalesforceRequest } from '../../../middlewares/salesforce';
 // import { runLogsArchive } from '../../../jobs/logs-archive-cron';
 // import { runSyncSalesforceRefreshTokenJob } from '../../../jobs/sync-salesforce-refresh-token';
 import { eventBridgeHandler } from './event-bridge';
+import { S3_ASSUME_ROLE_CFN_TEMPLATE } from '../../../assets/cloudformation/s3-assumerole-role';
+
+/** Public CloudFormation template for AssumeRole quick-create (no auth). */
+const s3AssumeRoleCfnTemplateHandler = async (_req: IRequest, res: IResponse): Promise<void> => {
+  res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.status(200).send(S3_ASSUME_ROLE_CFN_TEMPLATE);
+};
 
 /**
  * processRealtimeWebhook — core logic for handling a decrypted Salesforce webhook body.
@@ -67,6 +75,10 @@ import { eventBridgeHandler } from './event-bridge';
  *   bad envelope is rejected there with a 401 before this ever runs. That decryption
  *   IS the authorization; there is no separate webhook-secret header any more.
  */
+// In-process guard so a GSI lag does not re-write pending on every webhook.
+const realtimePendingMarkedAt = new Map<string, number>();
+const REALTIME_PENDING_MARK_MS = 60_000;
+
 const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<void> => {
   const { crm, data: decryptedBody } = sf;
 
@@ -95,7 +107,22 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       continue;
     }
 
-    await updateBackupConfig(config.backupConfigId, { backupStatus: STATUS.pending, status: VISIBILITY_STATUS.active });
+    // Hot-path: large realtime bursts hit the same backupConfigId partition.
+    // Only flip to pending when needed; lastBackupAt is owned by backup.job.completed.
+    const markedAt = realtimePendingMarkedAt.get(config.backupConfigId) ?? 0;
+    const recentlyMarked = Date.now() - markedAt < REALTIME_PENDING_MARK_MS;
+    const needsPendingWrite =
+      !recentlyMarked &&
+      (config.backupStatus !== STATUS.pending || config.status !== VISIBILITY_STATUS.active);
+    if (needsPendingWrite) {
+      await updateBackupConfig(config.backupConfigId, {
+        backupStatus: STATUS.pending,
+        status: VISIBILITY_STATUS.active,
+      });
+      realtimePendingMarkedAt.set(config.backupConfigId, Date.now());
+      config.backupStatus = STATUS.pending;
+      config.status = VISIBILITY_STATUS.active;
+    }
 
     /**
      * WHY we pass destination config decrypted to backup-service:
@@ -122,7 +149,6 @@ const processRealtimeWebhook = async (sf: DecryptedSalesforceRequest): Promise<v
       }),
     });
 
-    await updateBackupConfig(config.backupConfigId, { lastBackupAt: new Date().toISOString() });
     logger.info(`Triggered real-time backup for backupConfigId: ${config.backupConfigId} transactionId: ${transactionId}`);
   }
 };
@@ -294,9 +320,13 @@ const testHandler = async (req: IRequest, res: IResponse): Promise<void> => {
   makeResponse(req, res, 200, true, 'create',);
 }
 
-export const publicController = wrapController({
-  payloadHandler,
-  eventBridgeHandler,
-  salesForceRealTimeHandler,
-  testHandler
-});
+export const publicController = {
+  ...wrapController({
+    payloadHandler,
+    eventBridgeHandler,
+    salesForceRealTimeHandler,
+    testHandler,
+  }),
+  // Raw YAML — do not wrap with JSON makeResponse
+  s3AssumeRoleCfnTemplateHandler,
+};

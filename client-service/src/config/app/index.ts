@@ -22,6 +22,20 @@ const app = express();
 // Set to the number of proxies between client and app (typically 1 for single LB)
 app.set('trust proxy', 1);
 
+// Redirect direct IP access to the canonical login URL (set in .env per env).
+const RESTRICTED_IP_HOST = (process.env.RESTRICTED_IP_HOST || '').trim();
+const CANONICAL_LOGIN_URL = (process.env.CANONICAL_LOGIN_URL || '').trim();
+
+if (RESTRICTED_IP_HOST && CANONICAL_LOGIN_URL) {
+  app.use((req, res, next) => {
+    const host = (req.headers.host || '').split(':')[0];
+    if (host === RESTRICTED_IP_HOST) {
+      return res.redirect(301, CANONICAL_LOGIN_URL);
+    }
+    next();
+  });
+}
+
 app.use(
   helmet({
     // Only frame-ancestors — a full default CSP would block the SPA bundle's

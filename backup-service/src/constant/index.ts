@@ -8,12 +8,23 @@ const EMAIL_SUPPORT_ADDRESS = String(
   process.env.EMAIL_SUPPORT_ADDRESS || 'support@360datacraft.com'
 );
 const EMAIL_FROM_ADDRESS = String(process.env.EMAIL_FROM_ADDRESS || 'jhoncenatest@gmail.com');
+// Test environments only: when set, every email goes to this address instead
+// of its real recipient (the subject names who it was meant for). Ignored
+// when NODE_ENV is production.
+const EMAIL_OVERRIDE_TO = String(process.env.EMAIL_OVERRIDE_TO || '').trim();
 const EMAIL_APP_URL = String(process.env.EMAIL_APP_URL || 'https://app.360datacraft.com');
 const EMAIL_SMTP_USER = String(process.env.EMAIL_SMTP_USER || '');
 const EMAIL_SMTP_APP_PASSWORD = String(process.env.EMAIL_SMTP_APP_PASSWORD || '');
+// Any SMTP relay (e.g. smtp-relay.brevo.com:587). Leave EMAIL_SMTP_HOST empty
+// to keep using Gmail.
+const EMAIL_SMTP_HOST = String(process.env.EMAIL_SMTP_HOST || '').trim();
+const EMAIL_SMTP_PORT = Number(process.env.EMAIL_SMTP_PORT) || 587;
 
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
+// How long a pass for a customer's IAM role lasts. Default 3600: ECS/EC2 run on assumed roles, so
+// STS role chaining caps DurationSeconds at 1 hour. Credentials refresh before expiry for long jobs.
+const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS) || 3600;
 const AWS_ACCESS_KEY_ID = String(process.env.AWS_ACCESS_KEY_ID);
 const AWS_SECRET_ACCESS_KEY = String(process.env.AWS_SECRET_ACCESS_KEY);
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
@@ -282,12 +293,16 @@ export {
   EMAIL_COMPANY_NAME,
   EMAIL_SUPPORT_ADDRESS,
   EMAIL_FROM_ADDRESS,
+  EMAIL_SMTP_HOST,
+  EMAIL_SMTP_PORT,
+  EMAIL_OVERRIDE_TO,
   EMAIL_APP_URL,
   EMAIL_SMTP_USER,
   EMAIL_SMTP_APP_PASSWORD,
 
   // Aws Config
   AWS_REGION,
+  S3_ROLE_SESSION_SECONDS,
   AWS_ACCESS_KEY_ID,
   AWS_SECRET_ACCESS_KEY,
   DYNAMODB_ENDPOINT,

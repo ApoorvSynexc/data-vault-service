@@ -30,7 +30,7 @@ import {
 } from '../../../services';
 import { provisionEcaPermissionSet } from '../../../services/third-party/salesforce/eca-permission-set';
 import { ICrm, IUser } from '../../../models';
-import { encrypt } from '../../../utils/encryption';
+import { buildIssuedCredentialFields, logCredentialIssued } from '../../../services/third-party/salesforce';
 import {
   getAuthCookieOptions,
   generateTokens,
@@ -148,11 +148,7 @@ const socialLoginCallbackHandler = async (
   // Computed once and reused by both the create and update paths below, so a
   // newly-created user gets it on its first write instead of a second
   // update right after.
-  const crmCredential = {
-    access_token: token.access_token,
-    refresh_token: token.refresh_token,
-  };
-  const encrptedCrm = encrypt(JSON.stringify(crmCredential));
+  const issuedCredentialFields = buildIssuedCredentialFields(token);
 
   // Check if user exists by email (only match active users)
   let user = await getUserByCrmProfileUserId(sfProfile.user_id, sfProfile.organization_id);
@@ -177,7 +173,8 @@ const socialLoginCallbackHandler = async (
     const salesforceTokens: SalesforceTokens = {
       accessToken: token.access_token,
       refreshToken: token.refresh_token,
-      userId: sfProfile.user_id,
+      // No DataCraft userId yet — these tokens were just issued, so a 401
+      // here is surfaced as SalesforceAuthExpiredError, not refreshed.
       customUrl: oauthState.customUrl,
     };
     const crmIdentity: ICrm = {
@@ -224,8 +221,7 @@ const socialLoginCallbackHandler = async (
         firstName: crmProfile.firstName,
         lastName: crmProfile.lastName,
         status: VISIBILITY_STATUS.active,
-        crmCredential: encrptedCrm,
-        isCrmConnected: true,
+        ...issuedCredentialFields,
         ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
       });
       await upsertCrm({
@@ -240,12 +236,12 @@ const socialLoginCallbackHandler = async (
       // use the record we just wrote for the rest of the login flow.
       user = { userId, crmId, crmProfile, status: VISIBILITY_STATUS.active, isCrmConnected: true, customUrl: oauthState.customUrl } as IUser;
       userJustCreated = true;
+      logCredentialIssued({ userId, crmId, refreshToken: token.refresh_token }, false);
     } else {
       await updateUser(
         { userId: user.userId },
         {
-          crmCredential: encrptedCrm,
-          isCrmConnected: true,
+          ...issuedCredentialFields,
           ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
           ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
         });
@@ -291,11 +287,11 @@ const socialLoginCallbackHandler = async (
     await updateUser(
       { userId: user.userId },
       {
-        crmCredential: encrptedCrm,
-        isCrmConnected: true,
+        ...issuedCredentialFields,
         ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {}),
         ...(token.instance_url ? { crmProfile: { ...user.crmProfile, instanceUrl: token.instance_url } } : {}),
       });
+    logCredentialIssued({ userId: user.userId, crmId: user.crmId, refreshToken: token.refresh_token }, true);
     logger.info(`[social-login-callback] persisted crmProfile.instanceUrl: ${token.instance_url ?? '(none returned by Salesforce — kept prior value)'} (prior value: ${user.crmProfile?.instanceUrl})`);
   }
 

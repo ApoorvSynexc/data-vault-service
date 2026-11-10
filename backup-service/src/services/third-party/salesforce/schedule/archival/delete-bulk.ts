@@ -9,7 +9,7 @@ import {
   // uploadToS3,
 } from '../../../../destination/s3';
 import { parseCSVLine, splitCSVRows, buildErrorLogsS3Prefix } from '../../../../../utils/helper';
-import { SalesforceTokens } from '../../api-request';
+import { salesforceFetch, SalesforceTokens } from '../../api-request';
 import { logger } from '../../../../../middlewares/logger';
 
 // const RECORD_ERROR_BATCH_SIZE = 200;
@@ -44,19 +44,20 @@ const createBulkDeleteJob = async (
   tokens: SalesforceTokens,
   objectName: string
 ): Promise<IBulkDeleteJob> => {
-  const response = await fetch(`${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${tokens.accessToken}`,
-      'Content-Type': 'application/json',
+  const response = await salesforceFetch(
+    `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        object: objectName,
+        operation: 'delete',
+        lineEnding: 'LF',
+        columnDelimiter: 'COMMA',
+      }),
     },
-    body: JSON.stringify({
-      object: objectName,
-      operation: 'delete',
-      lineEnding: 'LF',
-      columnDelimiter: 'COMMA',
-    }),
-  });
+    tokens
+  );
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -74,16 +75,14 @@ const uploadDataToJob = async (
   csvData: string
 ): Promise<void> => {
   try {
-    const response = await fetch(
+    const response = await salesforceFetch(
       `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/batches`,
       {
         method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${tokens.accessToken}`,
-          'Content-Type': 'text/csv',
-        },
+        headers: { 'Content-Type': 'text/csv' },
         body: csvData,
-      }
+      },
+      tokens
     );
 
     if (!response.ok) {
@@ -100,16 +99,14 @@ const closeAndSubmitJob = async (
   tokens: SalesforceTokens,
   jobId: string
 ): Promise<void> => {
-  const response = await fetch(
+  const response = await salesforceFetch(
     `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
     {
       method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ state: 'UploadComplete' }),
-    }
+    },
+    tokens
   );
 
   if (!response.ok) {
@@ -161,13 +158,10 @@ const pollJobCompletion = async (paylaod: {
     }
 
     pollCount += 1;
-    const response = await fetch(
+    const response = await salesforceFetch(
       `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${tokens.accessToken}`,
-        },
-      }
+      {},
+      tokens
     );
 
     if (!response.ok) {
@@ -227,9 +221,8 @@ const getJobErrors = async (
 
   if (failedCount > 0) {
     try {
-      const headers = { Authorization: `Bearer ${tokens.accessToken}` };
       const base = `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`;
-      const failedRes = await fetch(`${base}/failedResults`, { headers });
+      const failedRes = await salesforceFetch(`${base}/failedResults`, {}, tokens);
       if (failedRes.ok) {
         const failedText = await failedRes.text();
         const rows = splitCSVRows(failedText);

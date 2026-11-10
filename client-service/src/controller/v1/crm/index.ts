@@ -14,9 +14,13 @@ import {
   getUsersByContactEmail,
   getUser,
 } from '../../../services';
-import { SalesforceEnvironment } from '../../../services/third-party/salesforce';
+import {
+  buildIssuedCredentialFields,
+  disconnectSalesforceCredential,
+  logCredentialIssued,
+  SalesforceEnvironment,
+} from '../../../services/third-party/salesforce';
 import { wrapController } from '../../../utils/helper';
-import { encrypt } from '../../../utils/encryption';
 
 // Extracts the Salesforce `error` code from httpRequest thrown messages.
 // e.g. "HTTP Error 400: {"error":"invalid_grant",...}" → "invalid_grant"
@@ -142,19 +146,14 @@ const crmCodeHanlder = async (req: IRequest, res: IResponse): Promise<void> => {
     return;
   }
 
-  const crmCredential = {
-    access_token: token.access_token,
-    refresh_token: token.refresh_token,
-  }
-  const encrptedCrm = encrypt(JSON.stringify(crmCredential));
   await updateUser(
     { userId: userDetail?.userId },
     {
-      isCrmConnected: true,
-      crmCredential: encrptedCrm,
+      ...buildIssuedCredentialFields(token),
       ...(oauthState.customUrl ? { customUrl: oauthState.customUrl } : {})
     }
   );
+  logCredentialIssued({ userId: userDetail.userId, crmId: userDetail.crmId, refreshToken: token.refresh_token }, true);
 
   makeResponse(req, res, 200, true, 'fetch');
 };
@@ -199,7 +198,7 @@ const crmDisconnectHandler = async (req: IRequest, res: IResponse): Promise<void
     return;
   }
 
-  await updateUser({ userId: String(userId) }, { isCrmConnected: false });
+  await disconnectSalesforceCredential(String(userId), disconnectUserExist.crmId);
   makeResponse(req, res, 200, true, 'update');
 };
 

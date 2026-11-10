@@ -1,4 +1,4 @@
-import { STATUS, JOB_OBJECT_STATUS, EMAIL_TEMPLATE, BACKUP_TYPE } from '../../../constant';
+import { STATUS, JOB_OBJECT_STATUS, EMAIL_TEMPLATE, BACKUP_TYPE, JOB_TYPE } from '../../../constant';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../../middlewares/logger';
 import {
@@ -19,8 +19,11 @@ import { getBackupConfigById, updateBackupConfig } from '../../backup-config';
 import { getBackupJob, updateBackupObject, updateJobStatus } from '../../backup-job';
 import { getRestoreById, updateRestore } from '../../restore';
 import { getRestoreJobById, updateRestoreJob } from '../../restore-job';
+import { notifyJobCompleted } from '../../common/notify-client';
 
 import { SalesforceTokens } from './api-request';
+import { getCurrentAccessToken } from './token-gate';
+import { ISourceS3Keys } from '../../../models/restore-job';
 import { checkSalesforceApiLimitUsage, SalesforceApiLimitExceededError } from './api-limit';
 import { exportFirstTime, exportIncremental } from './schedule/backup';
 import { isRangeExportEnabled } from './schedule/backup/range-export';
@@ -195,9 +198,7 @@ interface RestoreHierarchyContext {
   restoreId: string;
   restoreJobId: string;
   recurvedObject: Array<{ id: string; name: string; status?: string }>;
-  sourceS3Credentials: {
-    accessKeyId: string;
-    secretAccessKey: string;
+  sourceS3Credentials: ISourceS3Keys & {
     bucketName: string;
     region: string;
     csvFilePath: string;
@@ -205,8 +206,9 @@ interface RestoreHierarchyContext {
   };
   destinationSalesforceCredentials: {
     access_token: string;
-    refresh_token: string;
+    refresh_token?: string;
     instanceUrl: string;
+    userId?: string;
   };
   conflict: IRestoreConflict;
 }
@@ -324,10 +326,13 @@ const salesforceHandler: ICrmBackupHandler = {
     }
 
     const tokens: SalesforceTokens = {
-      accessToken: access_token,
+      accessToken: (await getCurrentAccessToken(backupConfig.userId)) ?? access_token,
       refreshToken: refresh_token,
       crmId,
       backupConfigId,
+      userId: backupConfig.userId,
+      jobId: backupJobId,
+      jobType: 'BACKUP',
     };
 
     logger.info(
@@ -387,15 +392,23 @@ const salesforceHandler: ICrmBackupHandler = {
           ? STATUS.partialFailure
           : STATUS.success;
 
-    await updateBackupConfig(backupConfigId, {
-      backupStatus: finalStatus,
-      sizeInBytes,
-      completedRecordCount,
-    });
+    // Job row stays in backup-service; config backupStatus is owned by client-service
+    // via backup.job.completed (see notifyJobCompleted).
     await updateJobStatus({
       backupJobId,
       status: finalStatus,
       completedAt: dayjs().toISOString(),
+    });
+
+    await notifyJobCompleted({
+      backupConfigId,
+      backupJobId,
+      status: finalStatus,
+      jobType: (completedJob?.jobType as 'BULK' | 'REALTIME') || JOB_TYPE.bulk,
+      eventId: backupJobId,
+      schemaSync: Boolean(completedJob?.schemaSync),
+      sizeInBytes,
+      completedRecordCount,
     });
 
     if (failedObjects.length) {
@@ -530,16 +543,22 @@ const salesforceHandler: ICrmBackupHandler = {
           ? STATUS.partialFailure
           : STATUS.success;
 
-    await updateBackupConfig(backupConfigId, {
-      backupStatus: finalStatus,
-      sizeInBytes,
-      completedRecordCount,
-      deletedRecordCount,
-    });
     await updateJobStatus({
       backupJobId,
       status: finalStatus,
       completedAt: dayjs().toISOString(),
+    });
+
+    await notifyJobCompleted({
+      backupConfigId,
+      backupJobId,
+      status: finalStatus,
+      jobType: (freshJob?.jobType as 'BULK' | 'REALTIME') || JOB_TYPE.bulk,
+      eventId: backupJobId,
+      schemaSync: Boolean(freshJob?.schemaSync),
+      sizeInBytes,
+      completedRecordCount,
+      deletedRecordCount,
     });
 
     if (failedObjects.length) {
@@ -597,14 +616,14 @@ const salesforceHandler: ICrmBackupHandler = {
   ): Promise<typeof STATUS.success | typeof STATUS.failed> => {
     try {
       const objects = destination.objects as any;
-      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+      const sourceS3Credentials: ISourceS3Keys =
         'cipherText' in source.encryptedKeys
           ? JSON.parse(decrypt(source.encryptedKeys))
           : source.encryptedKeys;
 
       const destinationSalesforceCredentials: {
         access_token: string;
-        refresh_token: string;
+        refresh_token?: string;
         instanceUrl: string;
       } =
         'cipherText' in destination.encryptedTokens
@@ -618,9 +637,15 @@ const salesforceHandler: ICrmBackupHandler = {
         region: source.region,
         csvFilePath: source.csvFilePath,
       };
+      // Refresh and replay against the DESTINATION org's own user — never the
+      // source backup config's owner (runner fills this for older jobs).
+      const destinationUserId = destination.userId;
       const resolvedDestinationCredentials = {
         ...destinationSalesforceCredentials,
+        access_token:
+          (await getCurrentAccessToken(destinationUserId)) ?? destinationSalesforceCredentials.access_token,
         instanceUrl: destination.instanceUrl,
+        userId: destinationUserId,
       };
 
       const recurvedObject = recursivelyFlatten(objects || []);
@@ -768,14 +793,14 @@ const salesforceHandler: ICrmBackupHandler = {
   ): Promise<typeof STATUS.success | typeof STATUS.failed> => {
     try {
       const objects = destination.objects as any;
-      const sourceS3Credentials: { accessKeyId: string; secretAccessKey: string } =
+      const sourceS3Credentials: ISourceS3Keys =
         'cipherText' in source.encryptedKeys
           ? JSON.parse(decrypt(source.encryptedKeys))
           : source.encryptedKeys;
 
       const destinationSalesforceCredentials: {
         access_token: string;
-        refresh_token: string;
+        refresh_token?: string;
         instanceUrl: string;
       } =
         'cipherText' in destination.encryptedTokens
@@ -789,9 +814,15 @@ const salesforceHandler: ICrmBackupHandler = {
         region: source.region,
         csvFilePath: source.csvFilePath,
       };
+      // Refresh and replay against the DESTINATION org's own user — never the
+      // source backup config's owner (runner fills this for older jobs).
+      const destinationUserId = destination.userId;
       const resolvedDestinationCredentials = {
         ...destinationSalesforceCredentials,
+        access_token:
+          (await getCurrentAccessToken(destinationUserId)) ?? destinationSalesforceCredentials.access_token,
         instanceUrl: destination.instanceUrl,
+        userId: destinationUserId,
       };
 
       const recurvedObject = recursivelyFlatten(objects || []);

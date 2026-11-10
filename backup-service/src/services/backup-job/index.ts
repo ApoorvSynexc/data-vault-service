@@ -198,8 +198,10 @@ const updateJobStatus = async (params: UpdateJobStatusParams): Promise<void> => 
     expressionParts.push('errorMessage = :errorMessage');
     expressionValues[':errorMessage'] = errorMessage;
   } else if (startedAt !== undefined) {
-    // Clear stale error from a previous failed run when the job is (re)claimed.
-    removeParts.push('errorMessage');
+    // Clear stale error (and token-stop reason) from a previous failed run
+    // when the job is (re)claimed, so a later unrelated failure is never
+    // mistaken for a token stop and auto-resumed.
+    removeParts.push('errorMessage', 'errorReason');
   }
 
   // Check if record exists, merge with any additional condition
@@ -234,6 +236,7 @@ const updateJobStatus = async (params: UpdateJobStatusParams): Promise<void> => 
 };
 
 interface UpdateBackupObjectParams {
+  pendingBulkJobId?: string;
   backupJobId: string;
   objectIndex: number | number[];
   status?: string;
@@ -260,6 +263,7 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     objectIndex,
     status,
     bulkJobId,
+    pendingBulkJobId,
     totalRecordCount,
     completedRecordCount,
     insertCount,
@@ -293,6 +297,12 @@ const updateBackupObject = async (params: UpdateBackupObjectParams): Promise<voi
     expressionParts.push(`#object[${objectIndex}].#bulkJobId = :bulkJobId`);
     expressionNames['#bulkJobId'] = 'bulkJobId';
     expressionValues[':bulkJobId'] = bulkJobId;
+  }
+
+  if (pendingBulkJobId !== undefined) {
+    expressionParts.push(`#object[${objectIndex}].#pendingBulkJobId = :pendingBulkJobId`);
+    expressionNames['#pendingBulkJobId'] = 'pendingBulkJobId';
+    expressionValues[':pendingBulkJobId'] = pendingBulkJobId;
   }
 
   if (totalRecordCount !== undefined) {

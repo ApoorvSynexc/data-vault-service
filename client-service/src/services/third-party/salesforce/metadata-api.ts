@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { salesforceRequest, SalesforceTokens } from './index';
+import { salesforceFetch, salesforceRequest, SalesforceTokens } from './index';
 import { timer } from '../../../utils/helper';
 import { SALESFORCE_METADATA_API_VERSION } from '../../../constant';
 import { logger } from '../../../middlewares';
@@ -71,16 +71,16 @@ export const deployMetadata = async (
   ]);
 
   // httpRequest hardcodes application/json — use native fetch for multipart upload.
-  const deployResponse = await fetch(
+  const deployResponse = await salesforceFetch(
     `${instanceUrl}/services/data/v${METADATA_API_VERSION}/metadata/deployRequest`,
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
       },
       body,
-    }
+    },
+    tokens
   );
 
   if (!deployResponse.ok) {

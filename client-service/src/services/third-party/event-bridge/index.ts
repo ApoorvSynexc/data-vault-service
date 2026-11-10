@@ -1,4 +1,5 @@
 import {
+    ActionAfterCompletion,
     SchedulerClient,
     CreateScheduleCommand,
     UpdateScheduleCommand,
@@ -23,10 +24,13 @@ interface ScheduleInput {
     payload?: Record<string, unknown>;
     startDate?: Date;
     endDate?: Date;
+    // One-time at() schedules only: remove the schedule once it has fired.
+    deleteAfterCompletion?: boolean;
 }
 
-const buildParams = ({ name, scheduleExpression, timeZone, payload, startDate, endDate }: ScheduleInput) => ({
+const buildParams = ({ name, scheduleExpression, timeZone, payload, startDate, endDate, deleteAfterCompletion }: ScheduleInput) => ({
     Name: name,
+    ...(deleteAfterCompletion && { ActionAfterCompletion: ActionAfterCompletion.DELETE }),
     ScheduleExpression: scheduleExpression,
     ScheduleExpressionTimezone: timeZone ?? "UTC",
     FlexibleTimeWindow: { Mode: FlexibleTimeWindowMode.OFF },
@@ -93,4 +97,35 @@ const getAwsEventSchedule = async (name: string): Promise<GetScheduleCommandOutp
     }
 };
 
-export { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler, getAwsEventSchedule };
+// at(yyyy-mm-ddThh:mm:ss) in UTC — EventBridge's one-time expression.
+const toAtExpression = (date: Date): string => `at(${date.toISOString().slice(0, 19)})`;
+
+// Creates or moves a self-deleting one-time schedule. Used for per-user
+// Salesforce token retries and reconnect reminders.
+const upsertOneTimeSchedule = async (name: string, runAt: Date, payload: Record<string, unknown>): Promise<void> => {
+    const input: ScheduleInput = { name, scheduleExpression: toAtExpression(runAt), payload, deleteAfterCompletion: true };
+    try {
+        await scheduler.send(new CreateScheduleCommand(buildParams(input)));
+    } catch (err: any) {
+        if (err.name !== "ConflictException") throw err;
+        await scheduler.send(new UpdateScheduleCommand({ ...buildParams(input), State: ScheduleState.ENABLED }));
+    }
+};
+
+// Deletes a schedule; a missing one (already fired, or never created) is fine.
+const deleteScheduleIfExists = async (name: string): Promise<void> => {
+    try {
+        await scheduler.send(new DeleteScheduleCommand({ Name: name }));
+    } catch (err: any) {
+        if (err.name !== "ResourceNotFoundException") throw err;
+    }
+};
+
+export {
+    createAwsEventScheduler,
+    updateAwsEventSchedule,
+    deleteAwsEventScheduler,
+    getAwsEventSchedule,
+    upsertOneTimeSchedule,
+    deleteScheduleIfExists,
+};

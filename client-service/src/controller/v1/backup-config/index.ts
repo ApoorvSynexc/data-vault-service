@@ -24,13 +24,14 @@ import {
   checkSharedTriggerConflict,
   computeJobStats,
   getSalesforceProfile,
-  initalizePayloadTransform,
   getUser,
   getDecryptedCrmCredential,
   runMetadataComparisonForConfig,
   hasMetadataChanged,
   getDecryptedDestinationConfig,
   checkSalesforceApiLimitUsage,
+  requestCompressionForConfig,
+  processCompressionQueue,
 } from '../../../services';
 import { createAwsEventScheduler, updateAwsEventSchedule, deleteAwsEventScheduler } from '../../../services/third-party/event-bridge';
 import { BACKUP_CONFIG_TABLE, SCHEDULE_MODE, STATUS, BACKUP_TYPE, VISIBILITY_STATUS, SCHEDULE_TYPE, DURATION_TYPE } from '../../../constant';
@@ -452,7 +453,19 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
   let user;
   const changedObjectNames: string[] = [];
   try {
-
+    // Manual Process Backup — enqueue through the same DynamoDB queue (bypasses auto flag).
+    const enqueueManual = async () => {
+      const result = await requestCompressionForConfig({
+        backupConfigId: config.backupConfigId,
+        backupJobId: `manual:${config.backupConfigId}:${Date.now()}`,
+        jobType: config.schedule === 'REALTIME' ? 'REALTIME' : 'BULK',
+        source: 'manual',
+      });
+      logger.info(
+        `[Process Backup] enqueue | cfg:${config.backupConfigId} ok:${result.ok} reason:${result.reason}`
+      );
+      void processCompressionQueue();
+    };
 
     if (config.type === 'NORMAL' && config.schedule === 'REALTIME') {
       const result = await runMetadataComparisonForConfig(config, false);
@@ -484,11 +497,11 @@ const initalizePayloadTransformHandler = async (req: IRequest, res: IResponse): 
         await checkSalesforceApiLimitUsage({ userId: user.userId, crmId: config.crmId });
         await triggerBackupJob({ user, config, type: 'backup', lastUpdatedAt: config.lastSchemaSyncAt, schemaSync: true, lastSchemaSyncAt: true });
       } else {
-        await initalizePayloadTransform(config.backupConfigId);
+        await enqueueManual();
       }
     } else {
-      initalizePayloadTransform(config.backupConfigId).catch((err) => {
-        logger.error('EMR job failed after response sent:', err?.message ?? err);
+      enqueueManual().catch((err) => {
+        logger.error('EMR enqueue failed after response sent:', err?.message ?? err);
       });
     }
   } catch (error) {
@@ -612,8 +625,8 @@ const recoverTriggerHandler = async (req: IRequest, res: IResponse): Promise<voi
       userId: config.userId,
       backupConfigId: config.backupConfigId,
       source: {
+        // Access token only — backup-service refreshes via the internal API.
         access_token,
-        refresh_token,
         crmId: crm.crmId,
         crmName: crm.crmName,
         instanceUrl,
