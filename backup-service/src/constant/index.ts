@@ -79,6 +79,10 @@ const MAX_CONCURRENT_PAGES = positiveIntFromEnv(process.env.MAX_CONCURRENT_PAGES
 const MAX_CONCURRENT_RETRIES = positiveIntFromEnv(process.env.MAX_CONCURRENT_RETRIES, 3);
 const RETRY_BASE_DELAY_MS = positiveIntFromEnv(process.env.RETRY_BASE_DELAY_MS, 5000);
 const RETRY_MAX_DELAY_MS = positiveIntFromEnv(process.env.RETRY_MAX_DELAY_MS, 60000);
+// A retry holds its slot only while it STARTS, not for its whole run (a retry of a huge
+// object can run for hours and would block every other retry). So at most
+// MAX_CONCURRENT_RETRIES retries begin within any RETRY_SLOT_HOLD_MS window.
+const RETRY_SLOT_HOLD_MS = positiveIntFromEnv(process.env.RETRY_SLOT_HOLD_MS, 60000);
 const SF_BULK_MAX_RECORDS_PER_PAGE = positiveIntFromEnv(
   process.env.SF_BULK_MAX_RECORDS_PER_PAGE,
   50000
@@ -335,6 +339,7 @@ export {
   MAX_CONCURRENT_RETRIES,
   RETRY_BASE_DELAY_MS,
   RETRY_MAX_DELAY_MS,
+  RETRY_SLOT_HOLD_MS,
   SF_BULK_MAX_RECORDS_PER_PAGE,
   BULK_RANGE_CHUNKING,
   BULK_RANGE_CONFIG_IDS,

@@ -2,6 +2,9 @@ export interface ISemaphore {
   // Runs `task` once a slot is free and releases the slot when it settles,
   // whether it resolved or threw. Waiters are served first-in, first-out.
   run: <T>(task: () => Promise<T>) => Promise<T>;
+  // Takes a slot and returns its release function, for callers that need to give the
+  // slot back at a time other than when a task settles. Releasing twice is harmless.
+  acquire: () => Promise<() => void>;
   readonly active: number;
   readonly waiting: number;
 }
@@ -11,7 +14,7 @@ export const createSemaphore = (limit: number): ISemaphore => {
   let active = 0;
   const waiters: Array<() => void> = [];
 
-  const acquire = async (): Promise<void> => {
+  const take = async (): Promise<void> => {
     if (active < maxSlots) {
       active++;
       return;
@@ -30,15 +33,27 @@ export const createSemaphore = (limit: number): ISemaphore => {
     }
   };
 
+  const acquire = async (): Promise<() => void> => {
+    await take();
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        release();
+      }
+    };
+  };
+
   return {
     run: async <T>(task: () => Promise<T>): Promise<T> => {
-      await acquire();
+      const done = await acquire();
       try {
         return await task();
       } finally {
-        release();
+        done();
       }
     },
+    acquire,
     get active() {
       return active;
     },

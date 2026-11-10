@@ -123,11 +123,32 @@ export const tryRangeExport = async (
   const configId = backupConfig.backupConfigId;
 
   if (!object.rangeMode) {
-    if (!isRangeExportEnabled(configId) || object.bulkJobId) {
+    if (!isRangeExportEnabled(configId)) {
       return null;
     }
     if (!(await isRangeTableAvailable())) {
       return null;
+    }
+
+    // A single-query job whose query already completed is finished on the single path. But
+    // one Salesforce reports Failed / Aborted / gone (results expire) can only fail the same
+    // way again on every retry, which is exactly the large-object case: drop it and let the
+    // object take the range path instead of retrying a dead job forever.
+    if (object.bulkJobId) {
+      const saved = await getBulkQueryJobState({ instanceUrl, tokens, jobId: object.bulkJobId });
+      if (saved && saved.state !== 'Failed' && saved.state !== 'Aborted') {
+        return null;
+      }
+      logger.info(
+        `[range] saved single-query job unusable (${saved?.state ?? 'not found'}), dropping it, backupJobId=${params.backupJobId}, objectName=${object.name}`
+      );
+      await updateBackupObject({
+        backupJobId: params.backupJobId,
+        objectIndex: params.objectIndex,
+        bulkJobId: '',
+      });
+      // the single-query path reads this field directly, so keep this copy in step
+      object.bulkJobId = '';
     }
 
     const count = await getRecordCount({
@@ -156,6 +177,13 @@ export const tryRangeExport = async (
     });
     if (planned === null) {
       return null;
+    }
+
+    // Range mode takes over from a single-query job an earlier attempt left running (the
+    // resume mechanism saves it as pendingBulkJobId): stop it so it stops using the org's
+    // Bulk capacity. Best effort.
+    if (object.pendingBulkJobId) {
+      await abortBulkQueryJob({ instanceUrl, tokens, jobId: object.pendingBulkJobId });
     }
   }
 

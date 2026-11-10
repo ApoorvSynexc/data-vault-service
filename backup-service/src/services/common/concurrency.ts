@@ -6,7 +6,8 @@ import { createSemaphore } from '../../utils/semaphore';
 // Salesforce result pages are held in memory at once (fetch -> parse -> upload),
 // regardless of how many jobs/objects are running. pageSlots is the hard memory
 // bound; jobSlots keeps a burst of jobs from starving each other.
-// retrySlots bounds how many *retry* attempts (not first attempts) run at once.
+// retrySlots bounds how many *retry* attempts (not first attempts) START together; a retry
+// holds its slot only for RETRY_SLOT_HOLD_MS, see services/common/retry.ts.
 export const jobSlots = createSemaphore(MAX_CONCURRENT_JOBS);
 export const pageSlots = createSemaphore(MAX_CONCURRENT_PAGES);
 export const retrySlots = createSemaphore(MAX_CONCURRENT_RETRIES);

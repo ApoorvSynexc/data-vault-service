@@ -125,13 +125,53 @@ interface IRunBackupJobParams extends IBackupJob {
   executionType: 'RETRY' | 'NEW';
 }
 
-// Waits for a free job slot BEFORE claiming the DynamoDB lock: a queued job
-// stays an untouched PENDING job (no processingStartedAt), so the stale-job
-// sweeper can't mistake time spent waiting here for a hung run.
-export const runBackupJob = (job: IRunBackupJobParams): Promise<void> =>
-  jobSlots.run(() => executeBackupJob(job));
+// The job's DynamoDB lock is claimed FIRST, then the job waits for a free job slot while it
+// heartbeats. A queued job therefore looks like any running job: a second trigger gets
+// "already running", SIGTERM fails it (failActiveJobsOnShutdown) and releases the lock, and
+// if the task crashes while it waits, the client-service stale-job sweeper fails it exactly
+// like any other crashed job. (Waiting WITHOUT the lock left a job PENDING and invisible to
+// every cleanup path after a restart, blocking its config forever.)
+const claimJob = async (backupJobId: string, label: string): Promise<void> => {
+  activeJobs.set(backupJobId, { kind: 'backup' });
+  try {
+    await updateJobStatus({
+      backupJobId,
+      status: STATUS.pending,
+      startedAt: dayjs().toISOString(),
+      conditionExpression: 'attribute_not_exists(processingStartedAt)',
+    });
+  } catch (err: any) {
+    activeJobs.delete(backupJobId);
+    if (err.name === 'ConditionalCheckFailedException') {
+      throw new HttpError(409, `${label} ${backupJobId} is already running`);
+    }
+    throw err;
+  }
+};
 
-const executeBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
+// Runs `execute` once a job slot is free. While the job is still queued its row is
+// heartbeated (updatedAt) so the sweeper does not mistake waiting for a hung run; once
+// running, the job's own heartbeat takes over.
+const runInJobSlot = async (backupJobId: string, execute: () => Promise<void>): Promise<void> => {
+  const stopQueueHeartbeat = startHeartbeat(backupJobId, (heartbeatAt) =>
+    updateBackupJob({ backupJobId, heartbeatAt })
+  );
+  try {
+    await jobSlots.run(async () => {
+      stopQueueHeartbeat();
+      await execute();
+    });
+  } finally {
+    stopQueueHeartbeat();
+  }
+};
+
+export const runBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
+  await claimJob(job.backupJobId, 'Backup job');
+  await runInJobSlot(job.backupJobId, () => processBackupJob(job));
+};
+
+const processBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
   const {
     backupConfigId,
     backupJobId,
@@ -141,23 +181,6 @@ const executeBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
     triggerSource,
     executionType
   } = job;
-  const startedAt = dayjs().toISOString();
-  activeJobs.set(backupJobId, { kind: 'backup' });
-
-  try {
-    await updateJobStatus({
-      backupJobId,
-      status: STATUS.pending,
-      startedAt,
-      conditionExpression: 'attribute_not_exists(processingStartedAt)',
-    });
-  } catch (err: any) {
-    activeJobs.delete(backupJobId);
-    if (err.name === 'ConditionalCheckFailedException') {
-      throw new HttpError(409, `Backup job ${backupJobId} is already running`);
-    }
-    throw err;
-  }
 
   const stopHeartbeat = startHeartbeat(backupJobId, (heartbeatAt) =>
     updateBackupJob({ backupJobId, heartbeatAt })
@@ -220,29 +243,13 @@ const executeBackupJob = async (job: IRunBackupJobParams): Promise<void> => {
 interface IRunArchivalJobParams extends IBackupJob {
   executionType: 'RETRY' | 'NEW';
 }
-export const runArchivalJob = (job: IRunArchivalJobParams): Promise<void> =>
-  jobSlots.run(() => executeArchivalJob(job));
+export const runArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
+  await claimJob(job.backupJobId, 'Archival job');
+  await runInJobSlot(job.backupJobId, () => processArchivalJob(job));
+};
 
-const executeArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
+const processArchivalJob = async (job: IRunArchivalJobParams): Promise<void> => {
   const { backupConfigId, backupJobId, source: encryptedSource, destination, object, triggerSource, executionType } = job;
-  const startedAt = dayjs().toISOString();
-
-  activeJobs.set(backupJobId, { kind: 'backup' });
-
-  try {
-    await updateJobStatus({
-      backupJobId,
-      status: STATUS.pending,
-      startedAt,
-      conditionExpression: 'attribute_not_exists(processingStartedAt)',
-    });
-  } catch (err: any) {
-    activeJobs.delete(backupJobId);
-    if (err.name === 'ConditionalCheckFailedException') {
-      throw new HttpError(409, `Archival job ${backupJobId} is already running`);
-    }
-    throw err;
-  }
 
   const stopHeartbeat = startHeartbeat(backupJobId, (heartbeatAt) =>
     updateBackupJob({ backupJobId, heartbeatAt })
@@ -586,7 +593,7 @@ export const failActiveJobsOnShutdown = async (): Promise<void> => {
       }),
     ]),
   ]);
-}
+};
 
 // Token-stop reasons that a resume may pick up (mirrors TOKEN_GATE_CLOSE_REASON).
 const RESUMABLE_TOKEN_REASONS = new Set(['SALESFORCE_TOKEN_WAITING', 'SALESFORCE_REAUTH_REQUIRED']);
@@ -607,4 +614,4 @@ export const resumeRestoreJob = async (job: IRestoreJob): Promise<void> => {
   run({ ...job, status: STATUS.pending }).catch((err: any) =>
     logger.error(`Resume of restore job ${job.restoreJobId} failed: ${err?.message ?? err}`)
   );
-}
+};
