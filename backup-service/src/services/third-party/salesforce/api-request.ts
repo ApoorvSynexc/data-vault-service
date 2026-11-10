@@ -179,6 +179,10 @@ const abortBulkQueryJob = async (payload: IBulkQueryJobRef): Promise<void> => {
       tokens
     );
   } catch (err: any) {
+    // A closed token gate (login needs attention) is not a "best effort" failure.
+    if (err instanceof SalesforceTokenUnavailableError) {
+      throw err;
+    }
     logger.warn(`[range] could not abort Salesforce bulk job ${jobId}: ${err?.message ?? err}`);
   }
 };
@@ -220,6 +224,11 @@ const getRecordCount = async (payload: {
     );
     return typeof res?.totalSize === 'number' ? res.totalSize : null;
   } catch (err: any) {
+    // The count is only a hint, so ordinary failures return null; but a closed token gate
+    // (the Salesforce login needs attention) must surface like it does everywhere else.
+    if (err instanceof SalesforceTokenUnavailableError) {
+      throw err;
+    }
     logger.warn(`[range] record count unavailable for ${objectName}: ${err?.message ?? err}`);
     return null;
   }
@@ -227,11 +236,13 @@ const getRecordCount = async (payload: {
 
 export {
   salesforceRequest,
+  salesforceFetch,
   makePageFetcher,
   createBulkQueryJob,
   getBulkQueryJobState,
   abortBulkQueryJob,
   getRecordCount,
+  SalesforceTokenUnavailableError,
 };
 export type { IBulkQueryJobState };
 export type { SalesforceTokens };
