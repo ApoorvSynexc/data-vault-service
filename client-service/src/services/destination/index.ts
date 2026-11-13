@@ -142,10 +142,11 @@ const getDecryptedDestinationConfig = (destination: IDestination): Record<string
   return JSON.parse(decrypt(destination));
 };
 
-// For the Spark job only. Spark cannot ask AWS for a role pass itself, so a role destination comes
-// back here as short-lived access keys + sessionToken + expiresAt; a legacy keys destination comes
-// back unchanged. Everything else keeps using getDecryptedDestinationConfig: client-service's own S3
-// client and backup-service both renew a role pass by themselves, so they get the role details.
+// For the Spark job only. An ASSUME_ROLE destination is the role address and External ID.
+// Spark assumes that role and renews the pass itself, so a multi-hour job is not stuck with a
+// token minted here. A legacy keys destination comes back unchanged. Everything else keeps
+// using getDecryptedDestinationConfig: client-service's own S3 client and backup-service both
+// renew a role pass by themselves, so they get the role details.
 const getResolvedDestinationConfig = async (destination: IDestination): Promise<Record<string, any>> => {
   return resolveS3Config(getDecryptedDestinationConfig(destination) as IS3Config);
 };
