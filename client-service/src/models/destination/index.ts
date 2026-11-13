@@ -13,8 +13,8 @@ export interface IS3Config {
   // ASSUME_ROLE
   roleArn?: string;
   externalId?: string;
-  // ACCESS_KEYS (legacy). Also filled with short-lived values plus sessionToken when a role has
-  // been resolved for a job that must hand credentials to another system.
+  // ACCESS_KEYS (legacy). A role destination handed to Spark keeps roleArn and externalId
+  // instead of a one-hour session token; Spark renews that pass itself.
   accessKeyId?: string;
   secretAccessKey?: string;
   sessionToken?: string;

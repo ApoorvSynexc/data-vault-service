@@ -20,10 +20,6 @@ const ROLE_ARN_PATTERN = /^arn:aws[a-z-]*:iam::\d{12}:role\/[\w+=,.@/-]+$/;
 const ROLE_SESSION_NAME = 'datacraft-s3';
 // Fetch a new pass this long before the old one expires, so a request never starts with a nearly-dead pass.
 const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000;
-// A Spark job cannot renew its pass, so it must start with a pass that outlives the job. A cached
-// pass with less than this left is replaced by a fresh one before it is handed to Spark.
-// Prefer a pass that outlives short Spark steps; under role chaining AWS still caps at 1 hour.
-const SPARK_MIN_REMAINING_MS = 50 * 60 * 1000;
 
 const isRoleAuth = (config: Pick<IS3Config, 'authType'>): boolean => config.authType === 'ASSUME_ROLE';
 
@@ -128,29 +124,27 @@ const getAwsCredentials = (config: IS3Config): IAwsCredentialIdentity | (() => P
   };
 };
 
-// For handing credentials to a system that cannot ask AWS for a pass itself (the Spark job).
-// A role destination becomes plain short-lived keys + sessionToken + expiresAt; legacy keys pass
-// through unchanged. The role address and External ID are dropped so they travel no further.
-const resolveS3Config = async <T extends IS3Config>(config: T): Promise<T & { expiresAt?: string }> => {
+// What the Spark job receives. Spark assumes the customer role itself and renews the pass
+// about five minutes before each one-hour expiry, so this must not mint a token: a token
+// created here dies while a large compression is still sorting. Legacy keys pass through
+// unchanged because they do not expire.
+const resolveS3Config = <T extends IS3Config>(config: T): T => {
   if (!isRoleAuth(config)) {return config;}
-  const pass = await resolveRolePass(config, SPARK_MIN_REMAINING_MS);
-  // Spark cannot renew a pass. If AWS gave less than we asked for, say so now instead of letting a
-  // long job die halfway with ExpiredToken. A short job still works, so this warns rather than blocks.
-  const remainingMs = (pass.expiration?.getTime() ?? 0) - Date.now();
-  if (remainingMs < SPARK_MIN_REMAINING_MS) {
-    logger.warn(
-      `[s3-role] Spark pass lasts only ${Math.round(remainingMs / 60000)} min (wanted at least ${SPARK_MIN_REMAINING_MS / 60000}). A job running longer than that will fail with ExpiredToken. roleArn=${config.roleArn}`
-    );
+  if (!isValidRoleArn(config.roleArn) || !config.externalId) {
+    throw new Error('invalid_role_destination');
   }
-  const { roleArn: _roleArn, externalId: _externalId, ...rest } = config;
+  const {
+    accessKeyId: _accessKeyId,
+    secretAccessKey: _secretAccessKey,
+    sessionToken: _sessionToken,
+    ...rest
+  } = config;
   return {
     ...rest,
-    authType: 'ACCESS_KEYS',
-    accessKeyId: pass.accessKeyId,
-    secretAccessKey: pass.secretAccessKey,
-    sessionToken: pass.sessionToken,
-    expiresAt: pass.expiration?.toISOString(),
-  } as T & { expiresAt?: string };
+    authType: 'ASSUME_ROLE',
+    roleArn: config.roleArn,
+    externalId: config.externalId,
+  } as T;
 };
 
 // A restore job stores its source credentials in `source.encryptedKeys`. For a role destination it
