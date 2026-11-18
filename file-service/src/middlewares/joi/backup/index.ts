@@ -1,7 +1,7 @@
 import Joi from 'joi';
 import { NextFunction, Request, Response } from 'express';
 
-export const getBackupJobsValidation = (req: Request, res: Response, next: NextFunction): void => {
+export const getBackupValidation = (req: Request, res: Response, next: NextFunction): void => {
   const schema = Joi.object({
     backupJobIds: Joi.array().items(Joi.string().required()).min(1).unique().required(),
   });

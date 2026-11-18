@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import { backupJobController } from '../../controller';
+import { backupController } from '../../controller';
+import { getBackupValidation } from '../../middlewares';
 
 const router = Router();
 
-router.get('/', backupJobController.getBackupJobHandler);
+router.post('/', getBackupValidation, backupController.getBackupHandler);
 
 export const backupRouter = router;
