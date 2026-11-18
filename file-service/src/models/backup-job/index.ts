@@ -148,7 +148,7 @@ export interface IBackupJob {
   heartbeatAt?: string;
   createdAt: string;
   updatedAt: string;
-  source?: EncryptedPayload;
+  source: EncryptedPayload;
   object?: IBackupObject[];
   lastUpdatedAt?: string;
   schemaSync?: boolean;

@@ -13,6 +13,7 @@ const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
 // DynamoDB table names
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
+const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
 
 export {
   HOST,
@@ -21,6 +22,7 @@ export {
   AWS_REGION,
   DYNAMODB_ENDPOINT,
   BACKUP_JOB_TABLE,
+  BACKUP_CONFIG_TABLE,
   INTERNAL_SECRET,
   ENCRYPTION_KEY,
 };
