@@ -7,7 +7,10 @@ const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
 
+// Service
+const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET || '');
+
 // DynamoDB table names
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
 
-export { HOST, PORT, NODE_ENV, AWS_REGION, DYNAMODB_ENDPOINT, BACKUP_JOB_TABLE };
+export { HOST, PORT, NODE_ENV, AWS_REGION, DYNAMODB_ENDPOINT, BACKUP_JOB_TABLE, INTERNAL_SECRET };

@@ -1,0 +1,8 @@
+import { Router } from 'express';
+import { backupJobController } from '../../controller';
+
+const router = Router();
+
+router.get('/', backupJobController.getBackupJobHandler);
+
+export const backupRouter = router;
