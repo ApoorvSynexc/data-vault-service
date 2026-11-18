@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
-import { getBackupConfig, getBackupJob, listS3Objects } from '../../../services';
+import { getBackupConfig, getBackupJob, listS3Objects, downloadFromS3 } from '../../../services';
+import { parseCsvStream } from '../../../utils/csv';
 import { IBackupConfig, IDestinationConfig, ISource } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
 import { buildS3KeyPrefix } from '../../../utils/helper';
@@ -25,7 +26,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
 
     for (let index = 0; index < job.object.length; index++) {
       const object = job.object[index];
-      if(!object.completedRecordCount) continue;
+      if (!object.completedRecordCount) continue;
 
       const prefix = buildS3KeyPrefix({
         crmId: job.crmId || "",
@@ -38,10 +39,26 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
       });
 
       const fileList = await listS3Objects(destination, prefix);
-      if(fileList.length === 0) continue;
+      if (fileList.length === 0) continue;
+
+      let rowCount = 0;
+      const rows = []
+      for (const key of fileList) {
+        const fileStream = await downloadFromS3(destination, key);
+        for await (const row of parseCsvStream(fileStream)) {
+          rowCount++;
+
+          if (rowCount <= 3) {
+            rows.push(row);
+          }
+        }
+      }
+
       payload.push({
         prefix,
-        fileList
+        fileList,
+        rowCount,
+        rows
       });
     }
   }

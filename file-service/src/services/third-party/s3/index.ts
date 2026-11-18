@@ -1,4 +1,5 @@
-import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
+import { Readable } from 'stream';
 import { IDestinationConfig } from '../../../models';
 
 type S3Config = Pick<
@@ -42,4 +43,22 @@ export const listS3Objects = async (config: S3Config, prefix: string): Promise<s
   }
 
   return keys.sort();
+};
+
+export const downloadFromS3 = async (config: S3Config, key: string): Promise<Readable> => {
+  const client = getS3Client(config);
+
+  try {
+    const { Body } = await client.send(
+      new GetObjectCommand({ Bucket: config.bucketName, Key: key })
+    );
+    if (!(Body instanceof Readable)) {
+      throw new Error(`Unexpected S3 response body for key: ${key}`);
+    }
+    Body.once('close', () => client.destroy());
+    return Body;
+  } catch (error) {
+    client.destroy();
+    throw error;
+  }
 };
