@@ -36,6 +36,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
       });
 
       const fileList = await listS3Objects(destination, prefix);
+      if(fileList.length === 0) continue;
       payload.push({
         prefix,
         fileList
