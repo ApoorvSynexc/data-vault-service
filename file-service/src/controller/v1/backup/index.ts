@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { getBackupJob } from '../../../services/backup-job';
+import { getBackupJob } from '../../../services';
 
 const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
   const { backupJobIds } = req.body as { backupJobIds: string[] };
