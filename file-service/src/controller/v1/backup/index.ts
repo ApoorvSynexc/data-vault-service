@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { getBackupJob } from '../../../services';
 import { IDestinationConfig } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
+import { buildS3KeyPrefix } from '../../../utils/helper';
 
 const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
   const { backupJobIds } = req.body as { backupJobIds: string[] };
