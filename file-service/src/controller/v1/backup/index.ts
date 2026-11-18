@@ -26,7 +26,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
     for (let index = 0; index < job.object.length; index++) {
       const object = job.object[index];
       const prefix = buildS3KeyPrefix({
-        crmId: source.crmId,
+        crmId: job.crmId || "",
         crmName: source.crmName,
         backupConfigId: backupConfig.backupConfigId,
         backupJobId,
