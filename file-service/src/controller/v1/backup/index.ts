@@ -12,7 +12,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
     const job = jobs[index];
     if (!job) continue;
 
-    const destination = (JSON.parse(decrypt(job.destination)) as IDestinationConfig)
+    const destination = JSON.parse(decrypt(job.destination)) as IDestinationConfig;
   }
 
   res.status(200).send({

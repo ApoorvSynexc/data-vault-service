@@ -15,7 +15,6 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1011.0",
     "@aws-sdk/client-s3": "^3.1171.0",
-    "@aws-sdk/credential-providers": "^3.1171.0",
     "@aws-sdk/lib-dynamodb": "^3.1011.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",

@@ -6,7 +6,6 @@ const NODE_ENV_PREFIX = NODE_ENV.toLowerCase();
 // AWS / DynamoDB Config
 const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
-const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS) || 3600;
 
 // Service
 const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET || '');
@@ -21,7 +20,6 @@ export {
   NODE_ENV,
   AWS_REGION,
   DYNAMODB_ENDPOINT,
-  S3_ROLE_SESSION_SECONDS,
   BACKUP_JOB_TABLE,
   INTERNAL_SECRET,
   ENCRYPTION_KEY,
