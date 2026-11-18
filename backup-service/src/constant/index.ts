@@ -85,7 +85,7 @@ const RETRY_MAX_DELAY_MS = positiveIntFromEnv(process.env.RETRY_MAX_DELAY_MS, 60
 const RETRY_SLOT_HOLD_MS = positiveIntFromEnv(process.env.RETRY_SLOT_HOLD_MS, 60000);
 const SF_BULK_MAX_RECORDS_PER_PAGE = positiveIntFromEnv(
   process.env.SF_BULK_MAX_RECORDS_PER_PAGE,
-  50000
+  100
 );
 
 // Range-chunked export of very large objects (schedule/backup/range-export.ts).

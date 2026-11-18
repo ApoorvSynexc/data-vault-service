@@ -45,7 +45,7 @@ const awsCredentials: IAwsCredentials = {
 //     secretAccessKey: AWS_SECRET_ACCESS_KEY || 'local',
 //   }
 // } else 
-  if (NODE_ENV === 'dev' && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
+if (NODE_ENV === 'dev' && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
   awsCredentials.credentials = {
     accessKeyId: AWS_ACCESS_KEY_ID,
     secretAccessKey: AWS_SECRET_ACCESS_KEY,
@@ -55,6 +55,7 @@ const awsCredentials: IAwsCredentials = {
 // Adaptive retries absorb short on-demand scale-up / hot-partition throttles
 // (common on realtime webhook storms writing the same backupConfigId).
 const client = new DynamoDBClient({
+  ...({ endpoint: "http://localhost:8000" }),
   ...awsCredentials,
   maxAttempts: 10,
   retryMode: 'adaptive',
@@ -460,9 +461,11 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
     if (err.name !== 'ResourceNotFoundException') {
       throw err;
     }
+    console.log(`Creating table: ${def.TableName}`);
 
     await client.send(new CreateTableCommand(def));
     await waitUntilTableExists({ client, maxWaitTime: 60 }, { TableName: def.TableName });
+    console.log(`Table ready: ${def.TableName}`);
   }
 
   const ttlAttr = TTL_CONFIG[def.TableName!];
@@ -487,6 +490,7 @@ const ensureTable = async (def: CreateTableCommand['input']): Promise<void> => {
 
 const initializeDatabase = async () => {
   await Promise.all(TABLE_DEFINITIONS.map(ensureTable));
+  console.log(`DynamoDB ready (region: ${AWS_REGION})`);
   return docClient;
 };
 

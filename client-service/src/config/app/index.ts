@@ -7,7 +7,7 @@ import { createServer, Server } from 'http';
 import { router } from '../../routes';
 import { morganMiddleware } from '../../middlewares';
 import { makeResponse } from '../../lib';
-import { startCron } from '../../jobs';
+// import { startCron } from '../../jobs';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST: string = String(process.env.HOST || '0.0.0.0');
@@ -80,6 +80,6 @@ export const initializeApp = () => {
   const server: Server = createServer(app);
   server.listen(PORT, HOST, async () => {
     console.log(`* App is running at PORT: ${PORT} *`);
-    startCron();
+    // startCron();
   });
 };
