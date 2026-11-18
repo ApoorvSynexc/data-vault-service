@@ -10,6 +10,7 @@ const S3_ROLE_SESSION_SECONDS = Number(process.env.S3_ROLE_SESSION_SECONDS) || 3
 
 // Service
 const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET || '');
+const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
 // DynamoDB table names
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
@@ -23,4 +24,5 @@ export {
   S3_ROLE_SESSION_SECONDS,
   BACKUP_JOB_TABLE,
   INTERNAL_SECRET,
+  ENCRYPTION_KEY,
 };
