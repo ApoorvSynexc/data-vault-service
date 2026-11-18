@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { getBackupConfig, getBackupJob } from '../../../services';
+import { getBackupConfig, getBackupJob, listS3Objects } from '../../../services';
 import { IBackupConfig, IDestinationConfig, ISource } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
 import { buildS3KeyPrefix } from '../../../utils/helper';
@@ -35,8 +35,10 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         operation: 'inserts',
       });
 
+      const fileList = await listS3Objects(destination, prefix);
       payload.push({
-        prefix
+        prefix,
+        fileList
       });
     }
   }
