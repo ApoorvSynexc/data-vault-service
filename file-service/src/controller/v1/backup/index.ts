@@ -8,11 +8,12 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
 
   const jobs = await Promise.all(backupJobIds.map((backupJobId) => getBackupJob(backupJobId)));
 
-  const destinations = jobs.map((job) =>
-    job ? (JSON.parse(decrypt(job.destination)) as IDestinationConfig) : null
-  );
+  for (let index = 0; index < jobs.length; index++) {
+    const job = jobs[index];
+    if (!job) continue;
 
-  console.log({ destinations });
+    const destination = (JSON.parse(decrypt(job.destination)) as IDestinationConfig)
+  }
 
   res.status(200).send({
     success: true,
