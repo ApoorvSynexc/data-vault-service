@@ -25,6 +25,8 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
 
     for (let index = 0; index < job.object.length; index++) {
       const object = job.object[index];
+      if(!object.completedRecordCount) continue;
+
       const prefix = buildS3KeyPrefix({
         crmId: job.crmId || "",
         crmName: source.crmName,
