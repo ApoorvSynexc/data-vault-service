@@ -8,6 +8,7 @@ const AWS_REGION = String(process.env.AWS_REGION || 'ap-south-1');
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT;
 
 // Service
+const CORE_SERVICE = String(process.env.CORE_SERVICE);
 const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET || '');
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
@@ -23,6 +24,7 @@ export {
   DYNAMODB_ENDPOINT,
   BACKUP_JOB_TABLE,
   BACKUP_CONFIG_TABLE,
+  CORE_SERVICE,
   INTERNAL_SECRET,
   ENCRYPTION_KEY,
 };
