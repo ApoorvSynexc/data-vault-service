@@ -1,5 +1,12 @@
 import { Request, Response } from 'express';
-import { getBackupConfig, getBackupJob, listS3Objects, downloadFromS3 } from '../../../services';
+import {
+  getBackupConfig,
+  getBackupJob,
+  listS3Objects,
+  downloadFromS3,
+  getContentDocumentLinks,
+  SalesforceTokens,
+} from '../../../services';
 import { parseCsvStream } from '../../../utils/csv';
 import { IBackupConfig, IDestinationConfig, ISource } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
@@ -23,6 +30,20 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
 
     const destination = JSON.parse(decrypt(job.destination)) as IDestinationConfig;
     const source = JSON.parse(decrypt(job.source)) as ISource;
+
+    // One token holder per job, so a 401 refresh is shared by every Salesforce call below.
+    const salesforce = {
+      instanceUrl: source.instanceUrl,
+      tokens: {
+        accessToken: source.access_token,
+        refreshToken: source.refresh_token,
+        crmId: source.crmId,
+        backupConfigId: backupConfig.backupConfigId,
+        userId: backupConfig.userId,
+        jobId: backupJobId,
+        jobType: 'BACKUP',
+      } as SalesforceTokens,
+    };
 
     for (let index = 0; index < job.object.length; index++) {
       const object = job.object[index];
@@ -54,11 +75,20 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         }
       }
 
+      // Files linked to each of the sampled rows (record Id -> ContentDocumentLinks).
+      const links = [];
+      for (const row of rows) {
+        if (!row.Id) continue;
+        const contentDocumentLinks = await getContentDocumentLinks(salesforce, row.Id);
+        links.push({ ...row, contentDocumentLinks });
+      }
+
       payload.push({
         prefix,
         fileList,
         rowCount,
-        rows
+        rows,
+        links,
       });
     }
   }
