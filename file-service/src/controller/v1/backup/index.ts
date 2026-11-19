@@ -7,10 +7,11 @@ import {
   getContentDocumentLinks,
   SalesforceTokens,
 } from '../../../services';
+import { makeResponse } from '../../../lib/response';
 import { parseCsvStream } from '../../../utils/csv';
 import { IBackupConfig, IDestinationConfig, ISource } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
-import { buildS3KeyPrefix } from '../../../utils/helper';
+import { buildS3KeyPrefix, wrapController } from '../../../utils/helper';
 
 const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
   const { backupJobIds } = req.body as { backupJobIds: string[] };
@@ -93,12 +94,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
     }
   }
 
-  res.status(200).send({
-    success: true,
-    message: 'fetch',
-    data: payload,
-    meta: {},
-  });
+  makeResponse(req, res, 200, true, 'fetch', payload);
 };
 
-export const backupController = { getBackupHandler };
+export const backupController = wrapController({ getBackupHandler });

@@ -1,0 +1,11 @@
+{
+  "fetch": "Record fetched successfully",
+  "create": "Record created successfully",
+  "update": "Record update successfully",
+  "delete": "Record deleted successfully",
+  "not_found": "Record not found",
+  "unknown_error": "An unknown error occurred",
+  "unauthorized": "unauthorized",
+  "params_required": "Required parameters are missing",
+  "route_not_found": "the resource you are looking for is not found"
+}

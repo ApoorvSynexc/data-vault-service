@@ -14,6 +14,13 @@ const CORE_SERVICE = String(process.env.CORE_SERVICE);
 const INTERNAL_SECRET = String(process.env.INTERNAL_SECRET || '');
 const ENCRYPTION_KEY = String(process.env.ENCRYPTION_KEY);
 
+// Supported response languages (see lib/response)
+const LANGUAGE = {
+  en: 'en',
+  hi: 'hi',
+  gu: 'gu',
+};
+
 // DynamoDB table names
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
 const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
@@ -26,6 +33,7 @@ export {
   DYNAMODB_ENDPOINT,
   BACKUP_JOB_TABLE,
   BACKUP_CONFIG_TABLE,
+  LANGUAGE,
   SALESFORCE_API_VERSION,
   CORE_SERVICE,
   INTERNAL_SECRET,
