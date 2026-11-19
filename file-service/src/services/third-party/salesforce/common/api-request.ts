@@ -57,5 +57,37 @@ const salesforceRequest = async <T = any>(
   }
 };
 
-export { salesforceRequest, SalesforceTokenUnavailableError };
+// Raw-response variant for callers that need the Response itself (binary file
+// content). Same gate and single replay as salesforceRequest.
+const salesforceFetch = async (
+  url: string,
+  init: RequestInit,
+  tokens: SalesforceTokens
+): Promise<Response> => {
+  const send = (accessToken: string) =>
+    fetch(url, {
+      ...init,
+      headers: {
+        ...(init.headers as Record<string, string>),
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+  await awaitTokenGate(tokens);
+  const usedToken = tokens.accessToken;
+  const response = await send(usedToken);
+  if (response.status !== 401) {
+    return response;
+  }
+
+  await response.body?.cancel();
+  const replay = await send(await onUnauthorized(tokens, usedToken));
+  if (replay.status === 401) {
+    await replay.body?.cancel();
+    throw rejectedAfterRefresh();
+  }
+  return replay;
+};
+
+export { salesforceRequest, salesforceFetch, SalesforceTokenUnavailableError };
 export type { SalesforceRequestOptions, SalesforceTokens };
