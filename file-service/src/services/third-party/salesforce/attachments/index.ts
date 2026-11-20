@@ -94,7 +94,7 @@ const getContentVersion = async (
     records: [version],
   } = await query<IContentVersion>(
     context,
-    `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}' AND IsLatest = true`
+    `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}' AND IsLatest = true`
   );
   return version ?? null;
 };
