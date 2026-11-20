@@ -88,7 +88,6 @@ const getContentDocumentLinks = async (
 const getContentVersion = async (
   context: ISalesforceContext,
   contentDocumentId: string,
-  latest: boolean
 ): Promise<any | null> => {
   assertSalesforceId(contentDocumentId);
   const records = await query<IContentVersion>(

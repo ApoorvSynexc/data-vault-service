@@ -109,7 +109,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
 
         const contentDocumentVersions = [];
         for (const { ContentDocumentId } of contentDocumentLinks.records) {
-          const contentVersion = await getContentVersion(salesforce, ContentDocumentId, false);
+          const contentVersion = await getContentVersion(salesforce, ContentDocumentId);
           if (!contentVersion) continue;
           contentDocumentVersions.push(contentVersion);
 
