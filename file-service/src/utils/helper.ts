@@ -65,4 +65,11 @@ const buildS3KeyPrefix = ({
   return operation ? `${base}/${operation}` : base;
 };
 
-export { buildS3KeyPrefix, wrapController };
+// "<Title>.<ext>" with characters that are unsafe in an S3 key / file name replaced,
+// so a Salesforce title like "a/b" can't create extra folders.
+const toSafeFileName = (title: string, extension?: string | null): string => {
+  const safeTitle = title.replace(/[\\/:*?"<>|]/g, '_').trim() || 'file';
+  return extension ? `${safeTitle}.${extension}` : safeTitle;
+};
+
+export { buildS3KeyPrefix, toSafeFileName, wrapController };

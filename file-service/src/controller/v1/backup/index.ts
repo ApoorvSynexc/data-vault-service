@@ -7,12 +7,14 @@ import {
   getContentDocumentLinks,
   SalesforceTokens,
   getContentVersion,
+  getContentBinary,
+  uploadToS3,
 } from '../../../services';
 import { makeResponse } from '../../../lib/response';
 import { parseCsvStream } from '../../../utils/csv';
 import { IBackupConfig, IDestinationConfig, ISource } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
-import { buildS3KeyPrefix, wrapController } from '../../../utils/helper';
+import { buildS3KeyPrefix, toSafeFileName, wrapController } from '../../../utils/helper';
 
 const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
   const { backupJobIds } = req.body as { backupJobIds: string[] };
@@ -77,20 +79,57 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         }
       }
 
-      // Files linked to each of the sampled rows (record Id -> ContentDocumentLinks).
+      const attachmentPrefix =  buildS3KeyPrefix({
+        crmId: job.crmId || "",
+        crmName: source.crmName,
+        backupConfigId: backupConfig.backupConfigId,
+        backupJobId,
+        objectName: object.name,
+        type: 'backup',
+      });
+
+      // Files linked to each of the sampled rows, saved under
+      //   <attachmentPrefix>/attachments/<recordId>/content-document-links.json
+      //   <attachmentPrefix>/attachments/<recordId>/<contentDocumentId>/content-version.json
+      //   <attachmentPrefix>/attachments/<recordId>/<contentDocumentId>/<Title>.<ext>
       const links = [];
       for (const row of rows) {
         if (!row.Id) continue;
+        const recordFolder = `${attachmentPrefix}/attachments/${row.Id}`;
+
         const contentDocumentLinks = await getContentDocumentLinks(salesforce, row.Id);
-        if(contentDocumentLinks.records.length){
-          const contentDocumentVersions = []
-          for (let index = 0; index < contentDocumentLinks.records.length; index++) {
-            const contentDocumentLink = contentDocumentLinks.records[index];
-            const contentDocumentVersion = await getContentVersion(salesforce, contentDocumentLink.ContentDocumentId);
-            contentDocumentVersions.push(contentDocumentVersion)
-          }
-          links.push({ ...row, contentDocumentLinks, contentDocumentVersions });
+        if (!contentDocumentLinks.records.length) continue;
+
+        await uploadToS3(
+          destination,
+          `${recordFolder}/content-document-links.json`,
+          JSON.stringify(contentDocumentLinks.records),
+          'application/json'
+        );
+
+        const contentDocumentVersions = [];
+        for (const { ContentDocumentId } of contentDocumentLinks.records) {
+          const contentVersion = await getContentVersion(salesforce, ContentDocumentId);
+          if (!contentVersion) continue;
+          contentDocumentVersions.push(contentVersion);
+
+          const documentFolder = `${recordFolder}/${ContentDocumentId}`;
+          await uploadToS3(
+            destination,
+            `${documentFolder}/content-version.json`,
+            JSON.stringify(contentVersion),
+            'application/json'
+          );
+
+          const binary = await getContentBinary(salesforce, contentVersion.Id);
+          await uploadToS3(
+            destination,
+            `${documentFolder}/${toSafeFileName(contentVersion.Title, contentVersion.FileExtension)}`,
+            binary
+          );
         }
+
+        links.push({ ...row, contentDocumentLinks, contentDocumentVersions });
       }
 
       payload.push({
