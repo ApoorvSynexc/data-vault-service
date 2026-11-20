@@ -88,14 +88,13 @@ const getContentDocumentLinks = async (
 const getContentVersion = async (
   context: ISalesforceContext,
   contentDocumentId: string,
-): Promise<any | null> => {
+): Promise<IContentVersion[] | null> => {
   assertSalesforceId(contentDocumentId);
-  const records = await query<IContentVersion>(
+  const result = await query<IContentVersion>(
     context,
     `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}'`
   );
-  console.log(JSON.stringify({records}))
-  return records ?? null;
+  return result.records ?? null;
 };
 
 /** Streams the file bytes (PDF, image, ...) of a ContentVersion. */

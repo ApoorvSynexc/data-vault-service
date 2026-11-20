@@ -79,7 +79,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         }
       }
 
-      const attachmentPrefix =  buildS3KeyPrefix({
+      const attachmentPrefix = buildS3KeyPrefix({
         crmId: job.crmId || "",
         crmName: source.crmName,
         backupConfigId: backupConfig.backupConfigId,
@@ -109,24 +109,29 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
 
         const contentDocumentVersions = [];
         for (const { ContentDocumentId } of contentDocumentLinks.records) {
-          const contentVersion = await getContentVersion(salesforce, ContentDocumentId);
-          if (!contentVersion) continue;
-          contentDocumentVersions.push(contentVersion);
+          const contentVersions = await getContentVersion(salesforce, ContentDocumentId);
+          if (!contentVersions) continue;
+          contentDocumentVersions.push(contentVersions);
 
-          // const documentFolder = `${recordFolder}/${ContentDocumentId}_old_${Date.now()}`;
-          // await uploadToS3(
-          //   destination,
-          //   `${documentFolder}/content-version.json`,
-          //   JSON.stringify(contentVersion),
-          //   'application/json'
-          // );
+          for (let index = 0; index < contentVersions.length; index++) {
+            const contentVersion = contentVersions[index];
 
-          // const binary = await getContentBinary(salesforce, contentVersion.Id);
-          // await uploadToS3(
-          //   destination,
-          //   `${documentFolder}/${toSafeFileName(contentVersion.Title, contentVersion.FileExtension)}`,
-          //   binary
-          // );
+            const documentFolder = `${recordFolder}/${ContentDocumentId}_${contentVersion.Id}`;
+            await uploadToS3(
+              destination,
+              `${documentFolder}/content-version.json`,
+              JSON.stringify(contentVersion),
+              'application/json'
+            );
+
+            const binary = await getContentBinary(salesforce, contentVersion.Id);
+            await uploadToS3(
+              destination,
+              `${documentFolder}/${toSafeFileName(contentVersion.Title, contentVersion.FileExtension)}`,
+              binary
+            );
+          }
+
         }
 
         links.push({ ...row, contentDocumentLinks, contentDocumentVersions });
