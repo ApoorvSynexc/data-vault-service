@@ -71,7 +71,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         for await (const row of parseCsvStream(fileStream)) {
           rowCount++;
 
-          if (['001dN0000166firQAA', '001dN0000166fm4QAA'].includes(row.id)) {
+          if (['001dN0000166firQAA', '001dN0000166fm4QAA'].includes(row.Id)) {
             rows.push(row);
           }
         }
