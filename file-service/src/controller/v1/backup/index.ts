@@ -109,15 +109,27 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
 
         const contentDocumentVersions = [];
         for (const { ContentDocumentId } of contentDocumentLinks.records) {
-          const contentVersion = await getContentVersion(salesforce, ContentDocumentId);
+          const contentVersion = await getContentVersion(salesforce, ContentDocumentId, false);
           if (!contentVersion) continue;
           contentDocumentVersions.push(contentVersion);
 
-          const documentFolder = `${recordFolder}/${ContentDocumentId}`;
+          const documentFolder = `${recordFolder}/${ContentDocumentId}_old_${Date.now()}`;
           await uploadToS3(
             destination,
             `${documentFolder}/content-version.json`,
             JSON.stringify(contentVersion),
+            'application/json'
+          );
+
+          const latestContentVersion = await getContentVersion(salesforce, ContentDocumentId, true);
+          if (!latestContentVersion) continue;
+          contentDocumentVersions.push(latestContentVersion);
+
+          const latestDocumentFolder = `${recordFolder}/${ContentDocumentId}_latest_${Date.now()}`;
+          await uploadToS3(
+            destination,
+            `${latestDocumentFolder}/content-version.json`,
+            JSON.stringify(latestContentVersion),
             'application/json'
           );
 
@@ -126,6 +138,13 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
             destination,
             `${documentFolder}/${toSafeFileName(contentVersion.Title, contentVersion.FileExtension)}`,
             binary
+          );
+
+          const latestBinary = await getContentBinary(salesforce, latestContentVersion.Id);
+          await uploadToS3(
+            destination,
+            `${documentFolder}/${toSafeFileName(latestContentVersion.Title, latestContentVersion.FileExtension)}`,
+            latestBinary
           );
         }
 

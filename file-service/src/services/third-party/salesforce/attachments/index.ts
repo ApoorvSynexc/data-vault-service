@@ -87,14 +87,15 @@ const getContentDocumentLinks = async (
 /** Latest published version of a file (its metadata), or null if none exists. */
 const getContentVersion = async (
   context: ISalesforceContext,
-  contentDocumentId: string
+  contentDocumentId: string,
+  latest: boolean
 ): Promise<IContentVersion | null> => {
   assertSalesforceId(contentDocumentId);
   const {
     records: [version],
   } = await query<IContentVersion>(
     context,
-    `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}'`
+    `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}'${latest? ` AND IsLatest=true` : ''}`
   );
   return version ?? null;
 };
