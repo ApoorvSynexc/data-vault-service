@@ -121,30 +121,11 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
             'application/json'
           );
 
-          const latestContentVersion = await getContentVersion(salesforce, ContentDocumentId, true);
-          if (!latestContentVersion) continue;
-          contentDocumentVersions.push(latestContentVersion);
-
-          const latestDocumentFolder = `${recordFolder}/${ContentDocumentId}_latest_${Date.now()}`;
-          await uploadToS3(
-            destination,
-            `${latestDocumentFolder}/content-version.json`,
-            JSON.stringify(latestContentVersion),
-            'application/json'
-          );
-
           const binary = await getContentBinary(salesforce, contentVersion.Id);
           await uploadToS3(
             destination,
             `${documentFolder}/${toSafeFileName(contentVersion.Title, contentVersion.FileExtension)}`,
             binary
-          );
-
-          const latestBinary = await getContentBinary(salesforce, latestContentVersion.Id);
-          await uploadToS3(
-            destination,
-            `${latestDocumentFolder}/${toSafeFileName(latestContentVersion.Title, latestContentVersion.FileExtension)}`,
-            latestBinary
           );
         }
 

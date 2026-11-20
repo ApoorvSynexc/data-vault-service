@@ -89,15 +89,13 @@ const getContentVersion = async (
   context: ISalesforceContext,
   contentDocumentId: string,
   latest: boolean
-): Promise<IContentVersion | null> => {
+): Promise<any | null> => {
   assertSalesforceId(contentDocumentId);
-  const {
-    records: [version],
-  } = await query<IContentVersion>(
+  const records = await query<IContentVersion>(
     context,
-    `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}'${latest? ` AND IsLatest=true` : 'AND IsLatest=false'}`
+    `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}'`
   );
-  return version ?? null;
+  return records ?? null;
 };
 
 /** Streams the file bytes (PDF, image, ...) of a ContentVersion. */
