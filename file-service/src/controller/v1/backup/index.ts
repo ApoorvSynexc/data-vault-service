@@ -113,20 +113,20 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
           if (!contentVersion) continue;
           contentDocumentVersions.push(contentVersion);
 
-          const documentFolder = `${recordFolder}/${ContentDocumentId}_old_${Date.now()}`;
-          await uploadToS3(
-            destination,
-            `${documentFolder}/content-version.json`,
-            JSON.stringify(contentVersion),
-            'application/json'
-          );
+          // const documentFolder = `${recordFolder}/${ContentDocumentId}_old_${Date.now()}`;
+          // await uploadToS3(
+          //   destination,
+          //   `${documentFolder}/content-version.json`,
+          //   JSON.stringify(contentVersion),
+          //   'application/json'
+          // );
 
-          const binary = await getContentBinary(salesforce, contentVersion.Id);
-          await uploadToS3(
-            destination,
-            `${documentFolder}/${toSafeFileName(contentVersion.Title, contentVersion.FileExtension)}`,
-            binary
-          );
+          // const binary = await getContentBinary(salesforce, contentVersion.Id);
+          // await uploadToS3(
+          //   destination,
+          //   `${documentFolder}/${toSafeFileName(contentVersion.Title, contentVersion.FileExtension)}`,
+          //   binary
+          // );
         }
 
         links.push({ ...row, contentDocumentLinks, contentDocumentVersions });

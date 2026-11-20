@@ -94,6 +94,7 @@ const getContentVersion = async (
     context,
     `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}'`
   );
+  console.log(JSON.stringify({records}))
   return records ?? null;
 };
 
