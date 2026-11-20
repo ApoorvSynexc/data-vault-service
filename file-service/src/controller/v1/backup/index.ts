@@ -6,6 +6,7 @@ import {
   downloadFromS3,
   getContentDocumentLinks,
   SalesforceTokens,
+  getContentVersion,
 } from '../../../services';
 import { makeResponse } from '../../../lib/response';
 import { parseCsvStream } from '../../../utils/csv';
@@ -81,7 +82,15 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
       for (const row of rows) {
         if (!row.Id) continue;
         const contentDocumentLinks = await getContentDocumentLinks(salesforce, row.Id);
-        links.push({ ...row, contentDocumentLinks });
+        if(contentDocumentLinks.records.length){
+          const contentDocumentVersions = []
+          for (let index = 0; index < contentDocumentLinks.records.length; index++) {
+            const contentDocumentLink = contentDocumentLinks.records[index];
+            const contentDocumentVersion = await getContentVersion(salesforce, contentDocumentLink.ContentDocumentId);
+            contentDocumentVersions.push(contentDocumentVersion)
+          }
+          links.push({ ...row, contentDocumentLinks, contentDocumentVersions });
+        }
       }
 
       payload.push({
