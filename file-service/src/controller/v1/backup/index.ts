@@ -143,7 +143,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
           const latestBinary = await getContentBinary(salesforce, latestContentVersion.Id);
           await uploadToS3(
             destination,
-            `${documentFolder}/${toSafeFileName(latestContentVersion.Title, latestContentVersion.FileExtension)}`,
+            `${latestDocumentFolder}/${toSafeFileName(latestContentVersion.Title, latestContentVersion.FileExtension)}`,
             latestBinary
           );
         }
