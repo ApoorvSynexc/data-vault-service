@@ -126,7 +126,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
           // upload content versions
           await uploadToS3(
             destination,
-            `${filesKeys.mapping.contentVersion}/${row.Id}.json`,
+            `${filesKeys.mapping.contentVersion}/${ContentDocumentId}.json`,
             JSON.stringify(contentVersions),
             'application/json'
           );
