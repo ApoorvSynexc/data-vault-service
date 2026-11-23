@@ -6,6 +6,7 @@ import {
   downloadFromS3,
   getContentDocumentLinks,
   SalesforceTokens,
+  getContentDocument,
   getContentVersion,
   getContentBinary,
   uploadToS3,
@@ -102,8 +103,21 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
           'application/json'
         );
 
+        const contentDocuments = [];
         const contentDocumentVersions = [];
         for (const { ContentDocumentId } of contentDocumentLinks.records) {
+          // upload content document
+          const contentDocument = await getContentDocument(salesforce, ContentDocumentId);
+          if (contentDocument) {
+            contentDocuments.push(contentDocument);
+            await uploadToS3(
+              destination,
+              `${filesKeys.mapping.contentDocument}/${ContentDocumentId}.json`,
+              JSON.stringify(contentDocument),
+              'application/json'
+            );
+          }
+
           const contentVersions = await getContentVersion(salesforce, ContentDocumentId);
           if (!contentVersions) continue;
           contentDocumentVersions.push(contentVersions);
@@ -130,7 +144,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
 
         }
 
-        links.push({ ...row, contentDocumentLinks, contentDocumentVersions });
+        links.push({ ...row, contentDocumentLinks, contentDocuments, contentDocumentVersions });
       }
 
       payload.push({

@@ -23,6 +23,19 @@ export interface IContentVersion {
   LastModifiedDate: string;
 }
 
+export interface IContentDocument {
+  Id: string;
+  Title: string;
+  FileExtension: string | null;
+  FileType: string | null;
+  ContentSize: number;
+  LatestPublishedVersionId: string | null;
+  OwnerId: string;
+  IsArchived: boolean;
+  CreatedDate: string;
+  LastModifiedDate: string;
+}
+
 interface IQueryResult<T> {
   records: T[];
   done: boolean;
@@ -86,6 +99,19 @@ const getContentDocumentLinks = async (
   };
 };
 
+/** The ContentDocument record (the file's container) for the given id, or null if none exists. */
+const getContentDocument = async (
+  context: ISalesforceContext,
+  contentDocumentId: string
+): Promise<IContentDocument | null> => {
+  assertSalesforceId(contentDocumentId);
+  const result = await query<IContentDocument>(
+    context,
+    `SELECT Id, Title, FileExtension, FileType, ContentSize, LatestPublishedVersionId, OwnerId, IsArchived, CreatedDate, LastModifiedDate FROM ContentDocument WHERE Id = '${contentDocumentId}'`
+  );
+  return result.records[0] ?? null;
+};
+
 /** Latest published version of a file (its metadata), or null if none exists. */
 const getContentVersion = async (
   context: ISalesforceContext,
@@ -118,4 +144,4 @@ const getContentBinary = async (
   return Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
 };
 
-export { getContentDocumentLinks, getContentVersion, getContentBinary };
+export { getContentDocumentLinks, getContentDocument, getContentVersion, getContentBinary };
