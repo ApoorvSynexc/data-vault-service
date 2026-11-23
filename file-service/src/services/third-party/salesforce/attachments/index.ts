@@ -42,11 +42,13 @@ interface IQueryResult<T> {
   nextRecordsUrl?: string;
 }
 
-export interface IContentDocumentLinkPage {
-  records: IContentDocumentLink[];
+export interface IQueryPage<T> {
+  records: T[];
   // Set when more rows exist; pass it back to fetch the next page. null = last page.
   nextRecordsUrl: string | null;
 }
+
+export type IContentDocumentLinkPage = IQueryPage<IContentDocumentLink>;
 
 // Salesforce ids are 15 or 18 alphanumeric characters. Validated because the id
 // is interpolated into SOQL / the URL path.
@@ -65,32 +67,38 @@ const query = <T>(
     tokens
   );
 
-/**
- * Files linked to a record: one row per ContentDocument attached to `recordId`.
- * Salesforce returns up to 2000 rows per page. When more exist, `nextRecordsUrl`
- * is set; pass it back as the third argument to get the next page.
- */
-const getContentDocumentLinks = async (
+// The ids go in the query string of a GET request, so the list has to stay under
+// the URL length limit (about 16 KB; each quoted id is ~21 characters).
+const MAX_IDS_PER_QUERY = 500;
+
+// Runs a SOQL query that filters on a list of ids (`buildSoql` receives the quoted,
+// comma separated list). Salesforce returns up to 2000 rows per page; when more
+// exist `nextRecordsUrl` is set, and passing it back fetches the next page.
+const queryByIds = async <T>(
   context: ISalesforceContext,
-  recordId: string,
+  ids: string[],
+  buildSoql: (idList: string) => string,
   nextRecordsUrl?: string
-): Promise<IContentDocumentLinkPage> => {
-  let result: IQueryResult<IContentDocumentLink>;
+): Promise<IQueryPage<T>> => {
+  let result: IQueryResult<T>;
 
   if (nextRecordsUrl) {
     if (!nextRecordsUrl.startsWith('/services/data/')) {
       throw new Error(`Invalid nextRecordsUrl: ${nextRecordsUrl}`);
     }
-    result = await salesforceRequest<IQueryResult<IContentDocumentLink>>(
+    result = await salesforceRequest<IQueryResult<T>>(
       { url: `${context.instanceUrl}${nextRecordsUrl}` },
       context.tokens
     );
   } else {
-    assertSalesforceId(recordId);
-    result = await query<IContentDocumentLink>(
-      context,
-      `SELECT ContentDocumentId, LinkedEntityId FROM ContentDocumentLink WHERE LinkedEntityId = '${recordId}'`
-    );
+    if (ids.length === 0) {
+      return { records: [], nextRecordsUrl: null };
+    }
+    if (ids.length > MAX_IDS_PER_QUERY) {
+      throw new Error(`Too many ids (${ids.length}); send at most ${MAX_IDS_PER_QUERY} per call`);
+    }
+    ids.forEach(assertSalesforceId);
+    result = await query<T>(context, buildSoql(ids.map((id) => `'${id}'`).join(',')));
   }
 
   return {
@@ -99,31 +107,53 @@ const getContentDocumentLinks = async (
   };
 };
 
-/** The ContentDocument record (the file's container) for the given id, or null if none exists. */
-const getContentDocument = async (
+/**
+ * Files linked to the given records: one row per ContentDocument attached to any of
+ * `recordIds`; `LinkedEntityId` on each row says which record it belongs to.
+ */
+const getContentDocumentLinks = (
   context: ISalesforceContext,
-  contentDocumentId: string
-): Promise<IContentDocument | null> => {
-  assertSalesforceId(contentDocumentId);
-  const result = await query<IContentDocument>(
+  recordIds: string[],
+  nextRecordsUrl?: string
+): Promise<IContentDocumentLinkPage> =>
+  queryByIds<IContentDocumentLink>(
     context,
-    `SELECT Id, Title, FileExtension, FileType, ContentSize, LatestPublishedVersionId, OwnerId, IsArchived, CreatedDate, LastModifiedDate FROM ContentDocument WHERE Id = '${contentDocumentId}'`
+    recordIds,
+    (idList) =>
+      `SELECT ContentDocumentId, LinkedEntityId FROM ContentDocumentLink WHERE LinkedEntityId IN (${idList})`,
+    nextRecordsUrl
   );
-  return result.records[0] ?? null;
-};
 
-/** Latest published version of a file (its metadata), or null if none exists. */
-const getContentVersion = async (
+/** The ContentDocument records (the files' containers) for the given ids. */
+const getContentDocument = (
   context: ISalesforceContext,
-  contentDocumentId: string,
-): Promise<IContentVersion[] | null> => {
-  assertSalesforceId(contentDocumentId);
-  const result = await query<IContentVersion>(
+  contentDocumentIds: string[],
+  nextRecordsUrl?: string
+): Promise<IQueryPage<IContentDocument>> =>
+  queryByIds<IContentDocument>(
     context,
-    `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId = '${contentDocumentId}'`
+    contentDocumentIds,
+    (idList) =>
+      `SELECT Id, Title, FileExtension, FileType, ContentSize, LatestPublishedVersionId, OwnerId, IsArchived, CreatedDate, LastModifiedDate FROM ContentDocument WHERE Id IN (${idList})`,
+    nextRecordsUrl
   );
-  return result.records ?? null;
-};
+
+/**
+ * Every version of the given ContentDocuments (metadata only);
+ * `ContentDocumentId` on each row says which document it belongs to.
+ */
+const getContentVersion = (
+  context: ISalesforceContext,
+  contentDocumentIds: string[],
+  nextRecordsUrl?: string
+): Promise<IQueryPage<IContentVersion>> =>
+  queryByIds<IContentVersion>(
+    context,
+    contentDocumentIds,
+    (idList) =>
+      `SELECT Id, ContentDocumentId, Title, FileExtension, FileType, IsLatest, LastModifiedDate, ContentSize FROM ContentVersion WHERE ContentDocumentId IN (${idList})`,
+    nextRecordsUrl
+  );
 
 /** Streams the file bytes (PDF, image, ...) of a ContentVersion. */
 const getContentBinary = async (

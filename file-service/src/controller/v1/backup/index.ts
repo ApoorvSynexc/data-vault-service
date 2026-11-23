@@ -80,72 +80,58 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         }
       }
 
-      const filesKeys = buildFilesS3Keys({
-        crmId: job.crmId || "",
-        crmName: source.crmName,
-        backupConfigId: backupConfig.backupConfigId,
-        backupJobId,
-        type: 'backup',
-      });
+      if (rows.length) {
+        const recordsIds = rows.map(r => r.Id);
 
-      const links = [];
-      for (const row of rows) {
-        if (!row.Id) continue;
-        const recordFiles = filesKeys.files(row.Id);
+        const filesKeys = buildFilesS3Keys({
+          crmId: job.crmId || "",
+          crmName: source.crmName,
+          backupConfigId: backupConfig.backupConfigId,
+          backupJobId,
+          type: 'backup',
+        });
 
         // upload content document links 
-        const contentDocumentLinks = await getContentDocumentLinks(salesforce, row.Id);
-        if (!contentDocumentLinks.records.length) continue;
+        const contentDocumentLinks = await getContentDocumentLinks(salesforce, recordsIds);
+        const contentDocumentIds = contentDocumentLinks.records.map(r => r.ContentDocumentId);
+        if (!contentDocumentIds.length) continue;
         await uploadToS3(
           destination,
-          `${filesKeys.mapping.contentDocumentLink}/${row.Id}.json`,
+          `${filesKeys.mapping.contentDocumentLink}/${Date.now()}.json`,
           JSON.stringify(contentDocumentLinks.records),
           'application/json'
         );
 
-        const contentDocuments = [];
-        const contentDocumentVersions = [];
-        for (const { ContentDocumentId } of contentDocumentLinks.records) {
-          
-          // upload content document
-          const contentDocument = await getContentDocument(salesforce, ContentDocumentId);
-          if (contentDocument) {
-            contentDocuments.push(contentDocument);
-            await uploadToS3(
-              destination,
-              `${filesKeys.mapping.contentDocument}/${ContentDocumentId}.json`,
-              JSON.stringify(contentDocument),
-              'application/json'
-            );
-          }
+        const contentDocument = await getContentDocument(salesforce, contentDocumentIds);
+        if (!contentDocument.records.length) continue;
+        await uploadToS3(
+          destination,
+          `${filesKeys.mapping.contentDocument}/${Date.now()}.json`,
+          JSON.stringify(contentDocument.records),
+          'application/json'
+        );
 
-          const contentVersions = await getContentVersion(salesforce, ContentDocumentId);
-          if (!contentVersions) continue;
-          contentDocumentVersions.push(contentVersions);
+        const contentVersions = await getContentVersion(salesforce, contentDocumentIds);
+        if (!contentVersions.records.length) continue;
+        await uploadToS3(
+          destination,
+          `${filesKeys.mapping.contentVersion}/${Date.now()}.json`,
+          JSON.stringify(contentVersions.records),
+          'application/json'
+        );
 
-          // upload content versions
-          await uploadToS3(
-            destination,
-            `${filesKeys.mapping.contentVersion}/${ContentDocumentId}.json`,
-            JSON.stringify(contentVersions),
-            'application/json'
-          );
+        for (let index = 0; index < contentVersions.records.length; index++) {
+          const contentVersion = contentVersions.records[index];
+          const recordFiles = filesKeys.files(contentVersion.ContentDocumentId);
 
-          for (let index = 0; index < contentVersions.length; index++) {
-            const contentVersion = contentVersions[index];
-
-            // upload files
-            const fileName = toSafeFileName(contentVersion.Title, contentVersion.FileExtension);
-            const fileFolder = contentVersion.IsLatest
-              ? recordFiles.latest
-              : `${recordFiles.versions}/${contentVersion.Id}`;
-            const binary = await getContentBinary(salesforce, contentVersion.Id);
-            await uploadToS3(destination, `${fileFolder}/${fileName}`, binary);
-          }
-
+          // upload files
+          const fileName = toSafeFileName(contentVersion.Title, contentVersion.FileExtension);
+          const fileFolder = contentVersion.IsLatest
+            ? `${recordFiles.latest}/${contentVersion.Id}`
+            : `${recordFiles.versions}/${contentVersion.Id}`;
+          const binary = await getContentBinary(salesforce, contentVersion.Id);
+          await uploadToS3(destination, `${fileFolder}/${fileName}`, binary);
         }
-
-        links.push({ ...row, contentDocumentLinks, contentDocuments, contentDocumentVersions });
       }
 
       payload.push({
@@ -153,7 +139,6 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         fileList,
         rowCount,
         rows,
-        links,
       });
     }
   }
