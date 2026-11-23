@@ -106,6 +106,7 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         const contentDocuments = [];
         const contentDocumentVersions = [];
         for (const { ContentDocumentId } of contentDocumentLinks.records) {
+          
           // upload content document
           const contentDocument = await getContentDocument(salesforce, ContentDocumentId);
           if (contentDocument) {
