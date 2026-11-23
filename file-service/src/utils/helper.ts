@@ -65,6 +65,44 @@ const buildS3KeyPrefix = ({
   return operation ? `${base}/${operation}` : base;
 };
 
+interface IFilesS3KeyParams {
+  crmId: string;
+  crmName: string;
+  backupConfigId: string;
+  backupJobId: string;
+  type: S3KeyType;
+}
+
+// Folder layout for Salesforce Files, a sibling of raw_data under the backup config:
+//
+//   <crmName>/<crmId>/<type>/<backupConfigId>/
+//     files/<recordId>/latest/                      current file of the record
+//     files/<recordId>/versions/                    older versions of the file
+//     Files-mapping/<backupJobId>/content_document_link/
+//     Files-mapping/<backupJobId>/content_version/
+//     Files-mapping/<backupJobId>/content_document/
+//     Files-mapping/<backupJobId>/content_assets/
+//
+// S3 has no real folders, so this returns the key prefixes (no trailing slash);
+// append a file name to a prefix to get the object key.
+const buildFilesS3Keys = ({ crmId, crmName, backupConfigId, backupJobId, type }: IFilesS3KeyParams) => {
+  const base = `${crmName}/${crmId}/${type}/${backupConfigId}`;
+  const mapping = `${base}/Files-mapping/${backupJobId}`;
+
+  return {
+    files: (recordId: string) => ({
+      latest: `${base}/files/${recordId}/latest`,
+      versions: `${base}/files/${recordId}/versions`,
+    }),
+    mapping: {
+      contentDocumentLink: `${mapping}/content_document_link`,
+      contentVersion: `${mapping}/content_version`,
+      contentDocument: `${mapping}/content_document`,
+      contentAssets: `${mapping}/content_assets`,
+    },
+  };
+};
+
 // "<Title>.<ext>" with characters that are unsafe in an S3 key / file name replaced,
 // so a Salesforce title like "a/b" can't create extra folders.
 const toSafeFileName = (title: string, extension?: string | null): string => {
@@ -72,4 +110,4 @@ const toSafeFileName = (title: string, extension?: string | null): string => {
   return extension ? `${safeTitle}.${extension}` : safeTitle;
 };
 
-export { buildS3KeyPrefix, toSafeFileName, wrapController };
+export { buildS3KeyPrefix, buildFilesS3Keys, toSafeFileName, wrapController };

@@ -14,7 +14,7 @@ import { makeResponse } from '../../../lib/response';
 import { parseCsvStream } from '../../../utils/csv';
 import { IBackupConfig, IDestinationConfig, ISource } from '../../../models';
 import { decrypt } from '../../../utils/encryption';
-import { buildS3KeyPrefix, toSafeFileName, wrapController } from '../../../utils/helper';
+import { buildFilesS3Keys, buildS3KeyPrefix, toSafeFileName, wrapController } from '../../../utils/helper';
 
 const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
   const { backupJobIds } = req.body as { backupJobIds: string[] };
@@ -79,30 +79,25 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
         }
       }
 
-      const attachmentPrefix = buildS3KeyPrefix({
+      const filesKeys = buildFilesS3Keys({
         crmId: job.crmId || "",
         crmName: source.crmName,
         backupConfigId: backupConfig.backupConfigId,
         backupJobId,
-        objectName: object.name,
         type: 'backup',
       });
 
-      // Files linked to each of the sampled rows, saved under
-      //   <attachmentPrefix>/attachments/<recordId>/content-document-links.json
-      //   <attachmentPrefix>/attachments/<recordId>/<contentDocumentId>/content-version.json
-      //   <attachmentPrefix>/attachments/<recordId>/<contentDocumentId>/<Title>.<ext>
       const links = [];
       for (const row of rows) {
         if (!row.Id) continue;
-        const recordFolder = `${attachmentPrefix}/attachments/${row.Id}`;
+        const recordFiles = filesKeys.files(row.Id);
 
+        // upload content document links 
         const contentDocumentLinks = await getContentDocumentLinks(salesforce, row.Id);
         if (!contentDocumentLinks.records.length) continue;
-
         await uploadToS3(
           destination,
-          `${recordFolder}/content-document-links.json`,
+          `${filesKeys.mapping.contentDocumentLink}/${row.Id}.json`,
           JSON.stringify(contentDocumentLinks.records),
           'application/json'
         );
@@ -113,23 +108,24 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
           if (!contentVersions) continue;
           contentDocumentVersions.push(contentVersions);
 
+          // upload content versions
+          await uploadToS3(
+            destination,
+            `${filesKeys.mapping.contentVersion}/${row.Id}.json`,
+            JSON.stringify(contentVersions),
+            'application/json'
+          );
+
           for (let index = 0; index < contentVersions.length; index++) {
             const contentVersion = contentVersions[index];
 
-            const documentFolder = `${recordFolder}/${ContentDocumentId}_${contentVersion.Id}`;
-            await uploadToS3(
-              destination,
-              `${documentFolder}/content-version.json`,
-              JSON.stringify(contentVersion),
-              'application/json'
-            );
-
+            // upload files
+            const fileName = toSafeFileName(contentVersion.Title, contentVersion.FileExtension);
+            const fileFolder = contentVersion.IsLatest
+              ? recordFiles.latest
+              : `${recordFiles.versions}/${contentVersion.Id}`;
             const binary = await getContentBinary(salesforce, contentVersion.Id);
-            await uploadToS3(
-              destination,
-              `${documentFolder}/${toSafeFileName(contentVersion.Title, contentVersion.FileExtension)}`,
-              binary
-            );
+            await uploadToS3(destination, `${fileFolder}/${fileName}`, binary);
           }
 
         }

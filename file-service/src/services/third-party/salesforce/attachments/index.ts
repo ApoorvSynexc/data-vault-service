@@ -19,6 +19,8 @@ export interface IContentVersion {
   FileExtension: string | null;
   FileType: string | null;
   ContentSize: number;
+  IsLatest: boolean;
+  LastModifiedDate: string;
 }
 
 interface IQueryResult<T> {
