@@ -42,6 +42,17 @@ interface IQueryResult<T> {
   nextRecordsUrl?: string;
 }
 
+export interface IContentAsset {
+  Id: string;
+  ContentDocumentId: string;
+  DeveloperName: string;
+  MasterLabel: string;
+  Language: string | null;
+  NamespacePrefix: string | null;
+  CreatedDate: string;
+  LastModifiedDate: string;
+}
+
 export interface IQueryPage<T> {
   records: T[];
   // Set when more rows exist; pass it back to fetch the next page. null = last page.
@@ -139,6 +150,24 @@ const getContentDocument = (
   );
 
 /**
+ * The ContentAsset records (Salesforce asset-file wrapper: developer name, label,
+ * language) of the given ContentDocuments; `ContentDocumentId` on each row says
+ * which document it belongs to. Documents that are not assets have no row.
+ */
+const getContentAsset = (
+  context: ISalesforceContext,
+  contentDocumentIds: string[],
+  nextRecordsUrl?: string
+): Promise<IQueryPage<IContentAsset>> =>
+  queryByIds<IContentAsset>(
+    context,
+    contentDocumentIds,
+    (idList) =>
+      `SELECT Id, ContentDocumentId, DeveloperName, MasterLabel, Language, NamespacePrefix, CreatedDate, LastModifiedDate FROM ContentAsset WHERE ContentDocumentId IN (${idList})`,
+    nextRecordsUrl
+  );
+
+/**
  * Every version of the given ContentDocuments (metadata only);
  * `ContentDocumentId` on each row says which document it belongs to.
  */
@@ -174,4 +203,10 @@ const getContentBinary = async (
   return Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
 };
 
-export { getContentDocumentLinks, getContentDocument, getContentVersion, getContentBinary };
+export {
+  getContentDocumentLinks,
+  getContentDocument,
+  getContentAsset,
+  getContentVersion,
+  getContentBinary,
+};

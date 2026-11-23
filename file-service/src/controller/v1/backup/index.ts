@@ -10,6 +10,7 @@ import {
   getContentVersion,
   getContentBinary,
   uploadToS3,
+  getContentAsset,
 } from '../../../services';
 import { makeResponse } from '../../../lib/response';
 import { parseCsvStream } from '../../../utils/csv';
@@ -108,6 +109,15 @@ const getBackupHandler = async (req: Request, res: Response): Promise<void> => {
           destination,
           `${filesKeys.mapping.contentDocument}/${Date.now()}.json`,
           JSON.stringify(contentDocument.records),
+          'application/json'
+        );
+
+        const contentDocumentAsset = await getContentAsset(salesforce, contentDocumentIds);
+        if (!contentDocumentAsset.records.length) continue;
+        await uploadToS3(
+          destination,
+          `${filesKeys.mapping.contentAssets}/${Date.now()}.json`,
+          JSON.stringify(contentDocumentAsset.records),
           'application/json'
         );
 
