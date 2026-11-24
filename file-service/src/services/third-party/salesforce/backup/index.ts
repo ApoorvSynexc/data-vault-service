@@ -1,7 +1,7 @@
 import { buildFilesS3Keys, toSafeFileName } from "../../../../utils/helper";
 import { uploadToS3 } from "../../s3";
 import { ICrmFilesJobContext } from "../../types"
-import { getContentAsset, getContentBinary, getContentDocument, getContentDocumentLinks, getContentVersion } from "../attachments";
+import { getContentAsset, getContentBinary, getContentDocument, getContentDocumentLinks, getContentVersion, IContentVersion } from "../attachments";
 import { SalesforceTokens } from "../common";
 
 interface IBackupFileContent extends ICrmFilesJobContext {
@@ -66,16 +66,24 @@ const updateBackupFiles = async (context: IBackupFileContent) => {
         'application/json'
     );
 
-    const contentVersions = await getContentVersion(salesforce, contentDocumentIds);
-    if (!contentVersions.records.length) return;
-    await uploadToS3(
-        destination,
-        `${filesKeys.mapping.contentVersion}/${Date.now()}.json`,
-        JSON.stringify(contentVersions.records),
-        'application/json'
-    );
+    let contentVersions: IContentVersion[] = [];
+    let nextCursor;
+    do {
+        const result = await getContentVersion(salesforce, contentDocumentIds);
+        if (!result.records.length) return;
+        contentVersions.push(...result.records);
+        nextCursor = result.nextRecordsUrl;
+    } while (nextCursor);
+    if (contentVersions.length) {
+        await uploadToS3(
+            destination,
+            `${filesKeys.mapping.contentVersion}/${Date.now()}.json`,
+            JSON.stringify(contentVersions),
+            'application/json'
+        );
+    }
 
-    for (const contentVersion of contentVersions.records) {
+    for (const contentVersion of contentVersions) {
         const recordFiles = filesKeys.files(contentVersion.ContentDocumentId);
 
         // upload files
