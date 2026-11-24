@@ -80,7 +80,7 @@ const query = <T>(
 
 // The ids go in the query string of a GET request, so the list has to stay under
 // the URL length limit (about 16 KB; each quoted id is ~21 characters).
-const MAX_IDS_PER_QUERY = 500;
+export const MAX_IDS_PER_QUERY = 500;
 
 // Runs a SOQL query that filters on a list of ids (`buildSoql` receives the quoted,
 // comma separated list). Salesforce returns up to 2000 rows per page; when more

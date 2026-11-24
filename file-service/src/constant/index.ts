@@ -21,6 +21,10 @@ const LANGUAGE = {
   gu: 'gu',
 };
 
+const CRM_NAME = {
+  salesforce: 'salesforce',
+};
+
 // DynamoDB table names
 const BACKUP_JOB_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_JOB_TABLE || 'data-vault-backup-jobs'}`;
 const BACKUP_CONFIG_TABLE = `${NODE_ENV_PREFIX}-${process.env.BACKUP_CONFIG_TABLE || 'data-vault-backup-configs'}`;
@@ -34,6 +38,7 @@ export {
   BACKUP_JOB_TABLE,
   BACKUP_CONFIG_TABLE,
   LANGUAGE,
+  CRM_NAME,
   SALESFORCE_API_VERSION,
   CORE_SERVICE,
   INTERNAL_SECRET,
