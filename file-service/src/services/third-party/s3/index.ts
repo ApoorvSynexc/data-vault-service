@@ -17,33 +17,42 @@ const getS3Client = ({ region, accessKeyId, secretAccessKey }: S3Config): S3Clie
     },
   });
 
-export const listS3Objects = async (config: S3Config, prefix: string): Promise<string[]> => {
+export interface IListS3ObjectsResult {
+  keys: string[];
+  // Pass back as `cursor` to get the next page; undefined when there are no more keys.
+  nextCursor?: string;
+}
+
+/**
+ * Lists one page of at most `limit` keys under `prefix` (S3 caps a page at 1000).
+ * Keys come back in ascending order. If more keys exist, `nextCursor` is returned.
+ */
+export const listS3Objects = async (
+  config: S3Config,
+  prefix: string,
+  limit = 1000,
+  cursor?: string
+): Promise<IListS3ObjectsResult> => {
   const client = getS3Client(config);
 
-  const keys: string[] = [];
-  let continuationToken: string | undefined;
-
   try {
-    do {
-      const result = await client.send(
-        new ListObjectsV2Command({
-          Bucket: config.bucketName,
-          Prefix: prefix,
-          ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
-        })
-      );
-      for (const obj of result.Contents ?? []) {
-        if (obj.Key) {
-          keys.push(obj.Key);
-        }
-      }
-      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
-    } while (continuationToken !== undefined);
+    const result = await client.send(
+      new ListObjectsV2Command({
+        Bucket: config.bucketName,
+        Prefix: prefix,
+        MaxKeys: limit,
+        ...(cursor ? { ContinuationToken: cursor } : {}),
+      })
+    );
+
+    const keys = (result.Contents ?? []).flatMap((obj) => (obj.Key ? [obj.Key] : []));
+    return {
+      keys,
+      nextCursor: result.IsTruncated ? result.NextContinuationToken : undefined,
+    };
   } finally {
     client.destroy();
   }
-
-  return keys.sort();
 };
 
 export const downloadFromS3 = async (config: S3Config, key: string): Promise<Readable> => {
